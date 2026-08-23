@@ -31,4 +31,11 @@ final class HyperliquidPriceStep
 
         return BigDecimal::ofUnscaledValue($commonUnits, $scale)->stripTrailingZeros();
     }
+
+    public static function isValid(BigDecimal $price, BigDecimal $minimumTick): bool
+    {
+        return $price->isPositive()
+            && $minimumTick->isPositive()
+            && $price->remainder(self::forPrice($price, $minimumTick))->isZero();
+    }
 }

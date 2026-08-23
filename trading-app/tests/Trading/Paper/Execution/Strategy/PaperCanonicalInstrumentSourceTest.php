@@ -157,6 +157,36 @@ final class PaperCanonicalInstrumentSourceTest extends TestCase
         ))->evidenceFor($this->hyperliquidCell(), $trigger, $this->book());
     }
 
+    public function testHyperliquidEvidenceRejectsABookFromThePreviousSourceEpoch(): void
+    {
+        $metadata = $this->hyperliquidMetadata(
+            schema: 'paper-instrument-metadata.v2',
+            sourceEpoch: 2,
+        );
+        $trigger = $this->triggerFor(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            '2',
+        );
+        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        $market->restore([$metadata, $trigger]);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_canonical_instrument_book_identity_mismatch');
+        (new PaperCanonicalInstrumentSource(
+            $market,
+            new PaperReplayClock($trigger->receivedTimestamp),
+        ))->evidenceFor(
+            $this->hyperliquidCell(),
+            $trigger,
+            $this->book(
+                PaperMarketDataVenue::HYPERLIQUID,
+                PaperMarketDataNetwork::TESTNET,
+                sourceEpoch: 1,
+            ),
+        );
+    }
+
     public function testReturnsNoEvidenceForUnavailableV1Metadata(): void
     {
         foreach ([$this->okxMetadata('1', '0.1', schema: 'paper-instrument-metadata.v1'), $this->hyperliquidMetadata()] as $metadata) {
@@ -292,7 +322,10 @@ final class PaperCanonicalInstrumentSourceTest extends TestCase
         );
     }
 
-    private function hyperliquidMetadata(string $schema = 'paper-instrument-metadata.v1'): PaperMarketEvent
+    private function hyperliquidMetadata(
+        string $schema = 'paper-instrument-metadata.v1',
+        int $sourceEpoch = 1,
+    ): PaperMarketEvent
     {
         $payload = [
             'metadata_schema_version' => $schema,
@@ -305,7 +338,7 @@ final class PaperCanonicalInstrumentSourceTest extends TestCase
             'contract_value' => '1', 'contract_multiplier' => '1',
             'contract_value_unit' => 'BTC', 'size_decimals' => 5,
             'price_precision_digits' => 5, 'price_max_decimals' => 1,
-            'maximum_leverage' => '50', 'source_epoch' => 1, 'origin' => 'rest_meta',
+            'maximum_leverage' => '50', 'source_epoch' => $sourceEpoch, 'origin' => 'rest_meta',
         ];
         if ($schema === 'paper-instrument-metadata.v2') {
             $payload['maximum_market_notional'] = '15000000';
@@ -329,7 +362,9 @@ final class PaperCanonicalInstrumentSourceTest extends TestCase
         PaperMarketDataNetwork $network = PaperMarketDataNetwork::MAINNET,
         float $bestBid = 99.9,
         float $bestAsk = 100.1,
+        ?int $sourceEpoch = null,
     ): CanonicalOrderBookSnapshot {
+        $sourceEpoch ??= $venue === PaperMarketDataVenue::HYPERLIQUID ? 1 : null;
         return new CanonicalOrderBookSnapshot(
             exchange: $venue->value,
             environment: $network->value,
@@ -346,6 +381,7 @@ final class PaperCanonicalInstrumentSourceTest extends TestCase
                 (string) $bestBid,
                 (string) $bestAsk,
             ])),
+            sourceEpoch: $sourceEpoch,
         );
     }
 

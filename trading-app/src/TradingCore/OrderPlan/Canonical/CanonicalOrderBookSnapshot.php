@@ -17,6 +17,7 @@ final readonly class CanonicalOrderBookSnapshot
         public float $spreadBps,
         public \DateTimeImmutable $observedAt,
         public string $inputHash,
+        public ?int $sourceEpoch = null,
     ) {
         if (
             trim($exchange) === ''
@@ -43,6 +44,9 @@ final readonly class CanonicalOrderBookSnapshot
         }
         if (preg_match('/\Asha256:[a-f0-9]{64}\z/D', $inputHash) !== 1) {
             throw new CanonicalOrderPlanException('canonical_order_book_hash_invalid');
+        }
+        if ($sourceEpoch !== null && $sourceEpoch < 1) {
+            throw new CanonicalOrderPlanException('canonical_order_book_source_epoch_invalid');
         }
     }
 

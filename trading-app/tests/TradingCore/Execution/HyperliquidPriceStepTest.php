@@ -42,4 +42,13 @@ final class HyperliquidPriceStepTest extends TestCase
             }
         }
     }
+
+    public function testValidatesEveryPriceAgainstItsOwnMagnitude(): void
+    {
+        $minimumTick = BigDecimal::of('0.1');
+
+        self::assertTrue(HyperliquidPriceStep::isValid(BigDecimal::of('9999.9'), $minimumTick));
+        self::assertTrue(HyperliquidPriceStep::isValid(BigDecimal::of('10001'), $minimumTick));
+        self::assertFalse(HyperliquidPriceStep::isValid(BigDecimal::of('10000.1'), $minimumTick));
+    }
 }

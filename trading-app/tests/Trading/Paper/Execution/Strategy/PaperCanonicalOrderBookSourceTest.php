@@ -45,6 +45,7 @@ final class PaperCanonicalOrderBookSourceTest extends TestCase
         self::assertSame(200.0, $snapshot->spreadBps);
         self::assertSame('2026-08-01T10:00:58.000000Z', $snapshot->observedAt->format('Y-m-d\TH:i:s.u\Z'));
         self::assertSame('sha256:' . $lateReceipt->eventId, $snapshot->inputHash);
+        self::assertSame(1, $snapshot->sourceEpoch);
     }
 
     public function testReturnsNoEvidenceWhenTheOnlyAppliedBookIsNotYetObservable(): void
@@ -58,6 +59,52 @@ final class PaperCanonicalOrderBookSourceTest extends TestCase
             $market,
             new PaperReplayClock($trigger->receivedTimestamp),
         ))->snapshotFor($this->cell(), $trigger));
+    }
+
+    public function testPreservesTheHyperliquidBookSourceEpoch(): void
+    {
+        $book = PaperMarketEvent::create(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'BTCUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            new \DateTimeImmutable('2026-08-01T10:00:58.000000Z'),
+            new \DateTimeImmutable('2026-08-01T10:00:59.000000Z'),
+            '1',
+            [
+                'native_symbol' => 'BTC', 'bid_price' => '99', 'bid_size' => '5',
+                'ask_price' => '101', 'ask_size' => '4', 'bid_level_count' => '2',
+                'ask_level_count' => '3', 'source_time' => '1785578458000',
+                'source_epoch' => '7', 'source_book_hash' => str_repeat('d', 64),
+                'origin' => 'ws_l2_book', 'synthetic' => false,
+            ],
+        );
+        $trigger = PaperMarketEvent::create(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'BTCUSDT',
+            PaperMarketDataChannel::CANDLE_1M,
+            new \DateTimeImmutable('2026-08-01T10:01:00.000000Z'),
+            new \DateTimeImmutable('2026-08-01T10:01:01.000000Z'),
+            '2',
+            [
+                'native_symbol' => 'BTC', 'interval' => '1m',
+                'start_time' => '1785578460000', 'close_time' => '1785578519999',
+                'open' => '100', 'high' => '101', 'low' => '99', 'close' => '100',
+                'volume' => '1', 'trade_count' => '1', 'confirmed' => true,
+                'origin' => 'rest_candle_snapshot',
+            ],
+        );
+        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        $market->restore([$book, $trigger]);
+
+        $snapshot = (new PaperCanonicalOrderBookSource(
+            $market,
+            new PaperReplayClock($trigger->receivedTimestamp),
+        ))->snapshotFor($this->hyperliquidCell(), $trigger);
+
+        self::assertNotNull($snapshot);
+        self::assertSame(7, $snapshot->sourceEpoch);
     }
 
     public function testRejectsAnOlderTriggerAgainstANewerAppliedPrefix(): void
@@ -227,6 +274,27 @@ final class PaperCanonicalOrderBookSourceTest extends TestCase
                 'sha256:' . str_repeat('c', 64),
             ),
             'paper-order-book-source-run',
+        );
+    }
+
+    private function hyperliquidCell(): PaperExecutionCell
+    {
+        return PaperExecutionCell::createModern(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'sha256:' . str_repeat('a', 64),
+            PaperModernStrategyIdentity::fromDurableIdentity(
+                PaperMarketDataNetwork::TESTNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                'day_trading',
+                '1.1.0',
+                'day_trading.trend_continuation.long',
+                '1.1.0',
+                'long',
+                'sha256:' . str_repeat('b', 64),
+                'sha256:' . str_repeat('c', 64),
+            ),
+            'paper-order-book-source-hyperliquid-run',
         );
     }
 }

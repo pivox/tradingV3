@@ -50,6 +50,13 @@ metadata record, exact book snapshot, and derived constraints. Missing v2
 metadata, book mismatch, non-positive result, or a derived quantity below the
 minimum fails closed. OKX v2 behavior remains unchanged.
 
+Because the five-significant-figure step changes at decimal magnitude
+boundaries, every generated entry, stop, and target is validated again against
+its own price magnitude. A price that crosses a boundary without satisfying the
+new step produces no plan. The canonical book snapshot also carries the public
+`source_epoch`; Hyperliquid evidence requires exact equality with the metadata
+epoch so the reconnect interval before the first new book stays fail-closed.
+
 ## Settlement semantics
 
 Canonical risk and the private Fake ledger remain numerically denominated in

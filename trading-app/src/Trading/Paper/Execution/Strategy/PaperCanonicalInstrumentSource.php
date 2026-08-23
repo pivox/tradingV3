@@ -250,6 +250,8 @@ final readonly class PaperCanonicalInstrumentSource
             || $book->symbol !== $metadata->symbol
             || $book->marketType !== 'perpetual'
             || $book->source !== 'order_book'
+            || ($metadata->marketDataVenue === PaperMarketDataVenue::HYPERLIQUID->value
+                && $book->sourceEpoch !== $metadata->sourceEpoch)
         ) {
             throw new \LogicException('paper_canonical_instrument_book_identity_mismatch');
         }

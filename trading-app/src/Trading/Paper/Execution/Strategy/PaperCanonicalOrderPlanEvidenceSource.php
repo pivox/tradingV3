@@ -6,6 +6,7 @@ namespace App\Trading\Paper\Execution\Strategy;
 
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjection;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidPriceStep;
 use App\TradingCore\OrderPlan\Canonical\CanonicalEntryZoneEngine;
 use App\TradingCore\OrderPlan\Canonical\CanonicalEntryZoneRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionCostSnapshot;
@@ -18,12 +19,14 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalPriceObservation;
 use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionEngine;
+use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionDecision;
 use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionRequest;
 use App\TradingCore\Risk\Canonical\CanonicalCostSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
 use App\TradingCore\Risk\Canonical\CanonicalRiskEngine;
 use App\TradingCore\Risk\Canonical\CanonicalRiskException;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
+use Brick\Math\BigDecimal;
 use Psr\Clock\ClockInterface;
 
 final readonly class PaperCanonicalOrderPlanEvidenceSource
@@ -35,6 +38,7 @@ final readonly class PaperCanonicalOrderPlanEvidenceSource
         'canonical_risk_quantity_below_minimum',
         'canonical_risk_notional_below_minimum',
         'canonical_minimum_net_r_not_met',
+        'canonical_hyperliquid_price_precision_invalid',
     ];
 
     public function __construct(
@@ -117,6 +121,7 @@ final readonly class PaperCanonicalOrderPlanEvidenceSource
                 $policy->stop->kind === 'pivot' ? $stopInput : null,
             );
             $protection = $this->protection->calculate($protectionRequest);
+            $this->assertHyperliquidPricePrecision($instrument, $protection);
             $fundingIntervals = intdiv(
                 $policy->holdingWindowSeconds - 1,
                 $policy->costContract->fundingIntervalSeconds,
@@ -173,6 +178,26 @@ final readonly class PaperCanonicalOrderPlanEvidenceSource
             }
 
             throw $exception;
+        }
+    }
+
+    private function assertHyperliquidPricePrecision(
+        PaperCanonicalInstrumentEvidence $instrument,
+        CanonicalProtectionDecision $protection,
+    ): void {
+        if ($instrument->instrument->exchange !== 'hyperliquid') {
+            return;
+        }
+        $minimumTick = BigDecimal::of((string) $instrument->tick->tickSize);
+        $prices = [$protection->entryPrice, $protection->stopPrice];
+        foreach ($protection->targets as $target) {
+            $prices[] = $target->price;
+        }
+        foreach ($prices as $price) {
+            $decimal = BigDecimal::of((string) $price);
+            if (!HyperliquidPriceStep::isValid($decimal, $minimumTick)) {
+                throw new CanonicalOrderPlanException('canonical_hyperliquid_price_precision_invalid');
+            }
         }
     }
 
