@@ -46,6 +46,49 @@ that checkpoint in the deterministic replay order. The controlled replay clock m
 monotonically with the delivered event timestamp; wall-clock time must not alter a
 replay result.
 
+## Public mainnet capture
+
+Prepare one private root outside Git, then run one independent process per
+public-data venue. These commands have no execution dependency and do not need
+`PAPER_EXECUTION_ENABLED`:
+
+```bash
+install -d -m 0700 /absolute/private/paper-market-data
+
+PAPER_MARKET_ACQUISITION_ENABLED=1 \
+PAPER_MARKET_DATA_ROOT=/absolute/private/paper-market-data \
+php bin/console app:paper-market:public-capture \
+  --venue=okx \
+  --dataset-id=first-baseline-okx-20260823-mainnet \
+  --duration-sec=86400
+
+HYPERLIQUID_PAPER_PUBLIC_ACQUISITION_ENABLED=1 \
+PAPER_MARKET_DATA_ROOT=/absolute/private/paper-market-data \
+php bin/console app:paper-market:public-capture \
+  --venue=hyperliquid \
+  --dataset-id=first-baseline-hyperliquid-20260823-mainnet \
+  --duration-sec=86400
+```
+
+The duration is explicit and bounded from 300 to 604800 seconds. BTC/ETH,
+mainnet provenance, native instruments and required channels are fixed by the
+venue contracts. OKX and Hyperliquid may run concurrently, but always as
+separate processes so their event loops, reconnect budgets and failures remain
+isolated.
+
+A timer, `SIGINT` or `SIGTERM` requests a healthy stop. The source completes
+only after its queues and pending acknowledgements are drained and continuity
+is proven. A protocol, continuity, durability or abnormal-stop failure freezes
+the dataset as `incomplete`; a terminal dataset is immutable. An abrupt process
+loss may leave `recording`, in which case the exact same command resumes from
+the durable recorder/source checkpoints.
+
+Successful output is redacted schema `paper-public-capture-result-v1` and ends
+with `certification_status=not_evaluated`. A complete capture proves neither a
+trade nor representative coverage. After both captures complete, pass their
+absolute directories to the exact certification campaign below, then apply the
+independent 50-certified-trades gate to every cell.
+
 ## Readiness check
 
 Run the read-only check with the exact inputs that will be replayed:

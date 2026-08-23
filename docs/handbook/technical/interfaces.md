@@ -40,6 +40,7 @@
 | `populate:indicators` | Peuple les snapshots indicateurs. |
 | `populate:validation-cache` | Peuple le cache validation. |
 | `app:exchange:runtime-check` | Controle runtime exchange/profile. |
+| `app:paper-market:public-capture` | Enregistre un dataset public mainnet OKX ou Hyperliquid, sans credential ni execution. |
 | `app:paper-market:runtime-check` | Verifie une cellule de replay Paper sans mutation. |
 | `app:paper-market:replay` | Rejoue un dataset public verifie dans une cellule Fake/Paper exacte. |
 | `app:paper-market:certification-matrix` | Exporte les cellules exactes attendues par #132. |

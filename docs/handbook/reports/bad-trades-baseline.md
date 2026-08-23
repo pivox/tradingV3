@@ -46,11 +46,14 @@ python3 trading-app/scripts/bad_trades_baseline.py \
   --monte-carlo-runs 1000
 ```
 
-Avant l'export, la campagne exacte peut etre executee avec
-`app:paper-market:certification-campaign` (voir le runbook Paper). Chaque cellule
-tourne dans des processus PHP neufs et reprend le meme checkpoint grace a son
-run ID deterministe. Un statut de campagne `completed` ne remplace jamais les
-gates de certification de cette page et ne prouve aucun nombre de trades.
+Avant la campagne, les corpus publics mainnet peuvent etre enregistres avec un
+processus `app:paper-market:public-capture` distinct pour OKX et Hyperliquid
+(voir le runbook Paper). La commande de capture ne lance aucune strategie et
+son statut `complete` ne prouve aucune representativite. Les deux corpus
+immuables alimentent ensuite `app:paper-market:certification-campaign`. Chaque
+cellule tourne dans des processus PHP neufs et reprend le meme checkpoint grace
+a son run ID deterministe. Un statut de campagne `completed` ne remplace jamais
+les gates de certification de cette page et ne prouve aucun nombre de trades.
 
 ## Axes couverts
 
