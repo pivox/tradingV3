@@ -534,6 +534,11 @@ services:
         arguments:
             $network: '%env(string:HYPERLIQUID_PAPER_PUBLIC_NETWORK)%'
 
+    App\Trading\Paper\Capture\PaperPublicCaptureRunner:
+        arguments:
+            $okxSourceFactory: '@App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSourceFactory'
+            $hyperliquidSourceFactory: '@App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSourceFactory'
+
     hyperliquid.paper_public.history_limiter:
         class: Symfony\Component\RateLimiter\LimiterInterface
         factory: ['@limiter.hyperliquid_paper_history', 'create']

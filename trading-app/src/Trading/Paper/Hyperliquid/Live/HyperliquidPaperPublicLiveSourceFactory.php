@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Trading\Paper\Hyperliquid\Live;
 
+use App\Trading\Paper\Capture\PaperPublicLiveSourceFactoryInterface;
 use App\Trading\Paper\Dataset\PaperDatasetFormatLimits;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
@@ -18,7 +19,7 @@ use React\EventLoop\Loop;
 use React\EventLoop\LoopInterface;
 use Symfony\Component\Clock\ClockInterface;
 
-final readonly class HyperliquidPaperPublicLiveSourceFactory
+final readonly class HyperliquidPaperPublicLiveSourceFactory implements PaperPublicLiveSourceFactoryInterface
 {
     private const MANIFEST_FILENAME = 'manifest.json';
     private const MANIFEST_ERROR = 'hyperliquid_paper_public_live_manifest_invalid';

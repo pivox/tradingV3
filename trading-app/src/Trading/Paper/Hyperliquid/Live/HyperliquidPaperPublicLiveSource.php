@@ -28,6 +28,8 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
     private ?\Throwable $transportFailure = null;
     private bool $stopped = false;
     private int $activeGeneration = 0;
+
+    private bool $healthyStopRequested = false;
     private ?TimerInterface $heartbeatTimer = null;
     private ?TimerInterface $pongTimer = null;
     private ?TimerInterface $reconnectTimer = null;
@@ -117,15 +119,14 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             return;
         }
         if ($this->checkpoint->phase === 'stopping') {
+            $this->cancelTimers();
+            $this->transport->close();
+            $this->stopped = true;
             $this->checkpoint = $this->checkpointStore->save(
-                $this->checkpoint->loseContinuity(
-                    'hyperliquid_public_trade_gap_unrecoverable',
-                ),
+                $this->checkpoint->completeHealthyStop(),
             );
 
-            throw new HyperliquidPaperLiveIntegrityException(
-                'hyperliquid_public_trade_gap_unrecoverable',
-            );
+            return;
         }
         if (\in_array(
             $this->checkpoint->phase,
@@ -166,6 +167,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         }
 
         while (!$this->stopped) {
+            $this->persistHealthyStopWhenDrained();
             if ($this->checkpoint->phase === 'stopping' && $this->queue->count() === 0) {
                 if ($this->checkpoint->pendingEvent !== null) {
                     throw new HyperliquidPaperLiveIntegrityException(
@@ -291,6 +293,9 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             $failure = $this->pendingTransportFailure();
             if ($failure !== null) {
                 throw $failure;
+            }
+            if ($this->checkpoint->phase === 'stopping') {
+                return null;
             }
             if ($this->fundingRefreshDue) {
                 return null;
@@ -719,21 +724,37 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
 
     public function requestHealthyOperatorStop(): void
     {
-        if ($this->checkpoint->phase === 'stopping') {
+        if ($this->checkpoint->phase === 'stopping' || $this->healthyStopRequested) {
             return;
         }
         if ($this->checkpoint->phase !== 'streaming'
             || !$this->checkpoint->continuity
+            || $this->checkpoint->pendingEvent !== null
+            || $this->pendingTransportFailure() !== null
         ) {
             throw new HyperliquidPaperLiveIntegrityException(
                 'hyperliquid_paper_public_healthy_stop_invalid',
             );
         }
+        $this->healthyStopRequested = true;
+        ++$this->activeGeneration;
+        $this->cancelTimers();
+        $this->persistHealthyStopWhenDrained();
+        $this->loop->stop();
+    }
+
+    private function persistHealthyStopWhenDrained(): void
+    {
+        if (!$this->healthyStopRequested
+            || $this->checkpoint->phase !== 'streaming'
+            || $this->checkpoint->pendingEvent !== null
+            || $this->queue->count() !== 0
+        ) {
+            return;
+        }
         $this->checkpoint = $this->checkpointStore->save(
             $this->checkpoint->requestHealthyStop(),
         );
-        $this->cancelTimers();
-        $this->loop->stop();
     }
 
     public function failureReason(): ?string

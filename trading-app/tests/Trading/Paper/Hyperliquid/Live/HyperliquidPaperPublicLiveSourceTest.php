@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\Paper\Hyperliquid\Live;
 
+use App\Trading\Paper\Capture\PaperPublicCaptureStopController;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpointStore;
+use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveIntegrityException;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSource;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicWebSocketTransportInterface;
 use App\Trading\Paper\MarketData\CanonicalJson;
@@ -175,6 +177,73 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertTrue($transport->closed);
     }
 
+    public function testDurationStopCompletesWhileWaitingForTheNextFrame(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport(self::marketFrames());
+        $source = $this->source($transport, loop: $loop);
+        $stops = new PaperPublicCaptureStopController($loop, $source);
+        $stops->start(300);
+        $events = self::generator($source->events());
+
+        $events->rewind();
+        for ($eventCount = 0; $eventCount < 6; ++$eventCount) {
+            self::assertTrue($events->valid());
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            if ($eventCount < 5) {
+                $events->next();
+            }
+        }
+
+        $loop->onNextRun(static function () use ($loop, $transport): void {
+            $loop->fire(300.0);
+            $lateTrade = json_decode(self::tradeFrame(), true, 512, \JSON_THROW_ON_ERROR);
+            $lateTrade['data'][0]['hash'] = '0xaaa';
+            $lateTrade['data'][0]['time'] = 2_000;
+            $lateTrade['data'][0]['tid'] = 44;
+            $transport->push(CanonicalJson::encode($lateTrade));
+        });
+        try {
+            $events->next();
+        } finally {
+            $stops->close();
+        }
+
+        self::assertFalse($events->valid());
+        self::assertTrue($source->isComplete());
+        self::assertNull($source->failureReason());
+        self::assertTrue($transport->closed);
+    }
+
+    public function testHealthyStopCannotBeRequestedWithAPendingEvent(): void
+    {
+        $source = $this->source(
+            new DeterministicHyperliquidTransport(self::marketFrames()),
+        );
+        $events = self::generator($source->events());
+        $events->rewind();
+        $event = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $event);
+        $source->acknowledge($event->eventId);
+        self::assertNotNull($this->checkpoint()->pendingEvent);
+
+        try {
+            $source->requestHealthyOperatorStop();
+            self::fail('A pending event must prevent the healthy stop request.');
+        } catch (HyperliquidPaperLiveIntegrityException $exception) {
+            self::assertSame(
+                'hyperliquid_paper_public_healthy_stop_invalid',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertSame('streaming', $this->checkpoint()->phase);
+        self::assertFalse($source->isComplete());
+        $source->stop();
+    }
+
     public function testAcquisitionDisabledAndPrematureMarketDataFailBeforeAcceptance(): void
     {
         $disabledTransport = new DeterministicHyperliquidTransport([]);
@@ -312,7 +381,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         yield 'subscribing' => ['subscribing'];
     }
 
-    public function testRestartFromStoppingFailsContinuityInsteadOfCompleting(): void
+    public function testRestartFromStoppingCompletesThePersistedHealthyStop(): void
     {
         $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
         $checkpoint = $store->loadOrCreate(
@@ -326,21 +395,17 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         $transport = new DeterministicHyperliquidTransport([]);
         $source = $this->source($transport);
 
-        try {
-            self::generator($source->events())->rewind();
-            self::fail('A restarted drain cannot prove queued frames were preserved.');
-        } catch (\RuntimeException $exception) {
-            self::assertSame(
-                'hyperliquid_public_trade_gap_unrecoverable',
-                $exception->getMessage(),
-            );
-        }
+        $events = self::generator($source->events());
+        $events->rewind();
 
         $persisted = $this->checkpoint();
-        self::assertSame('failed', $persisted->phase);
-        self::assertFalse($persisted->continuity);
-        self::assertFalse($source->isComplete());
+        self::assertFalse($events->valid());
+        self::assertSame('complete', $persisted->phase);
+        self::assertTrue($persisted->continuity);
+        self::assertTrue($source->isComplete());
+        self::assertNull($source->failureReason());
         self::assertSame(0, $transport->connectCount);
+        self::assertTrue($transport->closed);
     }
 
     public function testOverlappingTradeBatchRedeliveryIsIgnoredBeforeNewOrdinals(): void
@@ -367,6 +432,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame(['42', '43'], $tradeIds);
 
         $source->requestHealthyOperatorStop();
+        self::assertSame('streaming', $this->checkpoint()->phase);
         $events->next();
 
         self::assertFalse($events->valid());
@@ -822,6 +888,8 @@ final class HyperliquidDeterministicLoop implements LoopInterface
     /** @var list<TimerInterface> */
     private array $timers = [];
 
+    private ?\Closure $onNextRun = null;
+
     public function addReadStream($stream, $listener): void
     {
     }
@@ -877,10 +945,20 @@ final class HyperliquidDeterministicLoop implements LoopInterface
 
     public function run(): void
     {
+        $callback = $this->onNextRun;
+        $this->onNextRun = null;
+        if ($callback !== null) {
+            $callback();
+        }
     }
 
     public function stop(): void
     {
+    }
+
+    public function onNextRun(\Closure $callback): void
+    {
+        $this->onNextRun = $callback;
     }
 
     /** @return list<float> */
