@@ -28,6 +28,11 @@ final class NativeHyperliquidPaperPublicHttpTransport implements HyperliquidPape
         return $this->post($uri, $payload);
     }
 
+    public function postFundingContext(string $uri, array $payload): ResponseInterface
+    {
+        return $this->post($uri, $payload);
+    }
+
     /** @param array<string, mixed> $payload */
     private function post(string $uri, array $payload): ResponseInterface
     {

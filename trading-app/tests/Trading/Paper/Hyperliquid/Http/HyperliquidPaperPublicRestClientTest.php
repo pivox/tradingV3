@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\Paper\Hyperliquid\Http;
 
-use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRateLimiter;
+use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicHttpTransportInterface;
-use App\Trading\Paper\Hyperliquid\Http\NativeHyperliquidPaperPublicHttpTransport;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRateLimiter;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClient;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface;
-use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
+use App\Trading\Paper\Hyperliquid\Http\NativeHyperliquidPaperPublicHttpTransport;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -29,6 +30,59 @@ use Symfony\Contracts\HttpClient\ResponseStreamInterface;
 #[CoversClass(HyperliquidPaperPublicRestClient::class)]
 final class HyperliquidPaperPublicRestClientTest extends TestCase
 {
+    public function testReadsCurrentFundingForBothSupportedAssetsFromCredentialFreeContexts(): void
+    {
+        $requests = [];
+        $client = $this->client(new MockHttpClient(function (string $method, string $url, array $options) use (&$requests): MockResponse {
+            $requests[] = [$method, $url, $options];
+
+            return new MockResponse(json_encode([
+                ['universe' => [
+                    ['name' => 'BTC'],
+                    ['name' => 'SOL'],
+                    ['name' => 'ETH'],
+                ]],
+                [
+                    ['funding' => '0.000012500'],
+                    ['funding' => '-0.0002'],
+                    ['funding' => '0.000025'],
+                ],
+            ], JSON_THROW_ON_ERROR));
+        }));
+
+        self::assertSame([
+            ['coin' => 'BTC', 'funding_rate' => '0.0000125'],
+            ['coin' => 'ETH', 'funding_rate' => '0.000025'],
+        ], $client->fundingRates());
+        self::assertInstanceOf(HyperliquidPaperFundingRateClientInterface::class, $client);
+        self::assertSame('POST', $requests[0][0]);
+        self::assertSame('{"type":"metaAndAssetCtxs"}', $requests[0][2]['body']);
+        self::assertStringNotContainsString(
+            'authorization',
+            strtolower(json_encode($requests[0][2], JSON_THROW_ON_ERROR)),
+        );
+    }
+
+    public function testFundingContextsRequireBothAssetsAndCanonicalBoundedRates(): void
+    {
+        foreach ([
+            [['universe' => [['name' => 'BTC']]], [['funding' => '0.0001']]],
+            [['universe' => [['name' => 'BTC'], ['name' => 'BTC'], ['name' => 'ETH']]], [['funding' => '0.0001'], ['funding' => '0.0001'], ['funding' => '0.0001']]],
+            [['universe' => [['name' => 'BTC'], ['name' => 'ETH']]], [['funding' => '1'], ['funding' => '0.0001']]],
+            [['universe' => [['name' => 'BTC'], ['name' => 'ETH']]], [['funding' => '0.0001']]],
+        ] as $payload) {
+            $client = $this->client(new MockHttpClient(new MockResponse(
+                json_encode($payload, JSON_THROW_ON_ERROR),
+            )));
+            try {
+                $client->fundingRates();
+                self::fail('Invalid Hyperliquid funding contexts must fail closed.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('hyperliquid_paper_public_response_invalid', $exception->getMessage());
+            }
+        }
+    }
+
     public function testReadsExactSupportedUniverseFromPublicMetaRequest(): void
     {
         $requests = [];
@@ -159,7 +213,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
 
         $native = new \ReflectionClass(NativeHyperliquidPaperPublicHttpTransport::class);
         self::assertSame([], $native->getConstructor()?->getParameters() ?? []);
-        self::assertSame(['postCandleSnapshot', 'postMetadata', 'stream'], array_values(array_map(
+        self::assertSame(['postCandleSnapshot', 'postMetadata', 'postFundingContext', 'stream'], array_values(array_map(
             static fn (\ReflectionMethod $method): string => $method->getName(),
             array_filter($native->getMethods(), static fn (\ReflectionMethod $method): bool => $method->isPublic() && !$method->isConstructor()),
         )));
@@ -516,6 +570,18 @@ final class HyperliquidRecordingTransport implements HyperliquidPaperPublicHttpT
         ]);
     }
 
+    public function postFundingContext(string $uri, array $payload): ResponseInterface
+    {
+        return $this->http->request('POST', $uri, [
+            'json' => $payload,
+            'headers' => ['Accept' => 'application/json', 'Content-Type' => 'application/json'],
+            'timeout' => 10.0,
+            'max_duration' => 10.0,
+            'max_redirects' => 0,
+            'buffer' => false,
+        ]);
+    }
+
     public function stream(ResponseInterface $response): ResponseStreamInterface
     {
         return $this->http->stream($response);
@@ -537,6 +603,12 @@ final class HyperliquidStatusThrowingTransport implements HyperliquidPaperPublic
             new TransportException('wallet=status-secret'),
         );
     }
+    public function postFundingContext(string $uri, array $payload): ResponseInterface
+    {
+        return $this->responses[] = new HyperliquidThrowingStatusResponse(
+            new TransportException('wallet=status-secret'),
+        );
+    }
     public function stream(ResponseInterface $response): ResponseStreamInterface { throw new \LogicException('stream_not_expected'); }
 }
 
@@ -546,6 +618,10 @@ final class HyperliquidStreamThrowingTransport implements HyperliquidPaperPublic
     public array $responses = [];
     public function postCandleSnapshot(string $uri, array $payload): ResponseInterface { return $this->responses[] = new MockResponse('[]'); }
     public function postMetadata(string $uri, array $payload): ResponseInterface
+    {
+        return $this->responses[] = new MockResponse('[]');
+    }
+    public function postFundingContext(string $uri, array $payload): ResponseInterface
     {
         return $this->responses[] = new MockResponse('[]');
     }

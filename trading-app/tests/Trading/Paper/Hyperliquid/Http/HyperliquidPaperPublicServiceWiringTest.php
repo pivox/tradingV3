@@ -6,6 +6,7 @@ namespace App\Tests\Trading\Paper\Hyperliquid\Http;
 
 use App\Kernel;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicHttpTransportInterface;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRateLimiter;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClient;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface;
@@ -185,8 +186,12 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
             self::declaredPublicMethodNames(HyperliquidPaperPublicRestClientInterface::class),
         );
         self::assertSame(
-            ['postCandleSnapshot', 'postMetadata', 'stream'],
+            ['postCandleSnapshot', 'postMetadata', 'postFundingContext', 'stream'],
             self::declaredPublicMethodNames(HyperliquidPaperPublicHttpTransportInterface::class),
+        );
+        self::assertSame(
+            ['fundingRates'],
+            self::declaredPublicMethodNames(HyperliquidPaperFundingRateClientInterface::class),
         );
         self::assertSame(
             ['create'],
@@ -195,6 +200,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
         foreach ([
             HyperliquidPaperPublicRestClientInterface::class,
             HyperliquidPaperPublicHttpTransportInterface::class,
+            HyperliquidPaperFundingRateClientInterface::class,
             HyperliquidPaperPublicConfigFactory::class,
         ] as $class) {
             foreach (self::declaredPublicMethodNames($class) as $method) {
@@ -268,6 +274,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
             '/src/Trading/Paper/Hyperliquid/Http/HyperliquidPaperPublicRateLimiter.php',
             '/src/Trading/Paper/Hyperliquid/Http/HyperliquidPaperPublicRestClient.php',
             '/src/Trading/Paper/Hyperliquid/Http/HyperliquidPaperPublicRestClientInterface.php',
+            '/src/Trading/Paper/Hyperliquid/Http/HyperliquidPaperFundingRateClientInterface.php',
             '/src/Trading/Paper/Hyperliquid/Http/NativeHyperliquidPaperPublicHttpTransport.php',
         ];
         $source = '';

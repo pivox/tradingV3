@@ -133,7 +133,12 @@ final class CanonicalExecutionPolicyFixture
                 'leverage' => ['state' => 'defined', 'value' => 5.0, 'unit' => 'leverage_multiple'],
             ],
             'setup' => $setup,
-            'exchange' => ['id' => 'fake', 'fees' => ['maker_rate' => 0.0002, 'taker_rate' => 0.0005], 'limits' => ['min_notional' => 5.0, 'max_notional' => 1000.0]],
+            'exchange' => [
+                'id' => 'fake',
+                'fees' => ['maker_rate' => 0.0002, 'taker_rate' => 0.0005],
+                'funding' => ['enabled' => true, 'interval' => 'PT8H'],
+                'limits' => ['min_notional' => 5.0, 'max_notional' => 1000.0],
+            ],
             'environment' => [
                 'id' => 'test',
                 'allowed_symbols' => ['BTCUSDT'],

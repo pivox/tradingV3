@@ -144,6 +144,16 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         );
     }
 
+    public function testFundingEpochMustMatchTheFollowingSnapshotBoundary(): void
+    {
+        $this->assertInvalidLiveCompletion(
+            fn (): array => $this->completeDataset(
+                PaperMarketDataNetwork::MAINNET,
+                fundingEpoch: 2,
+            ),
+        );
+    }
+
     public function testContinuityLostCheckpointCannotCertifyCompleteDataset(): void
     {
         [$directory] = $this->completeDataset(PaperMarketDataNetwork::MAINNET);
@@ -176,6 +186,7 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         bool $omitSnapshots = false,
         bool $syntheticBook = false,
         bool $metadataAfterSnapshots = false,
+        int $fundingEpoch = 1,
     ): array
     {
         $datasetId = 'paper-hyperliquid-equality-' . $network->value;
@@ -216,7 +227,27 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         $secondNormalizer = new HyperliquidPaperMarketEventNormalizer(
             $network,
             $ordinals,
+            new MockClock('2026-07-29T10:00:00.000003Z'),
+        );
+        $btcFundingNormalizer = new HyperliquidPaperMarketEventNormalizer(
+            $network,
+            $ordinals,
             new MockClock('2026-07-29T10:00:00.000001Z'),
+        );
+        $btcSnapshotNormalizer = new HyperliquidPaperMarketEventNormalizer(
+            $network,
+            $ordinals,
+            new MockClock('2026-07-29T10:00:00.000002Z'),
+        );
+        $ethFundingNormalizer = new HyperliquidPaperMarketEventNormalizer(
+            $network,
+            $ordinals,
+            new MockClock('2026-07-29T10:00:00.000004Z'),
+        );
+        $ethSnapshotNormalizer = new HyperliquidPaperMarketEventNormalizer(
+            $network,
+            $ordinals,
+            new MockClock('2026-07-29T10:00:00.000005Z'),
         );
         $marketNormalizer = new HyperliquidPaperMarketEventNormalizer(
             $network,
@@ -229,11 +260,17 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         $ethMetadata = $secondNormalizer->instrumentMetadata([
             'coin' => 'ETH', 'asset_id' => 1, 'sz_decimals' => 4, 'max_leverage' => 25,
         ], 1);
-        $btcSnapshot = $normalizer->snapshotBoundary('BTC', 'initial', 1);
-        $ethSnapshot = $secondNormalizer->snapshotBoundary('ETH', 'initial', 1);
+        $btcFunding = $btcFundingNormalizer->fundingRate([
+            'coin' => 'BTC', 'funding_rate' => '0.0000125',
+        ], $fundingEpoch);
+        $ethFunding = $ethFundingNormalizer->fundingRate([
+            'coin' => 'ETH', 'funding_rate' => '-0.000025',
+        ], $fundingEpoch);
+        $btcSnapshot = $btcSnapshotNormalizer->snapshotBoundary('BTC', 'initial', 1);
+        $ethSnapshot = $ethSnapshotNormalizer->snapshotBoundary('ETH', 'initial', 1);
         $events = $omitSnapshots ? [] : ($metadataAfterSnapshots
-            ? [$btcSnapshot, $ethSnapshot, $btcMetadata, $ethMetadata]
-            : [$btcMetadata, $btcSnapshot, $ethMetadata, $ethSnapshot]);
+            ? [$btcSnapshot, $ethSnapshot, $btcMetadata, $btcFunding, $ethMetadata, $ethFunding]
+            : [$btcMetadata, $btcFunding, $btcSnapshot, $ethMetadata, $ethFunding, $ethSnapshot]);
         $events[] = $marketNormalizer->liveTrade([
                 'coin' => 'BTC',
                 'side' => 'B',

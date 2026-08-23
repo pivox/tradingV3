@@ -6,6 +6,7 @@ namespace App\Trading\Paper\Hyperliquid\Live;
 
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperMarketEventNormalizer;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
@@ -42,6 +43,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         ?HyperliquidPaperPublicFrameDecoder $decoder = null,
         ?HyperliquidPaperPublicFrameQueue $queue = null,
         private readonly ?HyperliquidPaperInstrumentMetadataClientInterface $metadataClient = null,
+        private readonly ?HyperliquidPaperFundingRateClientInterface $fundingClient = null,
     ) {
         if ($config->network !== $checkpoint->network) {
             throw new \InvalidArgumentException('hyperliquid_paper_live_checkpoint_mismatch');
@@ -142,6 +144,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             $this->scheduleHeartbeat();
             yield from $this->yieldCandidates([
                 ...($this->metadataClient === null ? [] : $this->metadataEvents()),
+                ...($this->fundingClient === null ? [] : $this->fundingEvents()),
                 $this->normalizer->snapshotBoundary(
                     'BTC',
                     'initial',
@@ -321,6 +324,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 $this->scheduleHeartbeat();
                 yield from $this->yieldCandidates([
                     ...($this->metadataClient === null ? [] : $this->metadataEvents()),
+                    ...($this->fundingClient === null ? [] : $this->fundingEvents()),
                     $this->normalizer->snapshotBoundary(
                         'BTC',
                         'reconnect',
@@ -457,6 +461,31 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         $events = [];
         foreach ($this->metadataClient->instrumentMetadata() as $row) {
             $events[] = $this->normalizer->instrumentMetadata(
+                $row,
+                $this->checkpoint->sourceEpoch,
+            );
+        }
+        if (\count($events) !== 2
+            || $events[0]->symbol !== 'BTCUSDT'
+            || $events[1]->symbol !== 'ETHUSDT'
+        ) {
+            throw new HyperliquidPaperLiveIntegrityException(
+                'hyperliquid_paper_public_response_invalid',
+            );
+        }
+
+        return $events;
+    }
+
+    /** @return list<PaperMarketEvent> */
+    private function fundingEvents(): array
+    {
+        if (!$this->fundingClient instanceof HyperliquidPaperFundingRateClientInterface) {
+            throw new \LogicException('hyperliquid_paper_funding_client_required');
+        }
+        $events = [];
+        foreach ($this->fundingClient->fundingRates() as $row) {
+            $events[] = $this->normalizer->fundingRate(
                 $row,
                 $this->checkpoint->sourceEpoch,
             );

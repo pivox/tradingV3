@@ -144,6 +144,65 @@ final class HyperliquidPaperMarketEventNormalizer
         }
     }
 
+    /** @param array<string, mixed> $row */
+    public function fundingRate(
+        #[\SensitiveParameter] array $row,
+        int $sourceEpoch,
+    ): PaperMarketEvent {
+        try {
+            self::assertExactKeys($row, ['coin', 'funding_rate']);
+            $coin = $row['coin'] ?? null;
+            $rate = $row['funding_rate'] ?? null;
+            if (!\is_string($coin)
+                || !\in_array($coin, ['BTC', 'ETH'], true)
+                || !\is_string($rate)
+                || \strlen($rate) > 128
+                || preg_match('/\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $rate) !== 1
+                || (string) BigDecimal::of($rate)->stripTrailingZeros() !== $rate
+                || BigDecimal::of($rate)->isLessThanOrEqualTo(-1)
+                || BigDecimal::of($rate)->isGreaterThanOrEqualTo(1)
+                || $sourceEpoch < 1
+            ) {
+                throw new \InvalidArgumentException();
+            }
+            $timestamp = $this->receiptTimestamp();
+            $payload = [
+                'funding_schema_version' => 'paper-funding-rate.v2',
+                'native_symbol' => $coin,
+                'instrument_type' => 'perpetual',
+                'funding_rate' => $rate,
+                'observed_at_ms' => $timestamp->format('Uv'),
+                'funding_interval_seconds' => 3600,
+                'method' => 'current_asset_context',
+                'formula_type' => 'metaAndAssetCtxsFunding',
+                'settlement_state' => 'processing',
+                'source_epoch' => $sourceEpoch,
+                'origin' => 'rest_public_meta_and_asset_contexts',
+            ];
+
+            return $this->event(
+                symbol: (new HyperliquidPaperInstrumentMap())->normalizedSymbol($coin),
+                channel: PaperMarketDataChannel::FUNDING_RATE,
+                exchangeTimestamp: $timestamp,
+                naturalIdentity: implode('|', [
+                    $this->network->value,
+                    $coin,
+                    'funding_rate',
+                    (string) $sourceEpoch,
+                    hash('sha256', CanonicalJson::encode($payload)),
+                ]),
+                payload: $payload,
+                receivedTimestamp: $timestamp,
+            );
+        } catch (\Throwable $exception) {
+            throw new \InvalidArgumentException(
+                'hyperliquid_paper_funding_rate_invalid',
+                0,
+                $exception,
+            );
+        }
+    }
+
     private function normalizedCandle(
         HyperliquidCandle $candle,
         string $origin,

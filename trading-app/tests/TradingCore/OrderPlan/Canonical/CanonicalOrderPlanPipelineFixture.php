@@ -129,7 +129,10 @@ final class CanonicalOrderPlanPipelineFixture
                 0.0001,
                 0.0001,
                 0.0001,
-                1,
+                intdiv(
+                    $policy->holdingWindowSeconds - 1,
+                    $policy->costContract->fundingIntervalSeconds,
+                ) + 1,
             ),
             new CanonicalInstrumentSnapshot(
                 $exchange,

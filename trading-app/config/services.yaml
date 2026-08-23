@@ -557,6 +557,10 @@ services:
         alias: App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClient
         public: true
 
+    App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface:
+        alias: App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClient
+        public: true
+
     hyperliquid.paper_public.ws_transport_factory:
         class: App\Trading\Paper\Hyperliquid\Live\PawlHyperliquidPaperPublicWebSocketTransportFactory
 
@@ -567,6 +571,7 @@ services:
     App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSourceFactory:
         arguments:
             $metadataClient: '@App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface'
+            $fundingClient: '@App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface'
         public: true
 
     App\Runtime\Safety\ExchangeCallGuardHttpClient:
