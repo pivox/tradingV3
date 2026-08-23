@@ -14,6 +14,14 @@ historiques restent `reference_only` sans backfill. L'export #132 exige
 explicitement `baseline_eligible` avant les gates de lineage, fermeture, coûts,
 PnL et minimum 50 ; ce statut rend un trade candidat, il ne le certifie pas.
 
+### Mise à jour du 23 août 2026 — campagne multi-processus
+
+La matrice #132 peut désormais être rejouée séquentiellement avec un processus
+PHP neuf par runtime-check et par cellule. Les run IDs et l'état atomique rendent
+la campagne reprenable sans partager l'horloge monotone entre venues. Le premier
+échec stoppe la suite et aucun statut de campagne n'est interprété comme une
+preuve de trade certifié ou de seuil 50 atteint.
+
 ### Mise à jour du 20 août 2026 — identité Paper moderne
 
 Le stockage Paper accepte désormais une identité moderne versionnée contenant

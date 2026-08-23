@@ -40,6 +40,10 @@
 | `populate:indicators` | Peuple les snapshots indicateurs. |
 | `populate:validation-cache` | Peuple le cache validation. |
 | `app:exchange:runtime-check` | Controle runtime exchange/profile. |
+| `app:paper-market:runtime-check` | Verifie une cellule de replay Paper sans mutation. |
+| `app:paper-market:replay` | Rejoue un dataset public verifie dans une cellule Fake/Paper exacte. |
+| `app:paper-market:certification-matrix` | Exporte les cellules exactes attendues par #132. |
+| `app:paper-market:certification-campaign` | Execute la matrice dans des processus isoles, avec reprise et sans declarer la certification. |
 | `app:export-symbol-data` | Exporte donnees et logs d'un symbole. |
 | `app:export-execution-data` | Exporte donnees d'execution. |
 | `position:close-manual` | Ferme une position manuellement. |

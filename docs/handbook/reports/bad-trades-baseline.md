@@ -46,6 +46,12 @@ python3 trading-app/scripts/bad_trades_baseline.py \
   --monte-carlo-runs 1000
 ```
 
+Avant l'export, la campagne exacte peut etre executee avec
+`app:paper-market:certification-campaign` (voir le runbook Paper). Chaque cellule
+tourne dans des processus PHP neufs et reprend le meme checkpoint grace a son
+run ID deterministe. Un statut de campagne `completed` ne remplace jamais les
+gates de certification de cette page et ne prouve aucun nombre de trades.
+
 ## Axes couverts
 
 Le script produit les agregats par mode, setup, side canonique, symbole, timeframe et cellule de certification exacte. Il calcule count, population certifiee, winrate, Wilson 95 %, expectancy nette, profit factor, max drawdown, R net moyen/median, MFE/MAE, duree, couts et causes de perte candidates. La liquidite maker/taker est explicitement `unavailable_not_exposed_by_position_trade_analysis_v2` : une colonne absente ne devient jamais un faux zero.
