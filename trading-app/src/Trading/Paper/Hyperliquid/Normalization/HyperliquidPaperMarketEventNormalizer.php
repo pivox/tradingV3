@@ -92,13 +92,14 @@ final class HyperliquidPaperMarketEventNormalizer
             $quantityStep = $sizeDecimals === 0
                 ? '1'
                 : '0.' . str_repeat('0', $sizeDecimals - 1) . '1';
+            $maximumMarketNotional = HyperliquidOrderNotionalLimits::maximumMarketNotional($maxLeverage);
             $timestamp = $this->receiptTimestamp();
             $payload = [
-                'metadata_schema_version' => 'paper-instrument-metadata.v1',
+                'metadata_schema_version' => 'paper-instrument-metadata.v2',
                 'native_symbol' => $coin,
                 'instrument_type' => 'perpetual',
                 'base_asset' => $coin,
-                'quote_asset' => 'USDC',
+                'quote_asset' => 'USDT',
                 'settlement_asset' => 'USDC',
                 'status' => 'live',
                 'asset_id' => $assetId,
@@ -112,6 +113,9 @@ final class HyperliquidPaperMarketEventNormalizer
                 'price_precision_digits' => 5,
                 'price_max_decimals' => 6 - $sizeDecimals,
                 'maximum_leverage' => (string) $maxLeverage,
+                'maximum_market_notional' => $maximumMarketNotional,
+                'maximum_limit_notional' => HyperliquidOrderNotionalLimits::maximumLimitNotional($maxLeverage),
+                'order_notional_limit_model' => HyperliquidOrderNotionalLimits::MODEL,
                 'source_epoch' => $sourceEpoch,
                 'origin' => 'rest_meta',
             ];

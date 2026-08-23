@@ -48,10 +48,13 @@ final readonly class PaperCanonicalStrategyEvidenceSource implements PaperCanoni
         if ($projection === null) {
             return null;
         }
-        $instrument = $this->instruments->evidenceFor($cell, $event);
         $book = $this->books->snapshotFor($cell, $event);
+        if ($book === null) {
+            return null;
+        }
+        $instrument = $this->instruments->evidenceFor($cell, $event, $book);
         $costs = $this->costs->snapshotFor($cell, $event, $policy);
-        if ($instrument === null || $book === null || $costs === null) {
+        if ($instrument === null || $costs === null) {
             return null;
         }
         $portfolio = $this->portfolios->snapshot(

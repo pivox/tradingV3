@@ -83,7 +83,7 @@ final class HyperliquidPaperSourceOrdinal
     ];
 
     /** @var list<string> */
-    private const INSTRUMENT_METADATA_PAYLOAD_KEYS = [
+    private const INSTRUMENT_METADATA_V1_PAYLOAD_KEYS = [
         'asset_id',
         'base_asset',
         'contract_multiplier',
@@ -104,6 +104,14 @@ final class HyperliquidPaperSourceOrdinal
         'size_decimals',
         'source_epoch',
         'status',
+    ];
+
+    /** @var list<string> */
+    private const INSTRUMENT_METADATA_V2_PAYLOAD_KEYS = [
+        ...self::INSTRUMENT_METADATA_V1_PAYLOAD_KEYS,
+        'maximum_limit_notional',
+        'maximum_market_notional',
+        'order_notional_limit_model',
     ];
 
     /** @var list<string> */
@@ -883,16 +891,25 @@ final class HyperliquidPaperSourceOrdinal
             throw new \InvalidArgumentException();
         }
         $payload = $event->payload;
-        self::assertExactKeys($payload, self::INSTRUMENT_METADATA_PAYLOAD_KEYS);
+        $metadataSchemaVersion = $payload['metadata_schema_version'] ?? null;
+        self::assertExactKeys(
+            $payload,
+            $metadataSchemaVersion === 'paper-instrument-metadata.v2'
+                ? self::INSTRUMENT_METADATA_V2_PAYLOAD_KEYS
+                : self::INSTRUMENT_METADATA_V1_PAYLOAD_KEYS,
+        );
         $coin = $this->canonicalLiveCoin($event, $payload['native_symbol'] ?? null);
         $assetId = $payload['asset_id'] ?? null;
         $sizeDecimals = $payload['size_decimals'] ?? null;
         $epoch = $payload['source_epoch'] ?? null;
         $maximumLeverage = $payload['maximum_leverage'] ?? null;
-        if (($payload['metadata_schema_version'] ?? null) !== 'paper-instrument-metadata.v1'
+        if (!\in_array($metadataSchemaVersion, [
+            'paper-instrument-metadata.v1',
+            'paper-instrument-metadata.v2',
+        ], true)
             || ($payload['instrument_type'] ?? null) !== 'perpetual'
             || ($payload['base_asset'] ?? null) !== $coin
-            || ($payload['quote_asset'] ?? null) !== 'USDC'
+            || ($payload['quote_asset'] ?? null) !== ($metadataSchemaVersion === 'paper-instrument-metadata.v2' ? 'USDT' : 'USDC')
             || ($payload['settlement_asset'] ?? null) !== 'USDC'
             || ($payload['status'] ?? null) !== 'live'
             || ($payload['quantity_unit'] ?? null) !== 'base_asset'
@@ -921,6 +938,19 @@ final class HyperliquidPaperSourceOrdinal
             || ($payload['minimum_quantity'] ?? null) !== $step
         ) {
             throw new \InvalidArgumentException();
+        }
+        if ($metadataSchemaVersion === 'paper-instrument-metadata.v2') {
+            $maximumMarketNotional = HyperliquidOrderNotionalLimits::maximumMarketNotional(
+                (int) $maximumLeverage,
+            );
+            if (($payload['maximum_market_notional'] ?? null) !== $maximumMarketNotional
+                || ($payload['maximum_limit_notional'] ?? null)
+                    !== HyperliquidOrderNotionalLimits::maximumLimitNotional((int) $maximumLeverage)
+                || ($payload['order_notional_limit_model'] ?? null)
+                    !== HyperliquidOrderNotionalLimits::MODEL
+            ) {
+                throw new \InvalidArgumentException();
+            }
         }
         $this->assertEqualEventTimestamps($event);
         $sourceDigest = hash('sha256', CanonicalJson::encode($payload));

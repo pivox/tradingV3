@@ -8,15 +8,19 @@ use App\Trading\Paper\Backtesting\NormalizedBacktestInstrumentMetadata;
 use App\Trading\Paper\Backtesting\PaperBacktestDatasetAdapter;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
+use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidOrderNotionalLimits;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Replay\PaperReplayClock;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidPriceStep;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderBookSnapshot;
+use App\TradingCore\OrderPlan\Canonical\CanonicalTickSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalInstrumentSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
-use App\TradingCore\OrderPlan\Canonical\CanonicalTickSnapshot;
 use Brick\Math\BigDecimal;
+use Brick\Math\RoundingMode;
 
 final readonly class PaperCanonicalInstrumentSource
 {
@@ -33,30 +37,79 @@ final readonly class PaperCanonicalInstrumentSource
     ): ?CanonicalInstrumentSnapshot {
         $metadata = $this->metadataFor($cell, $trigger);
 
-        return $metadata === null
+        return $metadata === null || !$this->isCompleteOkxV2($metadata)
             ? null
-            : $this->instrumentFor($metadata, new \DateTimeImmutable($metadata->happenedAt));
+            : $this->instrumentFor(
+                $metadata,
+                new \DateTimeImmutable($metadata->happenedAt),
+                (string) $metadata->maxLimitQuantity,
+                (string) $metadata->maxMarketQuantity,
+                'sha256:' . $metadata->sourceRecordId,
+            );
     }
 
     public function evidenceFor(
         PaperExecutionCell $cell,
         PaperMarketEvent $trigger,
+        CanonicalOrderBookSnapshot $book,
     ): ?PaperCanonicalInstrumentEvidence {
         $metadata = $this->metadataFor($cell, $trigger);
         if ($metadata === null) {
             return null;
         }
+        $this->assertBookIdentity($metadata, $book);
         $observedAt = \DateTimeImmutable::createFromInterface($this->clock->now());
-        $inputHash = 'sha256:' . $metadata->sourceRecordId;
+        if ($book->observedAt > $observedAt) {
+            return null;
+        }
+        if ($this->isCompleteOkxV2($metadata)) {
+            $tick = $metadata->priceTick;
+            $maxQuantity = (string) $metadata->maxLimitQuantity;
+            $marketMaxQuantity = (string) $metadata->maxMarketQuantity;
+            $inputHash = 'sha256:' . $metadata->sourceRecordId;
+        } elseif ($this->isCompleteHyperliquidV2($metadata)) {
+            $referencePrice = BigDecimal::of((string) $book->bestAsk);
+            $quantityStep = BigDecimal::of($metadata->quantityStep);
+            $tick = $this->canonical(HyperliquidPriceStep::forPrice(
+                $referencePrice,
+                BigDecimal::of($metadata->priceTick),
+            ));
+            $maxQuantity = $this->maximumQuantity(
+                (string) $metadata->maxLimitNotional,
+                $referencePrice,
+                $quantityStep,
+            );
+            $marketMaxQuantity = $this->maximumQuantity(
+                (string) $metadata->maxMarketNotional,
+                $referencePrice,
+                $quantityStep,
+            );
+            $inputHash = 'sha256:' . hash('sha256', CanonicalJson::encode([
+                'metadata_record_id' => $metadata->sourceRecordId,
+                'book_input_hash' => $book->inputHash,
+                'reference_price' => $this->canonical($referencePrice),
+                'price_tick' => $tick,
+                'maximum_limit_quantity' => $maxQuantity,
+                'maximum_market_quantity' => $marketMaxQuantity,
+            ]));
+        } else {
+            return null;
+        }
 
         return new PaperCanonicalInstrumentEvidence(
-            $this->instrumentFor($metadata, $observedAt),
+            $this->instrumentFor(
+                $metadata,
+                $observedAt,
+                $maxQuantity,
+                $marketMaxQuantity,
+                $inputHash,
+            ),
             new CanonicalTickSnapshot(
                 exchange: $metadata->marketDataVenue,
                 environment: $metadata->sourceNetwork,
                 symbol: $metadata->symbol,
                 marketType: 'perpetual',
-                tickSize: $this->finitePositive(BigDecimal::of($metadata->priceTick)),
+                tickSize: $this->finitePositive(BigDecimal::of($tick)),
                 observedAt: $observedAt,
                 inputHash: $inputHash,
             ),
@@ -125,24 +178,23 @@ final readonly class PaperCanonicalInstrumentSource
         ) {
             throw new \LogicException('paper_canonical_instrument_identity_mismatch');
         }
-        if (!$this->isCompleteOkxV2($metadata)) {
-            return null;
-        }
-
         return $metadata;
     }
 
     private function instrumentFor(
         NormalizedBacktestInstrumentMetadata $metadata,
         \DateTimeImmutable $observedAt,
+        string $maxQuantityValue,
+        string $marketMaxQuantityValue,
+        string $inputHash,
     ): CanonicalInstrumentSnapshot {
         $contractSize = $this->finitePositive(
             BigDecimal::of($metadata->contractValue)->multipliedBy($metadata->contractMultiplier),
         );
         $quantityStep = $this->finitePositive(BigDecimal::of($metadata->quantityStep));
         $minQuantity = $this->finitePositive(BigDecimal::of($metadata->minQuantity));
-        $maxQuantity = $this->finitePositive(BigDecimal::of((string) $metadata->maxLimitQuantity));
-        $marketMaxQuantity = $this->finitePositive(BigDecimal::of((string) $metadata->maxMarketQuantity));
+        $maxQuantity = $this->finitePositive(BigDecimal::of($maxQuantityValue));
+        $marketMaxQuantity = $this->finitePositive(BigDecimal::of($marketMaxQuantityValue));
         $leverageCap = $this->finitePositive(BigDecimal::of((string) $metadata->maxLeverage));
         if (BigDecimal::of($metadata->quantityStep)->getScale()
                 > CanonicalRiskCalculationRequest::MAX_QUANTITY_DECIMALS
@@ -154,8 +206,6 @@ final readonly class PaperCanonicalInstrumentSource
         ) {
             throw new \LogicException('paper_canonical_instrument_constraints_invalid');
         }
-
-        $inputHash = 'sha256:' . $metadata->sourceRecordId;
 
         return new CanonicalInstrumentSnapshot(
             exchange: $metadata->marketDataVenue,
@@ -173,6 +223,65 @@ final readonly class PaperCanonicalInstrumentSource
             observedAt: $observedAt,
             inputHash: $inputHash,
         );
+    }
+
+    private function isCompleteHyperliquidV2(NormalizedBacktestInstrumentMetadata $metadata): bool
+    {
+        return $metadata->marketDataVenue === PaperMarketDataVenue::HYPERLIQUID->value
+            && $metadata->metadataSchemaVersion === 'paper-instrument-metadata.v2'
+            && $metadata->quoteAsset === 'USDT'
+            && $metadata->settlementAsset === 'USDC'
+            && $metadata->quantityUnit === 'base_asset'
+            && $metadata->maxMarketQuantity === null
+            && $metadata->maxLimitQuantity === null
+            && $metadata->maxMarketNotional !== null
+            && $metadata->maxLimitNotional !== null
+            && $metadata->orderNotionalLimitModel
+                === HyperliquidOrderNotionalLimits::MODEL
+            && $metadata->maxLeverage !== null;
+    }
+
+    private function assertBookIdentity(
+        NormalizedBacktestInstrumentMetadata $metadata,
+        CanonicalOrderBookSnapshot $book,
+    ): void {
+        if ($book->exchange !== $metadata->marketDataVenue
+            || $book->environment !== $metadata->sourceNetwork
+            || $book->symbol !== $metadata->symbol
+            || $book->marketType !== 'perpetual'
+            || $book->source !== 'order_book'
+        ) {
+            throw new \LogicException('paper_canonical_instrument_book_identity_mismatch');
+        }
+    }
+
+    private function maximumQuantity(
+        string $maximumNotional,
+        BigDecimal $referencePrice,
+        BigDecimal $quantityStep,
+    ): string {
+        $raw = BigDecimal::of($maximumNotional)->dividedBy(
+            $referencePrice,
+            24,
+            RoundingMode::DOWN,
+        );
+        $quantity = $raw
+            ->dividedBy($quantityStep, 0, RoundingMode::DOWN)
+            ->multipliedBy($quantityStep);
+        if (!$quantity->isPositive()) {
+            throw new \LogicException('paper_canonical_instrument_constraints_invalid');
+        }
+
+        return $this->canonical($quantity);
+    }
+
+    private function canonical(BigDecimal $value): string
+    {
+        $canonical = $value->stripTrailingZeros();
+
+        return $canonical->getScale() < 0
+            ? (string) $canonical->toScale(0)
+            : (string) $canonical;
     }
 
     private function isCompleteOkxV2(NormalizedBacktestInstrumentMetadata $metadata): bool

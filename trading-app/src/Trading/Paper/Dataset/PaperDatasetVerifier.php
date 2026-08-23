@@ -1207,7 +1207,10 @@ final class PaperDatasetVerifier
         array &$metadataEpochs,
     ): string {
         $epoch = $this->livePositiveInt($payload['source_epoch'] ?? null);
-        if (($payload['metadata_schema_version'] ?? null) !== 'paper-instrument-metadata.v1'
+        if (!\in_array($payload['metadata_schema_version'] ?? null, [
+            'paper-instrument-metadata.v1',
+            'paper-instrument-metadata.v2',
+        ], true)
             || ($payload['origin'] ?? null) !== 'rest_meta'
             || isset($metadataEpochs[$event->symbol])
                 && $epoch <= $metadataEpochs[$event->symbol]

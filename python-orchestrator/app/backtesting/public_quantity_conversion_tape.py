@@ -71,7 +71,9 @@ def _canonical(value: Any) -> bytes:
 class InstrumentMetadataRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
     schema_version: Literal[
-        "backtest-instrument-metadata.v1", "backtest-instrument-metadata.v2"
+        "backtest-instrument-metadata.v1",
+        "backtest-instrument-metadata.v2",
+        "backtest-instrument-metadata.v3",
     ]
     source_record_id: str = Field(pattern=_RECORD_ID)
     source_checksum: str = Field(pattern=_HASH)
@@ -99,6 +101,9 @@ class InstrumentMetadataRecord(BaseModel):
     maximum_market_quantity: str | None = None
     maximum_limit_quantity: str | None = None
     maximum_leverage: str | None = None
+    maximum_market_notional: str | None = None
+    maximum_limit_notional: str | None = None
+    order_notional_limit_model: str | None = None
 
     @field_validator("available_at", "happened_at")
     @classmethod
@@ -116,6 +121,8 @@ class InstrumentMetadataRecord(BaseModel):
         "maximum_market_quantity",
         "maximum_limit_quantity",
         "maximum_leverage",
+        "maximum_market_notional",
+        "maximum_limit_notional",
         mode="before",
     )
     @classmethod
@@ -152,6 +159,9 @@ class InstrumentMetadataRecord(BaseModel):
             self.maximum_market_quantity,
             self.maximum_limit_quantity,
             self.maximum_leverage,
+            self.maximum_market_notional,
+            self.maximum_limit_notional,
+            self.order_notional_limit_model,
         )
         if self.schema_version == "backtest-instrument-metadata.v1":
             if any(value is not None for value in extended):
@@ -186,17 +196,52 @@ class InstrumentMetadataRecord(BaseModel):
                     self.metadata_schema_version == "paper-instrument-metadata.v2"
                     and self.maximum_leverage is None
                 )
+                or self.maximum_market_notional is not None
+                or self.maximum_limit_notional is not None
+                or self.order_notional_limit_model is not None
             ):
                 raise ValueError("public_quantity_conversion_metadata_invalid")
-        elif (
-            self.metadata_schema_version != "paper-instrument-metadata.v1"
-            or self.quote_asset != "USDC"
-            or self.settlement_asset != "USDC"
-            or self.maximum_market_quantity is not None
-            or self.maximum_limit_quantity is not None
-            or self.maximum_leverage is None
-        ):
-            raise ValueError("public_quantity_conversion_metadata_invalid")
+        else:
+            if (
+                self.settlement_asset != "USDC"
+                or self.maximum_market_quantity is not None
+                or self.maximum_limit_quantity is not None
+                or self.maximum_leverage is None
+                or re.fullmatch(r"[1-9][0-9]*", self.maximum_leverage) is None
+            ):
+                raise ValueError("public_quantity_conversion_metadata_invalid")
+            if self.metadata_schema_version == "paper-instrument-metadata.v1":
+                if (
+                    self.quote_asset != "USDC"
+                    or self.maximum_market_notional is not None
+                    or self.maximum_limit_notional is not None
+                    or self.order_notional_limit_model is not None
+                ):
+                    raise ValueError("public_quantity_conversion_metadata_invalid")
+            elif self.metadata_schema_version == "paper-instrument-metadata.v2":
+                leverage = Decimal(self.maximum_leverage)
+                expected_market = (
+                    Decimal("15000000")
+                    if leverage >= 25
+                    else Decimal("5000000")
+                    if leverage >= 20
+                    else Decimal("2000000")
+                    if leverage >= 10
+                    else Decimal("500000")
+                )
+                if (
+                    self.schema_version != "backtest-instrument-metadata.v3"
+                    or self.quote_asset != "USDT"
+                    or self.maximum_market_notional is None
+                    or self.maximum_limit_notional is None
+                    or Decimal(self.maximum_market_notional) != expected_market
+                    or Decimal(self.maximum_limit_notional) != expected_market * 10
+                    or self.order_notional_limit_model
+                    != "hyperliquid-max-order-notional-by-leverage.v1"
+                ):
+                    raise ValueError("public_quantity_conversion_metadata_invalid")
+            else:
+                raise ValueError("public_quantity_conversion_metadata_invalid")
         return self
 
 

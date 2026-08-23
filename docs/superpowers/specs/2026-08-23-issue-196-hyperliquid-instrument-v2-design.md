@@ -2,9 +2,14 @@
 
 ## Goal
 
-Make public Hyperliquid Paper replays eligible for canonical modern strategy
-evidence without inventing a static tick, a quantity cap, or an implicit
-USDC/USDT conversion.
+Make public Hyperliquid instrument records eligible for canonical modern
+strategy evidence without inventing a static tick, a quantity cap, or an
+implicit USDC/USDT conversion.
+
+This lot removes only the instrument-provider blocker. A full Hyperliquid
+strategy replay remains fail-closed until a separate public funding capture and
+canonical funding source exist; the current funding source intentionally
+accepts OKX only.
 
 ## Source contract
 
@@ -50,8 +55,10 @@ minimum fails closed. OKX v2 behavior remains unchanged.
 Canonical risk and the private Fake ledger remain numerically denominated in
 the USDT contract quote currency. Hyperliquid settlement remains explicitly
 USDC in source and normalized evidence, and the Fake instrument descriptor
-uses USDC settlement for a Hyperliquid cell. No exchange rate, stablecoin
-parity conversion, or private balance call is introduced.
+uses USDC settlement for a Hyperliquid cell. That descriptor advances to v2;
+persisted v1 descriptors remain restart-readable with their original USDT
+settlement semantics. No exchange rate, stablecoin parity conversion, or
+private balance call is introduced.
 
 ## Safety and verification
 

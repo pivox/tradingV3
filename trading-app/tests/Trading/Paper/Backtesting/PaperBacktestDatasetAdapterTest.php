@@ -821,6 +821,15 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         self::assertSame('base_asset', $dataset->instrumentMetadata[0]->quantityUnit);
         self::assertSame('1', $dataset->instrumentMetadata[0]->contractValue);
         self::assertSame('1', $dataset->instrumentMetadata[0]->contractMultiplier);
+        self::assertSame('USDT', $dataset->instrumentMetadata[0]->quoteAsset);
+        self::assertSame('USDC', $dataset->instrumentMetadata[0]->settlementAsset);
+        self::assertSame('15000000', $dataset->instrumentMetadata[0]->maxMarketNotional);
+        self::assertSame('150000000', $dataset->instrumentMetadata[0]->maxLimitNotional);
+        self::assertSame(
+            'hyperliquid-max-order-notional-by-leverage.v1',
+            $dataset->instrumentMetadata[0]->orderNotionalLimitModel,
+        );
+        self::assertSame('backtest-instrument-metadata.v3', $dataset->instrumentMetadata[0]->toArray()['schema_version']);
         self::assertSame('0.25', $dataset->tradeQuantityConversions[0]->sourceQuantity);
         self::assertSame('0.25', $dataset->tradeQuantityConversions[0]->baseQuantity);
         self::assertSame('0.25', $dataset->bookQuantityConversions[0]->bidBaseQuantity);
@@ -853,6 +862,18 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             $this->hyperliquidMetadata(['price_max_decimals' => 3]),
             $this->hyperliquidEvent(),
         ), 'paper_backtest_instrument_metadata_invalid');
+
+        foreach ([
+            ['maximum_leverage' => '50.5'],
+            ['maximum_market_notional' => '5000000'],
+            ['maximum_limit_notional' => '15000000'],
+            ['order_notional_limit_model' => 'unknown'],
+        ] as $override) {
+            $this->assertAdapterFailure($this->snapshot(
+                $this->hyperliquidMetadata($override),
+                $this->hyperliquidEvent(),
+            ), 'paper_backtest_instrument_metadata_invalid');
+        }
     }
 
     /** @param array<string, mixed> $override */
@@ -1048,11 +1069,11 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             $timestamp,
             '1',
             array_replace([
-                'metadata_schema_version' => 'paper-instrument-metadata.v1',
+                'metadata_schema_version' => 'paper-instrument-metadata.v2',
                 'native_symbol' => 'ETH',
                 'instrument_type' => 'perpetual',
                 'base_asset' => 'ETH',
-                'quote_asset' => 'USDC',
+                'quote_asset' => 'USDT',
                 'settlement_asset' => 'USDC',
                 'status' => 'live',
                 'asset_id' => 1,
@@ -1066,6 +1087,9 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
                 'price_precision_digits' => 5,
                 'price_max_decimals' => 2,
                 'maximum_leverage' => '50',
+                'maximum_market_notional' => '15000000',
+                'maximum_limit_notional' => '150000000',
+                'order_notional_limit_model' => 'hyperliquid-max-order-notional-by-leverage.v1',
                 'source_epoch' => 1,
                 'origin' => 'rest_meta',
             ], $override),

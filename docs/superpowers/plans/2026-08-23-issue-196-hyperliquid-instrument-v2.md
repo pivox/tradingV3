@@ -14,4 +14,5 @@
 6. Run targeted PHP/Python tests, adjacent Paper/TradingCore suites, static
    analysis, container/YAML checks, and whitespace validation.
 7. Commit, push a ready PR, request review, resolve real feedback, merge when CI
-   and review are clear, then continue the global chantier.
+   and review are clear, then continue the global chantier with public
+   Hyperliquid funding evidence.
