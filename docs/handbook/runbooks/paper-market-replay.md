@@ -78,10 +78,11 @@ Modern cells use identity schema v2. Their exact identity contains network,
 public-data venue, Paper configuration snapshot, canonical mode/setup IDs and
 versions, side, canonical configuration hash, condition-catalog hash and run ID.
 All modern fields are mandatory together; legacy v1 cells are never backfilled.
-The current runtime deliberately rejects a modern cell before mutation with
-`paper_modern_strategy_bridge_unavailable`. Operators must not interpret a
-persisted v2 cell as executable or baseline-eligible until the canonical
-strategy/effect bridge is available.
+The canonical strategy/effect bridge is now wired. A modern identity that passes
+the strict Effective Config resolver and coordinator readiness is marked
+`baseline_eligible`; this only makes its closed trades candidates for the
+independent lineage/cost/PnL and minimum-50 gates. Historical v2 cells persisted
+as `reference_only` are never backfilled or counted.
 
 After a successful check, execute the same tuple:
 
@@ -115,11 +116,11 @@ PAPER_EXECUTION_ENABLED=1 php bin/console app:paper-market:runtime-check \
 The dataset fixes the public venue and network environment; the command fixes
 the capability to `paper`. Mixing `--profile` with modern options, omitting one
 modern field or using a legacy alias fails closed. The check resolves the exact
-Effective Config and emits only its canonical hashes and identity. It currently
-returns `ready=false` with `paper_modern_strategy_bridge_unavailable`. Supplying
-the same options to `app:paper-market:replay` stops before any Paper snapshot,
-cell or dataset binding is written. Identity/configuration failures use stable
-redacted blocker codes and never expose an Effective Config filesystem path.
+Effective Config and emits only its canonical hashes and identity. A successful
+modern check returns `ready=true` and `baseline_eligible=true`; the replay still
+executes exclusively against Fake state. Identity/configuration failures use
+stable redacted blocker codes and never expose an Effective Config filesystem
+path.
 
 ## Database and rollback rules
 

@@ -52,6 +52,16 @@ final class PaperModernExecutionProvenanceTest extends TestCase
         self::assertSame($provenance, PaperExecutionProvenance::validate($provenance));
     }
 
+    public function testModernBaselineEligibleProvenanceRoundTripsWithoutChangingIdentity(): void
+    {
+        $cell = self::modernCell();
+        $provenance = $cell->provenance(PaperProfileEligibility::BASELINE_ELIGIBLE);
+
+        self::assertSame('baseline_eligible', $provenance['paper_eligibility']);
+        self::assertSame($cell->id, $provenance['paper_execution_cell_id']);
+        self::assertSame($provenance, PaperExecutionProvenance::validate($provenance));
+    }
+
     public function testLegacyProvenanceRemainsByteCompatible(): void
     {
         $cell = PaperExecutionCell::create(

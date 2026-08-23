@@ -28,6 +28,7 @@ use Doctrine\Migrations\AbstractMigration;
 use DoctrineMigrations\Version20260801120000;
 use DoctrineMigrations\Version20260820170000;
 use DoctrineMigrations\Version20260821030000;
+use DoctrineMigrations\Version20260823190000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -141,11 +142,35 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
         $this->store->inspectCell($modern, PaperProfileEligibility::REFERENCE_ONLY);
     }
 
-    public function testModernCellCannotBeMarkedBaselineEligibleBeforeBridge(): void
+    public function testModernCellCanBeMarkedBaselineEligibleAfterCanonicalBridge(): void
     {
+        $modern = $this->modernCell();
+
+        $this->store->registerCell($modern, PaperProfileEligibility::BASELINE_ELIGIBLE);
+
+        self::assertSame(
+            PaperProfileEligibility::BASELINE_ELIGIBLE->value,
+            $this->connection->fetchOne('SELECT eligibility FROM paper_execution_cell WHERE id = ?', [$modern->id]),
+        );
+        self::assertTrue($this->store->inspectCell(
+            $modern,
+            PaperProfileEligibility::BASELINE_ELIGIBLE,
+        )->registered);
+    }
+
+    public function testLegacyCellCannotBeMarkedBaselineEligible(): void
+    {
+        $legacy = PaperExecutionCell::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::OKX,
+            $this->snapshot->id,
+            'regular',
+            'legacy-baseline-forbidden',
+        );
+
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_execution_cell_eligibility_conflict');
-        $this->store->registerCell($this->modernCell(), PaperProfileEligibility::BASELINE_ELIGIBLE);
+        $this->store->registerCell($legacy, PaperProfileEligibility::BASELINE_ELIGIBLE);
     }
 
     public function testDatasetIdentityIsBoundOnceAndCannotBeSubstitutedOnRestart(): void
@@ -381,7 +406,8 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
         require_once __DIR__ . '/../../../../../migrations/Version20260801120000.php';
         require_once __DIR__ . '/../../../../../migrations/Version20260820170000.php';
         require_once __DIR__ . '/../../../../../migrations/Version20260821030000.php';
-        foreach ([Version20260801120000::class, Version20260820170000::class, Version20260821030000::class] as $class) {
+        require_once __DIR__ . '/../../../../../migrations/Version20260823190000.php';
+        foreach ([Version20260801120000::class, Version20260820170000::class, Version20260821030000::class, Version20260823190000::class] as $class) {
             /** @var AbstractMigration $migration */
             $migration = new $class($this->connection, new NullLogger());
             $migration->up(new Schema());

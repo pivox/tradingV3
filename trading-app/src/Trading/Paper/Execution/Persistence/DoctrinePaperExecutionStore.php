@@ -54,11 +54,9 @@ final class DoctrinePaperExecutionStore implements PaperExecutionStoreInterface
 
     public function registerCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): void
     {
-        if ($cell->isModern()) {
-            if ($eligibility !== PaperProfileEligibility::REFERENCE_ONLY) {
-                throw new \LogicException('paper_execution_cell_eligibility_conflict');
-            }
-        } elseif ((new PaperProfileRegistry())->require($cell->strategyProfile) !== $eligibility) {
+        if (!$cell->isModern()
+            && (new PaperProfileRegistry())->require($cell->strategyProfile) !== $eligibility
+        ) {
             throw new \LogicException('paper_execution_cell_eligibility_conflict');
         }
 

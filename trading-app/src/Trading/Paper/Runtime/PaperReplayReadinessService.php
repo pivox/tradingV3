@@ -106,7 +106,7 @@ final readonly class PaperReplayReadinessService
                 $modernIdentity,
                 $runId,
             );
-            $eligibility = PaperProfileEligibility::REFERENCE_ONLY;
+            $eligibility = PaperProfileEligibility::BASELINE_ELIGIBLE;
         } else {
             $profile = $strategy->legacyProfile();
             $eligibility = $this->profiles->require($profile);

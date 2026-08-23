@@ -71,7 +71,9 @@ trait PaperExecutionProvenance
 
     public function setPaperEligibility(?string $paperEligibility): self
     {
-        if ($paperEligibility !== null && $paperEligibility !== 'reference_only') {
+        if ($paperEligibility !== null
+            && !\in_array($paperEligibility, ['reference_only', 'baseline_eligible'], true)
+        ) {
             throw new \InvalidArgumentException('paper_eligibility_invalid');
         }
 

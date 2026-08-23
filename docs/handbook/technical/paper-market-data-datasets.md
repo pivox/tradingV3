@@ -141,11 +141,13 @@ portefeuille doivent également correspondre exactement à la cellule v2. Un
 écart de plan, preuve, décision, cellule, réseau, venue, version, side ou hash échoue avec
 `paper_canonical_prepared_effect_payload_invalid`.
 
-Cette frontière est volontairement non exécutable seule. Le runtime moderne
-reste bloqué par `paper_modern_strategy_bridge_unavailable` tant que
-l'assemblage des inputs marché/risque, la réservation d'intent, le dispatcher
-Fake canonique et la reprise des partial fills ne consomment pas tous ce même
-contrat. Aucune cellule moderne n'est donc promue par ce lot.
+L'assemblage des inputs marché/risque, la réservation d'intent, le dispatcher
+Fake canonique et la reprise idempotente consomment désormais tous ce contrat.
+Une cellule moderne résolue et exécutable peut donc être marquée
+`baseline_eligible`. Ce statut ne certifie ni son PnL ni sa représentativité :
+les preuves de fermeture, coûts, lineage et le seuil de 50 trades restent des
+gates indépendants. Les cellules historiques `reference_only` ne sont jamais
+promues par backfill.
 
 ### Stockage et reprise
 
@@ -194,6 +196,9 @@ Le résultat JSON `paper-replay-readiness-v1` ne contient aucune configuration
 ni aucun chemin. `ready=true` prouve la disponibilité technique de la source,
 de l'horloge, de la base et de la frontière Fake-only. Le champ indépendant
 `baseline_eligible` reste faux pour tous les profils legacy `reference_only`.
+Pour une identité moderne complète et exécutable, il vaut vrai afin que les
+trades puissent entrer dans la campagne de certification #132 ; l'export rejette
+néanmoins toute ligne qui ne satisfait pas aussi ses autres preuves.
 Le check refuse aussi une cellule tuée, un binding dataset divergent et un
 dataset au-delà de la limite effective du reader. Une reprise existante doit
 pointer vers le même événement, index et timestamp dans le dataset vérifié,

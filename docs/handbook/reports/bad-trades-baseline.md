@@ -8,6 +8,7 @@ Statut au 26 juin 2026 : l'extraction de production n'a pas pu etre executee loc
 
 La population de base vient de `position_trade_analysis_v2`, unique autorite de certification. Les metriques nettes utilisent uniquement les lignes certifiees par cette vue :
 
+- `paper_eligibility = baseline_eligible` ;
 - `analysis_status = matched_closed` ;
 - `close_match_status = matched` ;
 - `cost_completeness = complete` ;
