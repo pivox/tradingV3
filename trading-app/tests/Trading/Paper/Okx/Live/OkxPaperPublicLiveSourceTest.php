@@ -3213,7 +3213,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertFalse($source->isComplete());
     }
 
-    public function testHealthyStopFailsStablyWhenEitherSocketClosesMidFlow(): void
+    public function testHealthyStopIgnoresStaleSocketCloseAfterAdmissionIsQuiesced(): void
     {
         $clock = new MockClock('2026-07-25T10:00:00.000000Z');
         $store = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
@@ -3262,22 +3262,19 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(PaperMarketEvent::class, $btcStopped);
         $source->acknowledge($btcStopped->eventId);
 
-        try {
-            $business->disconnect();
-            self::fail('A socket close must invalidate an in-progress healthy stop.');
-        } catch (OkxPaperLiveIntegrityException $exception) {
-            self::assertSame(
-                'okx_paper_public_healthy_stop_invalid',
-                $exception->getMessage(),
-            );
-        }
+        $business->disconnect();
+        self::assertSame('stopping', $this->checkpointState()['phase']);
 
-        self::assertSame('failed', $this->checkpointState()['phase']);
-        self::assertSame(
-            'okx_paper_public_healthy_stop_invalid',
-            $source->failureReason(),
-        );
-        self::assertFalse($source->isComplete());
+        $events->next();
+        $ethStopped = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $ethStopped);
+        self::assertSame('ETHUSDT', $ethStopped->symbol);
+        $source->acknowledge($ethStopped->eventId);
+        $events->next();
+
+        self::assertSame('complete', $this->checkpointState()['phase']);
+        self::assertNull($source->failureReason());
+        self::assertTrue($source->isComplete());
         self::assertSame(1, $public->closeCount);
         self::assertSame(1, $business->closeCount);
         self::assertTrue($deterministic->stopped);
@@ -3334,7 +3331,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(1, $business->closeCount);
     }
 
-    public function testHealthyStopRejectsFrameAdmissionAfterLastStoppedAcknowledgement(): void
+    public function testHealthyStopIgnoresFrameAdmissionAfterLastStoppedAcknowledgement(): void
     {
         $public = new Task7Transport();
         $business = new Task7Transport();
@@ -3367,17 +3364,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             $source->acknowledge($stopped->eventId);
         }
 
-        try {
-            $public->message(Task7Transport::tradeFrame(['9917']));
-            self::fail('No frame may be admitted while healthy stop is pending cleanup.');
-        } catch (OkxPaperLiveIntegrityException $exception) {
-            self::assertSame(
-                'okx_paper_public_healthy_stop_invalid',
-                $exception->getMessage(),
-            );
-        }
-        self::assertSame('failed', $this->checkpointState()['phase']);
-        self::assertFalse($source->isComplete());
+        $public->message(Task7Transport::tradeFrame(['9917']));
+        self::assertSame('stopping', $this->checkpointState()['phase']);
+
+        $events->next();
+        self::assertTrue($source->isComplete());
         self::assertSame(1, $public->closeCount);
         self::assertSame(1, $business->closeCount);
     }

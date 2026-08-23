@@ -380,6 +380,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         if (!$this->healthyStopPreconditionsHold()) {
             $this->failTerminal('okx_paper_public_healthy_stop_invalid');
         }
+        ++$this->connectionGeneration;
         $state = $this->checkpoint->toArray();
         $state['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
         $state['healthy_stop'] = [

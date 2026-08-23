@@ -9,6 +9,7 @@ use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpointStore;
+use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveIntegrityException;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSource;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicWebSocketTransportInterface;
 use App\Trading\Paper\MarketData\CanonicalJson;
@@ -196,7 +197,14 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
             }
         }
 
-        $loop->onNextRun(static fn () => $loop->fire(300.0));
+        $loop->onNextRun(static function () use ($loop, $transport): void {
+            $loop->fire(300.0);
+            $lateTrade = json_decode(self::tradeFrame(), true, 512, \JSON_THROW_ON_ERROR);
+            $lateTrade['data'][0]['hash'] = '0xaaa';
+            $lateTrade['data'][0]['time'] = 2_000;
+            $lateTrade['data'][0]['tid'] = 44;
+            $transport->push(CanonicalJson::encode($lateTrade));
+        });
         try {
             $events->next();
         } finally {
@@ -207,6 +215,33 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertTrue($source->isComplete());
         self::assertNull($source->failureReason());
         self::assertTrue($transport->closed);
+    }
+
+    public function testHealthyStopCannotBeRequestedWithAPendingEvent(): void
+    {
+        $source = $this->source(
+            new DeterministicHyperliquidTransport(self::marketFrames()),
+        );
+        $events = self::generator($source->events());
+        $events->rewind();
+        $event = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $event);
+        $source->acknowledge($event->eventId);
+        self::assertNotNull($this->checkpoint()->pendingEvent);
+
+        try {
+            $source->requestHealthyOperatorStop();
+            self::fail('A pending event must prevent the healthy stop request.');
+        } catch (HyperliquidPaperLiveIntegrityException $exception) {
+            self::assertSame(
+                'hyperliquid_paper_public_healthy_stop_invalid',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertSame('streaming', $this->checkpoint()->phase);
+        self::assertFalse($source->isComplete());
+        $source->stop();
     }
 
     public function testAcquisitionDisabledAndPrematureMarketDataFailBeforeAcceptance(): void
@@ -397,6 +432,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame(['42', '43'], $tradeIds);
 
         $source->requestHealthyOperatorStop();
+        self::assertSame('streaming', $this->checkpoint()->phase);
         $events->next();
 
         self::assertFalse($events->valid());
