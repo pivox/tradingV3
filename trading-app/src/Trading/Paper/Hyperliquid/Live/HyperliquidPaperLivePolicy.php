@@ -13,6 +13,7 @@ final readonly class HyperliquidPaperLivePolicy
     public const RECONNECT_DELAYS_SECONDS = [1.0, 2.0, 4.0, 8.0, 15.0, 30.0];
     public const HEARTBEAT_IDLE_SECONDS = 45.0;
     public const PONG_TIMEOUT_SECONDS = 10.0;
+    public const FUNDING_REFRESH_SECONDS = 3000.0;
     public const MAX_FRAME_BYTES = 1_048_576;
     public const MAX_QUEUED_FRAMES = 256;
     public const MAX_QUEUED_BYTES = 2_097_152;
@@ -51,6 +52,7 @@ final readonly class HyperliquidPaperLivePolicy
                 'book_levels_per_side' => self::MAX_BOOK_LEVELS_PER_SIDE,
                 'heartbeat_idle_seconds' => self::HEARTBEAT_IDLE_SECONDS,
                 'pong_timeout_seconds' => self::PONG_TIMEOUT_SECONDS,
+                'funding_refresh_seconds' => self::FUNDING_REFRESH_SECONDS,
                 'reconnect_delays_seconds' => self::RECONNECT_DELAYS_SECONDS,
             ],
         ]));

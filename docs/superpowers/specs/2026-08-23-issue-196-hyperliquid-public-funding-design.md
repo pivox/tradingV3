@@ -23,7 +23,9 @@ historical cash flows, not the current cost input for a new order plan.
 ## Replay and certification
 
 The live source emits metadata and funding before the snapshot boundary on
-initial connection and every reconnect. Dataset verification authenticates the
+initial connection and every reconnect. While the WebSocket remains healthy,
+it refreshes current funding every 50 minutes within the same source epoch, so
+the one-hour evidence window cannot expire. Dataset verification authenticates the
 exact v2 keys, canonical signed decimal, one-hour interval, receipt timestamp,
 event identity, and source epoch. Funding remains optional at the generic
 dataset-format level for backwards-readable captures, but canonical

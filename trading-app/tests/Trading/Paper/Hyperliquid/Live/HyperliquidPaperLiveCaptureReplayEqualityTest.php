@@ -154,6 +154,33 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         );
     }
 
+    public function testPeriodicFundingWithinTheCurrentEpochCertifies(): void
+    {
+        [$directory, $events] = $this->completeDataset(
+            PaperMarketDataNetwork::MAINNET,
+            periodicFunding: true,
+        );
+
+        self::assertSame(PaperDatasetState::COMPLETE, (new PaperDatasetVerifier())
+            ->verifyForBaseline($directory)->state);
+        self::assertCount(4, array_filter(
+            $events,
+            static fn (PaperMarketEvent $event): bool =>
+                $event->channel === PaperMarketDataChannel::FUNDING_RATE,
+        ));
+    }
+
+    public function testPeriodicFundingFromAFutureEpochWithoutItsBoundaryIsRejected(): void
+    {
+        $this->assertInvalidLiveCompletion(
+            fn (): array => $this->completeDataset(
+                PaperMarketDataNetwork::MAINNET,
+                periodicFunding: true,
+                periodicFundingEpoch: 2,
+            ),
+        );
+    }
+
     public function testContinuityLostCheckpointCannotCertifyCompleteDataset(): void
     {
         [$directory] = $this->completeDataset(PaperMarketDataNetwork::MAINNET);
@@ -187,6 +214,8 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         bool $syntheticBook = false,
         bool $metadataAfterSnapshots = false,
         int $fundingEpoch = 1,
+        bool $periodicFunding = false,
+        int $periodicFundingEpoch = 1,
     ): array
     {
         $datasetId = 'paper-hyperliquid-equality-' . $network->value;
@@ -322,6 +351,19 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
                 't' => $baseMilliseconds,
                 'v' => '4',
             ], 'BTC', '1m'));
+        if ($periodicFunding) {
+            $refreshNormalizer = new HyperliquidPaperMarketEventNormalizer(
+                $network,
+                $ordinals,
+                new MockClock('2026-07-29T10:50:00Z'),
+            );
+            $events[] = $refreshNormalizer->fundingRate([
+                'coin' => 'BTC', 'funding_rate' => '0.000015',
+            ], $periodicFundingEpoch);
+            $events[] = $refreshNormalizer->fundingRate([
+                'coin' => 'ETH', 'funding_rate' => '-0.00002',
+            ], $periodicFundingEpoch);
+        }
         foreach ($events as $event) {
             $recorder->append($event);
         }

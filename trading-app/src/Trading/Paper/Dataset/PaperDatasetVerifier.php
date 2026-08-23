@@ -858,6 +858,11 @@ final class PaperDatasetVerifier
                 if ($fundingSymbols !== $manifestSymbols) {
                     throw new \RuntimeException('paper_dataset_hyperliquid_live_event_invalid');
                 }
+                foreach ($liveFundingEpochs as $symbol => $epoch) {
+                    if (($liveSnapshotEpochs[$symbol] ?? null) !== $epoch) {
+                        throw new \RuntimeException('paper_dataset_hyperliquid_live_event_invalid');
+                    }
+                }
             }
             $this->assertHyperliquidLiveCheckpoint(
                 dirname($eventsPath),
@@ -1324,9 +1329,9 @@ final class PaperDatasetVerifier
             || ($payload['formula_type'] ?? null) !== 'metaAndAssetCtxsFunding'
             || ($payload['settlement_state'] ?? null) !== 'processing'
             || ($payload['origin'] ?? null) !== 'rest_public_meta_and_asset_contexts'
-            || $previous !== null && $epoch <= $previous
+            || $previous !== null && $epoch < $previous
             || isset($snapshotEpochs[$event->symbol])
-                && $epoch <= $snapshotEpochs[$event->symbol]
+                && $epoch < $snapshotEpochs[$event->symbol]
         ) {
             throw new \InvalidArgumentException();
         }
