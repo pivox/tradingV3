@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Execution;
 
 use App\Command\PaperExecutionReplayCommand;
+use App\Command\PaperCertificationCampaignCommand;
 use App\Command\PaperReplayRuntimeCheckCommand;
 use App\Kernel;
 use App\Trading\Paper\Execution\PaperEventCoordinatorInterface;
@@ -32,6 +33,8 @@ use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceSourceInt
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalOrderPlanEvidenceSource;
 use App\Trading\Paper\Execution\Fake\PaperCanonicalFakePortfolioSource;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPortfolioReservationStore;
+use App\Trading\Paper\Certification\Campaign\PaperCertificationCampaignProcessExecutorInterface;
+use App\Trading\Paper\Certification\Campaign\SymfonyPaperCertificationCampaignProcessExecutor;
 use App\MtfValidator\Policy\CanonicalSetupRuleRuntime;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
@@ -86,6 +89,11 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
         );
         self::assertInstanceOf(PaperExecutionReplayCommand::class, $container->get(PaperExecutionReplayCommand::class));
         self::assertInstanceOf(PaperReplayRuntimeCheckCommand::class, $container->get(PaperReplayRuntimeCheckCommand::class));
+        self::assertInstanceOf(PaperCertificationCampaignCommand::class, $container->get(PaperCertificationCampaignCommand::class));
+        self::assertInstanceOf(
+            SymfonyPaperCertificationCampaignProcessExecutor::class,
+            $container->get(PaperCertificationCampaignProcessExecutorInterface::class),
+        );
         $factory = $container->get(PaperFakeRuntimeFactory::class);
         self::assertInstanceOf(PaperFakeRuntimeFactory::class, $factory);
         $root = (new \ReflectionProperty(PaperFakeRuntimeFactory::class, 'root'))->getValue($factory);

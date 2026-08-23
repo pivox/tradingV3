@@ -140,6 +140,9 @@ services:
     App\Trading\Paper\Runtime\PaperDatabaseInspectorInterface:
         alias: App\Trading\Paper\Runtime\DoctrinePaperDatabaseInspector
 
+    App\Trading\Paper\Certification\Campaign\PaperCertificationCampaignProcessExecutorInterface:
+        alias: App\Trading\Paper\Certification\Campaign\SymfonyPaperCertificationCampaignProcessExecutor
+
     App\TradingCore\Microstructure\CanonicalMicrostructureSnapshotProviderInterface:
         alias: App\TradingCore\Microstructure\PaperMarketStateMicrostructureSnapshotProvider
 

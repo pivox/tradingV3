@@ -122,6 +122,37 @@ executes exclusively against Fake state. Identity/configuration failures use
 stable redacted blocker codes and never expose an Effective Config filesystem
 path.
 
+## Exact certification campaign
+
+Run the complete first-baseline matrix with one explicit dataset per public
+scope. The configuration and state files must be private (`0600`); dataset,
+configuration and state paths must be absolute and contain no symlink component.
+
+```bash
+PAPER_EXECUTION_ENABLED=1 php bin/console app:paper-market:certification-campaign \
+  --spec="$PWD/config/trading/paper_certification/first-baseline-v1.json" \
+  --configuration=/absolute/private/paper-configuration.json \
+  --dataset=mainnet/okx=/absolute/private/okx-dataset \
+  --dataset=mainnet/hyperliquid=/absolute/private/hyperliquid-dataset \
+  --campaign-id=first-baseline-20260823 \
+  --state=/absolute/private/first-baseline-20260823.state.json \
+  --cell-timeout-sec=3600
+```
+
+The command derives all 12 cells from the canonical matrix and starts a fresh
+PHP process for each readiness check and each replay. It stops at the first
+failure. Re-run the byte-identical command to resume: deterministic run IDs
+address the same database checkpoints, while every cell is checked and replayed
+idempotently again. The state file is atomic audit evidence and cannot skip the
+database authority; changing the matrix, configuration, manifest or events file
+under the same campaign ID is rejected.
+
+`status=completed` means only that every verified dataset reached its end in
+Fake/Paper; `certification_status` remains `not_evaluated`. It is not a
+certification claim and does not imply one trade, a
+closed trade, complete costs/PnL or the minimum 50 trades per exact cell. Run the
+#132 export gates separately after the campaign.
+
 ## Database and rollback rules
 
 The only allowed Paper database is `trading_paper`. Tests may use names matching
