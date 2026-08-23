@@ -164,4 +164,3 @@ the acquisition flags, private-root permissions, expected terminal JSON and the
 explicit sequence: capture, verify, run #407, then evaluate the #132 population
 gate. No real dataset is committed to Git and no strategy configuration changes
 in this PR.
-
