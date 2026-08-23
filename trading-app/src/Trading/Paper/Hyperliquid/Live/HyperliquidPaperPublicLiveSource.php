@@ -117,15 +117,14 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             return;
         }
         if ($this->checkpoint->phase === 'stopping') {
+            $this->cancelTimers();
+            $this->transport->close();
+            $this->stopped = true;
             $this->checkpoint = $this->checkpointStore->save(
-                $this->checkpoint->loseContinuity(
-                    'hyperliquid_public_trade_gap_unrecoverable',
-                ),
+                $this->checkpoint->completeHealthyStop(),
             );
 
-            throw new HyperliquidPaperLiveIntegrityException(
-                'hyperliquid_public_trade_gap_unrecoverable',
-            );
+            return;
         }
         if (\in_array(
             $this->checkpoint->phase,

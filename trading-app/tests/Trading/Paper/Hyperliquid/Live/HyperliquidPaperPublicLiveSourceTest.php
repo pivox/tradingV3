@@ -346,7 +346,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         yield 'subscribing' => ['subscribing'];
     }
 
-    public function testRestartFromStoppingFailsContinuityInsteadOfCompleting(): void
+    public function testRestartFromStoppingCompletesThePersistedHealthyStop(): void
     {
         $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
         $checkpoint = $store->loadOrCreate(
@@ -360,21 +360,17 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         $transport = new DeterministicHyperliquidTransport([]);
         $source = $this->source($transport);
 
-        try {
-            self::generator($source->events())->rewind();
-            self::fail('A restarted drain cannot prove queued frames were preserved.');
-        } catch (\RuntimeException $exception) {
-            self::assertSame(
-                'hyperliquid_public_trade_gap_unrecoverable',
-                $exception->getMessage(),
-            );
-        }
+        $events = self::generator($source->events());
+        $events->rewind();
 
         $persisted = $this->checkpoint();
-        self::assertSame('failed', $persisted->phase);
-        self::assertFalse($persisted->continuity);
-        self::assertFalse($source->isComplete());
+        self::assertFalse($events->valid());
+        self::assertSame('complete', $persisted->phase);
+        self::assertTrue($persisted->continuity);
+        self::assertTrue($source->isComplete());
+        self::assertNull($source->failureReason());
         self::assertSame(0, $transport->connectCount);
+        self::assertTrue($transport->closed);
     }
 
     public function testOverlappingTradeBatchRedeliveryIsIgnoredBeforeNewOrdinals(): void
