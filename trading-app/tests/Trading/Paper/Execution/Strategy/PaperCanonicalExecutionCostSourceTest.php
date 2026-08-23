@@ -117,7 +117,7 @@ final class PaperCanonicalExecutionCostSourceTest extends TestCase
     public function testPropagatesFundingIntervalMismatch(): void
     {
         [$policy, $snapshot] = $this->forgedPolicy(static function (array &$payload): void {
-            $payload['setup']['ast']['execution']['cost_contract']['value']['funding_interval_seconds'] = 14_400;
+            $payload['exchange']['funding']['interval'] = 'PT4H';
         });
         [$source, $cell, $trigger] = $this->context(policy: $policy, snapshot: $snapshot);
 

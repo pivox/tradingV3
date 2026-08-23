@@ -43,6 +43,52 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
         self::assertSame('UTC', $policy->holdingHorizon['daily_boundary_timezone']);
     }
 
+    public function testCompilesFundingCadenceFromTheAuthenticatedVenueSchedule(): void
+    {
+        $resolver = new EffectiveTradingConfigResolver();
+
+        $hyperliquid = (new CanonicalExecutionPolicyCompiler())->compile($resolver->resolve(new EffectiveTradingConfigRequest(
+            'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
+            'hyperliquid', 'mainnet', 'long', ShadowExecutionCapability::Paper,
+        )));
+        $okx = (new CanonicalExecutionPolicyCompiler())->compile($resolver->resolve(new EffectiveTradingConfigRequest(
+            'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
+            'okx', 'demo', 'long', ShadowExecutionCapability::Paper,
+        )));
+
+        self::assertSame('venue_schedule', $hyperliquid->costContract->fundingSource);
+        self::assertSame(3600, $hyperliquid->costContract->fundingIntervalSeconds);
+        self::assertSame(28_800, $okx->costContract->fundingIntervalSeconds);
+    }
+
+    #[DataProvider('invalidVenueFundingSchedules')]
+    public function testRejectsAnInvalidAuthenticatedVenueFundingSchedule(callable $mutate): void
+    {
+        $payload = $this->payload();
+        $mutate($payload);
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_cost_contract_venue_schedule_invalid');
+        (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
+    }
+
+    /** @return iterable<string, array{callable(array<string, mixed>&): void}> */
+    public static function invalidVenueFundingSchedules(): iterable
+    {
+        yield 'missing schedule' => [static function (array &$payload): void {
+            unset($payload['exchange']['funding']);
+        }];
+        yield 'disabled schedule' => [static function (array &$payload): void {
+            $payload['exchange']['funding']['enabled'] = false;
+        }];
+        yield 'calendar duration' => [static function (array &$payload): void {
+            $payload['exchange']['funding']['interval'] = 'P1D';
+        }];
+        yield 'unknown schedule key' => [static function (array &$payload): void {
+            $payload['exchange']['funding']['fallback_interval'] = 'PT8H';
+        }];
+    }
+
     #[DataProvider('scalpingIdentities')]
     public function testCompilesOnlyTheExactPublishedScalpingShadowEnvelope(string $setupId, string $side): void
     {

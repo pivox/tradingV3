@@ -59,6 +59,7 @@ use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 use Symfony\Component\Filesystem\Filesystem;
 
@@ -76,10 +77,14 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
         return Kernel::class;
     }
 
-    public function testRealModernDecisionAndFakeDispatchConvergeAfterCrashWithoutDuplicateOrder(): void
+    #[DataProvider('publicVenueProvider')]
+    public function testRealModernDecisionAndFakeDispatchConvergeAfterCrashWithoutDuplicateOrder(
+        string $venueId,
+    ): void
     {
+        $venue = PaperMarketDataVenue::from($venueId);
         self::bootKernel(['environment' => 'test', 'debug' => false]);
-        $root = sys_get_temp_dir() . '/paper_modern_real_replay_' . bin2hex(random_bytes(5));
+        $root = sys_get_temp_dir() . '/paper_modern_real_replay_' . $venueId . '_' . bin2hex(random_bytes(5));
         $triggerTime = new \DateTimeImmutable('2026-08-20T12:00:04Z');
         $clock = new PaperReplayClock($triggerTime);
         $market = new PaperMarketStateProjector(new PaperKlineProvider());
@@ -90,23 +95,23 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
             '1.1.0',
             'day_trading.trend_continuation.long',
             '1.1.0',
-            'okx',
+            $venueId,
             'mainnet',
             'long',
             ShadowExecutionCapability::Paper,
         ));
         $cell = PaperExecutionCell::createModern(
             PaperMarketDataNetwork::MAINNET,
-            PaperMarketDataVenue::OKX,
+            $venue,
             $snapshot->toArray()['snapshot_hash'],
             PaperModernStrategyIdentity::fromResolvedSnapshot(
                 PaperMarketDataNetwork::MAINNET,
-                PaperMarketDataVenue::OKX,
+                $venue,
                 $snapshot,
             ),
             'paper-modern-e2e-run',
         );
-        [$prefix, $trigger] = $this->representativeEvents();
+        [$prefix, $trigger] = $this->representativeEvents($venue);
         $probeRoot = $root . '_probe';
         $probeMarket = new PaperMarketStateProjector(new PaperKlineProvider());
         $probeMarket->restore([...$prefix, $trigger]);
@@ -204,6 +209,13 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
         }
     }
 
+    /** @return iterable<string, array{string}> */
+    public static function publicVenueProvider(): iterable
+    {
+        yield 'OKX public mainnet' => [PaperMarketDataVenue::OKX->value];
+        yield 'Hyperliquid public mainnet' => [PaperMarketDataVenue::HYPERLIQUID->value];
+    }
+
     private function canonicalPreparation(
         PaperMarketStateProjector $market,
         PaperReplayClock $clock,
@@ -292,7 +304,7 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
     }
 
     /** @return array{list<PaperMarketEvent>, PaperMarketEvent} */
-    private function representativeEvents(): array
+    private function representativeEvents(PaperMarketDataVenue $venue): array
     {
         $end = new \DateTimeImmutable('2026-08-20T12:00:00Z');
         $events = [];
@@ -312,6 +324,7 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
                     ? $end->modify('+4 seconds')
                     : $closeAt;
                 $events[] = $this->candle(
+                    $venue,
                     $channel,
                     $openAt,
                     $receivedAt,
@@ -340,9 +353,12 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
         }
         $trigger = $events[$triggerIndex];
         unset($events[$triggerIndex]);
-        $events[] = $this->instrumentMetadata((string) $sequence++, $end->modify('+1 second'));
-        $events[] = $this->funding((string) $sequence++, $end->modify('+2 seconds'));
-        $events[] = $this->book((string) $sequence++, $end->modify('+3 seconds'));
+        $events[] = $this->instrumentMetadata($venue, (string) $sequence++, $end->modify('+1 second'));
+        $events[] = $this->funding($venue, (string) $sequence++, $end->modify('+2 seconds'));
+        if ($venue === PaperMarketDataVenue::HYPERLIQUID) {
+            $events[] = $this->snapshotBoundary((string) $sequence++, $end->modify('+2500 milliseconds'));
+        }
+        $events[] = $this->book($venue, (string) $sequence++, $end->modify('+3 seconds'));
         usort($events, static fn (PaperMarketEvent $left, PaperMarketEvent $right): int =>
             ($left->receivedTimestamp <=> $right->receivedTimestamp)
             ?: ($left->eventId <=> $right->eventId));
@@ -351,6 +367,7 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
     }
 
     private function candle(
+        PaperMarketDataVenue $venue,
         PaperMarketDataChannel $channel,
         \DateTimeImmutable $openAt,
         \DateTimeImmutable $receivedAt,
@@ -379,15 +396,31 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
         $low = $close - $finalWick;
         $volume = $index === $count - 1 ? 1_000_000.0 : 10.0;
 
-        return PaperMarketEvent::create(
-            PaperMarketDataNetwork::MAINNET,
-            PaperMarketDataVenue::OKX,
-            'BTCUSDT',
-            $channel,
-            $openAt,
-            $receivedAt,
-            $sequence,
-            [
+        $duration = match ($timeframe) {
+            '1m' => 60,
+            '5m' => 300,
+            '15m' => 900,
+            '1h' => 3600,
+        };
+        $exchangeTimestamp = $venue === PaperMarketDataVenue::HYPERLIQUID
+            ? $openAt->modify(sprintf('+%d seconds -1 millisecond', $duration))
+            : $openAt;
+        $payload = $venue === PaperMarketDataVenue::HYPERLIQUID
+            ? [
+                'native_symbol' => 'BTC',
+                'interval' => $timeframe,
+                'start_time' => $openAt->format('Uv'),
+                'close_time' => $exchangeTimestamp->format('Uv'),
+                'open' => number_format($open, 6, '.', ''),
+                'high' => number_format($high, 6, '.', ''),
+                'low' => number_format($low, 6, '.', ''),
+                'close' => number_format($close, 6, '.', ''),
+                'volume' => number_format($volume, 6, '.', ''),
+                'trade_count' => '1',
+                'confirmed' => true,
+                'origin' => 'rest_candle_snapshot',
+            ]
+            : [
                 'native_symbol' => 'BTC-USDT-SWAP',
                 'bar' => $timeframe,
                 'open' => number_format($open, 6, '.', ''),
@@ -399,21 +432,53 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
                 'volume_quote' => number_format($volume * $close, 6, '.', ''),
                 'confirmed' => true,
                 'origin' => 'rest_history',
-            ],
+            ];
+
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            $venue,
+            'BTCUSDT',
+            $channel,
+            $exchangeTimestamp,
+            $receivedAt,
+            $sequence,
+            $payload,
         );
     }
 
-    private function instrumentMetadata(string $sequence, \DateTimeImmutable $receivedAt): PaperMarketEvent
+    private function instrumentMetadata(
+        PaperMarketDataVenue $venue,
+        string $sequence,
+        \DateTimeImmutable $receivedAt,
+    ): PaperMarketEvent
     {
-        return PaperMarketEvent::create(
-            PaperMarketDataNetwork::MAINNET,
-            PaperMarketDataVenue::OKX,
-            'BTCUSDT',
-            PaperMarketDataChannel::INSTRUMENT_METADATA,
-            $receivedAt->modify('-1 second'),
-            $receivedAt,
-            $sequence,
-            [
+        $payload = $venue === PaperMarketDataVenue::HYPERLIQUID
+            ? [
+                'metadata_schema_version' => 'paper-instrument-metadata.v2',
+                'native_symbol' => 'BTC',
+                'instrument_type' => 'perpetual',
+                'base_asset' => 'BTC',
+                'quote_asset' => 'USDT',
+                'settlement_asset' => 'USDC',
+                'status' => 'live',
+                'asset_id' => 0,
+                'quantity_unit' => 'base_asset',
+                'quantity_step' => '0.00001',
+                'minimum_quantity' => '0.00001',
+                'contract_value' => '1',
+                'contract_multiplier' => '1',
+                'contract_value_unit' => 'BTC',
+                'size_decimals' => 5,
+                'price_precision_digits' => 5,
+                'price_max_decimals' => 1,
+                'maximum_leverage' => '50',
+                'maximum_market_notional' => '15000000',
+                'maximum_limit_notional' => '150000000',
+                'order_notional_limit_model' => 'hyperliquid-max-order-notional-by-leverage.v1',
+                'source_epoch' => 1,
+                'origin' => 'rest_meta',
+            ]
+            : [
                 'metadata_schema_version' => 'paper-instrument-metadata.v2',
                 'native_symbol' => 'BTC-USDT-SWAP',
                 'instrument_type' => 'perpetual',
@@ -433,21 +498,41 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
                 'maximum_leverage' => '100',
                 'source_epoch' => 1,
                 'origin' => 'rest_public_instruments',
-            ],
+            ];
+
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            $venue,
+            'BTCUSDT',
+            PaperMarketDataChannel::INSTRUMENT_METADATA,
+            $receivedAt->modify('-1 second'),
+            $receivedAt,
+            $sequence,
+            $payload,
         );
     }
 
-    private function funding(string $sequence, \DateTimeImmutable $receivedAt): PaperMarketEvent
+    private function funding(
+        PaperMarketDataVenue $venue,
+        string $sequence,
+        \DateTimeImmutable $receivedAt,
+    ): PaperMarketEvent
     {
-        return PaperMarketEvent::create(
-            PaperMarketDataNetwork::MAINNET,
-            PaperMarketDataVenue::OKX,
-            'BTCUSDT',
-            PaperMarketDataChannel::FUNDING_RATE,
-            $receivedAt,
-            $receivedAt,
-            $sequence,
-            [
+        $payload = $venue === PaperMarketDataVenue::HYPERLIQUID
+            ? [
+                'funding_schema_version' => 'paper-funding-rate.v2',
+                'native_symbol' => 'BTC',
+                'instrument_type' => 'perpetual',
+                'funding_rate' => '0.00001',
+                'observed_at_ms' => $receivedAt->format('Uv'),
+                'funding_interval_seconds' => 3600,
+                'method' => 'current_asset_context',
+                'formula_type' => 'metaAndAssetCtxsFunding',
+                'settlement_state' => 'processing',
+                'source_epoch' => 1,
+                'origin' => 'rest_public_meta_and_asset_contexts',
+            ]
+            : [
                 'funding_schema_version' => 'paper-funding-rate.v1',
                 'native_symbol' => 'BTC-USDT-SWAP',
                 'instrument_type' => 'perpetual',
@@ -461,21 +546,57 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
                 'settlement_state' => 'settled',
                 'source_epoch' => 1,
                 'origin' => 'rest_public_funding_rate',
-            ],
+            ];
+
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            $venue,
+            'BTCUSDT',
+            PaperMarketDataChannel::FUNDING_RATE,
+            $receivedAt,
+            $receivedAt,
+            $sequence,
+            $payload,
         );
     }
 
-    private function book(string $sequence, \DateTimeImmutable $receivedAt): PaperMarketEvent
+    private function snapshotBoundary(string $sequence, \DateTimeImmutable $receivedAt): PaperMarketEvent
     {
         return PaperMarketEvent::create(
             PaperMarketDataNetwork::MAINNET,
-            PaperMarketDataVenue::OKX,
+            PaperMarketDataVenue::HYPERLIQUID,
             'BTCUSDT',
-            PaperMarketDataChannel::TOP_OF_BOOK,
-            $receivedAt->modify('-1 second'),
+            PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
+            $receivedAt,
             $receivedAt,
             $sequence,
-            [
+            ['native_symbol' => 'BTC', 'reason' => 'initial', 'source_epoch' => 1],
+        );
+    }
+
+    private function book(
+        PaperMarketDataVenue $venue,
+        string $sequence,
+        \DateTimeImmutable $receivedAt,
+    ): PaperMarketEvent
+    {
+        $exchangeTimestamp = $receivedAt->modify('-1 second');
+        $payload = $venue === PaperMarketDataVenue::HYPERLIQUID
+            ? [
+                'native_symbol' => 'BTC',
+                'bid_price' => '30310',
+                'bid_size' => '5',
+                'ask_price' => '30311',
+                'ask_size' => '4',
+                'bid_level_count' => '1',
+                'ask_level_count' => '1',
+                'source_time' => $exchangeTimestamp->format('Uv'),
+                'source_epoch' => '1',
+                'source_book_hash' => str_repeat('a', 64),
+                'origin' => 'ws_l2_book',
+                'synthetic' => false,
+            ]
+            : [
                 'native_symbol' => 'BTC-USDT-SWAP',
                 'bid_price' => '30310.0',
                 'bid_size_contracts' => '5',
@@ -487,7 +608,17 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
                 'source_prev_seq_id' => null,
                 'source_epoch' => 1,
                 'origin' => 'ws_books',
-            ],
+            ];
+
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            $venue,
+            'BTCUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            $exchangeTimestamp,
+            $receivedAt,
+            $sequence,
+            $payload,
         );
     }
 

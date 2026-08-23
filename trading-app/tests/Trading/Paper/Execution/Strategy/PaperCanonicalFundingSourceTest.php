@@ -20,6 +20,53 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(PaperCanonicalFundingSource::class)]
 final class PaperCanonicalFundingSourceTest extends TestCase
 {
+    public function testReturnsCurrentHyperliquidContextWithExactEpochLineage(): void
+    {
+        $funding = $this->hyperliquidFunding('1', '0.0000125', 3);
+        $boundary = $this->hyperliquidBoundary('2', 3);
+        $trigger = $this->hyperliquidTrigger('3');
+        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        $market->restore([$funding, $boundary, $trigger]);
+
+        $snapshot = (new PaperCanonicalFundingSource($market, new PaperReplayClock($trigger->receivedTimestamp)))
+            ->snapshotFor($this->hyperliquidCell(), $trigger, 3600);
+
+        self::assertNotNull($snapshot);
+        self::assertSame('venue_schedule', $snapshot->source);
+        self::assertSame(0.0000125, $snapshot->rate);
+        self::assertSame(3600, $snapshot->intervalSeconds);
+        self::assertSame('2026-08-01T10:00:58.000000Z', $snapshot->observedAt->format('Y-m-d\TH:i:s.u\Z'));
+        self::assertSame('sha256:' . $funding->eventId, $snapshot->inputHash);
+    }
+
+    public function testHyperliquidFundingFailsClosedWhenMissingStaleOrFromAnotherEpoch(): void
+    {
+        $trigger = $this->hyperliquidTrigger('3');
+        foreach ([
+            [$this->hyperliquidBoundary('2', 3)],
+            [
+                $this->hyperliquidFunding('1', '0.0000125', 3, '2026-08-01T08:00:00Z'),
+                $this->hyperliquidBoundary('2', 3),
+            ],
+        ] as $prefix) {
+            $market = new PaperMarketStateProjector(new PaperKlineProvider());
+            $market->restore([...$prefix, $trigger]);
+            self::assertNull((new PaperCanonicalFundingSource($market, new PaperReplayClock($trigger->receivedTimestamp)))
+                ->snapshotFor($this->hyperliquidCell(), $trigger, 3600));
+        }
+
+        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        $market->restore([
+            $this->hyperliquidFunding('1', '0.0000125', 2),
+            $this->hyperliquidBoundary('2', 3),
+            $trigger,
+        ]);
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_canonical_funding_evidence_invalid');
+        (new PaperCanonicalFundingSource($market, new PaperReplayClock($trigger->receivedTimestamp)))
+            ->snapshotFor($this->hyperliquidCell(), $trigger, 3600);
+    }
+
     public function testReturnsLatestAvailableRateWithExactEventLineage(): void
     {
         $lateReceipt = $this->funding('1', '-0.0002', '2026-08-01T10:00:58Z', '2026-08-01T10:01:00.500Z');
@@ -148,6 +195,83 @@ final class PaperCanonicalFundingSourceTest extends TestCase
         );
     }
 
+    private function hyperliquidFunding(
+        string $sequence,
+        string $rate,
+        int $sourceEpoch,
+        string $observed = '2026-08-01T10:00:58Z',
+    ): PaperMarketEvent {
+        $timestamp = new \DateTimeImmutable($observed);
+
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'BTCUSDT',
+            PaperMarketDataChannel::FUNDING_RATE,
+            $timestamp,
+            $timestamp,
+            $sequence,
+            [
+                'funding_schema_version' => 'paper-funding-rate.v2',
+                'native_symbol' => 'BTC',
+                'instrument_type' => 'perpetual',
+                'funding_rate' => $rate,
+                'observed_at_ms' => $timestamp->format('Uv'),
+                'funding_interval_seconds' => 3600,
+                'method' => 'current_asset_context',
+                'formula_type' => 'metaAndAssetCtxsFunding',
+                'settlement_state' => 'processing',
+                'source_epoch' => $sourceEpoch,
+                'origin' => 'rest_public_meta_and_asset_contexts',
+            ],
+        );
+    }
+
+    private function hyperliquidBoundary(string $sequence, int $sourceEpoch): PaperMarketEvent
+    {
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'BTCUSDT',
+            PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
+            new \DateTimeImmutable('2026-08-01T10:00:59Z'),
+            new \DateTimeImmutable('2026-08-01T10:00:59Z'),
+            $sequence,
+            [
+                'native_symbol' => 'BTC',
+                'reason' => 'reconnect',
+                'source_epoch' => $sourceEpoch,
+            ],
+        );
+    }
+
+    private function hyperliquidTrigger(string $sequence): PaperMarketEvent
+    {
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'BTCUSDT',
+            PaperMarketDataChannel::CANDLE_1M,
+            new \DateTimeImmutable('2026-08-01T10:01:00Z'),
+            new \DateTimeImmutable('2026-08-01T10:01:01Z'),
+            $sequence,
+            [
+                'native_symbol' => 'BTC',
+                'interval' => '1m',
+                'start_time' => '1785578400000',
+                'close_time' => '1785578459999',
+                'open' => '100',
+                'high' => '101',
+                'low' => '99',
+                'close' => '100',
+                'volume' => '1',
+                'trade_count' => '1',
+                'confirmed' => true,
+                'origin' => 'ws_candle',
+            ],
+        );
+    }
+
     private function cell(): PaperExecutionCell
     {
         return PaperExecutionCell::createModern(
@@ -159,6 +283,27 @@ final class PaperCanonicalFundingSourceTest extends TestCase
                 'sha256:' . str_repeat('b', 64), 'sha256:' . str_repeat('c', 64),
             ),
             'paper-funding-run',
+        );
+    }
+
+    private function hyperliquidCell(): PaperExecutionCell
+    {
+        return PaperExecutionCell::createModern(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'sha256:' . str_repeat('d', 64),
+            PaperModernStrategyIdentity::fromDurableIdentity(
+                PaperMarketDataNetwork::MAINNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                'day_trading',
+                '1.1.0',
+                'day_trading.trend_continuation.long',
+                '1.1.0',
+                'long',
+                'sha256:' . str_repeat('e', 64),
+                'sha256:' . str_repeat('f', 64),
+            ),
+            'paper-hyperliquid-funding-run',
         );
     }
 }

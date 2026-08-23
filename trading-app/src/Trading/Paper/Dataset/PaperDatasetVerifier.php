@@ -631,6 +631,8 @@ final class PaperDatasetVerifier
         $liveSnapshotEpochs = [];
         /** @var array<string, int> $liveMetadataEpochs */
         $liveMetadataEpochs = [];
+        /** @var array<string, int> $liveFundingEpochs */
+        $liveFundingEpochs = [];
         /** @var array<string, int> $liveCandleFrontiers */
         $liveCandleFrontiers = [];
         /** @var list<string> $liveEventIds */
@@ -724,6 +726,7 @@ final class PaperDatasetVerifier
                         $liveOrdinals,
                         $liveSnapshotEpochs,
                         $liveMetadataEpochs,
+                        $liveFundingEpochs,
                         $liveCandleFrontiers,
                         $liveTradeIdentityHistory,
                     );
@@ -847,6 +850,20 @@ final class PaperDatasetVerifier
             $historicalBooks,
         );
         if ($liveOrdinals instanceof HyperliquidPaperSourceOrdinal) {
+            if ($liveFundingEpochs !== []) {
+                $fundingSymbols = array_keys($liveFundingEpochs);
+                $manifestSymbols = array_keys($manifest->symbols);
+                sort($fundingSymbols, \SORT_STRING);
+                sort($manifestSymbols, \SORT_STRING);
+                if ($fundingSymbols !== $manifestSymbols) {
+                    throw new \RuntimeException('paper_dataset_hyperliquid_live_event_invalid');
+                }
+                foreach ($liveFundingEpochs as $symbol => $epoch) {
+                    if (($liveSnapshotEpochs[$symbol] ?? null) !== $epoch) {
+                        throw new \RuntimeException('paper_dataset_hyperliquid_live_event_invalid');
+                    }
+                }
+            }
             $this->assertHyperliquidLiveCheckpoint(
                 dirname($eventsPath),
                 $manifest,
@@ -1072,6 +1089,7 @@ final class PaperDatasetVerifier
     /**
      * @param array<string, int> $snapshotEpochs
      * @param array<string, int> $metadataEpochs
+     * @param array<string, int> $fundingEpochs
      * @param array<string, int> $candleFrontiers
      * @param list<array{identity_hash: string, assignment_digest: string}> $tradeIdentityHistory
      */
@@ -1080,6 +1098,7 @@ final class PaperDatasetVerifier
         HyperliquidPaperSourceOrdinal $ordinals,
         array &$snapshotEpochs,
         array &$metadataEpochs,
+        array &$fundingEpochs,
         array &$candleFrontiers,
         array &$tradeIdentityHistory,
     ): void {
@@ -1088,6 +1107,7 @@ final class PaperDatasetVerifier
                 PaperMarketDataChannel::PUBLIC_TRADE,
                 PaperMarketDataChannel::TOP_OF_BOOK,
                 PaperMarketDataChannel::INSTRUMENT_METADATA,
+                PaperMarketDataChannel::FUNDING_RATE,
                 PaperMarketDataChannel::CANDLE_1M,
                 PaperMarketDataChannel::CANDLE_5M,
                 PaperMarketDataChannel::CANDLE_15M,
@@ -1126,6 +1146,13 @@ final class PaperDatasetVerifier
                     $snapshotEpochs,
                     $metadataEpochs,
                 ),
+                PaperMarketDataChannel::FUNDING_RATE => $this->liveFundingIdentity(
+                    $event,
+                    $coin,
+                    $payload,
+                    $snapshotEpochs,
+                    $fundingEpochs,
+                ),
                 PaperMarketDataChannel::CANDLE_1M,
                 PaperMarketDataChannel::CANDLE_5M,
                 PaperMarketDataChannel::CANDLE_15M,
@@ -1151,11 +1178,13 @@ final class PaperDatasetVerifier
                     $payload,
                     $snapshotEpochs,
                     $metadataEpochs,
+                    $fundingEpochs,
                 ),
             };
             if ($event->channel !== PaperMarketDataChannel::SNAPSHOT_BOUNDARY
                 && $event->channel !== PaperMarketDataChannel::CONNECTION_STATE
                 && $event->channel !== PaperMarketDataChannel::INSTRUMENT_METADATA
+                && $event->channel !== PaperMarketDataChannel::FUNDING_RATE
                 && !isset($snapshotEpochs[$event->symbol])
             ) {
                 throw new \InvalidArgumentException();
@@ -1261,6 +1290,65 @@ final class PaperDatasetVerifier
     /**
      * @param array<array-key, mixed> $payload
      * @param array<string, int> $snapshotEpochs
+     * @param array<string, int> $fundingEpochs
+     */
+    private function liveFundingIdentity(
+        PaperMarketEvent $event,
+        string $coin,
+        array $payload,
+        array $snapshotEpochs,
+        array &$fundingEpochs,
+    ): string {
+        $expected = [
+            'formula_type', 'funding_interval_seconds', 'funding_rate',
+            'funding_schema_version', 'instrument_type', 'method',
+            'native_symbol', 'observed_at_ms', 'origin', 'settlement_state',
+            'source_epoch',
+        ];
+        $actual = array_keys($payload);
+        sort($actual, \SORT_STRING);
+        $rate = $payload['funding_rate'] ?? null;
+        $observed = $payload['observed_at_ms'] ?? null;
+        $epoch = $this->livePositiveInt($payload['source_epoch'] ?? null);
+        $previous = $fundingEpochs[$event->symbol] ?? null;
+        if ($actual !== $expected
+            || ($payload['funding_schema_version'] ?? null) !== 'paper-funding-rate.v2'
+            || ($payload['instrument_type'] ?? null) !== 'perpetual'
+            || !\is_string($rate)
+            || \strlen($rate) > 128
+            || preg_match('/\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $rate) !== 1
+            || (string) BigDecimal::of($rate)->stripTrailingZeros() !== $rate
+            || BigDecimal::of($rate)->isLessThanOrEqualTo(-1)
+            || BigDecimal::of($rate)->isGreaterThanOrEqualTo(1)
+            || !\is_string($observed)
+            || preg_match('/\A[1-9][0-9]{12}\z/D', $observed) !== 1
+            || $event->exchangeTimestamp->format('Uv') !== $observed
+            || $event->exchangeTimestamp != $event->receivedTimestamp
+            || ($payload['funding_interval_seconds'] ?? null) !== 3600
+            || ($payload['method'] ?? null) !== 'current_asset_context'
+            || ($payload['formula_type'] ?? null) !== 'metaAndAssetCtxsFunding'
+            || ($payload['settlement_state'] ?? null) !== 'processing'
+            || ($payload['origin'] ?? null) !== 'rest_public_meta_and_asset_contexts'
+            || $previous !== null && $epoch < $previous
+            || isset($snapshotEpochs[$event->symbol])
+                && $epoch < $snapshotEpochs[$event->symbol]
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        $fundingEpochs[$event->symbol] = $epoch;
+
+        return implode('|', [
+            $event->sourceNetwork->value,
+            $coin,
+            'funding_rate',
+            (string) $epoch,
+            hash('sha256', CanonicalJson::encode($payload)),
+        ]);
+    }
+
+    /**
+     * @param array<array-key, mixed> $payload
+     * @param array<string, int> $snapshotEpochs
      * @param array<string, int> $candleFrontiers
      */
     private function liveCandleIdentity(
@@ -1303,6 +1391,7 @@ final class PaperDatasetVerifier
      * @param array<array-key, mixed> $payload
      * @param array<string, int> $snapshotEpochs
      * @param array<string, int> $metadataEpochs
+     * @param array<string, int> $fundingEpochs
      */
     private function liveSnapshotIdentity(
         PaperMarketEvent $event,
@@ -1310,6 +1399,7 @@ final class PaperDatasetVerifier
         array $payload,
         array &$snapshotEpochs,
         array $metadataEpochs,
+        array $fundingEpochs,
     ): string {
         $reason = $this->liveString($payload['reason'] ?? null);
         $epoch = $this->livePositiveInt($payload['source_epoch'] ?? null);
@@ -1319,6 +1409,8 @@ final class PaperDatasetVerifier
                 && ($reason !== 'reconnect' || $epoch <= $previous))
             || ($metadataEpochs !== []
                 && ($metadataEpochs[$event->symbol] ?? null) !== $epoch)
+            || ($fundingEpochs !== []
+                && ($fundingEpochs[$event->symbol] ?? null) !== $epoch)
         ) {
             throw new \InvalidArgumentException();
         }

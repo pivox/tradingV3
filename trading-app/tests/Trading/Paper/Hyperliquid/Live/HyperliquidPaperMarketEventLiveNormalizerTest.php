@@ -19,6 +19,47 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(HyperliquidOrderNotionalLimits::class)]
 final class HyperliquidPaperMarketEventLiveNormalizerTest extends TestCase
 {
+    public function testFundingRatePreservesCurrentPublicContextAndSourceEpoch(): void
+    {
+        $event = self::normalizer()->fundingRate([
+            'coin' => 'BTC',
+            'funding_rate' => '0.0000125',
+        ], sourceEpoch: 4);
+
+        self::assertSame(PaperMarketDataChannel::FUNDING_RATE, $event->channel);
+        self::assertSame([
+            'funding_schema_version' => 'paper-funding-rate.v2',
+            'native_symbol' => 'BTC',
+            'instrument_type' => 'perpetual',
+            'funding_rate' => '0.0000125',
+            'observed_at_ms' => '1785319200123',
+            'funding_interval_seconds' => 3600,
+            'method' => 'current_asset_context',
+            'formula_type' => 'metaAndAssetCtxsFunding',
+            'settlement_state' => 'processing',
+            'source_epoch' => 4,
+            'origin' => 'rest_public_meta_and_asset_contexts',
+        ], $event->payload);
+        self::assertEquals($event->exchangeTimestamp, $event->receivedTimestamp);
+    }
+
+    public function testFundingRateRejectsUnknownAssetNonCanonicalRateAndEpoch(): void
+    {
+        foreach ([
+            [['coin' => 'SOL', 'funding_rate' => '0.0001'], 1],
+            [['coin' => 'BTC', 'funding_rate' => '0.000100'], 1],
+            [['coin' => 'BTC', 'funding_rate' => '1'], 1],
+            [['coin' => 'BTC', 'funding_rate' => '0.0001'], 0],
+        ] as [$row, $epoch]) {
+            try {
+                self::normalizer()->fundingRate($row, $epoch);
+                self::fail('Invalid Hyperliquid funding evidence must fail closed.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('hyperliquid_paper_funding_rate_invalid', $exception->getMessage());
+            }
+        }
+    }
+
     public function testInstrumentMetadataPreservesDynamicPrecisionAndBaseSizeUnits(): void
     {
         $event = self::normalizer()->instrumentMetadata([

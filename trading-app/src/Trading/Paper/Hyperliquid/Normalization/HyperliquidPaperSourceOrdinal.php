@@ -115,6 +115,21 @@ final class HyperliquidPaperSourceOrdinal
     ];
 
     /** @var list<string> */
+    private const FUNDING_RATE_V2_PAYLOAD_KEYS = [
+        'formula_type',
+        'funding_interval_seconds',
+        'funding_rate',
+        'funding_schema_version',
+        'instrument_type',
+        'method',
+        'native_symbol',
+        'observed_at_ms',
+        'origin',
+        'settlement_state',
+        'source_epoch',
+    ];
+
+    /** @var list<string> */
     private const CONNECTION_STATE_PAYLOAD_KEYS = [
         'connection_epoch',
         'native_symbol',
@@ -168,6 +183,7 @@ final class HyperliquidPaperSourceOrdinal
         PaperMarketDataChannel::CANDLE_1H,
         PaperMarketDataChannel::TOP_OF_BOOK,
         PaperMarketDataChannel::INSTRUMENT_METADATA,
+        PaperMarketDataChannel::FUNDING_RATE,
         PaperMarketDataChannel::PUBLIC_TRADE,
         PaperMarketDataChannel::CONNECTION_STATE,
         PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
@@ -598,6 +614,10 @@ final class HyperliquidPaperSourceOrdinal
                     $event,
                     $validationWitness,
                 ),
+                PaperMarketDataChannel::FUNDING_RATE => $this->canonicalFundingIdentity(
+                    $event,
+                    $validationWitness,
+                ),
                 PaperMarketDataChannel::PUBLIC_TRADE => $this->canonicalLiveTradeIdentity(
                     $event,
                     $validationWitness,
@@ -992,6 +1012,52 @@ final class HyperliquidPaperSourceOrdinal
             'snapshot',
             (string) $epoch,
             $reason,
+        ]);
+    }
+
+    /** @param array<array-key, mixed>|null $validationWitness */
+    private function canonicalFundingIdentity(
+        PaperMarketEvent $event,
+        ?array $validationWitness,
+    ): string {
+        if ($validationWitness !== null) {
+            throw new \InvalidArgumentException();
+        }
+        $payload = $event->payload;
+        self::assertExactKeys($payload, self::FUNDING_RATE_V2_PAYLOAD_KEYS);
+        $coin = $this->canonicalLiveCoin($event, $payload['native_symbol'] ?? null);
+        $rate = $payload['funding_rate'] ?? null;
+        $observed = $payload['observed_at_ms'] ?? null;
+        $epoch = $payload['source_epoch'] ?? null;
+        if (($payload['funding_schema_version'] ?? null) !== 'paper-funding-rate.v2'
+            || ($payload['instrument_type'] ?? null) !== 'perpetual'
+            || !\is_string($rate)
+            || \strlen($rate) > self::MAX_DECIMAL_LENGTH
+            || preg_match('/\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $rate) !== 1
+            || (string) BigDecimal::of($rate)->stripTrailingZeros() !== $rate
+            || BigDecimal::of($rate)->isLessThanOrEqualTo(-1)
+            || BigDecimal::of($rate)->isGreaterThanOrEqualTo(1)
+            || !\is_string($observed)
+            || preg_match('/\A[1-9][0-9]{12}\z/D', $observed) !== 1
+            || ($payload['funding_interval_seconds'] ?? null) !== 3600
+            || ($payload['method'] ?? null) !== 'current_asset_context'
+            || ($payload['formula_type'] ?? null) !== 'metaAndAssetCtxsFunding'
+            || ($payload['settlement_state'] ?? null) !== 'processing'
+            || !\is_int($epoch)
+            || $epoch < 1
+            || ($payload['origin'] ?? null) !== 'rest_public_meta_and_asset_contexts'
+            || $event->exchangeTimestamp->format('Uv') !== $observed
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        $this->assertEqualEventTimestamps($event);
+
+        return implode('|', [
+            $event->sourceNetwork->value,
+            $coin,
+            'funding_rate',
+            (string) $epoch,
+            hash('sha256', CanonicalJson::encode($payload)),
         ]);
     }
 

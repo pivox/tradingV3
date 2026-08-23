@@ -9,6 +9,7 @@ use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfigFactory;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSource;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSourceFactory;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicWebSocketTransportFactoryInterface;
@@ -57,6 +58,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
             'manifestCodec',
             'filesystem',
             'metadataClient',
+            'fundingClient',
         ], array_map(
             static fn (\ReflectionParameter $parameter): string => $parameter->getName(),
             $parameters,
@@ -68,6 +70,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
             PaperDatasetManifestCodec::class,
             PaperDatasetRecorderFilesystem::class,
             HyperliquidPaperInstrumentMetadataClientInterface::class,
+            HyperliquidPaperFundingRateClientInterface::class,
         ], array_map(
             static function (\ReflectionParameter $parameter): string {
                 $type = $parameter->getType();
@@ -79,7 +82,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
         ));
         foreach ($parameters as $parameter) {
             self::assertDoesNotMatchRegularExpression(
-                '/credential|api.?key|secret|wallet|sign|private|account|(?<!rec)order|fill|funding|execution|exchange.?action|fakeexchange/i',
+                '/credential|api.?key|secret|wallet|sign|private|account|(?<!rec)order|fill|execution|exchange.?action|fakeexchange/i',
                 $parameter->getName() . ':' . (string) $parameter->getType(),
             );
         }

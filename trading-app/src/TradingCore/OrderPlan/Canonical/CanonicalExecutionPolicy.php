@@ -96,6 +96,10 @@ final readonly class CanonicalExecutionPolicy
         self::invalidation(self::decision($execution, 'invalidation', 'invalidation_policy'));
         $holdingWindowSeconds = self::durationSeconds(self::decision($execution, 'time_stop', 'duration'));
         $costContract = self::costContract(self::decision($execution, 'cost_contract', 'cost_policy'), $shadow);
+        $costContract = self::withVenueFundingSchedule(
+            $costContract,
+            self::mapping($payload, 'exchange', 'canonical_cost_contract_venue_schedule_invalid'),
+        );
         $executionTimeframe = null;
         $mandatoryConfirmations = [];
         $orderPolicy = null;
@@ -281,17 +285,17 @@ final readonly class CanonicalExecutionPolicy
         }
     }
 
-    private static function durationSeconds(mixed $value): int
+    private static function durationSeconds(mixed $value, string $reasonCode = 'canonical_time_stop_invalid'): int
     {
         if (!\is_string($value) || preg_match('/\APT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?\z/D', $value, $matches) !== 1) {
-            throw new CanonicalOrderPlanException('canonical_time_stop_invalid');
+            throw new CanonicalOrderPlanException($reasonCode);
         }
         $hours = BigInteger::of(isset($matches[1]) && $matches[1] !== '' ? $matches[1] : '0');
         $minutes = BigInteger::of(isset($matches[2]) && $matches[2] !== '' ? $matches[2] : '0');
         $seconds = BigInteger::of(isset($matches[3]) && $matches[3] !== '' ? $matches[3] : '0');
         $duration = $hours->multipliedBy(3600)->plus($minutes->multipliedBy(60))->plus($seconds);
         if ($duration->isZero() || $duration->isGreaterThan(PHP_INT_MAX)) {
-            throw new CanonicalOrderPlanException('canonical_time_stop_invalid');
+            throw new CanonicalOrderPlanException($reasonCode);
         }
 
         return $duration->toInt();
@@ -332,6 +336,35 @@ final readonly class CanonicalExecutionPolicy
             fundingIntervalSeconds: self::positiveInteger($contract['funding_interval_seconds'], 'canonical_cost_contract_invalid'),
             entryLiquidityRole: $entryRole,
             stopLiquidityRole: $stopRole,
+        );
+    }
+
+    /** @param array<string, mixed> $exchange */
+    private static function withVenueFundingSchedule(CanonicalCostContract $contract, array $exchange): CanonicalCostContract
+    {
+        if ($contract->fundingSource !== 'venue_schedule') {
+            throw new CanonicalOrderPlanException('canonical_cost_contract_venue_schedule_invalid');
+        }
+        $funding = self::mapping($exchange, 'funding', 'canonical_cost_contract_venue_schedule_invalid');
+        self::requireExactKeys($funding, ['enabled', 'interval'], 'canonical_cost_contract_venue_schedule_invalid');
+        if (($funding['enabled'] ?? null) !== true) {
+            throw new CanonicalOrderPlanException('canonical_cost_contract_venue_schedule_invalid');
+        }
+
+        return new CanonicalCostContract(
+            entrySpreadSource: $contract->entrySpreadSource,
+            entrySlippageSource: $contract->entrySlippageSource,
+            stopSpreadSource: $contract->stopSpreadSource,
+            stopSlippageSource: $contract->stopSlippageSource,
+            targetSpreadSource: $contract->targetSpreadSource,
+            targetSlippageSource: $contract->targetSlippageSource,
+            fundingSource: $contract->fundingSource,
+            fundingIntervalSeconds: self::durationSeconds(
+                $funding['interval'] ?? null,
+                'canonical_cost_contract_venue_schedule_invalid',
+            ),
+            entryLiquidityRole: $contract->entryLiquidityRole,
+            stopLiquidityRole: $contract->stopLiquidityRole,
         );
     }
 

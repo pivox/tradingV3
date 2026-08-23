@@ -6,6 +6,7 @@ namespace App\Tests\Trading\Paper\Hyperliquid\Live;
 
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpointStore;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSource;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicWebSocketTransportInterface;
@@ -26,16 +27,17 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(HyperliquidPaperPublicLiveSource::class)]
 final class HyperliquidPaperPublicLiveSourceTest extends TestCase
 {
-    public function testAuthenticatedMetadataPrecedesInitialSnapshotBoundaries(): void
+    public function testAuthenticatedMetadataAndFundingPrecedeInitialSnapshotBoundaries(): void
     {
         $source = $this->source(
             new DeterministicHyperliquidTransport(self::marketFrames()),
             metadataClient: new StaticHyperliquidPaperMetadataClient(),
+            fundingClient: new StaticHyperliquidPaperFundingClient(),
         );
         $events = self::generator($source->events());
         $captured = [];
         $events->rewind();
-        while ($events->valid() && \count($captured) < 4) {
+        while ($events->valid() && \count($captured) < 6) {
             $event = $events->current();
             self::assertInstanceOf(PaperMarketEvent::class, $event);
             $captured[] = $event;
@@ -46,12 +48,57 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame([
             PaperMarketDataChannel::INSTRUMENT_METADATA,
             PaperMarketDataChannel::INSTRUMENT_METADATA,
+            PaperMarketDataChannel::FUNDING_RATE,
+            PaperMarketDataChannel::FUNDING_RATE,
             PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
             PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
         ], array_column($captured, 'channel'));
-        self::assertSame(['BTCUSDT', 'ETHUSDT', 'BTCUSDT', 'ETHUSDT'], array_column($captured, 'symbol'));
+        self::assertSame(
+            ['BTCUSDT', 'ETHUSDT', 'BTCUSDT', 'ETHUSDT', 'BTCUSDT', 'ETHUSDT'],
+            array_column($captured, 'symbol'),
+        );
         self::assertSame(1, $captured[0]->payload['source_epoch']);
         self::assertSame(1, $captured[1]->payload['source_epoch']);
+        self::assertSame(1, $captured[2]->payload['source_epoch']);
+        self::assertSame(1, $captured[3]->payload['source_epoch']);
+        $source->stop();
+    }
+
+    public function testFundingRefreshesBeforeExpiryWithoutChangingTheSourceEpoch(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $clock = new MockClock('2026-07-29T10:00:00Z');
+        $funding = new StaticHyperliquidPaperFundingClient();
+        $source = $this->source(
+            new DeterministicHyperliquidTransport([]),
+            loop: $loop,
+            metadataClient: new StaticHyperliquidPaperMetadataClient(),
+            fundingClient: $funding,
+            clock: $clock,
+        );
+        $events = self::generator($source->events());
+        $events->rewind();
+        for ($index = 0; $index < 6; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            if ($index < 5) {
+                $events->next();
+            }
+        }
+
+        self::assertSame(1, $funding->calls);
+        self::assertContains(3000.0, $loop->intervals());
+        $clock->sleep(3000);
+        self::assertSame(3000.0, $loop->fire(3000.0));
+        $events->next();
+
+        self::assertSame(PaperMarketDataChannel::FUNDING_RATE, $events->current()->channel);
+        self::assertSame('BTCUSDT', $events->current()->symbol);
+        self::assertSame(1, $events->current()->payload['source_epoch']);
+        self::assertSame('2026-07-29T10:50:00.000000Z', $events->current()->receivedTimestamp->format('Y-m-d\TH:i:s.u\Z'));
+        self::assertSame(2, $funding->calls);
+        self::assertContains(3000.0, $loop->intervals());
         $source->stop();
     }
 
@@ -557,6 +604,8 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         bool $enabled = true,
         ?LoopInterface $loop = null,
         ?HyperliquidPaperInstrumentMetadataClientInterface $metadataClient = null,
+        ?HyperliquidPaperFundingRateClientInterface $fundingClient = null,
+        ?MockClock $clock = null,
     ): HyperliquidPaperPublicLiveSource {
         $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
         $checkpoint = $store->loadOrCreate(
@@ -575,11 +624,12 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         return new HyperliquidPaperPublicLiveSource(
             $transport,
             $config,
-            new MockClock('2026-07-29T10:00:00Z'),
+            $clock ?? new MockClock('2026-07-29T10:00:00Z'),
             $store,
             $checkpoint,
             $loop ?? new StreamSelectLoop(),
             metadataClient: $metadataClient,
+            fundingClient: $fundingClient,
         );
     }
 
@@ -677,6 +727,21 @@ final class StaticHyperliquidPaperMetadataClient implements HyperliquidPaperInst
         return [
             ['coin' => 'BTC', 'asset_id' => 0, 'sz_decimals' => 5, 'max_leverage' => 50],
             ['coin' => 'ETH', 'asset_id' => 1, 'sz_decimals' => 4, 'max_leverage' => 25],
+        ];
+    }
+}
+
+final class StaticHyperliquidPaperFundingClient implements HyperliquidPaperFundingRateClientInterface
+{
+    public int $calls = 0;
+
+    public function fundingRates(): array
+    {
+        ++$this->calls;
+
+        return [
+            ['coin' => 'BTC', 'funding_rate' => '0.0000125'],
+            ['coin' => 'ETH', 'funding_rate' => '-0.000025'],
         ];
     }
 }
