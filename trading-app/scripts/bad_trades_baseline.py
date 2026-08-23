@@ -17,6 +17,10 @@ from typing import Any, Iterable
 
 MODERN_MODES = ("day_trading", "scalping", "micro_scalping")
 CERTIFICATION_CELL_FIELDS = ("paper_network", "market_data_venue", "mode_id", "setup_id", "canonical_side")
+CERTIFICATION_MANIFEST_CELL_FIELDS = (
+    "paper_network", "market_data_venue", "mode_id", "mode_version",
+    "setup_id", "setup_version", "canonical_side",
+)
 MIN_CERTIFIED_CELL_TRADES = 50
 TRADES_PER_SIMULATION = 100
 CAPITAL_USDT = 100.0
@@ -367,10 +371,7 @@ def load_expected_cells(path: Path) -> dict[str, Any]:
     if payload["cells_sha256"] != digest:
         raise ValueError("certification matrix digest mismatch")
 
-    cell_keys = {
-        "paper_network", "market_data_venue", "mode_id", "mode_version",
-        "setup_id", "setup_version", "canonical_side",
-    }
+    cell_keys = set(CERTIFICATION_MANIFEST_CELL_FIELDS)
     indexed: dict[str, dict[str, str]] = {}
     by_mode: Counter[str] = Counter()
     previous_order: tuple[str, ...] | None = None
@@ -391,7 +392,7 @@ def load_expected_cells(path: Path) -> dict[str, Any]:
             raise ValueError("certification matrix mode version is invalid")
         if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", cell["setup_version"]):
             raise ValueError("certification matrix setup version is invalid")
-        order = tuple(cell.values())
+        order = tuple(cell[field] for field in CERTIFICATION_MANIFEST_CELL_FIELDS)
         if previous_order is not None and order <= previous_order:
             raise ValueError("certification matrix cells are not uniquely sorted")
         previous_order = order
