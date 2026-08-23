@@ -283,17 +283,6 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
             '5m' => self::indicatorInput('5m', '2026-08-14T11:55:00Z'),
             '1m' => self::indicatorInput('1m', '2026-08-14T11:59:00Z'),
         ];
-        foreach ($inputs as $timeframe => &$input) {
-            $input['snapshot_identity'] = [
-                'timeframe' => $timeframe,
-                'symbol' => 'BTCUSDT',
-                'exchange' => 'okx',
-                'environment' => 'mainnet',
-                'market_type' => 'perpetual',
-            ];
-        }
-        unset($input);
-
         $result = (new CanonicalSetupRuleRuntime(
             $this->passingConditions('1.2.0'),
             microstructureInputs: new CanonicalMicrostructureRuntimeInputResolver($provider),

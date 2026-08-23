@@ -59,6 +59,39 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         self::assertSame($evidence->orderBook, $input->request->orderBook);
     }
 
+    public function testStrictOkxTriggerUsesItsExchangeTimestampAsCandleOpen(): void
+    {
+        [, $evidence] = $this->fixture();
+        $event = PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::OKX,
+            'BTCUSDT',
+            PaperMarketDataChannel::CANDLE_15M,
+            new \DateTimeImmutable('2026-08-10T11:45:00Z'),
+            new \DateTimeImmutable('2026-08-10T12:00:01Z'),
+            '1',
+            [
+                'native_symbol' => 'BTC-USDT-SWAP',
+                'bar' => '15m',
+                'open' => '100',
+                'high' => '101',
+                'low' => '99',
+                'close' => '100',
+                'volume_contracts' => '5',
+                'volume_base' => '0.01',
+                'volume_quote' => '1',
+                'confirmed' => true,
+                'origin' => 'ws_candle',
+            ],
+        );
+        $assembler = new PaperCanonicalStrategyInputAssembler($this->provider($evidence));
+
+        self::assertSame(
+            (new \DateTimeImmutable('2026-08-10T11:45:00Z'))->getTimestamp(),
+            (new \ReflectionMethod($assembler, 'eventCandleOpenSecond'))->invoke($assembler, $event, '15m'),
+        );
+    }
+
     public function testMissingEvidenceMeansNoDecisionWithoutFabricatingDefaults(): void
     {
         [$cell] = $this->fixture();
