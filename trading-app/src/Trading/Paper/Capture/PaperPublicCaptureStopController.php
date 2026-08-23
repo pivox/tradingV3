@@ -68,12 +68,14 @@ final class PaperPublicCaptureStopController
         $this->stopRequested = true;
         try {
             $this->source->requestHealthyOperatorStop();
+            $this->loop->stop();
         } catch (\Throwable) {
             try {
                 $this->source->stop();
             } catch (\Throwable) {
                 // The dataset capture will observe an abnormal terminal state.
             }
+            $this->loop->stop();
         }
     }
 }

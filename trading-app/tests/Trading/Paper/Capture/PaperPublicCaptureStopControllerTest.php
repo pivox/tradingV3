@@ -35,6 +35,7 @@ final class PaperPublicCaptureStopControllerTest extends TestCase
 
         ($loop->timers[0]->getCallback())();
         self::assertSame(1, $source->healthyStopCalls);
+        self::assertSame(1, $loop->stopCalls);
         if ($loop->signals !== []) {
             ($loop->signals[SIGTERM])();
         }
@@ -131,6 +132,7 @@ final class CaptureStopLoop implements LoopInterface
 
     /** @var array<int, callable> */
     public array $signals = [];
+    public int $stopCalls = 0;
 
     public function addReadStream($stream, $listener): void
     {
@@ -189,5 +191,6 @@ final class CaptureStopLoop implements LoopInterface
 
     public function stop(): void
     {
+        ++$this->stopCalls;
     }
 }
