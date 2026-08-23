@@ -32,8 +32,13 @@ psql "$DATABASE_URL" \
 Generer le rapport :
 
 ```bash
+php trading-app/bin/console app:paper-market:certification-matrix \
+  --spec=trading-app/config/trading/paper_certification/first-baseline-v1.json \
+  > /tmp/paper-certification-matrix-v1.json
+
 python3 trading-app/scripts/bad_trades_baseline.py \
   --input /tmp/bad-trades-baseline-v2.csv \
+  --expected-cells /tmp/paper-certification-matrix-v1.json \
   --output-md docs/handbook/reports/bad-trades-baseline.generated.md \
   --output-json docs/handbook/reports/evidence/bad-trades-baseline.generated.json \
   --seed 132 \
@@ -45,6 +50,10 @@ python3 trading-app/scripts/bad_trades_baseline.py \
 Le script produit les agregats par mode, setup, side canonique, symbole, timeframe et cellule de certification exacte. Il calcule count, population certifiee, winrate, Wilson 95 %, expectancy nette, profit factor, max drawdown, R net moyen/median, MFE/MAE, duree, couts et causes de perte candidates. La liquidite maker/taker est explicitement `unavailable_not_exposed_by_position_trade_analysis_v2` : une colonne absente ne devient jamais un faux zero.
 
 Une cellule est le tuple exact `paper_network x market_data_venue x mode_id x setup_id x canonical_side`. Elle doit contenir au moins 50 trades certifies pour contribuer a un agregat ou a une simulation. Ce minimum global ne peut pas etre abaisse par l'API Python ni par la CLI ; `--min-cell-size` permet uniquement de demander un seuil superieur.
+
+Pour la premiere baseline moderne, le manifeste `first-baseline-v1` epingle les sources publiques read-only `mainnet/okx` et `mainnet/hyperliquid`, ainsi que les versions exactes `1.1.0` des trois modes. La commande charge ensuite les contrats canoniques : elle ne retient que le long day-trading, les trois setups scalping et les deux setups micro-scalping executables, soit 12 cellules. `crash_short` et le short day-trading bloque ne sont pas inclus. Il n'existe aucun alias `regular`, `scalper` ou `scalper_micro` dans cette matrice.
+
+Le manifeste est obligatoire pour la certification finale #132. Son hash est verifie avant analyse. Une cellule attendue sans trade apparait avec un compte `0`; une cellule certifiee absente du manifeste est listee comme `unexpected_certified` et exclue des agregats. Une ligne dont le tuple correspond mais dont `mode_version` ou `setup_version` differe est classee `version_mismatched_certified` et reste elle aussi exclue. Ainsi, ni une cellule vide ni une identite hors contrat ne peut disparaitre silencieusement du rapport.
 
 L'export peut enrichir le diagnostic, sans modifier la certification fournie par v2 :
 
@@ -77,6 +86,7 @@ python3 -m pytest trading-app/tests/scripts/test_bad_trades_baseline.py -q
 python3 -m py_compile trading-app/scripts/bad_trades_baseline.py
 python3 trading-app/scripts/bad_trades_baseline.py \
   --input trading-app/tests/fixtures/bad_trades_baseline_sample.csv \
+  --expected-cells /tmp/paper-certification-matrix-v1.json \
   --output-md /tmp/bad-trades-baseline-sample.md \
   --output-json /tmp/bad-trades-baseline-sample.json \
   --seed 132 \
