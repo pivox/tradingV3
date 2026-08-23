@@ -292,6 +292,9 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             if ($failure !== null) {
                 throw $failure;
             }
+            if ($this->checkpoint->phase === 'stopping') {
+                return null;
+            }
             if ($this->fundingRefreshDue) {
                 return null;
             }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\Paper\Hyperliquid\Live;
 
+use App\Trading\Paper\Capture\PaperPublicCaptureStopController;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
@@ -170,6 +171,39 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         ]);
         self::assertFalse($events[4]->payload['synthetic']);
         self::assertSame('0', $events[5]->payload['start_time']);
+        self::assertTrue($source->isComplete());
+        self::assertNull($source->failureReason());
+        self::assertTrue($transport->closed);
+    }
+
+    public function testDurationStopCompletesWhileWaitingForTheNextFrame(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport(self::marketFrames());
+        $source = $this->source($transport, loop: $loop);
+        $stops = new PaperPublicCaptureStopController($loop, $source);
+        $stops->start(300);
+        $events = self::generator($source->events());
+
+        $events->rewind();
+        for ($eventCount = 0; $eventCount < 6; ++$eventCount) {
+            self::assertTrue($events->valid());
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            if ($eventCount < 5) {
+                $events->next();
+            }
+        }
+
+        $loop->onNextRun(static fn () => $loop->fire(300.0));
+        try {
+            $events->next();
+        } finally {
+            $stops->close();
+        }
+
+        self::assertFalse($events->valid());
         self::assertTrue($source->isComplete());
         self::assertNull($source->failureReason());
         self::assertTrue($transport->closed);
@@ -822,6 +856,8 @@ final class HyperliquidDeterministicLoop implements LoopInterface
     /** @var list<TimerInterface> */
     private array $timers = [];
 
+    private ?\Closure $onNextRun = null;
+
     public function addReadStream($stream, $listener): void
     {
     }
@@ -877,10 +913,20 @@ final class HyperliquidDeterministicLoop implements LoopInterface
 
     public function run(): void
     {
+        $callback = $this->onNextRun;
+        $this->onNextRun = null;
+        if ($callback !== null) {
+            $callback();
+        }
     }
 
     public function stop(): void
     {
+    }
+
+    public function onNextRun(\Closure $callback): void
+    {
+        $this->onNextRun = $callback;
     }
 
     /** @return list<float> */
