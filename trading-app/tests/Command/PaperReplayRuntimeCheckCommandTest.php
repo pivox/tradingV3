@@ -111,7 +111,8 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
 
         self::assertTrue($payload['ready']);
         self::assertTrue($payload['runtime_ready']);
-        self::assertFalse($payload['baseline_eligible']);
+        self::assertTrue($payload['baseline_eligible']);
+        self::assertSame('baseline_eligible', $payload['profile_eligibility']);
         self::assertArrayNotHasKey('blocker', $payload);
         self::assertSame([
             'schema_version' => 2,

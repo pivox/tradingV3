@@ -114,6 +114,7 @@ def is_certified(row: dict[str, str]) -> bool:
 
     return (
         declared_ok
+        and row.get("paper_eligibility") == "baseline_eligible"
         and row.get("lineage_classification") == "canonical"
         and row.get("mode_id") in MODERN_MODES
         and all(str(row.get(field) or "").strip() for field in CERTIFICATION_CELL_FIELDS)
@@ -129,6 +130,8 @@ def is_certified(row: dict[str, str]) -> bool:
 
 def exclusion_reasons(row: dict[str, str]) -> list[str]:
     reasons: list[str] = []
+    if row.get("paper_eligibility") != "baseline_eligible":
+        reasons.append(f"paper_eligibility:{row.get('paper_eligibility') or 'missing'}")
     if row.get("lineage_classification") != "canonical":
         reasons.append(f"lineage_classification:{row.get('lineage_classification') or 'missing'}")
     if row.get("mode_id") not in MODERN_MODES:

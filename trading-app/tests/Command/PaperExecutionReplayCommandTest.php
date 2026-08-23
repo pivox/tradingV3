@@ -171,8 +171,12 @@ final class PaperExecutionReplayCommandTest extends TestCase
             $store = new InMemoryPaperExecutionStore();
             $coordinator = new class implements PaperEventCoordinatorInterface {
                 public int $consumed = 0;
+                public ?PaperProfileEligibility $eligibility = null;
 
-                public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void {}
+                public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void
+                {
+                    $this->eligibility = $eligibility;
+                }
 
                 public function consumeAt(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, string $datasetId, int $sourcePosition, PaperMarketEvent $event): void
                 {
@@ -194,6 +198,7 @@ final class PaperExecutionReplayCommandTest extends TestCase
                 '--run-id' => 'paper-modern-run-001',
             ]));
             self::assertGreaterThan(0, $coordinator->consumed);
+            self::assertSame(PaperProfileEligibility::BASELINE_ELIGIBLE, $coordinator->eligibility);
             self::assertSame(3, $store->registrationWrites);
             self::assertStringContainsString('profile=day_trading', $tester->getDisplay());
         } finally {

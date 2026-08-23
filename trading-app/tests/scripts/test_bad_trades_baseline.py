@@ -145,6 +145,16 @@ def test_build_baseline_rejects_cell_minimum_below_global_contract() -> None:
         module.build_baseline(FIXTURE, min_cell_size=1)
 
 
+def test_reference_only_trade_can_never_be_certified() -> None:
+    module = load_module()
+    with FIXTURE.open(newline="", encoding="utf-8") as source:
+        row = next(csv.DictReader(source))
+    row["paper_eligibility"] = "reference_only"
+
+    assert module.is_certified(row) is False
+    assert "paper_eligibility:reference_only" in module.exclusion_reasons(row)
+
+
 def test_certification_cell_key_normalizes_only_side_casing() -> None:
     module = load_module()
     row = {
@@ -405,6 +415,8 @@ def test_current_v2_export_shape_marks_liquidity_unavailable_instead_of_zero(tmp
     }
     sql = EXPORT_SQL.read_text(encoding="utf-8")
     assert not any(field in sql for field in liquidity_fields)
+    assert "paper_eligibility = 'baseline_eligible'" in sql
+    assert "paper_eligibility," in sql
 
     with eligible_fixture.open(newline="", encoding="utf-8") as source:
         reader = csv.DictReader(source)

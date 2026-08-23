@@ -48,6 +48,9 @@ final class PaperExecutionProvenanceEntityTest extends TestCase
             self::assertSame('sha256:' . str_repeat('b', 64), $entity->getConfigurationSnapshotId());
             self::assertSame('reference_only', $entity->getPaperEligibility());
 
+            self::assertSame($entity, $entity->setPaperEligibility('baseline_eligible'));
+            self::assertSame('baseline_eligible', $entity->getPaperEligibility());
+
             self::assertSame($entity, $entity->setPaperNetwork(null));
             self::assertSame($entity, $entity->setPaperExecutionCellId(null));
             self::assertSame($entity, $entity->setConfigurationSnapshotId(null));

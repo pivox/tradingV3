@@ -97,6 +97,7 @@ WITH scoped AS (
     enriched.*,
     (
       lineage_classification = 'canonical'
+      AND paper_eligibility = 'baseline_eligible'
       AND analysis_status = 'matched_closed'
       AND close_match_status = 'matched'
       AND canonical_cost_completeness = 'complete'
@@ -119,6 +120,7 @@ SELECT
   close_time,
   mtf_profile,
   lineage_classification,
+  paper_eligibility,
   paper_network,
   market_data_venue,
   mode_id,

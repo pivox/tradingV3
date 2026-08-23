@@ -5,6 +5,15 @@
 **Le résultat métier de l'issue #196 reste incomplet. Le présent rapport est une
 baseline historique mise à jour par les lots correctifs listés ci-dessous.**
 
+### Mise à jour du 23 août 2026 — éligibilité baseline moderne
+
+Le pont canonique end-to-end OKX/Hyperliquid étant désormais complet, une
+identité moderne exacte qui passe l'Effective Config et la readiness est
+persistée `baseline_eligible`. Les profils legacy et les cellules modernes
+historiques restent `reference_only` sans backfill. L'export #132 exige
+explicitement `baseline_eligible` avant les gates de lineage, fermeture, coûts,
+PnL et minimum 50 ; ce statut rend un trade candidat, il ne le certifie pas.
+
 ### Mise à jour du 20 août 2026 — identité Paper moderne
 
 Le stockage Paper accepte désormais une identité moderne versionnée contenant
