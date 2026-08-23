@@ -158,6 +158,29 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
         )->registered);
     }
 
+    public function testBaselineEvidenceBlocksDowngradeBeforeConstraintsAreChanged(): void
+    {
+        $this->store->registerCell($this->modernCell(), PaperProfileEligibility::BASELINE_ELIGIBLE);
+        $migration = new Version20260823190000($this->connection, new NullLogger());
+        $migration->down(new Schema());
+
+        try {
+            $this->connection->executeStatement($migration->getSql()[0]->getStatement());
+            self::fail('Baseline-eligible evidence must block the downgrade.');
+        } catch (\Doctrine\DBAL\Exception $failure) {
+            self::assertStringContainsString('paper_baseline_eligible_evidence_blocks_downgrade', $failure->getMessage());
+        }
+
+        $definition = $this->connection->fetchOne(<<<'SQL'
+SELECT pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conname = 'chk_paper_execution_cell_eligibility'
+  AND connamespace = current_schema()::regnamespace
+SQL);
+        self::assertIsString($definition);
+        self::assertStringContainsString('baseline_eligible', $definition);
+    }
+
     public function testLegacyCellCannotBeMarkedBaselineEligible(): void
     {
         $legacy = PaperExecutionCell::create(

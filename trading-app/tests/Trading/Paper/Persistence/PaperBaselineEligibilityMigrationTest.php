@@ -35,4 +35,22 @@ final class PaperBaselineEligibilityMigrationTest extends TestCase
         self::assertStringNotContainsString('UPDATE ', $sql);
         self::assertStringNotContainsString('DELETE ', $sql);
     }
+
+    public function testDowngradeChecksForBaselineEvidenceBeforeChangingAnyConstraint(): void
+    {
+        require_once dirname(__DIR__, 4) . '/migrations/Version20260823190000.php';
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $migration = new Version20260823190000($connection, new NullLogger());
+        $migration->down(new Schema());
+        $queries = $migration->getSql();
+
+        self::assertNotEmpty($queries);
+        $preflight = $queries[0]->getStatement();
+        self::assertStringContainsString('RAISE EXCEPTION', $preflight);
+        self::assertStringContainsString("eligibility = 'baseline_eligible'", $preflight);
+        self::assertStringContainsString("paper_eligibility = 'baseline_eligible'", $preflight);
+        self::assertStringNotContainsString('ALTER TABLE', $preflight);
+        self::assertStringNotContainsString('UPDATE ', $preflight);
+        self::assertStringNotContainsString('DELETE ', $preflight);
+    }
 }

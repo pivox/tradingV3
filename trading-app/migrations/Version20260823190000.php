@@ -36,6 +36,21 @@ final class Version20260823190000 extends AbstractMigration
 
     public function down(Schema $schema): void
     {
+        $this->addSql(<<<'SQL'
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM paper_execution_cell WHERE eligibility = 'baseline_eligible')
+        OR EXISTS (SELECT 1 FROM order_intent WHERE paper_eligibility = 'baseline_eligible')
+        OR EXISTS (SELECT 1 FROM trade_lineage WHERE paper_eligibility = 'baseline_eligible')
+        OR EXISTS (SELECT 1 FROM trade_lifecycle_event WHERE paper_eligibility = 'baseline_eligible')
+        OR EXISTS (SELECT 1 FROM fill_cost_ledger WHERE paper_eligibility = 'baseline_eligible')
+        OR EXISTS (SELECT 1 FROM trade_zone_events WHERE paper_eligibility = 'baseline_eligible')
+    THEN
+        RAISE EXCEPTION 'paper_baseline_eligible_evidence_blocks_downgrade';
+    END IF;
+END
+$$
+SQL);
         foreach (array_reverse(self::TRADE_TABLES) as $table) {
             $this->replaceTradeConstraint(
                 $table,
