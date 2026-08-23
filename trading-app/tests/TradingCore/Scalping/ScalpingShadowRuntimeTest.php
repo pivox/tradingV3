@@ -685,6 +685,8 @@ final class ScalpingShadowRuntimeTest extends TestCase
         $bookSpreadBps = $liveSpreadBps ?? 1.0;
         $bookHalfSpread = $bookMid * $bookSpreadBps / 20_000.0;
         $scope = new CanonicalPortfolioScope('shadow', $exchange, $environment, 'account-1', 'scalping', 'USDT');
+        $indicatorExchange = $capability === ShadowExecutionCapability::Paper ? 'fake' : $exchange;
+        $indicatorEnvironment = $capability === ShadowExecutionCapability::Paper ? 'test' : $environment;
         $portfolio = new CanonicalPortfolioSnapshot(
             $scope,
             'scalping_test',
@@ -709,10 +711,10 @@ final class ScalpingShadowRuntimeTest extends TestCase
             $configRequest,
             $lineage,
             [
-                '1h' => self::indicatorInput('1h', '2026-08-10T11:00:00Z', exchange: $exchange, environment: $environment),
-                '15m' => self::indicatorInput('15m', '2026-08-10T11:45:00Z', ['pullback_age_bars' => 1], $exchange, $environment),
-                '5m' => self::indicatorInput('5m', '2026-08-10T11:55:00Z', exchange: $exchange, environment: $environment),
-                '1m' => self::indicatorInput('1m', '2026-08-10T11:59:00Z', exchange: $exchange, environment: $environment),
+                '1h' => self::indicatorInput('1h', '2026-08-10T11:00:00Z', exchange: $indicatorExchange, environment: $indicatorEnvironment),
+                '15m' => self::indicatorInput('15m', '2026-08-10T11:45:00Z', ['pullback_age_bars' => 1], $indicatorExchange, $indicatorEnvironment),
+                '5m' => self::indicatorInput('5m', '2026-08-10T11:55:00Z', exchange: $indicatorExchange, environment: $indicatorEnvironment),
+                '1m' => self::indicatorInput('1m', '2026-08-10T11:59:00Z', exchange: $indicatorExchange, environment: $indicatorEnvironment),
             ],
             new CanonicalOrderPlanBuildRequest(...$components),
             $scope,

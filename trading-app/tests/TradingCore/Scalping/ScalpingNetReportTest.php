@@ -269,15 +269,18 @@ final class ScalpingNetReportTest extends TestCase
         string $exchange,
         string $environment,
     ): void {
-        $paper = ScalpingShadowRuntimeTest::fixtureRuntime()->run(
-            ScalpingShadowRuntimeTest::fixtureRequest(
-                'scalping.trend_continuation.long',
-                'long',
-                capability: ShadowExecutionCapability::Paper,
-                exchange: $exchange,
-                environment: $environment,
-            ),
+        $request = ScalpingShadowRuntimeTest::fixtureRequest(
+            'scalping.trend_continuation.long',
+            'long',
+            capability: ShadowExecutionCapability::Paper,
+            exchange: $exchange,
+            environment: $environment,
         );
+        foreach ($request->indicatorsByTimeframe as $input) {
+            self::assertSame('fake', $input['snapshot_identity']['exchange'] ?? null);
+            self::assertSame('test', $input['snapshot_identity']['environment'] ?? null);
+        }
+        $paper = ScalpingShadowRuntimeTest::fixtureRuntime()->run($request);
         self::assertSame('planned', $paper->status);
         self::assertSame($exchange, $paper->lineage->exchange);
         self::assertSame($exchange, $paper->orderPlan?->exchange);

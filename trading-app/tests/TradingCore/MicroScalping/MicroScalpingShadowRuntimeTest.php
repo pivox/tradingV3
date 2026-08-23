@@ -48,6 +48,10 @@ final class MicroScalpingShadowRuntimeTest extends TestCase
         string $side,
     ): void {
         $request = self::request($setupId, $side);
+        foreach ($request->indicatorsByTimeframe as $input) {
+            self::assertSame('fake', $input['snapshot_identity']['exchange'] ?? null);
+            self::assertSame('test', $input['snapshot_identity']['environment'] ?? null);
+        }
         $snapshot = self::microstructure($request->orderBook, $side);
 
         $outcome = self::runtime($snapshot)->run($request);
@@ -304,8 +308,8 @@ final class MicroScalpingShadowRuntimeTest extends TestCase
             'snapshot_identity' => [
                 'timeframe' => $timeframe,
                 'symbol' => 'BTCUSDT',
-                'exchange' => 'okx',
-                'environment' => 'mainnet',
+                'exchange' => 'fake',
+                'environment' => 'test',
                 'market_type' => 'perpetual',
             ],
             'kline_time' => $klineTime,
