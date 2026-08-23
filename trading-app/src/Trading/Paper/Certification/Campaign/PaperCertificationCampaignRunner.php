@@ -145,12 +145,28 @@ final readonly class PaperCertificationCampaignRunner
                 $cell,
                 $runId,
             );
+            if (!$this->inputsAreUnchanged(
+                $configurationPath,
+                $configurationSha256,
+                $datasets,
+                $datasetEvidence,
+            )) {
+                return $this->fail($statePath, $state, $index, 'paper_campaign_inputs_changed');
+            }
             $readiness = $this->processes->execute([
                 $this->phpBinary,
                 $this->projectDirectory . '/bin/console',
                 'app:paper-market:runtime-check',
                 ...$baseArguments,
             ], $timeoutSeconds);
+            if (!$this->inputsAreUnchanged(
+                $configurationPath,
+                $configurationSha256,
+                $datasets,
+                $datasetEvidence,
+            )) {
+                return $this->fail($statePath, $state, $index, 'paper_campaign_inputs_changed');
+            }
             if ($readiness->timedOut) {
                 return $this->fail($statePath, $state, $index, 'paper_campaign_process_timeout');
             }
@@ -170,12 +186,28 @@ final readonly class PaperCertificationCampaignRunner
             $state['cells'][$index]['status'] = 'replay_running';
             $this->states->save($statePath, $state);
 
+            if (!$this->inputsAreUnchanged(
+                $configurationPath,
+                $configurationSha256,
+                $datasets,
+                $datasetEvidence,
+            )) {
+                return $this->fail($statePath, $state, $index, 'paper_campaign_inputs_changed');
+            }
             $replay = $this->processes->execute([
                 $this->phpBinary,
                 $this->projectDirectory . '/bin/console',
                 'app:paper-market:replay',
                 ...$baseArguments,
             ], $timeoutSeconds);
+            if (!$this->inputsAreUnchanged(
+                $configurationPath,
+                $configurationSha256,
+                $datasets,
+                $datasetEvidence,
+            )) {
+                return $this->fail($statePath, $state, $index, 'paper_campaign_inputs_changed');
+            }
             if ($replay->timedOut) {
                 return $this->fail($statePath, $state, $index, 'paper_campaign_process_timeout');
             }
@@ -497,6 +529,47 @@ final readonly class PaperCertificationCampaignRunner
             throw new \RuntimeException('paper_campaign_dataset_invalid');
         }
         $this->assertNoSymlinkComponents($directory, 'paper_campaign_dataset_invalid');
+    }
+
+    /**
+     * @param array<string, string> $datasets
+     * @param array<string, array{manifest_sha256: string, events_sha256: string}> $datasetEvidence
+     * @phpstan-impure
+     */
+    private function inputsAreUnchanged(
+        string $configurationPath,
+        string $configurationSha256,
+        array $datasets,
+        array $datasetEvidence,
+    ): bool {
+        try {
+            if (!hash_equals(
+                $configurationSha256,
+                $this->fingerprintFile($configurationPath, 'paper_campaign_configuration_invalid', true),
+            )) {
+                return false;
+            }
+            foreach ($datasetEvidence as $scope => $expected) {
+                $directory = $datasets[$scope] ?? null;
+                if (!is_string($directory)) {
+                    return false;
+                }
+                $this->assertDirectory($directory);
+                if (!hash_equals(
+                    $expected['manifest_sha256'],
+                    $this->fingerprintFile($directory . '/manifest.json', 'paper_campaign_dataset_invalid'),
+                ) || !hash_equals(
+                    $expected['events_sha256'],
+                    $this->fingerprintFile($directory . '/events.ndjson', 'paper_campaign_dataset_invalid'),
+                )) {
+                    return false;
+                }
+            }
+        } catch (\InvalidArgumentException|\RuntimeException) {
+            return false;
+        }
+
+        return true;
     }
 
     private function fingerprintFile(string $path, string $error, bool $private = false): string

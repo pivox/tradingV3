@@ -219,6 +219,45 @@ final class PaperCertificationCampaignRunnerTest extends TestCase
         $runner->run($this->matrix(), 'first-baseline-aug23', $this->configuration, $this->datasets, $this->state, 60);
     }
 
+    public function testStopsWhenAnInputChangesWhileAChildProcessIsRunning(): void
+    {
+        $configuration = $this->configuration;
+        $delegate = $this->acceptingExecutor();
+        $executor = new class($configuration, $delegate) implements PaperCertificationCampaignProcessExecutorInterface {
+            public int $calls = 0;
+
+            public function __construct(
+                private readonly string $configuration,
+                private readonly AcceptingPaperCampaignExecutor $delegate,
+            ) {
+            }
+
+            public function execute(array $argv, int $timeoutSeconds): PaperCertificationCampaignProcessResult
+            {
+                ++$this->calls;
+                if ($this->calls === 1) {
+                    file_put_contents($this->configuration, '{"risk":{"max_notional":"changed-during-child"}}');
+                }
+
+                return $this->delegate->execute($argv, $timeoutSeconds);
+            }
+        };
+
+        $result = $this->runner($executor)->run(
+            $this->matrix(),
+            'first-baseline-aug23',
+            $this->configuration,
+            $this->datasets,
+            $this->state,
+            60,
+        );
+
+        self::assertSame('failed', $result['status']);
+        self::assertSame('paper_campaign_inputs_changed', $result['blocker']);
+        self::assertSame(1, $executor->calls);
+        self::assertStringNotContainsString('changed-during-child', (string) file_get_contents($this->state));
+    }
+
     public function testTimeoutStopsTheCampaignWithAStableRedactedBlocker(): void
     {
         $executor = new class implements PaperCertificationCampaignProcessExecutorInterface {
