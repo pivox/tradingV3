@@ -10,6 +10,8 @@ use App\Trading\Paper\Capture\PaperPublicCaptureRunner;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSourceFactory;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSourceFactory;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
 #[CoversClass(PaperPublicCaptureRunner::class)]
@@ -20,6 +22,8 @@ final class PaperPublicCaptureServiceWiringTest extends KernelTestCase
         return Kernel::class;
     }
 
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function testCommandGraphContainsOnlyPublicMarketDataAndDatasetDependencies(): void
     {
         self::bootKernel(['environment' => 'test', 'debug' => false]);
