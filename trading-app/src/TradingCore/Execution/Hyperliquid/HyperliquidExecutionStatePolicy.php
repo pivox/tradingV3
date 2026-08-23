@@ -83,14 +83,14 @@ final readonly class HyperliquidExecutionStatePolicy
             : BigDecimal::one()->plus(self::EMERGENCY_SLIPPAGE);
         $rounding = $sell ? RoundingMode::DOWN : RoundingMode::UP;
         $target = $reference->multipliedBy($factor);
-        $step = $this->commonPriceStep($target, $tick);
+        $step = HyperliquidPriceStep::forPrice($target, $tick);
         $units = $target->dividedBy($step, 0, $rounding);
         if ($units->isLessThan(BigDecimal::one())) {
             $units = BigDecimal::one();
         }
         $cap = $units->multipliedBy($step);
 
-        $stableStep = $this->commonPriceStep($cap, $tick);
+        $stableStep = HyperliquidPriceStep::forPrice($cap, $tick);
         if (!$stableStep->isEqualTo($step)) {
             $units = $target->dividedBy($stableStep, 0, $rounding);
             if ($units->isLessThan(BigDecimal::one())) {
@@ -110,25 +110,6 @@ final readonly class HyperliquidExecutionStatePolicy
         }
 
         return $result;
-    }
-
-    private function commonPriceStep(BigDecimal $price, BigDecimal $tick): BigDecimal
-    {
-        $normalizedPrice = $price->stripTrailingZeros();
-        $orderOfMagnitude = strlen((string) $normalizedPrice->getUnscaledValue())
-            - $normalizedPrice->getScale()
-            - 1;
-        $significantStep = BigDecimal::one()->withPointMovedRight(
-            $orderOfMagnitude - self::MAX_PRICE_SIGNIFICANT_FIGURES + 1,
-        );
-        $scale = max($tick->getScale(), $significantStep->getScale());
-        $tickUnits = $tick->toScale($scale)->getUnscaledValue();
-        $significantUnits = $significantStep->toScale($scale)->getUnscaledValue();
-        $commonUnits = $tickUnits
-            ->dividedBy($tickUnits->gcd($significantUnits))
-            ->multipliedBy($significantUnits);
-
-        return BigDecimal::ofUnscaledValue($commonUnits, $scale);
     }
 
     private function significantFigures(BigDecimal $price): int

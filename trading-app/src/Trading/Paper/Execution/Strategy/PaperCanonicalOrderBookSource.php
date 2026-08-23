@@ -84,6 +84,16 @@ final readonly class PaperCanonicalOrderBookSource
         ) {
             throw new \LogicException('paper_canonical_order_book_identity_mismatch');
         }
+        $sourceEvent = null;
+        foreach ($bookEvents as $candidate) {
+            if (hash_equals($candidate->eventId, $book->sourceRecordId)) {
+                $sourceEvent = $candidate;
+                break;
+            }
+        }
+        if (!$sourceEvent instanceof PaperMarketEvent) {
+            throw new \LogicException('paper_canonical_order_book_source_event_missing');
+        }
 
         $bestBid = (float) $book->bidPrice;
         $bestAsk = (float) $book->askPrice;
@@ -99,6 +109,23 @@ final readonly class PaperCanonicalOrderBookSource
             spreadBps: 10_000.0 * ($bestAsk - $bestBid) / (($bestAsk + $bestBid) / 2.0),
             observedAt: new \DateTimeImmutable($book->happenedAt),
             inputHash: 'sha256:' . $book->sourceRecordId,
+            sourceEpoch: $this->sourceEpoch($sourceEvent),
         );
+    }
+
+    private function sourceEpoch(PaperMarketEvent $event): int
+    {
+        $value = $event->payload['source_epoch'] ?? null;
+        if (\is_int($value) && $value >= 1) {
+            return $value;
+        }
+        if (\is_string($value)
+            && preg_match('/\A[1-9][0-9]*\z/D', $value) === 1
+            && (string) ($epoch = (int) $value) === $value
+        ) {
+            return $epoch;
+        }
+
+        throw new \LogicException('paper_canonical_order_book_source_epoch_invalid');
     }
 }

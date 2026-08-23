@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Hyperliquid\Live;
 
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle;
+use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidOrderNotionalLimits;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperMarketEventNormalizer;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
@@ -15,6 +16,7 @@ use Symfony\Component\Clock\MockClock;
 
 #[CoversClass(HyperliquidPaperMarketEventNormalizer::class)]
 #[CoversClass(HyperliquidPaperSourceOrdinal::class)]
+#[CoversClass(HyperliquidOrderNotionalLimits::class)]
 final class HyperliquidPaperMarketEventLiveNormalizerTest extends TestCase
 {
     public function testInstrumentMetadataPreservesDynamicPrecisionAndBaseSizeUnits(): void
@@ -28,11 +30,11 @@ final class HyperliquidPaperMarketEventLiveNormalizerTest extends TestCase
 
         self::assertSame(PaperMarketDataChannel::INSTRUMENT_METADATA, $event->channel);
         self::assertSame([
-            'metadata_schema_version' => 'paper-instrument-metadata.v1',
+            'metadata_schema_version' => 'paper-instrument-metadata.v2',
             'native_symbol' => 'BTC',
             'instrument_type' => 'perpetual',
             'base_asset' => 'BTC',
-            'quote_asset' => 'USDC',
+            'quote_asset' => 'USDT',
             'settlement_asset' => 'USDC',
             'status' => 'live',
             'asset_id' => 0,
@@ -46,10 +48,33 @@ final class HyperliquidPaperMarketEventLiveNormalizerTest extends TestCase
             'price_precision_digits' => 5,
             'price_max_decimals' => 1,
             'maximum_leverage' => '50',
+            'maximum_market_notional' => '15000000',
+            'maximum_limit_notional' => '150000000',
+            'order_notional_limit_model' => 'hyperliquid-max-order-notional-by-leverage.v1',
             'source_epoch' => 4,
             'origin' => 'rest_meta',
         ], $event->payload);
         self::assertEquals($event->exchangeTimestamp, $event->receivedTimestamp);
+    }
+
+    public function testInstrumentMetadataFreezesEveryPublicOrderNotionalTier(): void
+    {
+        foreach ([
+            25 => ['15000000', '150000000'],
+            20 => ['5000000', '50000000'],
+            10 => ['2000000', '20000000'],
+            9 => ['500000', '5000000'],
+        ] as $maximumLeverage => [$market, $limit]) {
+            $event = self::normalizer()->instrumentMetadata([
+                'coin' => 'BTC',
+                'asset_id' => 0,
+                'sz_decimals' => 5,
+                'max_leverage' => $maximumLeverage,
+            ], sourceEpoch: 1);
+
+            self::assertSame($market, $event->payload['maximum_market_notional']);
+            self::assertSame($limit, $event->payload['maximum_limit_notional']);
+        }
     }
 
     public function testInstrumentMetadataRejectsUnknownAssetsAndImpossiblePrecision(): void

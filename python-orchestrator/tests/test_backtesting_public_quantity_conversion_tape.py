@@ -125,7 +125,7 @@ def test_metadata_v2_is_strict_while_v1_keeps_its_original_shape() -> None:
     assert legacy.model_dump(exclude_unset=True) == legacy_payload
 
 
-def test_metadata_v2_accepts_only_complete_venue_specific_constraints() -> None:
+def test_metadata_v3_accepts_only_complete_venue_specific_constraints() -> None:
     _, _, _, metadata, _ = _inputs()
     okx = metadata[0].model_dump()
     okx["metadata_schema_version"] = "paper-instrument-metadata.v2"
@@ -134,25 +134,62 @@ def test_metadata_v2_accepts_only_complete_venue_specific_constraints() -> None:
 
     hyperliquid = {
         **okx,
+        "schema_version": "backtest-instrument-metadata.v3",
         "source_network": "testnet",
         "market_data_venue": "hyperliquid",
         "quantity_unit": "base_asset",
         "contract_value": "1",
         "contract_multiplier": "1",
-        "metadata_schema_version": "paper-instrument-metadata.v1",
-        "quote_asset": "USDC",
+        "metadata_schema_version": "paper-instrument-metadata.v2",
+        "quote_asset": "USDT",
         "settlement_asset": "USDC",
         "maximum_market_quantity": None,
         "maximum_limit_quantity": None,
         "maximum_leverage": "50",
+        "maximum_market_notional": "15000000",
+        "maximum_limit_notional": "150000000",
+        "order_notional_limit_model": "hyperliquid-max-order-notional-by-leverage.v1",
     }
     assert InstrumentMetadataRecord.model_validate(hyperliquid).maximum_leverage == "50"
+    for maximum_leverage, maximum_market_notional in (
+        ("25", "15000000"),
+        ("20", "5000000"),
+        ("10", "2000000"),
+        ("9", "500000"),
+    ):
+        tier = {
+            **hyperliquid,
+            "maximum_leverage": maximum_leverage,
+            "maximum_market_notional": maximum_market_notional,
+            "maximum_limit_notional": str(int(maximum_market_notional) * 10),
+        }
+        assert (
+            InstrumentMetadataRecord.model_validate(tier).maximum_market_notional
+            == maximum_market_notional
+        )
+
+    historical_hyperliquid = {
+        **hyperliquid,
+        "schema_version": "backtest-instrument-metadata.v2",
+        "metadata_schema_version": "paper-instrument-metadata.v1",
+        "quote_asset": "USDC",
+        "maximum_market_notional": None,
+        "maximum_limit_notional": None,
+        "order_notional_limit_model": None,
+    }
+    assert InstrumentMetadataRecord.model_validate(historical_hyperliquid).quote_asset == "USDC"
 
     invalid = (
         {**okx, "happened_at": okx["available_at"].replace(year=2027)},
         {**okx, "quantity_step": "2", "minimum_quantity": "1"},
         {**okx, "maximum_market_quantity": "0.1", "minimum_quantity": "1"},
-        {**hyperliquid, "metadata_schema_version": "paper-instrument-metadata.v2"},
+        {**hyperliquid, "quote_asset": "USDC"},
+        {**hyperliquid, "maximum_market_notional": None},
+        {**hyperliquid, "maximum_limit_notional": "149999999"},
+        {**hyperliquid, "order_notional_limit_model": "unknown"},
+        {**hyperliquid, "maximum_leverage": "50.5"},
+        {**hyperliquid, "schema_version": "backtest-instrument-metadata.v2"},
+        {**historical_hyperliquid, "maximum_market_notional": "1"},
     )
     for payload in invalid:
         with pytest.raises(ValueError, match="public_quantity_conversion_metadata_invalid"):

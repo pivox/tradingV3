@@ -8,6 +8,7 @@ use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Dataset\VerifiedPaperDatasetSnapshot;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperInstrumentMap;
+use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidOrderNotionalLimits;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
@@ -87,6 +88,13 @@ final class PaperBacktestDatasetAdapter
         'quantity_step', 'minimum_quantity', 'contract_value', 'contract_multiplier',
         'contract_value_unit', 'size_decimals', 'price_precision_digits',
         'price_max_decimals', 'maximum_leverage', 'source_epoch', 'origin',
+    ];
+
+    /** @var list<string> */
+    private const HYPERLIQUID_METADATA_V2_KEYS = [
+        ...self::HYPERLIQUID_METADATA_KEYS,
+        'maximum_market_notional', 'maximum_limit_notional',
+        'order_notional_limit_model',
     ];
 
     public function adapt(VerifiedPaperDatasetSnapshot $snapshot): PaperBacktestDataset
@@ -337,7 +345,9 @@ final class PaperBacktestDatasetAdapter
                 ? ($metadataSchemaVersion === 'paper-instrument-metadata.v2'
                     ? self::OKX_METADATA_V2_KEYS
                     : self::OKX_METADATA_KEYS)
-                : self::HYPERLIQUID_METADATA_KEYS,
+                : ($metadataSchemaVersion === 'paper-instrument-metadata.v2'
+                    ? self::HYPERLIQUID_METADATA_V2_KEYS
+                    : self::HYPERLIQUID_METADATA_KEYS),
         );
         $baseAsset = $event->symbol === 'BTCUSDT' ? 'BTC' : 'ETH';
         $nativeSymbol = $event->sourceVenue === PaperMarketDataVenue::OKX
@@ -356,7 +366,7 @@ final class PaperBacktestDatasetAdapter
                     || ($metadataSchemaVersion === 'paper-instrument-metadata.v2'
                         && $this->canonicalPositiveMetadataDecimal($payload['maximum_leverage'] ?? null)))
                 && $this->canonicalPositiveMetadataDecimal($payload['price_tick'] ?? null))
-            : (($payload['quote_asset'] ?? null) === 'USDC'
+            : (($payload['quote_asset'] ?? null) === ($metadataSchemaVersion === 'paper-instrument-metadata.v2' ? 'USDT' : 'USDC')
                 && ($payload['settlement_asset'] ?? null) === 'USDC'
                 && ($payload['origin'] ?? null) === 'rest_meta'
                 && ($payload['quantity_unit'] ?? null) === 'base_asset'
@@ -369,10 +379,23 @@ final class PaperBacktestDatasetAdapter
                 && ($payload['price_max_decimals'] ?? null) === 6 - $payload['size_decimals']
                 && ($payload['quantity_step'] ?? null) === $this->quantityStep($payload['size_decimals'])
                 && ($payload['minimum_quantity'] ?? null) === $payload['quantity_step']
-                && $this->canonicalPositiveMetadataDecimal($payload['maximum_leverage'] ?? null));
+                && $this->canonicalPositiveMetadataDecimal($payload['maximum_leverage'] ?? null)
+                && preg_match('/\A[1-9][0-9]*\z/D', (string) $payload['maximum_leverage']) === 1
+                && ($metadataSchemaVersion === 'paper-instrument-metadata.v1'
+                    || ($this->canonicalPositiveMetadataDecimal($payload['maximum_market_notional'] ?? null)
+                        && $this->canonicalPositiveMetadataDecimal($payload['maximum_limit_notional'] ?? null)
+                        && ($payload['order_notional_limit_model'] ?? null)
+                            === HyperliquidOrderNotionalLimits::MODEL
+                        && BigDecimal::of($payload['maximum_limit_notional'])->isEqualTo(
+                            BigDecimal::of($payload['maximum_market_notional'])->multipliedBy(10),
+                        )
+                        && $payload['maximum_market_notional']
+                            === HyperliquidOrderNotionalLimits::maximumMarketNotional(
+                                (int) $payload['maximum_leverage'],
+                            ))));
         if (!\in_array($metadataSchemaVersion, $event->sourceVenue === PaperMarketDataVenue::OKX
                 ? ['paper-instrument-metadata.v1', 'paper-instrument-metadata.v2']
-                : ['paper-instrument-metadata.v1'], true)
+                : ['paper-instrument-metadata.v1', 'paper-instrument-metadata.v2'], true)
             || ($payload['native_symbol'] ?? null) !== $nativeSymbol
             || ($payload['instrument_type'] ?? null) !== 'perpetual'
             || ($payload['base_asset'] ?? null) !== $baseAsset
@@ -413,6 +436,16 @@ final class PaperBacktestDatasetAdapter
                     : null,
                 isset($payload['maximum_leverage'])
                     ? $this->decimal($payload['maximum_leverage'], true)
+                    : null,
+                isset($payload['maximum_market_notional'])
+                    ? $this->decimal($payload['maximum_market_notional'], true)
+                    : null,
+                isset($payload['maximum_limit_notional'])
+                    ? $this->decimal($payload['maximum_limit_notional'], true)
+                    : null,
+                isset($payload['order_notional_limit_model'])
+                    && \is_string($payload['order_notional_limit_model'])
+                    ? $payload['order_notional_limit_model']
                     : null,
             );
         } catch (PaperBacktestAdapterException|\InvalidArgumentException) {

@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace App\Trading\Paper\Backtesting;
 
+use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidOrderNotionalLimits;
 use Brick\Math\BigDecimal;
 
 final readonly class NormalizedBacktestInstrumentMetadata
 {
-    public const SCHEMA_VERSION = 'backtest-instrument-metadata.v2';
+    public const SCHEMA_VERSION = 'backtest-instrument-metadata.v3';
     private const TIMESTAMP_FORMAT = 'Y-m-d\TH:i:s.u\Z';
 
     public function __construct(
@@ -35,6 +36,9 @@ final readonly class NormalizedBacktestInstrumentMetadata
         public ?string $maxMarketQuantity,
         public ?string $maxLimitQuantity,
         public ?string $maxLeverage,
+        public ?string $maxMarketNotional,
+        public ?string $maxLimitNotional,
+        public ?string $orderNotionalLimitModel,
     ) {
         $expectedBaseAsset = match ($symbol) {
             'BTCUSDT' => 'BTC',
@@ -67,10 +71,16 @@ final readonly class NormalizedBacktestInstrumentMetadata
             throw new \InvalidArgumentException('paper_backtest_instrument_metadata_invalid');
         }
         if (($marketDataVenue === 'okx' && ($quoteAsset !== 'USDT' || $settlementAsset !== 'USDT'))
-            || ($marketDataVenue === 'hyperliquid' && ($quoteAsset !== 'USDC' || $settlementAsset !== 'USDC'))
+            || ($marketDataVenue === 'hyperliquid'
+                && (($metadataSchemaVersion === 'paper-instrument-metadata.v1'
+                        && ($quoteAsset !== 'USDC' || $settlementAsset !== 'USDC'))
+                    || ($metadataSchemaVersion === 'paper-instrument-metadata.v2'
+                        && ($quoteAsset !== 'USDT' || $settlementAsset !== 'USDC'))))
             || ($maxMarketQuantity !== null && !self::decimal($maxMarketQuantity)->isPositive())
             || ($maxLimitQuantity !== null && !self::decimal($maxLimitQuantity)->isPositive())
             || ($maxLeverage !== null && !self::decimal($maxLeverage)->isPositive())
+            || ($maxMarketNotional !== null && !self::decimal($maxMarketNotional)->isPositive())
+            || ($maxLimitNotional !== null && !self::decimal($maxLimitNotional)->isPositive())
             || ($maxMarketQuantity !== null
                 && self::decimal($maxMarketQuantity)->isLessThan(self::decimal($minQuantity)))
             || ($maxLimitQuantity !== null
@@ -82,11 +92,34 @@ final readonly class NormalizedBacktestInstrumentMetadata
             || ($marketDataVenue === 'okx'
                 && $metadataSchemaVersion === 'paper-instrument-metadata.v1'
                 && $maxLeverage !== null)
+            || ($marketDataVenue === 'okx'
+                && ($maxMarketNotional !== null
+                    || $maxLimitNotional !== null
+                    || $orderNotionalLimitModel !== null))
             || ($marketDataVenue === 'hyperliquid'
-                && ($metadataSchemaVersion !== 'paper-instrument-metadata.v1'
-                    || $maxMarketQuantity !== null
+                && ($maxMarketQuantity !== null
                     || $maxLimitQuantity !== null
-                    || $maxLeverage === null))
+                    || $maxLeverage === null
+                    || ($metadataSchemaVersion === 'paper-instrument-metadata.v1'
+                        && ($maxMarketNotional !== null
+                            || $maxLimitNotional !== null
+                            || $orderNotionalLimitModel !== null))
+                    || ($metadataSchemaVersion === 'paper-instrument-metadata.v2'
+                        && ($maxMarketNotional === null
+                            || $maxLimitNotional === null
+                            || $orderNotionalLimitModel
+                                !== HyperliquidOrderNotionalLimits::MODEL
+                            || !self::decimal($maxLimitNotional)->isEqualTo(
+                                self::decimal($maxMarketNotional)->multipliedBy(10),
+                            )))))
+        ) {
+            throw new \InvalidArgumentException('paper_backtest_instrument_metadata_invalid');
+        }
+        if ($marketDataVenue === 'hyperliquid'
+            && $metadataSchemaVersion === 'paper-instrument-metadata.v2'
+            && (preg_match('/\A[1-9][0-9]*\z/D', (string) $maxLeverage) !== 1
+                || $maxMarketNotional
+                    !== HyperliquidOrderNotionalLimits::maximumMarketNotional((int) $maxLeverage))
         ) {
             throw new \InvalidArgumentException('paper_backtest_instrument_metadata_invalid');
         }
@@ -120,6 +153,9 @@ final readonly class NormalizedBacktestInstrumentMetadata
             'maximum_market_quantity' => $this->maxMarketQuantity,
             'maximum_limit_quantity' => $this->maxLimitQuantity,
             'maximum_leverage' => $this->maxLeverage,
+            'maximum_market_notional' => $this->maxMarketNotional,
+            'maximum_limit_notional' => $this->maxLimitNotional,
+            'order_notional_limit_model' => $this->orderNotionalLimitModel,
             'contract_value' => $this->contractValue,
             'contract_multiplier' => $this->contractMultiplier,
             'contract_value_unit' => $this->contractValueUnit,

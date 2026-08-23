@@ -20,7 +20,8 @@ final readonly class PaperCanonicalFakeInstrumentDescriptor
 {
     public const METADATA_KEY = 'paper_canonical_instrument_descriptor';
 
-    private const SCHEMA = 'paper-canonical-fake-instrument.v1';
+    private const SCHEMA = 'paper-canonical-fake-instrument.v2';
+    private const LEGACY_SCHEMA = 'paper-canonical-fake-instrument.v1';
 
     private const PAYLOAD_FIELDS = [
         'schema',
@@ -60,6 +61,9 @@ final readonly class PaperCanonicalFakeInstrumentDescriptor
         try {
             $fixture = $fixtures->find($plan->symbol);
             $maxLeverage = (int) floor($plan->exchangeLeverageCap);
+            $settleAsset = $cell->marketDataVenue === PaperMarketDataVenue::HYPERLIQUID
+                ? 'USDC'
+                : 'USDT';
             if (!$cell->isModern()
                 || !hash_equals($plan->expectedPlanHash(), $plan->planHash)
                 || $plan->exchange !== $cell->marketDataVenue->value
@@ -68,7 +72,6 @@ final readonly class PaperCanonicalFakeInstrumentDescriptor
                 || !$fixture instanceof FakeInstrument
                 || $fixture->marketType !== MarketType::PERPETUAL
                 || $fixture->quoteAsset !== $plan->quoteCurrency
-                || $fixture->settleAsset !== $plan->quoteCurrency
                 || !is_finite($plan->exchangeLeverageCap)
                 || $maxLeverage < 1
                 || $plan->finalLeverage > $maxLeverage
@@ -85,7 +88,7 @@ final readonly class PaperCanonicalFakeInstrumentDescriptor
                 'market_type' => $plan->marketType,
                 'base_asset' => $fixture->baseAsset,
                 'quote_asset' => $plan->quoteCurrency,
-                'settle_asset' => $fixture->settleAsset,
+                'settle_asset' => $settleAsset,
                 'price_tick' => self::decimal($plan->tickSize),
                 'quantity_step' => self::decimal($plan->quantityStep),
                 'min_quantity' => self::decimal($plan->minQuantity),
@@ -183,7 +186,7 @@ final readonly class PaperCanonicalFakeInstrumentDescriptor
         $expectedKeys = self::PAYLOAD_FIELDS;
         sort($expectedKeys, SORT_STRING);
         if ($keys !== $expectedKeys
-            || ($payload['schema'] ?? null) !== self::SCHEMA
+            || !\in_array($payload['schema'] ?? null, [self::LEGACY_SCHEMA, self::SCHEMA], true)
             || !is_string($payload['paper_cell_id'] ?? null)
             || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $payload['paper_cell_id']) !== 1
             || !is_string($payload['paper_network'] ?? null)
@@ -208,10 +211,15 @@ final readonly class PaperCanonicalFakeInstrumentDescriptor
         }
 
         $fixture = $fixtures->find($payload['symbol']);
+        $expectedSettleAsset = $payload['schema'] === self::LEGACY_SCHEMA
+            ? $fixture?->settleAsset
+            : ($payload['public_venue'] === PaperMarketDataVenue::HYPERLIQUID->value
+                ? 'USDC'
+                : 'USDT');
         if (!$fixture instanceof FakeInstrument
             || $payload['base_asset'] !== $fixture->baseAsset
             || $payload['quote_asset'] !== $fixture->quoteAsset
-            || $payload['settle_asset'] !== $fixture->settleAsset
+            || $payload['settle_asset'] !== $expectedSettleAsset
             || ($payload['maintenance_margin_rate'] ?? null)
                 !== self::canonicalDecimal($fixture->maintenanceMarginRate)
         ) {

@@ -4,10 +4,16 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\Paper\Execution\Strategy;
 
+use App\Tests\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyFixture;
 use App\Tests\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanPipelineFixture;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalInstrumentEvidence;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalOrderPlanEvidenceSource;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjection;
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
+use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
+use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderBookSnapshot;
 use App\TradingCore\OrderPlan\Canonical\CanonicalTickSnapshot;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
@@ -79,7 +85,37 @@ final class PaperCanonicalOrderPlanEvidenceSourceTest extends TestCase
         ));
     }
 
-    private function projection(): CanonicalIndicatorProjection
+    public function testHyperliquidPlanFailsClosedWhenATargetCrossesAPriceMagnitudeBoundary(): void
+    {
+        $policy = $this->hyperliquidPolicy();
+        $fixture = CanonicalOrderPlanPipelineFixture::accepted(
+            executionPolicy: $policy,
+            exchange: 'hyperliquid',
+            environment: 'mainnet',
+        );
+        $bid = 9_999.8;
+        $ask = 9_999.9;
+        $book = new CanonicalOrderBookSnapshot(
+            'hyperliquid', 'mainnet', 'BTCUSDT', 'perpetual', 'order_book',
+            $bid, $ask, 10_000.0 * ($ask - $bid) / (($ask + $bid) / 2.0),
+            new \DateTimeImmutable('2026-08-10T11:59:30Z'),
+            'sha256:' . str_repeat('3', 64),
+            1,
+        );
+
+        self::assertNull((new PaperCanonicalOrderPlanEvidenceSource(
+            new MockClock('2026-08-10T12:00:00Z'),
+        ))->build(
+            $policy,
+            $this->projection(9_999.8),
+            $this->instrument($fixture),
+            $book,
+            $fixture['costs'],
+            $this->portfolio($policy->riskPolicy->modeId, 'hyperliquid', 'mainnet'),
+        ));
+    }
+
+    private function projection(float $vwap = 100.0): CanonicalIndicatorProjection
     {
         return CanonicalIndicatorProjection::fromValidatedRequest([
             'schema_version' => 'canonical-indicator-projection-request.v1',
@@ -91,7 +127,7 @@ final class PaperCanonicalOrderPlanEvidenceSourceTest extends TestCase
             'symbol' => 'BTCUSDT',
             'requested_timeframes' => ['5m'],
             'candles_by_timeframe' => ['5m' => []],
-        ], ['5m' => ['vwap' => 100.0, 'atr' => 1.0]]);
+        ], ['5m' => ['vwap' => $vwap, 'atr' => 1.0]]);
     }
 
     /** @param array<string, mixed> $fixture */
@@ -110,9 +146,13 @@ final class PaperCanonicalOrderPlanEvidenceSourceTest extends TestCase
         ));
     }
 
-    private function portfolio(string $modeId): CanonicalPortfolioSnapshot
+    private function portfolio(
+        string $modeId,
+        string $exchange = 'fake',
+        string $environment = 'test',
+    ): CanonicalPortfolioSnapshot
     {
-        $scope = new CanonicalPortfolioScope('test', 'fake', 'test', 'paper-account', $modeId, 'USDT');
+        $scope = new CanonicalPortfolioScope('test', $exchange, $environment, 'paper-account', $modeId, 'USDT');
 
         return new CanonicalPortfolioSnapshot(
             $scope,
@@ -133,5 +173,31 @@ final class PaperCanonicalOrderPlanEvidenceSourceTest extends TestCase
             1,
             'sha256:' . str_repeat('8', 64),
         );
+    }
+
+    private function hyperliquidPolicy(): CanonicalExecutionPolicy
+    {
+        $payload = CanonicalExecutionPolicyFixture::payload();
+        $payload['exchange']['id'] = 'hyperliquid';
+        $payload['environment']['id'] = 'mainnet';
+        $catalogHash = 'sha256:' . str_repeat('b', 64);
+        $snapshot = new EffectiveTradingConfigSnapshot(
+            new EffectiveTradingConfigRequest(
+                'day_trading',
+                '1.0.0',
+                'day_trading.trend_continuation.long',
+                '1.0.0',
+                'hyperliquid',
+                'mainnet',
+                'long',
+            ),
+            $payload,
+            CanonicalEffectiveConfigSnapshot::calculateConfigHash($payload, $catalogHash),
+            $catalogHash,
+            [],
+            [],
+        );
+
+        return (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
     }
 }

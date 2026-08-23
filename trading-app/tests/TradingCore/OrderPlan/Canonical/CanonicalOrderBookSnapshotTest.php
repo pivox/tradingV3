@@ -28,6 +28,7 @@ final class CanonicalOrderBookSnapshotTest extends TestCase
         self::assertEqualsWithDelta(1.0, $snapshot->derivedSpreadBps(), 1.0e-9);
         self::assertSame('2026-08-10T11:59:45+00:00', $snapshot->observedAt->format(DATE_ATOM));
         self::assertSame('sha256:' . str_repeat('7', 64), $snapshot->inputHash);
+        self::assertSame(7, $snapshot->sourceEpoch);
 
         try {
             (new \ReflectionProperty($snapshot, 'bestBid'))->setValue($snapshot, 1.0);
@@ -35,6 +36,14 @@ final class CanonicalOrderBookSnapshotTest extends TestCase
         } catch (\Error) {
             self::assertSame(99.995, $snapshot->bestBid);
         }
+    }
+
+    public function testRejectsANonPositiveSourceEpoch(): void
+    {
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_book_source_epoch_invalid');
+
+        self::snapshot(sourceEpoch: 0);
     }
 
     #[DataProvider('invalidBooks')]
@@ -68,6 +77,7 @@ final class CanonicalOrderBookSnapshotTest extends TestCase
         float $bestBid = 99.995,
         float $bestAsk = 100.005,
         float $spreadBps = 1.0,
+        ?int $sourceEpoch = 7,
     ): CanonicalOrderBookSnapshot {
         return new CanonicalOrderBookSnapshot(
             'fake',
@@ -80,6 +90,7 @@ final class CanonicalOrderBookSnapshotTest extends TestCase
             $spreadBps,
             new \DateTimeImmutable('2026-08-10T11:59:45+00:00'),
             'sha256:' . str_repeat('7', 64),
+            $sourceEpoch,
         );
     }
 }
