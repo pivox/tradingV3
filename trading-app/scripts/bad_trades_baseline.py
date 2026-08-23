@@ -441,11 +441,11 @@ def build_baseline(
     expected_manifest = load_expected_cells(expected_cells_path) if expected_cells_path is not None else None
     if expected_manifest is None:
         cell_rows = certified_by_cell
-        expected_keys = set(certified_by_cell)
+        expected_keys = sorted(certified_by_cell)
         unexpected_cells: dict[str, int] = {}
         version_mismatched_cells: dict[str, int] = {}
     else:
-        expected_keys = set(expected_manifest["cells"])
+        expected_keys = sorted(expected_manifest["cells"])
         unexpected_cells = {
             key: len(value) for key, value in certified_by_cell.items() if key not in expected_keys
         }
@@ -638,7 +638,8 @@ def render_markdown(result: dict[str, Any]) -> str:
     ])
     if cells["under_sampled"]:
         for key, count in cells["under_sampled"].items():
-            lines.append(f"| `{key}` | {count} |")
+            escaped_key = key.replace("|", "\\|")
+            lines.append(f"| `{escaped_key}` | {count} |")
     else:
         lines.append("| n/a | 0 |")
     if cells["unexpected_certified"]:

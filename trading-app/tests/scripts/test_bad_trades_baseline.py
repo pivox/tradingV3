@@ -4,6 +4,9 @@ import csv
 import importlib.util
 import json
 import hashlib
+import os
+import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -67,6 +70,43 @@ def write_expected_cells_manifest(tmp_path: Path, cells: list[dict[str, str]]) -
     destination = tmp_path / "expected-cells.json"
     destination.write_text(json.dumps(payload), encoding="utf-8")
     return destination
+
+
+def write_two_cell_eligible_fixture(tmp_path: Path) -> tuple[Path, list[dict[str, str]]]:
+    with FIXTURE.open(newline="", encoding="utf-8") as source:
+        reader = csv.DictReader(source)
+        assert reader.fieldnames is not None
+        fieldnames = [*reader.fieldnames, "mode_version", "setup_version"]
+        template = next(reader)
+    cells = [
+        {
+            "paper_network": "mainnet", "market_data_venue": "okx",
+            "mode_id": "day_trading", "mode_version": "1.1.0",
+            "setup_id": "day_trading.trend_continuation.long", "setup_version": "1.1.0",
+            "canonical_side": "long",
+        },
+        {
+            "paper_network": "mainnet", "market_data_venue": "okx",
+            "mode_id": "scalping", "mode_version": "1.1.0",
+            "setup_id": "scalping.pullback.long", "setup_version": "1.1.0",
+            "canonical_side": "long",
+        },
+    ]
+    rows: list[dict[str, str]] = []
+    for cell_index, cell in enumerate(cells):
+        for row_index in range(50):
+            row = dict(template)
+            row.update(cell)
+            row["entry_event_id"] = f"{cell_index}-{row_index}"
+            row["net_pnl_usdt"] = "2.0" if cell_index == 0 else "-1.0"
+            row["realized_net_pnl_r"] = "1.0" if cell_index == 0 else "-0.5"
+            rows.append(row)
+    destination = tmp_path / "two-eligible-cells.csv"
+    with destination.open("w", newline="", encoding="utf-8") as target:
+        writer = csv.DictWriter(target, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return destination, cells
 
 
 @pytest.mark.parametrize("value", ["Infinity", "-Infinity", "NaN"])
@@ -327,7 +367,32 @@ def test_cli_applies_expected_cell_manifest_and_renders_zero_count(tmp_path: Pat
     assert payload["certification_cells"]["under_sampled"] == {
         "mainnet|okx|day_trading|day_trading.trend_continuation.long|long": 0
     }
-    assert "| `mainnet|okx|day_trading|day_trading.trend_continuation.long|long` | 0 |" in output_md.read_text(encoding="utf-8")
+    assert "| `mainnet\\|okx\\|day_trading\\|day_trading.trend_continuation.long\\|long` | 0 |" in output_md.read_text(encoding="utf-8")
+
+
+def test_seeded_simulation_is_independent_from_python_hash_seed(tmp_path: Path) -> None:
+    exported, cells = write_two_cell_eligible_fixture(tmp_path)
+    manifest = write_expected_cells_manifest(tmp_path, cells)
+    simulations = []
+    for hash_seed in ("1", "2"):
+        output_json = tmp_path / f"baseline-{hash_seed}.json"
+        completed = subprocess.run(
+            [
+                sys.executable, str(SCRIPT), "--input", str(exported),
+                "--expected-cells", str(manifest),
+                "--output-md", str(tmp_path / f"baseline-{hash_seed}.md"),
+                "--output-json", str(output_json),
+                "--seed", "132", "--monte-carlo-runs", "37",
+            ],
+            env={**os.environ, "PYTHONHASHSEED": hash_seed},
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert completed.returncode == 0, completed.stderr
+        simulations.append(json.loads(output_json.read_text(encoding="utf-8"))["simulation"])
+
+    assert simulations[0] == simulations[1]
 
 
 def test_current_v2_export_shape_marks_liquidity_unavailable_instead_of_zero(tmp_path: Path) -> None:
