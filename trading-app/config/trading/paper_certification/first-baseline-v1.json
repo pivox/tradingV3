@@ -1,0 +1,28 @@
+{
+  "schema_version": "paper-certification-matrix-input-v1",
+  "minimum_certified_trades_per_cell": 50,
+  "scopes": [
+    {
+      "paper_network": "mainnet",
+      "market_data_venue": "okx"
+    },
+    {
+      "paper_network": "mainnet",
+      "market_data_venue": "hyperliquid"
+    }
+  ],
+  "mode_versions": {
+    "day_trading": "1.1.0",
+    "scalping": "1.1.0",
+    "micro_scalping": "1.1.0"
+  },
+  "setup_versions": {
+    "day_trading.trend_continuation.long": "1.1.0",
+    "day_trading.trend_continuation.short": "1.0.0",
+    "scalping.trend_continuation.long": "1.1.0",
+    "scalping.pullback.long": "1.1.0",
+    "scalping.trend_momentum.short": "1.1.0",
+    "micro_scalping.momentum_ofi.long": "1.1.0",
+    "micro_scalping.momentum_ofi.short": "1.1.0"
+  }
+}

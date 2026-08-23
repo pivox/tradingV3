@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import importlib.util
 import json
+import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -51,6 +52,23 @@ def write_minimum_eligible_fixture(tmp_path: Path, filename: str = "eligible.csv
     return destination
 
 
+def write_expected_cells_manifest(tmp_path: Path, cells: list[dict[str, str]]) -> Path:
+    compact = json.dumps(cells, separators=(",", ":"), ensure_ascii=False)
+    by_mode: dict[str, int] = {}
+    for cell in cells:
+        by_mode[cell["mode_id"]] = by_mode.get(cell["mode_id"], 0) + 1
+    payload = {
+        "schema_version": "paper-certification-matrix-v1",
+        "minimum_certified_trades_per_cell": 50,
+        "cells_sha256": "sha256:" + hashlib.sha256(compact.encode()).hexdigest(),
+        "expected_cell_count_by_mode": dict(sorted(by_mode.items())),
+        "cells": cells,
+    }
+    destination = tmp_path / "expected-cells.json"
+    destination.write_text(json.dumps(payload), encoding="utf-8")
+    return destination
+
+
 @pytest.mark.parametrize("value", ["Infinity", "-Infinity", "NaN"])
 def test_parse_float_rejects_non_finite_csv_values(value: str) -> None:
     module = load_module()
@@ -85,6 +103,103 @@ def test_build_baseline_rejects_cell_minimum_below_global_contract() -> None:
 
     with pytest.raises(ValueError, match="min_cell_size must be at least 50"):
         module.build_baseline(FIXTURE, min_cell_size=1)
+
+
+def test_certification_cell_key_normalizes_only_side_casing() -> None:
+    module = load_module()
+    row = {
+        "paper_network": "mainnet",
+        "market_data_venue": "okx",
+        "mode_id": "day_trading",
+        "setup_id": "day_trading.trend_continuation.long",
+        "canonical_side": "LONG",
+    }
+
+    assert module.certification_cell_key(row) == (
+        "mainnet|okx|day_trading|day_trading.trend_continuation.long|long"
+    )
+
+
+def test_expected_manifest_reports_zero_count_cells_and_excludes_unexpected_certified_rows(tmp_path: Path) -> None:
+    module = load_module()
+    manifest = write_expected_cells_manifest(tmp_path, [{
+        "paper_network": "mainnet",
+        "market_data_venue": "okx",
+        "mode_id": "day_trading",
+        "mode_version": "1.1.0",
+        "setup_id": "day_trading.trend_continuation.long",
+        "setup_version": "1.1.0",
+        "canonical_side": "long",
+    }])
+
+    result = module.build_baseline(FIXTURE, expected_cells_path=manifest)
+
+    expected_key = "mainnet|okx|day_trading|day_trading.trend_continuation.long|long"
+    assert result["certification_cells"]["expected_cell_count"] == 1
+    assert result["certification_cells"]["eligible_cell_count"] == 0
+    assert result["certification_cells"]["under_sampled"] == {expected_key: 0}
+    assert result["certification_cells"]["unexpected_certified"]
+    assert result["groups"]["mode"] == {}
+
+
+def test_expected_manifest_rejects_a_tampered_cell_digest(tmp_path: Path) -> None:
+    module = load_module()
+    manifest = write_expected_cells_manifest(tmp_path, [{
+        "paper_network": "mainnet",
+        "market_data_venue": "okx",
+        "mode_id": "day_trading",
+        "mode_version": "1.1.0",
+        "setup_id": "day_trading.trend_continuation.long",
+        "setup_version": "1.1.0",
+        "canonical_side": "long",
+    }])
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["cells"][0]["canonical_side"] = "short"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="certification matrix digest mismatch"):
+        module.build_baseline(FIXTURE, expected_cells_path=manifest)
+
+
+def test_expected_manifest_excludes_a_certified_row_from_another_contract_version(tmp_path: Path) -> None:
+    module = load_module()
+    manifest = write_expected_cells_manifest(tmp_path, [{
+        "paper_network": "mainnet",
+        "market_data_venue": "okx",
+        "mode_id": "day_trading",
+        "mode_version": "1.1.0",
+        "setup_id": "day_trading.trend_continuation.long",
+        "setup_version": "1.1.0",
+        "canonical_side": "long",
+    }])
+    with FIXTURE.open(newline="", encoding="utf-8") as source:
+        reader = csv.DictReader(source)
+        assert reader.fieldnames is not None
+        row = next(reader)
+        fieldnames = [*reader.fieldnames, "mode_version", "setup_version"]
+    row.update({
+        "paper_network": "mainnet",
+        "market_data_venue": "okx",
+        "mode_id": "day_trading",
+        "mode_version": "1.0.0",
+        "setup_id": "day_trading.trend_continuation.long",
+        "setup_version": "1.0.0",
+        "canonical_side": "long",
+    })
+    exported = tmp_path / "wrong-version.csv"
+    with exported.open("w", newline="", encoding="utf-8") as target:
+        writer = csv.DictWriter(target, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow(row)
+
+    result = module.build_baseline(exported, expected_cells_path=manifest)
+
+    key = "mainnet|okx|day_trading|day_trading.trend_continuation.long|long"
+    assert result["certification_cells"]["under_sampled"] == {key: 0}
+    assert result["certification_cells"]["version_mismatched_certified"] == {
+        key + "|mode_version=1.0.0|setup_version=1.0.0": 1
+    }
+    assert result["certification_cells"]["eligible_trade_count"] == 0
 
 
 def test_cli_rejects_cell_minimum_below_global_contract(tmp_path: Path) -> None:
@@ -185,6 +300,34 @@ def test_cli_writes_markdown_and_json_outputs(tmp_path: Path) -> None:
         "canonical_net_pnl_usdt and canonical_realized_net_pnl_r only"
     )
     assert "fill_cost_ledger" not in json.dumps(payload)
+
+
+def test_cli_applies_expected_cell_manifest_and_renders_zero_count(tmp_path: Path) -> None:
+    module = load_module()
+    manifest = write_expected_cells_manifest(tmp_path, [{
+        "paper_network": "mainnet",
+        "market_data_venue": "okx",
+        "mode_id": "day_trading",
+        "mode_version": "1.1.0",
+        "setup_id": "day_trading.trend_continuation.long",
+        "setup_version": "1.1.0",
+        "canonical_side": "long",
+    }])
+    output_md = tmp_path / "baseline.md"
+    output_json = tmp_path / "baseline.json"
+
+    assert module.main([
+        "--input", str(FIXTURE),
+        "--expected-cells", str(manifest),
+        "--output-md", str(output_md),
+        "--output-json", str(output_json),
+    ]) == 0
+
+    payload = json.loads(output_json.read_text(encoding="utf-8"))
+    assert payload["certification_cells"]["under_sampled"] == {
+        "mainnet|okx|day_trading|day_trading.trend_continuation.long|long": 0
+    }
+    assert "| `mainnet|okx|day_trading|day_trading.trend_continuation.long|long` | 0 |" in output_md.read_text(encoding="utf-8")
 
 
 def test_current_v2_export_shape_marks_liquidity_unavailable_instead_of_zero(tmp_path: Path) -> None:

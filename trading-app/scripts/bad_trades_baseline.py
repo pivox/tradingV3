@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import random
+import re
 import statistics
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -334,7 +336,76 @@ def simulate_group(rows: list[dict[str, str]], seed: int, runs: int) -> dict[str
 
 
 def certification_cell_key(row: dict[str, str]) -> str:
-    return "|".join(str(row.get(field) or "") for field in CERTIFICATION_CELL_FIELDS)
+    values = [str(row.get(field) or "").strip() for field in CERTIFICATION_CELL_FIELDS]
+    values[-1] = values[-1].lower()
+    return "|".join(values)
+
+
+def load_expected_cells(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("certification matrix is unreadable") from error
+    expected_top_keys = {
+        "schema_version",
+        "minimum_certified_trades_per_cell",
+        "cells_sha256",
+        "expected_cell_count_by_mode",
+        "cells",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_top_keys:
+        raise ValueError("certification matrix shape is invalid")
+    if payload["schema_version"] != "paper-certification-matrix-v1":
+        raise ValueError("certification matrix schema is unsupported")
+    if payload["minimum_certified_trades_per_cell"] != MIN_CERTIFIED_CELL_TRADES:
+        raise ValueError("certification matrix minimum is invalid")
+    cells = payload["cells"]
+    if not isinstance(cells, list) or not cells:
+        raise ValueError("certification matrix cells are invalid")
+    encoded = json.dumps(cells, separators=(",", ":"), ensure_ascii=False)
+    digest = "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()
+    if payload["cells_sha256"] != digest:
+        raise ValueError("certification matrix digest mismatch")
+
+    cell_keys = {
+        "paper_network", "market_data_venue", "mode_id", "mode_version",
+        "setup_id", "setup_version", "canonical_side",
+    }
+    indexed: dict[str, dict[str, str]] = {}
+    by_mode: Counter[str] = Counter()
+    previous_order: tuple[str, ...] | None = None
+    for cell in cells:
+        if not isinstance(cell, dict) or set(cell) != cell_keys:
+            raise ValueError("certification matrix cell shape is invalid")
+        if not all(isinstance(cell[field], str) and cell[field] for field in cell_keys):
+            raise ValueError("certification matrix cell value is invalid")
+        if cell["paper_network"] not in {"mainnet", "testnet"}:
+            raise ValueError("certification matrix network is invalid")
+        if cell["market_data_venue"] not in {"okx", "hyperliquid"}:
+            raise ValueError("certification matrix venue is invalid")
+        if cell["market_data_venue"] == "okx" and cell["paper_network"] != "mainnet":
+            raise ValueError("certification matrix scope is unsupported")
+        if cell["mode_id"] not in MODERN_MODES or cell["canonical_side"] not in {"long", "short"}:
+            raise ValueError("certification matrix strategy identity is invalid")
+        if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", cell["mode_version"]):
+            raise ValueError("certification matrix mode version is invalid")
+        if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", cell["setup_version"]):
+            raise ValueError("certification matrix setup version is invalid")
+        order = tuple(cell.values())
+        if previous_order is not None and order <= previous_order:
+            raise ValueError("certification matrix cells are not uniquely sorted")
+        previous_order = order
+        key = certification_cell_key(cell)
+        if key in indexed:
+            raise ValueError("certification matrix cell is duplicated")
+        indexed[key] = dict(cell)
+        by_mode[cell["mode_id"]] += 1
+
+    declared_by_mode = payload["expected_cell_count_by_mode"]
+    if not isinstance(declared_by_mode, dict) or declared_by_mode != dict(sorted(by_mode.items())):
+        raise ValueError("certification matrix mode counts mismatch")
+
+    return {"digest": digest, "cells": indexed}
 
 
 def parse_min_cell_size(value: str) -> int:
@@ -354,6 +425,7 @@ def build_baseline(
     seed: int = 132,
     monte_carlo_runs: int = 1000,
     min_cell_size: int = MIN_CERTIFIED_CELL_TRADES,
+    expected_cells_path: Path | None = None,
 ) -> dict[str, Any]:
     if min_cell_size < MIN_CERTIFIED_CELL_TRADES:
         raise ValueError(f"min_cell_size must be at least {MIN_CERTIFIED_CELL_TRADES}")
@@ -362,11 +434,47 @@ def build_baseline(
         rows = list(csv.DictReader(handle))
 
     certified = [row for row in rows if is_certified(row)]
-    cell_rows: dict[str, list[dict[str, str]]] = defaultdict(list)
+    certified_by_cell: dict[str, list[dict[str, str]]] = defaultdict(list)
     for row in certified:
-        cell_rows[certification_cell_key(row)].append(row)
-    eligible_cells = {key: value for key, value in cell_rows.items() if len(value) >= min_cell_size}
-    under_sampled_cells = {key: len(value) for key, value in cell_rows.items() if len(value) < min_cell_size}
+        certified_by_cell[certification_cell_key(row)].append(row)
+    expected_manifest = load_expected_cells(expected_cells_path) if expected_cells_path is not None else None
+    if expected_manifest is None:
+        cell_rows = certified_by_cell
+        expected_keys = set(certified_by_cell)
+        unexpected_cells: dict[str, int] = {}
+        version_mismatched_cells: dict[str, int] = {}
+    else:
+        expected_keys = set(expected_manifest["cells"])
+        unexpected_cells = {
+            key: len(value) for key, value in certified_by_cell.items() if key not in expected_keys
+        }
+        cell_rows = defaultdict(list)
+        mismatches: Counter[str] = Counter()
+        for key in expected_keys:
+            expected = expected_manifest["cells"][key]
+            for row in certified_by_cell.get(key, []):
+                if (
+                    row.get("mode_version") == expected["mode_version"]
+                    and row.get("setup_version") == expected["setup_version"]
+                ):
+                    cell_rows[key].append(row)
+                    continue
+                mismatch_key = (
+                    f"{key}|mode_version={row.get('mode_version') or 'missing'}"
+                    f"|setup_version={row.get('setup_version') or 'missing'}"
+                )
+                mismatches[mismatch_key] += 1
+        version_mismatched_cells = dict(mismatches)
+    eligible_cells = {
+        key: cell_rows[key]
+        for key in expected_keys
+        if len(cell_rows.get(key, [])) >= min_cell_size
+    }
+    under_sampled_cells = {
+        key: len(cell_rows.get(key, []))
+        for key in expected_keys
+        if len(cell_rows.get(key, [])) < min_cell_size
+    }
     aggregate_eligible = [row for values in eligible_cells.values() for row in values]
     groups = {
         "mode": grouped(aggregate_eligible, "mode_id"),
@@ -384,6 +492,8 @@ def build_baseline(
     return {
         "source": {
             "input_csv": str(input_csv),
+            "expected_cells": str(expected_cells_path) if expected_cells_path is not None else None,
+            "expected_cells_sha256": expected_manifest["digest"] if expected_manifest is not None else None,
             "contract": (
                 "position_trade_analysis_v2 is the sole certification authority; KPI PnL uses "
                 "canonical_net_pnl_usdt and canonical_realized_net_pnl_r only"
@@ -392,9 +502,12 @@ def build_baseline(
         "population": summarize_population(rows, certified),
         "certification_cells": {
             "minimum_trades": min_cell_size,
+            "expected_cell_count": len(expected_keys),
             "eligible_cell_count": len(eligible_cells),
             "eligible_trade_count": len(aggregate_eligible),
             "under_sampled": dict(sorted(under_sampled_cells.items())),
+            "unexpected_certified": dict(sorted(unexpected_cells.items())),
+            "version_mismatched_certified": dict(sorted(version_mismatched_cells.items())),
         },
         "groups": groups,
         "simulation": {
@@ -512,6 +625,30 @@ def render_markdown(result: dict[str, Any]) -> str:
     append_group_table(lines, "Metriques par timeframe", result["groups"]["timeframe"])
     append_group_table(lines, "Metriques par symbole", result["groups"]["symbol"])
 
+    cells = result["certification_cells"]
+    lines.extend([
+        "",
+        "## Couverture des cellules attendues",
+        "",
+        f"Cellules attendues : {cells['expected_cell_count']} ; eligibles : {cells['eligible_cell_count']} ; seuil : {cells['minimum_trades']}.",
+        "",
+        "| Cellule sous-echantillonnee | Trades certifies |",
+        "| --- | ---: |",
+    ])
+    if cells["under_sampled"]:
+        for key, count in cells["under_sampled"].items():
+            lines.append(f"| `{key}` | {count} |")
+    else:
+        lines.append("| n/a | 0 |")
+    if cells["unexpected_certified"]:
+        lines.extend(["", "Cellules certifiees hors manifeste (exclues) :"])
+        for key, count in cells["unexpected_certified"].items():
+            lines.append(f"- `{key}` : {count}")
+    if cells["version_mismatched_certified"]:
+        lines.extend(["", "Versions certifiees hors contrat attendu (exclues) :"])
+        for key, count in cells["version_mismatched_certified"].items():
+            lines.append(f"- `{key}` : {count}")
+
     lines.extend(
         [
             "",
@@ -570,9 +707,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=132, help="Deterministic Monte Carlo seed")
     parser.add_argument("--monte-carlo-runs", type=int, default=1000, help="Number of Monte Carlo paths")
     parser.add_argument("--min-cell-size", type=parse_min_cell_size, default=MIN_CERTIFIED_CELL_TRADES, help="Minimum certified trades per exact cell (cannot be below 50)")
+    parser.add_argument("--expected-cells", type=Path, help="Versioned JSON manifest of every expected certification cell")
     args = parser.parse_args(argv)
 
-    result = build_baseline(args.input, seed=args.seed, monte_carlo_runs=args.monte_carlo_runs, min_cell_size=args.min_cell_size)
+    result = build_baseline(
+        args.input,
+        seed=args.seed,
+        monte_carlo_runs=args.monte_carlo_runs,
+        min_cell_size=args.min_cell_size,
+        expected_cells_path=args.expected_cells,
+    )
     args.output_md.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_md.write_text(render_markdown(result), encoding="utf-8")
