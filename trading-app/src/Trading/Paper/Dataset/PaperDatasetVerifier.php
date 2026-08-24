@@ -8,6 +8,7 @@ use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\MarketData\PaperMarketHexNibbles;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalEventCoverage;
 use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalRequestIdentity;
@@ -1283,7 +1284,10 @@ final class PaperDatasetVerifier
             $coin,
             'book',
             $this->liveUnsignedString($payload['source_time'] ?? null),
-            $this->liveSha256($payload['source_book_hash'] ?? null),
+            $this->liveSha256(PaperMarketHexNibbles::toFixedHex(
+                $payload['source_book_hash_nibbles'] ?? null,
+                64,
+            )),
         ]);
     }
 

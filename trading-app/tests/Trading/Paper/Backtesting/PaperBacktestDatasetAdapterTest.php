@@ -363,7 +363,8 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             ['synthetic' => true],
             ['origin' => 'historical_candle_model'],
             ['source_time' => '1786615230001'],
-            ['source_book_hash' => str_repeat('g', 64)],
+            ['source_book_hash_nibbles' => [16]],
+            ['source_book_hash_nibbles' => [10]],
             ['bid_level_count' => '0'],
         ] as $override) {
             $this->assertAdapterFailure(
@@ -963,7 +964,7 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             '2',
             array_replace([
                 'native_symbol' => 'ETH', 'side' => 'sell', 'price' => '4000.50',
-                'size' => '0.250', 'transaction_hash' => '0xabc',
+                'size' => '0.250', 'transaction_hash_nibbles' => [10, 11, 12],
                 'block_time' => '1786615230000', 'trade_id' => '84',
                 'origin' => 'ws_trades',
             ], $override),
@@ -1013,7 +1014,7 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
                 'bid_size' => '0.250', 'ask_price' => '4000.50',
                 'ask_size' => '0.500', 'bid_level_count' => '2',
                 'ask_level_count' => '3', 'source_time' => '1786615230000',
-                'source_epoch' => '1', 'source_book_hash' => str_repeat('a', 64),
+                'source_epoch' => '1', 'source_book_hash_nibbles' => array_fill(0, 64, 10),
                 'origin' => 'ws_l2_book', 'synthetic' => false,
             ], $override),
         );

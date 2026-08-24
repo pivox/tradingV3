@@ -188,7 +188,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             if (!\in_array($this->checkpoint->phase, ['failed', 'complete'], true)) {
                 $reason = $this->terminalPublicFailureReason($exception);
                 if ($reason !== null) {
-                    $this->failTerminal($reason);
+                    $this->failTerminal($reason, $exception);
                 }
             }
 
@@ -1108,6 +1108,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 if (!$opened) {
                     $terminal = new OkxPaperLiveIntegrityException(
                         'okx_paper_public_reconnect_exhausted',
+                        0,
+                        new \LogicException(
+                            'okx_paper_public_connect_closed_before_open_' . $socket,
+                        ),
                     );
                 } else {
                     $this->beginPairedReconnect();
@@ -1131,14 +1135,37 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $this->loop->stop();
             },
         );
-        if (!$opened && $terminal === null) {
+        while (!$opened && $terminal === null) {
+            $before = [
+                $this->connectionGeneration,
+                $this->socketOpen,
+                $this->publicQueue->count(),
+                $this->publicQueue->bytes(),
+                $this->businessQueue->count(),
+                $this->businessQueue->bytes(),
+            ];
             $this->loop->run();
+            $after = [
+                $this->connectionGeneration,
+                $this->socketOpen,
+                $this->publicQueue->count(),
+                $this->publicQueue->bytes(),
+                $this->businessQueue->count(),
+                $this->businessQueue->bytes(),
+            ];
+            if ($before === $after) {
+                break;
+            }
         }
         if ($terminal instanceof \Throwable) {
             throw $terminal;
         }
         if (!$opened) {
-            throw new OkxPaperLiveIntegrityException('okx_paper_public_reconnect_exhausted');
+            throw new OkxPaperLiveIntegrityException(
+                'okx_paper_public_reconnect_exhausted',
+                0,
+                new \LogicException('okx_paper_public_connect_no_progress_' . $socket),
+            );
         }
     }
 
@@ -3007,22 +3034,35 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         OkxPaperPublicFrameQueue $queue,
         bool $business,
     ): void {
+        $unobservableWakeRemaining = 1;
         while (!$this->socketReady($business)) {
             $beforeAsyncProgress = [
                 $this->checkpoint->pendingTransition,
                 $this->socketOpen,
+                $this->publicQueue->count(),
+                $this->publicQueue->bytes(),
+                $this->businessQueue->count(),
+                $this->businessQueue->bytes(),
             ];
             if ($queue->count() === 0) {
                 $this->loop->run();
             }
             $framesToInspect = $queue->count();
             if ($framesToInspect === 0) {
-                if ($this->checkpoint->phase === 'reconnecting'
-                    && $beforeAsyncProgress !== [
+                if ($beforeAsyncProgress !== [
                         $this->checkpoint->pendingTransition,
                         $this->socketOpen,
+                        $this->publicQueue->count(),
+                        $this->publicQueue->bytes(),
+                        $this->businessQueue->count(),
+                        $this->businessQueue->bytes(),
                     ]
                 ) {
+                    $unobservableWakeRemaining = 1;
+                    continue;
+                }
+                if ($unobservableWakeRemaining > 0) {
+                    --$unobservableWakeRemaining;
                     continue;
                 }
                 throw new OkxPaperLiveIntegrityException('okx_paper_public_reconnect_exhausted');
@@ -3481,7 +3521,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         unset($this->expiredResyncGenerations[$symbol]);
     }
 
-    private function failTerminal(string $reason): never
+    private function failTerminal(string $reason, ?\Throwable $previous = null): never
     {
         ++$this->connectionGeneration;
         $this->stopped = true;
@@ -3498,7 +3538,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $this->nextCleanupTransition($transition),
             );
         }
-        throw new OkxPaperLiveIntegrityException($reason);
+        throw new OkxPaperLiveIntegrityException($reason, 0, $previous);
     }
 
     private function isIdentityConflict(\Throwable $exception): bool

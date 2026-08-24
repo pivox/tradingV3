@@ -466,6 +466,9 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             static function () use ($business): void {
                 $business->open();
             },
+            static function (): void {
+                // The real connector can wake the shared loop once before an ACK arrives.
+            },
             static function () use ($public): void {
                 foreach (Task7Transport::acknowledgements(
                     self::publicArguments(),
@@ -514,7 +517,99 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertNull($duringCallback['stream_frontiers']['BTCUSDT/ws/public_trade'] ?? null);
         self::assertSame($beforeCallback['ordinal_state'], $duringCallback['ordinal_state']);
         self::assertNotSame($duringCallback['ordinal_state'], $this->checkpointState()['ordinal_state']);
-        self::assertSame(5, $deterministic->runCount);
+        self::assertSame(6, $deterministic->runCount);
+    }
+
+    public function testBusinessConnectSurvivesPublicSocketProgressOnSharedLoop(): void
+    {
+        $public = new FakeOkxPaperPublicWebSocketTransport();
+        $business = new FakeOkxPaperPublicWebSocketTransport();
+        $deterministic = new DeterministicLoop();
+        $loop = new Task7ScriptedLoop($deterministic);
+        $publicAcknowledgements = Task7Transport::acknowledgements(
+            self::publicArguments(),
+            'public',
+        );
+        $loop->scripts = [
+            static fn () => $public->open(),
+            static fn () => $public->message($publicAcknowledgements[0]),
+            static fn () => $business->open(),
+            static function () use ($public, $publicAcknowledgements): void {
+                foreach (array_slice($publicAcknowledgements, 1) as $acknowledgement) {
+                    $public->message($acknowledgement);
+                }
+            },
+            static function () use ($business): void {
+                foreach (Task7Transport::acknowledgements(
+                    self::businessArguments(),
+                    'business',
+                ) as $acknowledgement) {
+                    $business->message($acknowledgement);
+                }
+            },
+            static fn () => $public->message(Task7Transport::tradeFrame(['9601'])),
+        ];
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            loop: $loop,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        for ($index = 0; $index < 14; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            $events->next();
+        }
+
+        $trade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $trade);
+        self::assertSame('9601', $trade->payload['trade_id'] ?? null);
+        self::assertSame(6, $deterministic->runCount);
+    }
+
+    public function testInitialConnectKeepsItsInternalCloseCauseBehindPublicFailure(): void
+    {
+        $public = new FakeOkxPaperPublicWebSocketTransport();
+        $loop = new Task7ScriptedLoop(new DeterministicLoop());
+        $loop->scripts = [static fn () => $public->disconnect()];
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            new FakeOkxPaperPublicWebSocketTransport(),
+            loop: $loop,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        for ($index = 0; $index < 14; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            if ($index < 13) {
+                $events->next();
+            }
+        }
+
+        try {
+            $events->next();
+            self::fail('The unopened public socket must fail closed.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('okx_paper_public_reconnect_exhausted', $exception->getMessage());
+            self::assertInstanceOf(
+                OkxPaperLiveIntegrityException::class,
+                $exception->getPrevious(),
+            );
+            self::assertInstanceOf(
+                \LogicException::class,
+                $exception->getPrevious()->getPrevious(),
+            );
+            self::assertSame(
+                'okx_paper_public_connect_closed_before_open_public',
+                $exception->getPrevious()->getPrevious()->getMessage(),
+            );
+        }
     }
 
     public function testSubscriptionReadinessCrashKeepsDurableBusinessSubscriptionAndRestartsExactTwelveAcks(): void

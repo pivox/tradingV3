@@ -10,6 +10,7 @@ use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\MarketData\PaperMarketHexNibbles;
 use Brick\Math\BigDecimal;
 use Brick\Math\BigInteger;
 use Brick\Math\RoundingMode;
@@ -63,7 +64,7 @@ final class HyperliquidPaperSourceOrdinal
         'side',
         'size',
         'trade_id',
-        'transaction_hash',
+        'transaction_hash_nibbles',
     ];
 
     /** @var list<string> */
@@ -76,7 +77,7 @@ final class HyperliquidPaperSourceOrdinal
         'bid_size',
         'native_symbol',
         'origin',
-        'source_book_hash',
+        'source_book_hash_nibbles',
         'source_epoch',
         'source_time',
         'synthetic',
@@ -810,8 +811,10 @@ final class HyperliquidPaperSourceOrdinal
         self::canonicalDecimal($payload['size'] ?? null, positive: true);
         if (!\in_array($payload['side'] ?? null, ['buy', 'sell'], true)
             || ($payload['origin'] ?? null) !== 'ws_trades'
-            || !\is_string($payload['transaction_hash'] ?? null)
-            || preg_match('/\A0x[0-9a-fA-F]{1,128}\z/D', $payload['transaction_hash']) !== 1
+            || !PaperMarketHexNibbles::isCanonical(
+                $payload['transaction_hash_nibbles'] ?? null,
+                128,
+            )
         ) {
             throw new \InvalidArgumentException();
         }
@@ -850,13 +853,15 @@ final class HyperliquidPaperSourceOrdinal
         $ask = self::canonicalDecimal($payload['ask_price'] ?? null, positive: true);
         self::canonicalDecimal($payload['bid_size'] ?? null, positive: true);
         self::canonicalDecimal($payload['ask_size'] ?? null, positive: true);
-        $sourceBookHash = $payload['source_book_hash'] ?? null;
+        $sourceBookHash = PaperMarketHexNibbles::toFixedHex(
+            $payload['source_book_hash_nibbles'] ?? null,
+            64,
+        );
         if ($sourceEpoch === '' || $bidLevelCount === '' || $askLevelCount === ''
             || !$bid->isLessThan($ask)
             || ($payload['origin'] ?? null) !== 'ws_l2_book'
             || ($payload['synthetic'] ?? null) !== false
-            || !\is_string($sourceBookHash)
-            || preg_match('/\A[0-9a-f]{64}\z/D', $sourceBookHash) !== 1
+            || $sourceBookHash === null
         ) {
             throw new \InvalidArgumentException();
         }
