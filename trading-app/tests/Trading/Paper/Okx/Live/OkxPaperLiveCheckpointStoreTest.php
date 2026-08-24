@@ -593,7 +593,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame($before, file_get_contents($path));
     }
 
-    public function testPublicSubscriptionCannotSkipTheCompleteBusinessChannelSequence(): void
+    public function testPublicSubscriptionCannotSkipBusinessSubscription(): void
     {
         $directory = $this->datasetDirectory('business-channel-skip');
         $store = new OkxPaperLiveCheckpointStore($directory);
@@ -603,6 +603,12 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'kind' => 'transport_connect',
             'symbol' => null,
             'stream' => 'public',
+            'stage' => 'connect',
+        ]);
+        $checkpoint = $store->saveTransition($checkpoint, 'connecting', [
+            'kind' => 'transport_connect',
+            'symbol' => null,
+            'stream' => 'business',
             'stage' => 'connect',
         ]);
         $checkpoint = $store->saveTransition($checkpoint, 'subscribing', [
@@ -616,7 +622,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
 
         try {
             $store->saveTransition($checkpoint, 'streaming', null);
-            self::fail('PHASE_SKIP_ACCEPTED: Business connect and subscribe must not be skipped.');
+            self::fail('PHASE_SKIP_ACCEPTED: Business subscribe must not be skipped.');
         } catch (OkxPaperLiveIntegrityException $exception) {
             self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
         }
@@ -640,13 +646,13 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $before = file_get_contents($path);
 
         try {
-            $store->saveTransition($checkpoint, 'connecting', [
-                'kind' => 'transport_connect',
+            $store->saveTransition($checkpoint, 'subscribing', [
+                'kind' => 'subscription_send',
                 'symbol' => null,
-                'stream' => 'business',
-                'stage' => 'connect',
+                'stream' => 'public',
+                'stage' => 'subscribe',
             ]);
-            self::fail('PENDING_ACTION_REPLACED: Public connect must advance only to Public subscribe.');
+            self::fail('PENDING_ACTION_REPLACED: Public connect must advance only to Business connect.');
         } catch (OkxPaperLiveIntegrityException $exception) {
             self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
         }
@@ -690,8 +696,8 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
 
         $actions = [
             ['connecting', ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect']],
-            ['subscribing', ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe']],
             ['connecting', ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect']],
+            ['subscribing', ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe']],
             ['subscribing', ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe']],
         ];
         foreach ($actions as [$phase, $transition]) {
@@ -6033,8 +6039,8 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $checkpoint = $this->completeInitialWarmup($store, $checkpoint);
         foreach ([
             ['connecting', ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect']],
-            ['subscribing', ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe']],
             ['connecting', ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect']],
+            ['subscribing', ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe']],
             ['subscribing', ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe']],
         ] as [$phase, $transition]) {
             $checkpoint = $store->saveTransition($checkpoint, $phase, $transition);

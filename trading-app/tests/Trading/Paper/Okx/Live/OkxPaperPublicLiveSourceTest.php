@@ -686,7 +686,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(PaperMarketEvent::class, $firstData);
         self::assertSame('9900', $firstData->payload['trade_id'] ?? null);
         self::assertSame(
-            ['connect:public', 'send:public', 'connect:business', 'send:business'],
+            ['connect:public', 'connect:business', 'send:public', 'send:business'],
             $restartLog->actions,
         );
         self::assertSame([OkxPaperPublicConfig::WEB_SOCKET_URI], $public->connections);
@@ -1169,7 +1169,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(PaperMarketEvent::class, $firstData);
         self::assertSame('9950', $firstData->payload['trade_id'] ?? null);
         self::assertSame(
-            ['connect:public', 'send:public', 'connect:business', 'send:business'],
+            ['connect:public', 'connect:business', 'send:public', 'send:business'],
             $restartLog->actions,
         );
         self::assertSame([OkxPaperPublicConfig::WEB_SOCKET_URI], $resumedPublic->connections);

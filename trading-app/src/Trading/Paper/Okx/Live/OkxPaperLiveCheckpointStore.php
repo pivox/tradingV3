@@ -2195,6 +2195,10 @@ final class OkxPaperLiveCheckpointStore
         }
 
         return match ($phase) {
+            'connecting', 'subscribing' => $this->isExactInitialTransportSuccessor(
+                $currentTransition,
+                $pendingTransition,
+            ),
             'reconnecting' => $this->isExactReconnectActionSuccessor(
                 $current,
                 $candidate,
@@ -3048,10 +3052,22 @@ final class OkxPaperLiveCheckpointStore
         ?array $currentTransition,
         ?array $nextTransition,
     ): bool {
-        foreach (['public', 'business'] as $stream) {
-            if ($this->isTransportTransition($currentTransition, 'transport_connect', $stream, 'connect')
-                && $this->isTransportTransition($nextTransition, 'subscription_send', $stream, 'subscribe')
-            ) {
+        $successors = [
+            [
+                ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
+                ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+            ],
+            [
+                ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
+            ],
+            [
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
+            ],
+        ];
+        foreach ($successors as [$action, $successor]) {
+            if ($currentTransition === $action && $nextTransition === $successor) {
                 return true;
             }
         }
