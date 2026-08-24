@@ -21,6 +21,15 @@ normalization contract. Existing producers continue to write `NULL`; no venue
 is inferred from the execution exchange. This PR does not activate a new Paper
 projection path.
 
+The correction must also be safe for databases where an operator already added
+the missing column to unblock the later views. It reconciles the column,
+constraint and indexes instead of assuming a pristine schema.
+
+Snapshot uniqueness is split deliberately: legacy rows remain unique on the
+existing identity while `market_data_venue IS NULL`; modern rows are unique on
+that identity plus the venue. Repository upserts use the same venue-aware key,
+so equal OKX and Hyperliquid candle timestamps cannot overwrite each other.
+
 ## Rejected alternatives
 
 - Removing the venue predicate would allow cross-venue evidence to be selected.

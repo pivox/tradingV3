@@ -13,6 +13,7 @@ use App\Entity\TradeZoneEvent;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping\Column;
+use Doctrine\ORM\Mapping\UniqueConstraint;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\TestCase;
 
@@ -78,6 +79,29 @@ final class MarketDataVenueEntityContractTest extends TestCase
             self::assertSame(32, $column->length, $entityClass);
             self::assertTrue($column->nullable, $entityClass);
         }
+    }
+
+    public function testIndicatorSnapshotDoctrineIdentitySeparatesLegacyAndVenueRows(): void
+    {
+        $constraints = [];
+        foreach ((new \ReflectionClass(IndicatorSnapshot::class))->getAttributes(UniqueConstraint::class) as $attribute) {
+            $constraint = $attribute->newInstance();
+            $constraints[$constraint->name] = [
+                'columns' => $constraint->columns,
+                'where' => $constraint->options['where'] ?? null,
+            ];
+        }
+
+        self::assertSame([
+            'ux_ind_snap_exchange_market_symbol_tf_time' => [
+                'columns' => ['exchange', 'market_type', 'symbol', 'timeframe', 'kline_time'],
+                'where' => 'market_data_venue IS NULL',
+            ],
+            'ux_ind_snap_exchange_market_venue_symbol_tf_time' => [
+                'columns' => ['exchange', 'market_type', 'market_data_venue', 'symbol', 'timeframe', 'kline_time'],
+                'where' => 'market_data_venue IS NOT NULL',
+            ],
+        ], $constraints);
     }
 
     /** @return list<OrderIntent|TradeLineage|TradeLifecycleEvent|FillCostLedgerEntry|TradeZoneEvent|IndicatorSnapshot> */

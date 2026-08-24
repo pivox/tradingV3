@@ -15,7 +15,16 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Table(name: 'indicator_snapshots')]
 #[ORM\Index(name: 'idx_ind_snap_symbol_tf', columns: ['exchange', 'market_type', 'symbol', 'timeframe'])]
 #[ORM\Index(name: 'idx_ind_snap_kline_time', columns: ['kline_time'])]
-#[ORM\UniqueConstraint(name: 'ux_ind_snap_exchange_market_symbol_tf_time', columns: ['exchange', 'market_type', 'symbol', 'timeframe', 'kline_time'])]
+#[ORM\UniqueConstraint(
+    name: 'ux_ind_snap_exchange_market_symbol_tf_time',
+    columns: ['exchange', 'market_type', 'symbol', 'timeframe', 'kline_time'],
+    options: ['where' => 'market_data_venue IS NULL'],
+)]
+#[ORM\UniqueConstraint(
+    name: 'ux_ind_snap_exchange_market_venue_symbol_tf_time',
+    columns: ['exchange', 'market_type', 'market_data_venue', 'symbol', 'timeframe', 'kline_time'],
+    options: ['where' => 'market_data_venue IS NOT NULL'],
+)]
 class IndicatorSnapshot
 {
     #[ORM\Id]
