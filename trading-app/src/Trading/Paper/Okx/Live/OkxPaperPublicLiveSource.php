@@ -1038,7 +1038,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $action = $actions[$index];
             $durable = $index >= $start;
             if ($action['kind'] === 'transport_connect') {
-                $this->connectSocket(
+                if (!$this->connectSocket(
                     $action['stream'],
                     $action['stream'] === 'public'
                         ? $this->config->webSocketUri
@@ -1050,7 +1050,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                         ? $this->publicQueue
                         : $this->businessQueue,
                     $durable,
-                );
+                )) {
+                    return;
+                }
 
                 continue;
             }
@@ -1075,7 +1077,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         OkxPaperPublicWebSocketTransportInterface $transport,
         OkxPaperPublicFrameQueue $queue,
         bool $durable = true,
-    ): void {
+    ): bool {
         if ($durable) {
             $this->ensureTransition('connecting', [
                 'kind' => 'transport_connect',
@@ -1145,6 +1147,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $this->businessQueue->bytes(),
             ];
             $this->loop->run();
+            if ($generation !== $this->connectionGeneration) {
+                return false;
+            }
             $after = [
                 $this->connectionGeneration,
                 $this->socketOpen,
@@ -1167,6 +1172,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 new \LogicException('okx_paper_public_connect_no_progress_' . $socket),
             );
         }
+
+        return true;
     }
 
     private function admitSocketFrame(
@@ -1497,17 +1504,6 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->publicTransport,
             $this->publicQueue,
             function (): void {
-                $publicSubscribe = [
-                    'kind' => 'subscription_send',
-                    'symbol' => null,
-                    'stream' => 'public',
-                    'stage' => 'subscribe',
-                ];
-                $this->ensureTransition('reconnecting', $publicSubscribe);
-                $this->publicTransport->send([
-                    'op' => 'subscribe',
-                    'args' => $this->subscriptions->publicArguments(),
-                ]);
                 $businessConnect = [
                     'kind' => 'transport_connect',
                     'symbol' => null,
@@ -1521,6 +1517,17 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     $this->businessTransport,
                     $this->businessQueue,
                     function (): void {
+                        $publicSubscribe = [
+                            'kind' => 'subscription_send',
+                            'symbol' => null,
+                            'stream' => 'public',
+                            'stage' => 'subscribe',
+                        ];
+                        $this->ensureTransition('reconnecting', $publicSubscribe);
+                        $this->publicTransport->send([
+                            'op' => 'subscribe',
+                            'args' => $this->subscriptions->publicArguments(),
+                        ]);
                         $businessSubscribe = [
                             'kind' => 'subscription_send',
                             'symbol' => null,
@@ -1640,16 +1647,16 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 'stage' => 'connect',
             ],
             [
-                'kind' => 'subscription_send',
-                'symbol' => null,
-                'stream' => 'public',
-                'stage' => 'subscribe',
-            ],
-            [
                 'kind' => 'transport_connect',
                 'symbol' => null,
                 'stream' => 'business',
                 'stage' => 'connect',
+            ],
+            [
+                'kind' => 'subscription_send',
+                'symbol' => null,
+                'stream' => 'public',
+                'stage' => 'subscribe',
             ],
             [
                 'kind' => 'subscription_send',
@@ -3640,8 +3647,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         $continuation = $this->persistedBookResyncContinuation();
         $actions = [
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
         ];
         $start = array_search($this->checkpoint->pendingTransition, $actions, true);

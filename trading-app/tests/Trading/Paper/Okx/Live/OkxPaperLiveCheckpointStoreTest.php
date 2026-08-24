@@ -687,6 +687,41 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame($before, file_get_contents($path));
     }
 
+    public function testInitialTransportPendingCanBeSupersededByPublicCloseForReconnect(): void
+    {
+        $directory = $this->datasetDirectory('initial-public-close-reconnect');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $checkpoint = $this->completeInitialWarmup($store, $checkpoint);
+        $checkpoint = $store->saveTransition($checkpoint, 'connecting', [
+            'kind' => 'transport_connect',
+            'symbol' => null,
+            'stream' => 'public',
+            'stage' => 'connect',
+        ]);
+        $checkpoint = $store->saveTransition($checkpoint, 'connecting', [
+            'kind' => 'transport_connect',
+            'symbol' => null,
+            'stream' => 'business',
+            'stage' => 'connect',
+        ]);
+
+        $reconnecting = $store->saveTransition($checkpoint, 'reconnecting', [
+            'kind' => 'transport_close',
+            'symbol' => null,
+            'stream' => 'public',
+            'stage' => 'close',
+        ]);
+
+        self::assertSame('reconnecting', $reconnecting->phase);
+        self::assertSame([
+            'kind' => 'transport_close',
+            'symbol' => null,
+            'stream' => 'public',
+            'stage' => 'close',
+        ], $reconnecting->pendingTransition);
+    }
+
     public function testTaskSevenPhaseGraphAcceptsTheExactWarmConnectSubscribeStreamPath(): void
     {
         $directory = $this->datasetDirectory('task-seven-phase-path');
@@ -5128,8 +5163,8 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             $businessSubscription = null;
             foreach ([
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
                 ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
             ] as $transition) {
                 $checkpoint = $store->saveTransition($checkpoint, 'reconnecting', $transition);
@@ -5271,8 +5306,8 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $checkpoint = $this->startReconnectAttempt($store, $checkpoint);
         foreach ([
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
         ] as $transition) {
             $checkpoint = $store->saveTransition($checkpoint, 'reconnecting', $transition);
@@ -5751,8 +5786,8 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             );
             foreach ([
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
                 ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
             ] as $transition) {
                 $checkpoint = $store->saveTransition($checkpoint, 'reconnecting', $transition);
@@ -6100,8 +6135,8 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
     ): OkxPaperLiveCheckpoint {
         foreach ([
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
         ] as $transition) {
             $checkpoint = $store->saveTransition($checkpoint, 'reconnecting', $transition);

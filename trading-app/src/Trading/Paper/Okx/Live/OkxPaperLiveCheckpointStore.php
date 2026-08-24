@@ -2149,10 +2149,49 @@ final class OkxPaperLiveCheckpointStore
         #[\SensitiveParameter] ?array $pendingTransition,
     ): bool {
         if ($current->pendingTransition !== null) {
-            return $this->sameCanonicalValue($current->pendingTransition, $pendingTransition);
+            return $this->sameCanonicalValue($current->pendingTransition, $pendingTransition)
+                || $this->initialTransportPendingCanBeInterruptedByPublicClose(
+                    $current,
+                    $pendingTransition,
+                );
         }
 
         return $this->sameCanonicalValue($pendingTransition, self::CLEANUP_ACTIONS[0]);
+    }
+
+    /** @param array<string, mixed>|null $pendingTransition */
+    private function initialTransportPendingCanBeInterruptedByPublicClose(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $current,
+        #[\SensitiveParameter] ?array $pendingTransition,
+    ): bool {
+        if (!\in_array($current->phase, ['connecting', 'subscribing'], true)
+            || !$this->isTransportTransition(
+                $pendingTransition,
+                'transport_close',
+                'public',
+                'close',
+            )
+        ) {
+            return false;
+        }
+
+        foreach (['public', 'business'] as $stream) {
+            if ($this->isTransportTransition(
+                $current->pendingTransition,
+                'transport_connect',
+                $stream,
+                'connect',
+            ) || $this->isTransportTransition(
+                $current->pendingTransition,
+                'subscription_send',
+                $stream,
+                'subscribe',
+            )) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** @param array<string, mixed>|null $pendingTransition */
@@ -2464,14 +2503,14 @@ final class OkxPaperLiveCheckpointStore
             ],
             [
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
-            ],
-            [
-                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
             ],
             [
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
+            ],
+            [
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
                 ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
             ],
         ];
@@ -2902,8 +2941,8 @@ final class OkxPaperLiveCheckpointStore
         }
         $transportActions = [
             $publicConnect,
-            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
         ];
         foreach ($transportActions as $position => $action) {

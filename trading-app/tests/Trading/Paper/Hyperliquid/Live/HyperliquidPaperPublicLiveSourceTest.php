@@ -609,6 +609,46 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertFalse($this->checkpoint()->continuity);
     }
 
+    public function testReconnectBuffersMarketFrameUntilAllSubscriptionsAreReady(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport(
+            [],
+            reconnectPrematureFrame: self::tradeFrame(),
+        );
+        $source = $this->source($transport, loop: $loop);
+        $events = self::generator($source->events());
+        $events->rewind();
+        for ($index = 0; $index < 2; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            if ($index === 0) {
+                $events->next();
+            }
+        }
+        $loop->enqueue(static fn () => $transport->serverClose());
+        $loop->enqueue(static fn () => $loop->fire(1.0));
+
+        $events->next();
+        $btcBoundary = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $btcBoundary);
+        self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $btcBoundary->channel);
+        self::assertSame('reconnect', $btcBoundary->payload['reason']);
+        $source->acknowledge($btcBoundary->eventId);
+        $events->next();
+        $ethBoundary = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $ethBoundary);
+        self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $ethBoundary->channel);
+        $source->acknowledge($ethBoundary->eventId);
+
+        $events->next();
+
+        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $events->current()->channel);
+        self::assertSame(2, $transport->connectCount);
+        self::assertFalse($this->checkpoint()->continuity);
+    }
+
     public function testReconnectUsesBoundedDelaysAndThenFailsTerminally(): void
     {
         $loop = new HyperliquidDeterministicLoop();
@@ -971,6 +1011,7 @@ final class DeterministicHyperliquidTransport implements
     public function __construct(
         private readonly array $marketFrames,
         private readonly ?string $prematureFrame = null,
+        private readonly ?string $reconnectPrematureFrame = null,
     ) {
     }
 
@@ -993,6 +1034,12 @@ final class DeterministicHyperliquidTransport implements
             return;
         }
         $onMessage = $this->onMessage ?? throw new \LogicException();
+        if ($this->connectCount > 1
+            && \count($this->sent) === 13
+            && $this->reconnectPrematureFrame !== null
+        ) {
+            $onMessage($this->reconnectPrematureFrame);
+        }
         $onMessage(CanonicalJson::encode([
             'channel' => 'subscriptionResponse',
             'data' => $message,

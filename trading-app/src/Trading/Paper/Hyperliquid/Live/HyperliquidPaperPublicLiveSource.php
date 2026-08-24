@@ -203,11 +203,23 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 continue;
             }
 
-            $decoded = $this->nextDecodedFrame();
-            if ($decoded === null) {
+            if ($this->checkpoint->phase === 'reconnecting'
+                && !$this->subscriptions->isReady()
+            ) {
+                $this->awaitSubscriptions();
+                yield from $this->completeReconnectSubscriptions();
+
                 continue;
             }
-            yield from $this->processDecoded($decoded);
+
+            $received = $this->nextDecodedFrame();
+            if ($received === null) {
+                continue;
+            }
+            yield from $this->processDecoded(
+                $received['decoded'],
+                $received['frame'],
+            );
         }
     }
 
@@ -297,7 +309,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         }
     }
 
-    /** @return array{kind: string, data?: mixed}|null */
+    /** @return array{decoded: array{kind: string, data?: mixed}, frame: string}|null */
     private function nextDecodedFrame(): ?array
     {
         $frame = $this->dequeuePreReadyFrame() ?? $this->nextTransportFrame();
@@ -305,7 +317,10 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             return null;
         }
 
-        return $this->decoder->decode($frame);
+        return [
+            'decoded' => $this->decoder->decode($frame),
+            'frame' => $frame,
+        ];
     }
 
     private function nextTransportFrame(): ?string
@@ -396,32 +411,13 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
      * @param array{kind: string, data?: mixed} $decoded
      * @return \Generator<int, PaperMarketEvent>
      */
-    private function processDecoded(array $decoded): \Generator
+    private function processDecoded(
+        array $decoded,
+        #[\SensitiveParameter] string $frame,
+    ): \Generator
     {
         if ($decoded['kind'] === 'subscription') {
-            if ($this->checkpoint->phase === 'reconnecting'
-                && $this->subscriptions->isReady()
-            ) {
-                $this->checkpoint = $this->checkpointStore->save(
-                    $this->checkpoint->withPhase('streaming'),
-                );
-                $this->scheduleHeartbeat();
-                $this->scheduleFundingRefresh();
-                yield from $this->yieldCandidates([
-                    ...($this->metadataClient === null ? [] : $this->metadataEvents()),
-                    ...($this->fundingClient === null ? [] : $this->fundingEvents()),
-                    $this->normalizer->snapshotBoundary(
-                        'BTC',
-                        'reconnect',
-                        $this->checkpoint->sourceEpoch,
-                    ),
-                    $this->normalizer->snapshotBoundary(
-                        'ETH',
-                        'reconnect',
-                        $this->checkpoint->sourceEpoch,
-                    ),
-                ]);
-            }
+            yield from $this->completeReconnectSubscriptions();
 
             return;
         }
@@ -433,9 +429,16 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         if ($this->checkpoint->phase === 'reconnecting'
             && !$this->subscriptions->isReady()
         ) {
-            throw new HyperliquidPaperLiveIntegrityException(
-                'hyperliquid_paper_public_message_before_ready',
-            );
+            if (!\in_array($decoded['kind'], ['trades', 'book', 'candle'], true)) {
+                throw new HyperliquidPaperLiveIntegrityException(
+                    'hyperliquid_paper_public_message_before_ready',
+                );
+            }
+            $this->deferPreReadyFrame($frame);
+            $this->awaitSubscriptions();
+            yield from $this->completeReconnectSubscriptions();
+
+            return;
         }
         if ($decoded['kind'] === 'trades') {
             if (!\is_array($decoded['data'] ?? null)) {
@@ -535,6 +538,35 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 ]),
         );
         yield from $this->resumePendingEvents();
+    }
+
+    /** @return \Generator<int, PaperMarketEvent> */
+    private function completeReconnectSubscriptions(): \Generator
+    {
+        if ($this->checkpoint->phase !== 'reconnecting'
+            || !$this->subscriptions->isReady()
+        ) {
+            return;
+        }
+        $this->checkpoint = $this->checkpointStore->save(
+            $this->checkpoint->withPhase('streaming'),
+        );
+        $this->scheduleHeartbeat();
+        $this->scheduleFundingRefresh();
+        yield from $this->yieldCandidates([
+            ...($this->metadataClient === null ? [] : $this->metadataEvents()),
+            ...($this->fundingClient === null ? [] : $this->fundingEvents()),
+            $this->normalizer->snapshotBoundary(
+                'BTC',
+                'reconnect',
+                $this->checkpoint->sourceEpoch,
+            ),
+            $this->normalizer->snapshotBoundary(
+                'ETH',
+                'reconnect',
+                $this->checkpoint->sourceEpoch,
+            ),
+        ]);
     }
 
     /** @return list<PaperMarketEvent> */

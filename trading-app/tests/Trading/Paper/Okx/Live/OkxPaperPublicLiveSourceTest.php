@@ -570,6 +570,57 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(6, $deterministic->runCount);
     }
 
+    public function testBusinessConnectHandsOffWhenPublicCloseStartsANewGeneration(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $public = new FakeOkxPaperPublicWebSocketTransport();
+        $business = new FakeOkxPaperPublicWebSocketTransport();
+        $deterministic = new DeterministicLoop();
+        $loop = new Task7ScriptedLoop($deterministic);
+        $loop->scripts = [
+            static fn () => $public->open(attempt: 0),
+            static fn () => $public->disconnect(attempt: 0),
+            static function () use ($clock, $deterministic, $public): void {
+                $clock->sleep(1);
+                $deterministic->fireTimerInterval(1.0);
+                $public->open(attempt: 1);
+                foreach (Task7Transport::acknowledgements(
+                    self::publicArguments(),
+                    'publicRetry',
+                ) as $acknowledgement) {
+                    $public->message($acknowledgement, attempt: 1);
+                }
+            },
+            static function () use ($business): void {
+                $business->open(attempt: 1);
+                foreach (Task7Transport::acknowledgements(
+                    self::businessArguments(),
+                    'businessRetry',
+                ) as $acknowledgement) {
+                    $business->message($acknowledgement, attempt: 1);
+                }
+            },
+        ];
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            clock: $clock,
+            loop: $loop,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+
+        $this->acknowledgeWarmup($source, $events);
+
+        self::assertInstanceOf(PaperMarketEvent::class, $events->current());
+        self::assertSame('reconnecting', $events->current()?->payload['state'] ?? null);
+        self::assertSame('reconnecting', $this->checkpointState()['phase']);
+        self::assertNull($source->failureReason());
+        self::assertCount(2, $public->connections);
+        self::assertCount(2, $business->connections);
+    }
+
     public function testInitialConnectKeepsItsInternalCloseCauseBehindPublicFailure(): void
     {
         $public = new FakeOkxPaperPublicWebSocketTransport();
@@ -2861,15 +2912,15 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 'symbol' => null,
             ],
             [
-                'kind' => 'subscription_send',
-                'stage' => 'subscribe',
-                'stream' => 'public',
-                'symbol' => null,
-            ],
-            [
                 'kind' => 'transport_connect',
                 'stage' => 'connect',
                 'stream' => 'business',
+                'symbol' => null,
+            ],
+            [
+                'kind' => 'subscription_send',
+                'stage' => 'subscribe',
+                'stream' => 'public',
                 'symbol' => null,
             ],
             [
@@ -2974,13 +3025,13 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 'transition' => $transportActions[0],
             ],
             [
-                'socket' => 'public',
-                'operation' => 'send',
+                'socket' => 'business',
+                'operation' => 'connect',
                 'transition' => $transportActions[1],
             ],
             [
-                'socket' => 'business',
-                'operation' => 'connect',
+                'socket' => 'public',
+                'operation' => 'send',
                 'transition' => $transportActions[2],
             ],
             [
@@ -4188,9 +4239,10 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertCount(1, $business->connections);
         self::assertSame([], $deterministic->timerIntervals());
         $public->open(attempt: 1);
-        self::assertCount(2, $public->sent);
+        self::assertCount(1, $public->sent);
         self::assertCount(2, $business->connections);
         $business->open(attempt: 1);
+        self::assertCount(2, $public->sent);
         self::assertCount(2, $business->sent);
         self::assertSame(
             [
@@ -4666,16 +4718,16 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 'stage' => 'connect',
             ],
             [
-                'kind' => 'subscription_send',
-                'symbol' => null,
-                'stream' => 'public',
-                'stage' => 'subscribe',
-            ],
-            [
                 'kind' => 'transport_connect',
                 'symbol' => null,
                 'stream' => 'business',
                 'stage' => 'connect',
+            ],
+            [
+                'kind' => 'subscription_send',
+                'symbol' => null,
+                'stream' => 'public',
+                'stage' => 'subscribe',
             ],
             [
                 'kind' => 'subscription_send',
@@ -4761,22 +4813,22 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 ],
             ],
             [
-                'socket' => 'public',
-                'operation' => 'send',
-                'transition' => [
-                    'kind' => 'subscription_send',
-                    'stage' => 'subscribe',
-                    'stream' => 'public',
-                    'symbol' => null,
-                ],
-            ],
-            [
                 'socket' => 'business',
                 'operation' => 'connect',
                 'transition' => [
                     'kind' => 'transport_connect',
                     'stage' => 'connect',
                     'stream' => 'business',
+                    'symbol' => null,
+                ],
+            ],
+            [
+                'socket' => 'public',
+                'operation' => 'send',
+                'transition' => [
+                    'kind' => 'subscription_send',
+                    'stage' => 'subscribe',
+                    'stream' => 'public',
                     'symbol' => null,
                 ],
             ],
@@ -4809,17 +4861,17 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             'stream' => 'public',
             'stage' => 'connect',
         ]];
-        yield 'Public subscription' => [[
-            'kind' => 'subscription_send',
-            'symbol' => null,
-            'stream' => 'public',
-            'stage' => 'subscribe',
-        ]];
         yield 'Business connect' => [[
             'kind' => 'transport_connect',
             'symbol' => null,
             'stream' => 'business',
             'stage' => 'connect',
+        ]];
+        yield 'Public subscription' => [[
+            'kind' => 'subscription_send',
+            'symbol' => null,
+            'stream' => 'public',
+            'stage' => 'subscribe',
         ]];
         yield 'Business subscription' => [[
             'kind' => 'subscription_send',
