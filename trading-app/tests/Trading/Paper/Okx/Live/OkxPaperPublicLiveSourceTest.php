@@ -3556,6 +3556,54 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertFalse($source->isComplete());
     }
 
+    public function testHealthyStopDoesNotAdmitBurstWhileAwaitingOtherSocketFreshness(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9910']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            clock: $clock,
+            loop: new DeterministicLoop(),
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+        $trade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $trade);
+        $source->acknowledge($trade->eventId);
+
+        $clock->sleep(21);
+        $source->requestHealthyOperatorStop();
+        for ($tradeId = 10000; $tradeId < 10300; ++$tradeId) {
+            $public->message(Task7Transport::tradeFrame([(string) $tradeId]));
+        }
+        $business->message('pong');
+
+        foreach (['BTCUSDT', 'ETHUSDT'] as $symbol) {
+            $events->next();
+            $stopped = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $stopped);
+            self::assertSame($symbol, $stopped->symbol);
+            $source->acknowledge($stopped->eventId);
+        }
+        $events->next();
+
+        self::assertFalse($events->valid());
+        self::assertTrue($source->isComplete());
+        self::assertSame('complete', $this->checkpointState()['phase']);
+    }
+
     public function testHealthyStopFailsStablyWhenSocketFreshnessExpiresMidFlow(): void
     {
         $clock = new MockClock('2026-07-25T10:00:00.000000Z');

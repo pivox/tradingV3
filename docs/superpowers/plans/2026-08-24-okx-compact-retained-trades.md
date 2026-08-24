@@ -238,3 +238,6 @@ and request a fresh Codex review before marking PR #409 ready.
   pending events and interrupted cleanup.
 - [x] Let an in-flight heartbeat prove socket freshness before quiescing, while
   keeping pong timeout and reconnect terminal for the requested healthy stop.
+- [x] Treat the operator request as the admission boundary while awaiting that
+  proof: validate later frames for liveness but never queue them, preventing a
+  hot public socket from exhausting backpressure before the quiet socket pongs.

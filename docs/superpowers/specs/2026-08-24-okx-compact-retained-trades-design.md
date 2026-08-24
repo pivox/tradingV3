@@ -136,3 +136,13 @@ request now waits for the existing heartbeat proof before quiescing admission.
 A valid pong or market frame permits the normal drain and stop transition; pong
 timeout or a reconnect still fails the requested healthy stop. r20 remains
 immutable, incomplete and non-certifiable.
+
+r21 reached 3,420 durable events without reconnect or resync. While the source
+waited for the quiet business socket's liveness proof, the active public socket
+could still admit a burst and exhausted the bounded 256-frame queue. The
+operator request is now also the cutoff for new market-data admission. Frames
+received afterward are decoded and may refresh socket liveness, but are not
+queued or persisted. Once both sockets are proven fresh, callback generations
+are quiesced and only the frames durable before the request are drained. A
+300-frame burst regression pins this boundary. r21 remains immutable,
+incomplete and non-certifiable.

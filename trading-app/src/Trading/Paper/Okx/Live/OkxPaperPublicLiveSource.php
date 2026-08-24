@@ -417,9 +417,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
                 return;
             }
-            $this->healthyStopAdmissionQuiesced = true;
-            ++$this->connectionGeneration;
-            $this->cancelHeartbeatTimers();
+            $this->quiesceHealthyStopAdmission();
         }
         if ($this->checkpoint->pendingEvent !== null
             || $this->checkpoint->pendingTransition !== null
@@ -1384,6 +1382,16 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 ? $this->decoder->decodePublic($frame)
                 : $this->decoder->decodeBusiness($frame);
             $this->refreshInboundFreshness($socket, $frame);
+            if ($this->healthyStopRequested
+                && !$this->healthyStopAdmissionQuiesced
+            ) {
+                if ($this->socketFreshnessWithinPolicy()) {
+                    $this->quiesceHealthyStopAdmission();
+                }
+                $this->loop->stop();
+
+                return;
+            }
         } catch (OkxPaperLiveIntegrityException $exception) {
             $reason = $this->terminalPublicFailureReason($exception);
             if ($reason !== null) {
@@ -1411,6 +1419,16 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             throw $exception;
         }
         $this->loop->stop();
+    }
+
+    private function quiesceHealthyStopAdmission(): void
+    {
+        if ($this->healthyStopAdmissionQuiesced) {
+            return;
+        }
+        $this->healthyStopAdmissionQuiesced = true;
+        ++$this->connectionGeneration;
+        $this->cancelHeartbeatTimers();
     }
 
     private function healthyStopPreconditionsHold(): bool
