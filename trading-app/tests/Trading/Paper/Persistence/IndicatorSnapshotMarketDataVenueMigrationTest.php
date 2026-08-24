@@ -128,13 +128,13 @@ CREATE TABLE indicator_snapshots (
     id BIGSERIAL PRIMARY KEY,
     exchange VARCHAR(32) NOT NULL,
     market_type VARCHAR(32) NOT NULL,
-    market_data_venue TEXT,
+    market_data_venue TEXT NOT NULL DEFAULT 'okx',
     symbol VARCHAR(50) NOT NULL,
     timeframe VARCHAR(10) NOT NULL,
-    kline_time TIMESTAMPTZ NOT NULL
-);
-CREATE UNIQUE INDEX ux_ind_snap_exchange_market_symbol_tf_time
-    ON indicator_snapshots (exchange, market_type, symbol, timeframe, kline_time)
+    kline_time TIMESTAMPTZ NOT NULL,
+    CONSTRAINT ux_ind_snap_exchange_market_symbol_tf_time
+        UNIQUE (exchange, market_type, symbol, timeframe, kline_time)
+)
 SQL);
 
             $this->executeMigration($connection, 'up');
@@ -155,6 +155,8 @@ WHERE schemaname = current_schema()
       'ux_ind_snap_exchange_market_venue_symbol_tf_time'
   )
 SQL));
+            $connection->executeStatement("INSERT INTO indicator_snapshots (exchange, market_type, symbol, timeframe, kline_time) VALUES ('bitmart', 'perpetual', 'BTCUSDT', '1m', NOW())");
+            self::assertNull($connection->fetchOne('SELECT market_data_venue FROM indicator_snapshots'));
         } finally {
             try {
                 $connection->executeStatement('SET search_path TO public');
