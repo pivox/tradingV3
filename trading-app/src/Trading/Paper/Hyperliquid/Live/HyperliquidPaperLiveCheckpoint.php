@@ -14,7 +14,7 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 final readonly class HyperliquidPaperLiveCheckpoint
 {
     public const SCHEMA_VERSION = 2;
-    public const POLICY_VERSION = 1;
+    public const POLICY_VERSION = 2;
     public const MAXIMUM_BYTES = 1_048_576;
     public const MAXIMUM_ACKNOWLEDGED_IDENTITIES = 4_096;
     public const MAXIMUM_TRADE_IDENTITIES = 4_096;

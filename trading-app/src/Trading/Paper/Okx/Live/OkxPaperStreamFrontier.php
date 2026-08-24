@@ -19,22 +19,31 @@ final readonly class OkxPaperStreamFrontier
         public string $sourceIdentity,
         public string $naturalIdentity,
         public string $canonicalDigest,
+        public string $overlapDigest,
     ) {
     }
 
     /** @param array<string, mixed> $state */
     public static function fromArray(#[\SensitiveParameter] array $state): self
     {
-        self::assertExactKeys($state, ['source_identity', 'natural_identity', 'canonical_digest']);
+        self::assertExactKeys($state, [
+            'source_identity',
+            'natural_identity',
+            'canonical_digest',
+            'overlap_digest',
+        ]);
         if (!\is_string($state['source_identity'])
             || !\is_string($state['natural_identity'])
             || !\is_string($state['canonical_digest'])
+            || !\is_string($state['overlap_digest'])
         ) {
             throw self::invalid();
         }
         self::assertIdentity($state['source_identity']);
         self::assertIdentity($state['natural_identity']);
-        if (preg_match(self::SHA256_PATTERN, $state['canonical_digest']) !== 1) {
+        if (preg_match(self::SHA256_PATTERN, $state['canonical_digest']) !== 1
+            || preg_match(self::SHA256_PATTERN, $state['overlap_digest']) !== 1
+        ) {
             throw self::invalid();
         }
 
@@ -42,6 +51,7 @@ final readonly class OkxPaperStreamFrontier
             $state['source_identity'],
             $state['natural_identity'],
             $state['canonical_digest'],
+            $state['overlap_digest'],
         );
     }
 
@@ -87,6 +97,10 @@ final readonly class OkxPaperStreamFrontier
         ], true)) {
             $canonical['exchange_timestamp'] = $event->exchangeTimestamp->format(self::TIMESTAMP_FORMAT);
         }
+        $overlapCanonical = $canonical;
+        if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
+            unset($overlapCanonical['source_fields']['size_contracts']);
+        }
 
         return self::fromArray([
             'source_identity' => $sourceIdentity,
@@ -97,16 +111,18 @@ final readonly class OkxPaperStreamFrontier
                 $sourceIdentity,
             ]),
             'canonical_digest' => hash('sha256', CanonicalJson::encode($canonical)),
+            'overlap_digest' => hash('sha256', CanonicalJson::encode($overlapCanonical)),
         ]);
     }
 
-    /** @return array{source_identity: string, natural_identity: string, canonical_digest: string} */
+    /** @return array{source_identity: string, natural_identity: string, canonical_digest: string, overlap_digest: string} */
     public function toArray(): array
     {
         return [
             'source_identity' => $this->sourceIdentity,
             'natural_identity' => $this->naturalIdentity,
             'canonical_digest' => $this->canonicalDigest,
+            'overlap_digest' => $this->overlapDigest,
         ];
     }
 

@@ -11,7 +11,8 @@ use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
 
 final readonly class OkxPaperLiveCheckpoint
 {
-    public const SCHEMA_VERSION = 3;
+    public const SCHEMA_VERSION = 7;
+    public const MISSING_CANONICAL_DIGEST = '----------------------------------------------------------------';
 
     /** @var list<string> */
     private const SYMBOLS = ['BTCUSDT', 'ETHUSDT'];
@@ -56,7 +57,7 @@ final readonly class OkxPaperLiveCheckpoint
      * @param list<string>                               $remainingSymbols
      * @param list<array{symbol: string, reason: string}> $remainingBoundaries
      * @param array<string, int>                         $sourceEpochs
-     * @param array{requested: bool, remaining_symbols: list<string>} $healthyStop
+     * @param array{liveness_proven: bool, remaining_symbols: list<string>, requested: bool} $healthyStop
      * @param array<string, mixed>                       $reconnect
      * @param array<string, mixed>                       $resyncBySymbol
      * @param array<string, mixed>                       $overlapPaginationByStream
@@ -68,7 +69,7 @@ final readonly class OkxPaperLiveCheckpoint
      *     public: array{frames: int, bytes: int},
      *     business: array{frames: int, bytes: int}
      * }|null $streamingQueueRef
-     * @param array<string, list<array{natural_identity_sha256: string, canonical_digest: string}>> $acknowledgedIdentityHistory
+     * @param array<string, list<array{string, string, string, string}>> $acknowledgedIdentityHistory
      * @param array{stream: string, frontier: OkxPaperStreamFrontier}|null $pendingFrontier
      */
     private function __construct(
@@ -108,7 +109,11 @@ final readonly class OkxPaperLiveCheckpoint
             'connection_epoch' => 1,
             'dataset_id' => $datasetId,
             'failure_reason' => null,
-            'healthy_stop' => ['requested' => false, 'remaining_symbols' => []],
+            'healthy_stop' => [
+                'liveness_proven' => false,
+                'remaining_symbols' => [],
+                'requested' => false,
+            ],
             'last_acknowledged_event_id' => null,
             'ordinal_state' => ['schema_version' => 1, 'scopes' => []],
             'overlap_pagination_by_stream' => $pagination,
@@ -282,14 +287,20 @@ final readonly class OkxPaperLiveCheckpoint
             if ($state['phase'] === 'failed' && $pendingEvent !== null) {
                 throw new \InvalidArgumentException();
             }
-            if (!$healthyStop['requested'] && $healthyStop['remaining_symbols'] !== []) {
+            if (!$healthyStop['requested']
+                && ($healthyStop['remaining_symbols'] !== []
+                    || $healthyStop['liveness_proven'])
+            ) {
                 throw new \InvalidArgumentException();
             }
-            if ($state['phase'] === 'stopping' && !$healthyStop['requested']) {
+            if ($state['phase'] === 'stopping'
+                && (!$healthyStop['requested'] || !$healthyStop['liveness_proven'])
+            ) {
                 throw new \InvalidArgumentException();
             }
             if ($state['phase'] === 'complete') {
                 if (!$healthyStop['requested']
+                    || !$healthyStop['liveness_proven']
                     || $healthyStop['remaining_symbols'] !== []
                     || $remainingSymbols !== []
                     || $remainingBoundaries !== []
@@ -442,7 +453,7 @@ final readonly class OkxPaperLiveCheckpoint
     }
 
     /**
-     * @return array<string, list<array{natural_identity_sha256: string, canonical_digest: string}>>
+     * @return array<string, list<array{string, string, string, string}>>
      */
     private static function acknowledgedIdentityHistory(mixed $value): array
     {
@@ -463,19 +474,25 @@ final readonly class OkxPaperLiveCheckpoint
             }
             $seen = [];
             foreach ($entries as $entry) {
-                if (!\is_array($entry) || array_is_list($entry)) {
+                if (!\is_array($entry)
+                    || !array_is_list($entry)
+                    || \count($entry) !== 4
+                ) {
                     throw new \InvalidArgumentException();
                 }
-                self::assertExactKeys(
-                    $entry,
-                    ['natural_identity_sha256', 'canonical_digest'],
-                );
-                $identity = $entry['natural_identity_sha256'] ?? null;
-                $digest = $entry['canonical_digest'] ?? null;
+                [$identity, $overlapDigest, $restDigest, $webSocketDigest] = $entry;
                 if (!\is_string($identity)
-                    || !\is_string($digest)
+                    || !\is_string($overlapDigest)
                     || preg_match(self::SHA256_PATTERN, $identity) !== 1
-                    || preg_match(self::SHA256_PATTERN, $digest) !== 1
+                    || preg_match(self::SHA256_PATTERN, $overlapDigest) !== 1
+                    || !\is_string($restDigest)
+                    || !\is_string($webSocketDigest)
+                    || (preg_match(self::SHA256_PATTERN, $restDigest) !== 1
+                        && $restDigest !== self::MISSING_CANONICAL_DIGEST)
+                    || (preg_match(self::SHA256_PATTERN, $webSocketDigest) !== 1
+                        && $webSocketDigest !== self::MISSING_CANONICAL_DIGEST)
+                    || ($restDigest === self::MISSING_CANONICAL_DIGEST
+                        && $webSocketDigest === self::MISSING_CANONICAL_DIGEST)
                     || isset($seen[$identity])
                 ) {
                     throw new \InvalidArgumentException();
@@ -1123,18 +1140,26 @@ final readonly class OkxPaperLiveCheckpoint
 
     /**
      * @param array<string, mixed> $healthyStop
-     * @return array{requested: bool, remaining_symbols: list<string>}
+     * @return array{liveness_proven: bool, remaining_symbols: list<string>, requested: bool}
      */
     private static function healthyStop(array $healthyStop): array
     {
-        self::assertExactKeys($healthyStop, ['requested', 'remaining_symbols']);
-        if (!\is_bool($healthyStop['requested']) || !\is_array($healthyStop['remaining_symbols'])) {
+        self::assertExactKeys($healthyStop, [
+            'liveness_proven',
+            'remaining_symbols',
+            'requested',
+        ]);
+        if (!\is_bool($healthyStop['liveness_proven'])
+            || !\is_bool($healthyStop['requested'])
+            || !\is_array($healthyStop['remaining_symbols'])
+        ) {
             throw new \InvalidArgumentException();
         }
 
         return [
-            'requested' => $healthyStop['requested'],
+            'liveness_proven' => $healthyStop['liveness_proven'],
             'remaining_symbols' => self::orderedSymbols($healthyStop['remaining_symbols']),
+            'requested' => $healthyStop['requested'],
         ];
     }
 
@@ -1368,12 +1393,17 @@ final readonly class OkxPaperLiveCheckpoint
                 throw new \InvalidArgumentException();
             }
             foreach ($pagination['retained_rows'] as $row) {
+                if ($isTrade) {
+                    if (!\is_array($row) && !\is_string($row)) {
+                        throw new \InvalidArgumentException();
+                    }
+                    OkxPaperRetainedTradeRow::expand($row);
+
+                    continue;
+                }
                 if (!\is_array($row)) {
                     throw new \InvalidArgumentException();
                 }
-            }
-            if (\strlen(CanonicalJson::encode($pagination['retained_rows'])) > 786_432) {
-                throw new \InvalidArgumentException();
             }
             $validated['retained_rows'] = $pagination['retained_rows'];
         }

@@ -75,7 +75,7 @@ final class PaperCanonicalOrderBookSourceTest extends TestCase
                 'native_symbol' => 'BTC', 'bid_price' => '99', 'bid_size' => '5',
                 'ask_price' => '101', 'ask_size' => '4', 'bid_level_count' => '2',
                 'ask_level_count' => '3', 'source_time' => '1785578458000',
-                'source_epoch' => '7', 'source_book_hash' => str_repeat('d', 64),
+                'source_epoch' => '7', 'source_book_hash_nibbles' => array_fill(0, 64, 13),
                 'origin' => 'ws_l2_book', 'synthetic' => false,
             ],
         );

@@ -10,6 +10,7 @@ use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\MarketData\PaperMarketHexNibbles;
 use Brick\Math\BigDecimal;
 use Symfony\Component\Clock\ClockInterface;
 
@@ -321,7 +322,10 @@ final class HyperliquidPaperMarketEventNormalizer
             'side' => $side === 'B' ? 'buy' : 'sell',
             'price' => $price,
             'size' => $size,
-            'transaction_hash' => $hash,
+            'transaction_hash_nibbles' => PaperMarketHexNibbles::fromHex(
+                substr($hash, 2),
+                128,
+            ),
             'block_time' => (string) $time,
             'trade_id' => (string) $tid,
             'origin' => 'ws_trades',
@@ -378,7 +382,10 @@ final class HyperliquidPaperMarketEventNormalizer
                 'ask_level_count' => (string) \count($levels[1]),
                 'source_time' => (string) $time,
                 'source_epoch' => (string) $sourceEpoch,
-                'source_book_hash' => $sourceBookHash,
+                'source_book_hash_nibbles' => PaperMarketHexNibbles::fromHex(
+                    $sourceBookHash,
+                    64,
+                ),
                 'origin' => 'ws_l2_book',
                 'synthetic' => false,
             ],

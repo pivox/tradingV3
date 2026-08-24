@@ -14,6 +14,7 @@ use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\MarketData\PaperMarketHexNibbles;
 use App\Trading\Paper\Okx\OkxPaperInstrumentMap;
 use Brick\Math\BigDecimal;
 
@@ -45,7 +46,7 @@ final class PaperBacktestDatasetAdapter
 
     /** @var list<string> */
     private const HYPERLIQUID_TRADE_KEYS = [
-        'native_symbol', 'side', 'price', 'size', 'transaction_hash', 'block_time',
+        'native_symbol', 'side', 'price', 'size', 'transaction_hash_nibbles', 'block_time',
         'trade_id', 'origin',
     ];
 
@@ -60,7 +61,7 @@ final class PaperBacktestDatasetAdapter
     private const HYPERLIQUID_BOOK_KEYS = [
         'native_symbol', 'bid_price', 'bid_size', 'ask_price', 'ask_size',
         'bid_level_count', 'ask_level_count', 'source_time', 'source_epoch',
-        'source_book_hash', 'origin', 'synthetic',
+        'source_book_hash_nibbles', 'origin', 'synthetic',
     ];
 
     /** @var list<string> */
@@ -518,8 +519,10 @@ final class PaperBacktestDatasetAdapter
             || !$this->positiveUnsignedString($payload['source_epoch'] ?? null)
             || !$this->positiveUnsignedString($payload['bid_level_count'] ?? null)
             || !$this->positiveUnsignedString($payload['ask_level_count'] ?? null)
-            || !\is_string($payload['source_book_hash'] ?? null)
-            || preg_match('/\A[0-9a-f]{64}\z/D', $payload['source_book_hash']) !== 1
+            || PaperMarketHexNibbles::toFixedHex(
+                $payload['source_book_hash_nibbles'] ?? null,
+                64,
+            ) === null
         ) {
             throw new PaperBacktestAdapterException('paper_backtest_public_book_invalid');
         }
@@ -639,8 +642,10 @@ final class PaperBacktestDatasetAdapter
             || \strlen($payload['trade_id']) > 63
             || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $payload['trade_id']) !== 1
             || !\in_array($payload['side'] ?? null, ['buy', 'sell'], true)
-            || !\is_string($payload['transaction_hash'] ?? null)
-            || preg_match('/\A0x[0-9a-fA-F]{1,128}\z/D', $payload['transaction_hash']) !== 1
+            || !PaperMarketHexNibbles::isCanonical(
+                $payload['transaction_hash_nibbles'] ?? null,
+                128,
+            )
             || !\is_string($payload['block_time'] ?? null)
             || \strlen($payload['block_time']) > 64
             || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $payload['block_time']) !== 1

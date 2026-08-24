@@ -52,6 +52,27 @@ final class HyperliquidPaperPublicSubscriptionSetTest extends TestCase
         self::assertFalse($set->isReady());
     }
 
+    public function testNormalizesExactServerDefaultsOnL2BookAcknowledgements(): void
+    {
+        $set = new HyperliquidPaperPublicSubscriptionSet();
+        foreach ($set->subscriptions() as $message) {
+            $subscription = $message['subscription'];
+            if ($subscription['type'] === 'l2Book') {
+                $subscription += [
+                    'nSigFigs' => null,
+                    'mantissa' => null,
+                    'fast' => false,
+                ];
+            }
+            $set->acknowledge([
+                'method' => 'subscribe',
+                'subscription' => $subscription,
+            ]);
+        }
+
+        self::assertTrue($set->isReady());
+    }
+
     /** @return iterable<string, array{array<array-key, mixed>}> */
     public static function forbiddenMessages(): iterable
     {

@@ -180,6 +180,94 @@ final class OkxPaperLiveCheckpointStore
         $this->persist($checkpoint);
     }
 
+    public function requestHealthyStopDrain(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+    ): OkxPaperLiveCheckpoint {
+        $this->assertCurrent($checkpoint);
+        if ($checkpoint->phase !== 'streaming'
+            || $checkpoint->healthyStop['requested']
+            || $checkpoint->pendingEvent !== null
+            || $checkpoint->pendingTransition !== null
+            || $checkpoint->remainingSymbols !== []
+            || $checkpoint->remainingBoundaries !== []
+            || $checkpoint->reconnect !== [
+                'attempt' => 0,
+                'deadline_at' => null,
+                'stable_since' => null,
+                'accepted_events' => 0,
+            ]
+            || array_filter(
+                $checkpoint->resyncBySymbol,
+                static fn (mixed $value): bool => $value !== null,
+            ) !== []
+            || array_filter(
+                $checkpoint->overlapPaginationByStream,
+                static fn (mixed $value): bool => $value !== null,
+            ) !== []
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $state = $checkpoint->toArray();
+        $state['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
+        $state['healthy_stop'] = [
+            'liveness_proven' => false,
+            'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
+        ];
+        $next = $this->validatedCheckpoint($state);
+        $this->assertCompleteIsTerminal($next);
+        $this->persist($next);
+
+        return $next;
+    }
+
+    public function confirmHealthyStopLiveness(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+    ): OkxPaperLiveCheckpoint {
+        $this->assertCurrent($checkpoint);
+        if ($checkpoint->phase !== 'streaming'
+            || !$checkpoint->healthyStop['requested']
+            || $checkpoint->healthyStop['liveness_proven']
+            || $checkpoint->healthyStop['remaining_symbols'] !== ['BTCUSDT', 'ETHUSDT']
+            || $checkpoint->remainingSymbols !== ['BTCUSDT', 'ETHUSDT']
+            || $checkpoint->pendingEvent !== null
+            || $checkpoint->pendingTransition !== null
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $state = $checkpoint->toArray();
+        $state['healthy_stop']['liveness_proven'] = true;
+        $next = $this->validatedCheckpoint($state);
+        $this->persist($next);
+
+        return $next;
+    }
+
+    public function rememberAcknowledgedIdentityObservation(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+        string $stream,
+        OkxPaperStreamFrontier $frontier,
+        string $sourceKind,
+    ): OkxPaperLiveCheckpoint {
+        $this->assertCurrent($checkpoint);
+        if (!\in_array($sourceKind, ['rest', 'ws'], true)) {
+            throw self::invalidCheckpoint();
+        }
+        $state = $checkpoint->toArray();
+        if (!$this->upsertAcknowledgedIdentityHistory(
+            $state,
+            $stream,
+            $frontier,
+            $sourceKind,
+        )) {
+            return $checkpoint;
+        }
+        $next = $this->validatedCheckpoint($state);
+        $this->persist($next);
+
+        return $next;
+    }
+
     public function fail(
         #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
         string $failureReason,
@@ -758,7 +846,12 @@ final class OkxPaperLiveCheckpointStore
                 }
             }
             $state['stream_frontiers'][$stream] = $nextFrontier->toArray();
-            $this->appendAcknowledgedIdentityHistory($state, $stream, $nextFrontier);
+            $this->appendAcknowledgedIdentityHistory(
+                $state,
+                $stream,
+                $nextFrontier,
+                $checkpoint->pendingEvent,
+            );
         }
         $recoveryContinues = $this->isExactReconnectRecoveryContinuation(
             $checkpoint,
@@ -815,34 +908,74 @@ final class OkxPaperLiveCheckpointStore
         array &$state,
         string $stream,
         OkxPaperStreamFrontier $frontier,
+        #[\SensitiveParameter] PaperMarketEvent $event,
     ): void {
         if ((!str_contains($stream, '/candle_') && !str_ends_with($stream, '/public_trade'))
             || (!str_contains($stream, '/rest/') && !str_contains($stream, '/ws/'))
         ) {
             return;
         }
+        $originStream = $this->recoveryStreamForEvent($event);
+        if ($originStream === null) {
+            throw self::invalidCheckpoint();
+        }
+        $sourceKind = str_contains($originStream, '/rest/') ? 'rest' : 'ws';
+        $this->upsertAcknowledgedIdentityHistory($state, $stream, $frontier, $sourceKind);
+    }
+
+    /** @param array<string, mixed> $state */
+    private function upsertAcknowledgedIdentityHistory(
+        array &$state,
+        string $stream,
+        OkxPaperStreamFrontier $frontier,
+        string $sourceKind,
+    ): bool {
+        if ((!str_contains($stream, '/candle_') && !str_ends_with($stream, '/public_trade'))
+            || (!str_contains($stream, '/rest/') && !str_contains($stream, '/ws/'))
+            || !\in_array($sourceKind, ['rest', 'ws'], true)
+        ) {
+            throw self::invalidCheckpoint();
+        }
         $logicalStream = str_replace(['/rest/', '/ws/'], '/', $stream);
         $history = $state['acknowledged_identity_history'][$logicalStream] ?? [];
         $identityHash = hash('sha256', $frontier->naturalIdentity);
-        foreach ($history as $entry) {
-            if (!hash_equals($entry['natural_identity_sha256'], $identityHash)) {
+        $originIndex = $sourceKind === 'rest' ? 2 : 3;
+        foreach ($history as $index => $entry) {
+            if (!hash_equals($entry[0], $identityHash)) {
                 continue;
             }
-            if (!hash_equals($entry['canonical_digest'], $frontier->canonicalDigest)) {
+            if (!hash_equals($entry[1], $frontier->overlapDigest)
+                || ($entry[$originIndex] !== OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST
+                    && !hash_equals($entry[$originIndex], $frontier->canonicalDigest))
+            ) {
                 throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
             }
+            if ($entry[$originIndex] !== OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST) {
+                return false;
+            }
+            $entry[$originIndex] = $frontier->canonicalDigest;
+            $history[$index] = $entry;
+            $state['acknowledged_identity_history'][$logicalStream] = $history;
 
-            return;
+            return true;
         }
         $history[] = [
-            'natural_identity_sha256' => $identityHash,
-            'canonical_digest' => $frontier->canonicalDigest,
+            $identityHash,
+            $frontier->overlapDigest,
+            $sourceKind === 'rest'
+                ? $frontier->canonicalDigest
+                : OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST,
+            $sourceKind === 'ws'
+                ? $frontier->canonicalDigest
+                : OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST,
         ];
         $window = OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($logicalStream);
         if (\count($history) > $window) {
             $history = array_slice($history, -$window);
         }
         $state['acknowledged_identity_history'][$logicalStream] = $history;
+
+        return true;
     }
 
     /** @param array<string, mixed>|null $continuationTransition */
@@ -2149,10 +2282,49 @@ final class OkxPaperLiveCheckpointStore
         #[\SensitiveParameter] ?array $pendingTransition,
     ): bool {
         if ($current->pendingTransition !== null) {
-            return $this->sameCanonicalValue($current->pendingTransition, $pendingTransition);
+            return $this->sameCanonicalValue($current->pendingTransition, $pendingTransition)
+                || $this->transportPendingCanBeInterruptedByPublicClose(
+                    $current,
+                    $pendingTransition,
+                );
         }
 
         return $this->sameCanonicalValue($pendingTransition, self::CLEANUP_ACTIONS[0]);
+    }
+
+    /** @param array<string, mixed>|null $pendingTransition */
+    private function transportPendingCanBeInterruptedByPublicClose(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $current,
+        #[\SensitiveParameter] ?array $pendingTransition,
+    ): bool {
+        if (!\in_array($current->phase, ['connecting', 'subscribing', 'resyncing'], true)
+            || !$this->isTransportTransition(
+                $pendingTransition,
+                'transport_close',
+                'public',
+                'close',
+            )
+        ) {
+            return false;
+        }
+
+        foreach (['public', 'business'] as $stream) {
+            if ($this->isTransportTransition(
+                $current->pendingTransition,
+                'transport_connect',
+                $stream,
+                'connect',
+            ) || $this->isTransportTransition(
+                $current->pendingTransition,
+                'subscription_send',
+                $stream,
+                'subscribe',
+            )) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** @param array<string, mixed>|null $pendingTransition */
@@ -2195,6 +2367,10 @@ final class OkxPaperLiveCheckpointStore
         }
 
         return match ($phase) {
+            'connecting', 'subscribing' => $this->isExactInitialTransportSuccessor(
+                $currentTransition,
+                $pendingTransition,
+            ),
             'reconnecting' => $this->isExactReconnectActionSuccessor(
                 $current,
                 $candidate,
@@ -2460,14 +2636,14 @@ final class OkxPaperLiveCheckpointStore
             ],
             [
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
-            ],
-            [
-                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
             ],
             [
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
+            ],
+            [
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
                 ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
             ],
         ];
@@ -2898,8 +3074,8 @@ final class OkxPaperLiveCheckpointStore
         }
         $transportActions = [
             $publicConnect,
-            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
         ];
         foreach ($transportActions as $position => $action) {
@@ -3048,10 +3224,22 @@ final class OkxPaperLiveCheckpointStore
         ?array $currentTransition,
         ?array $nextTransition,
     ): bool {
-        foreach (['public', 'business'] as $stream) {
-            if ($this->isTransportTransition($currentTransition, 'transport_connect', $stream, 'connect')
-                && $this->isTransportTransition($nextTransition, 'subscription_send', $stream, 'subscribe')
-            ) {
+        $successors = [
+            [
+                ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
+                ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+            ],
+            [
+                ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
+            ],
+            [
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
+            ],
+        ];
+        foreach ($successors as [$action, $successor]) {
+            if ($currentTransition === $action && $nextTransition === $successor) {
                 return true;
             }
         }
@@ -3699,8 +3887,9 @@ final class OkxPaperLiveCheckpointStore
             || $current->remainingBoundaries !== []
             || $candidate->remainingSymbols !== ['BTCUSDT', 'ETHUSDT']
             || $candidate->healthyStop !== [
-                'requested' => true,
+                'liveness_proven' => true,
                 'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+                'requested' => true,
             ]
         ) {
             throw self::invalidCheckpoint();
@@ -4028,7 +4217,7 @@ final class OkxPaperLiveCheckpointStore
         }
         $identity = $this->checkpointIdentity();
         if (!$this->sameFile($this->currentFileIdentity, $identity)
-            || !hash_equals($this->currentStateHash, hash('sha256', $this->readCheckpoint()))
+            || !hash_equals($this->currentStateHash, $this->checkpointContentHash())
         ) {
             throw self::invalidCheckpoint();
         }
@@ -4408,6 +4597,64 @@ final class OkxPaperLiveCheckpointStore
             }
 
             return $contents;
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    private function checkpointContentHash(): string
+    {
+        $this->assertManagedDirectories();
+        $before = $this->pathStatistics($this->checkpointPath);
+        if ($before === false
+            || $this->isSymlink($before)
+            || !$this->isPrivateRegularFile($before)
+            || !isset($before['size'])
+            || !\is_int($before['size'])
+            || $before['size'] < 2
+            || $before['size'] > OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $handle = @fopen($this->checkpointPath, 'rb');
+        if ($handle === false) {
+            throw self::invalidCheckpoint();
+        }
+        try {
+            $opened = $this->filesystem->stat($handle, 'okx_paper_live_checkpoint_load');
+            if ($opened === false
+                || !$this->isPrivateRegularFile($opened)
+                || !$this->sameSnapshot($before, $opened)
+            ) {
+                throw self::invalidCheckpoint();
+            }
+            $context = hash_init('sha256');
+            $remaining = $opened['size'];
+            while ($remaining > 0) {
+                $chunk = $this->filesystem->read(
+                    $handle,
+                    min(8192, $remaining),
+                    'okx_paper_live_checkpoint_load',
+                );
+                if ($chunk === false || $chunk === '') {
+                    throw self::invalidCheckpoint();
+                }
+                hash_update($context, $chunk);
+                $remaining -= \strlen($chunk);
+            }
+            $extra = $this->filesystem->read($handle, 1, 'okx_paper_live_checkpoint_load');
+            $afterHandle = $this->filesystem->stat($handle, 'okx_paper_live_checkpoint_load');
+            $afterPath = $this->pathStatistics($this->checkpointPath);
+            $this->assertManagedDirectories();
+            if ($extra === false
+                || $extra !== ''
+                || !$this->sameSnapshot($opened, $afterHandle)
+                || !$this->sameSnapshot($opened, $afterPath)
+            ) {
+                throw self::invalidCheckpoint();
+            }
+
+            return hash_final($context);
         } finally {
             fclose($handle);
         }

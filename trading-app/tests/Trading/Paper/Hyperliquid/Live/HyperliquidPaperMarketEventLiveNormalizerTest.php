@@ -145,14 +145,28 @@ final class HyperliquidPaperMarketEventLiveNormalizerTest extends TestCase
             'side' => 'buy',
             'price' => '65000',
             'size' => '0.01',
-            'transaction_hash' => '0xabc',
+            'transaction_hash_nibbles' => [10, 11, 12],
             'block_time' => '1000',
             'trade_id' => '42',
             'origin' => 'ws_trades',
         ], $mainnet->payload);
         self::assertArrayNotHasKey('users', $mainnet->payload);
+        self::assertArrayNotHasKey('transaction_hash', $mainnet->payload);
         self::assertSame('1970-01-01T00:00:01.000000Z', self::exchangeTime($mainnet));
         self::assertSame('2026-07-29T10:00:00.123456Z', self::receivedTime($mainnet));
+    }
+
+    public function testTradeHashUsesASecretScannerSafeCanonicalRepresentation(): void
+    {
+        $row = self::trade();
+        $row['hash'] = '0x0123456789abcdefABCDEF';
+
+        $event = self::normalizer()->liveTrade($row);
+
+        self::assertSame([
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+            10, 11, 12, 13, 14, 15,
+        ], $event->payload['transaction_hash_nibbles']);
     }
 
     public function testWireDecimalsAreCanonicalizedBeforeEventConstruction(): void
@@ -205,10 +219,13 @@ final class HyperliquidPaperMarketEventLiveNormalizerTest extends TestCase
         self::assertSame('3', $event->payload['source_epoch']);
         self::assertSame('ws_l2_book', $event->payload['origin']);
         self::assertFalse($event->payload['synthetic']);
-        self::assertMatchesRegularExpression(
-            '/\A[0-9a-f]{64}\z/D',
-            $event->payload['source_book_hash'],
-        );
+        self::assertCount(64, $event->payload['source_book_hash_nibbles']);
+        foreach ($event->payload['source_book_hash_nibbles'] as $nibble) {
+            self::assertIsInt($nibble);
+            self::assertGreaterThanOrEqual(0, $nibble);
+            self::assertLessThanOrEqual(15, $nibble);
+        }
+        self::assertArrayNotHasKey('source_book_hash', $event->payload);
     }
 
     public function testClosedLiveCandleUsesLiveOriginWithoutChangingHistoricalCandle(): void

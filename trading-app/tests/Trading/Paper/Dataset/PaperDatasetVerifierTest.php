@@ -828,6 +828,37 @@ PHP,
         }
     }
 
+    public function testBoundedLineReaderStreamsLongLinesInBoundedChunks(): void
+    {
+        $chunkBytes = 65_536;
+        $line = '[' . str_repeat(' ', $chunkBytes * 2) . "]\n";
+        self::assertIsArray(json_decode($line, true, 2, \JSON_THROW_ON_ERROR));
+        $handle = tmpfile();
+        self::assertIsResource($handle);
+        $filesystem = new BoundedVerifierLineFilesystem();
+        try {
+            self::assertSame(strlen($line), fwrite($handle, $line));
+            self::assertTrue(rewind($handle));
+            $reader = new PaperDatasetLineReader($filesystem);
+
+            self::assertSame(
+                $line,
+                $reader->read(
+                    $handle,
+                    'paper_dataset_events_read_failed',
+                    'paper_dataset_event_invalid',
+                ),
+            );
+            self::assertGreaterThanOrEqual(3, \count($filesystem->lineReadLengths));
+            self::assertLessThanOrEqual(
+                $chunkBytes + 1,
+                max($filesystem->lineReadLengths),
+            );
+        } finally {
+            fclose($handle);
+        }
+    }
+
     public function testVerifierReadsEventLinesThroughTheSharedBoundedContract(): void
     {
         $this->createCompleteDataset();
@@ -837,7 +868,7 @@ PHP,
 
         self::assertNotEmpty($filesystem->lineReadLengths);
         self::assertSame(
-            [PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES + 1],
+            [PaperDatasetLineReader::READ_CHUNK_BYTES + 1],
             array_values(array_unique($filesystem->lineReadLengths)),
         );
     }

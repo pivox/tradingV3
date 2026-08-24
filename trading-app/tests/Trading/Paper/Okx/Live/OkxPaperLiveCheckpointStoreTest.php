@@ -12,6 +12,7 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpoint;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveIntegrityException;
+use App\Trading\Paper\Okx\Live\OkxPaperLivePolicy;
 use App\Trading\Paper\Okx\Live\OkxPaperStreamFrontier;
 use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -57,6 +58,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_identity' => '1m|1784714400000',
             'natural_identity' => 'okx|BTC-USDT-SWAP|candle_1m|1m|1784714400000',
             'canonical_digest' => $restFrontier->canonicalDigest,
+            'overlap_digest' => $restFrontier->overlapDigest,
         ], $restFrontier->toArray());
         self::assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/D', $restFrontier->canonicalDigest);
     }
@@ -67,6 +69,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_identity' => '242720721',
             'natural_identity' => 'okx|BTC-USDT-SWAP|public_trade|242720721',
             'canonical_digest' => str_repeat('b', 64),
+            'overlap_digest' => str_repeat('c', 64),
         ];
 
         self::assertSame($valid, OkxPaperStreamFrontier::fromArray($valid)->toArray());
@@ -77,6 +80,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             array_replace($valid, ['source_identity' => '']),
             array_replace($valid, ['natural_identity' => str_repeat('x', 1025)]),
             array_replace($valid, ['canonical_digest' => str_repeat('A', 64)]),
+            array_replace($valid, ['overlap_digest' => str_repeat('A', 64)]),
         ] as $invalid) {
             try {
                 OkxPaperStreamFrontier::fromArray($invalid);
@@ -226,7 +230,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame('43', $acknowledged->streamFrontiers[$stream]?->sourceIdentity);
     }
 
-    public function testFreshCheckpointHasTheCompleteClosedVersionThreeSchema(): void
+    public function testFreshCheckpointHasTheCompleteClosedVersionSevenSchema(): void
     {
         $checkpoint = OkxPaperLiveCheckpoint::fresh(self::DATASET_ID, self::CONFIGURATION_SHA256);
         $state = $checkpoint->toArray();
@@ -252,7 +256,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_epochs',
             'stream_frontiers',
         ], array_keys($state));
-        self::assertSame(3, $state['schema_version']);
+        self::assertSame(7, $state['schema_version']);
         self::assertSame(self::DATASET_ID, $state['dataset_id']);
         self::assertSame(self::CONFIGURATION_SHA256, $state['configuration_sha256']);
         self::assertSame('warming', $state['phase']);
@@ -269,6 +273,24 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('okx_paper_live_checkpoint_invalid');
         OkxPaperLiveCheckpoint::fromArray($state);
+    }
+
+    public function testEarlierCheckpointVersionsAreRejectedInsteadOfReusingOldDigestSemantics(): void
+    {
+        foreach ([3, 4, 5, 6] as $schemaVersion) {
+            $state = OkxPaperLiveCheckpoint::fresh(
+                self::DATASET_ID,
+                self::CONFIGURATION_SHA256,
+            )->toArray();
+            $state['schema_version'] = $schemaVersion;
+
+            try {
+                OkxPaperLiveCheckpoint::fromArray($state);
+                self::fail('An earlier digest contract must not be reinterpreted.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
+            }
+        }
     }
 
     public function testEveryTransitionKindHasOnlyItsExactRepresentableStagesAndArguments(): void
@@ -298,7 +320,11 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             $state = OkxPaperLiveCheckpoint::fresh(self::DATASET_ID, self::CONFIGURATION_SHA256)->toArray();
             $state['phase'] = $phase;
             if ($phase === 'stopping') {
-                $state['healthy_stop'] = ['requested' => true, 'remaining_symbols' => ['BTCUSDT', 'ETHUSDT']];
+                $state['healthy_stop'] = [
+                    'liveness_proven' => true,
+                    'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+                    'requested' => true,
+                ];
             }
             $state['pending_transition'] = $transition;
             if ($transition['stage'] === 'reconnect_delay') {
@@ -502,14 +528,60 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
     public function testRestAndWebSocketCopiesOfTheSameTradeExcludeTransportAggregationFromFrontier(): void
     {
         $rest = OkxPaperStreamFrontier::fromEvent($this->tradeEvent('rest_recovery'));
-        $webSocket = OkxPaperStreamFrontier::fromEvent($this->tradeEvent('ws_aggregated', true));
+        $webSocket = OkxPaperStreamFrontier::fromEvent($this->tradeEvent(
+            'ws_aggregated',
+            true,
+            size: '4',
+        ));
 
-        self::assertSame($rest->toArray(), $webSocket->toArray());
+        self::assertNotSame($rest->canonicalDigest, $webSocket->canonicalDigest);
+        self::assertSame($rest->overlapDigest, $webSocket->overlapDigest);
         self::assertSame('242720721', $rest->sourceIdentity);
         self::assertSame(
             'okx|BTC-USDT-SWAP|public_trade|242720721',
             $rest->naturalIdentity,
         );
+        self::assertNotSame(
+            $rest->overlapDigest,
+            OkxPaperStreamFrontier::fromEvent($this->tradeEvent(
+                'rest_recovery',
+                price: '65000.2',
+            ))->overlapDigest,
+        );
+    }
+
+    public function testOppositeOriginCanonicalDigestUsesAlreadyReservedCheckpointBytes(): void
+    {
+        $directory = $this->datasetDirectory('reserved-opposite-origin-digest');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $restEvent = $this->tradeEvent('rest_recovery');
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $restEvent,
+            'trade|242720721',
+            'BTCUSDT/rest/public_trade',
+        );
+        $path = $this->checkpointPath($directory);
+        $beforeBytes = filesize($path);
+        self::assertIsInt($beforeBytes);
+        $webSocketFrontier = OkxPaperStreamFrontier::fromEvent($this->tradeEvent(
+            'ws_aggregated',
+            true,
+            size: '4',
+        ));
+
+        $checkpoint = $store->rememberAcknowledgedIdentityObservation(
+            $checkpoint,
+            'BTCUSDT/ws/public_trade',
+            $webSocketFrontier,
+            'ws',
+        );
+
+        self::assertSame($beforeBytes, filesize($path));
+        $history = $checkpoint->acknowledgedIdentityHistory['BTCUSDT/public_trade'];
+        self::assertSame($webSocketFrontier->canonicalDigest, $history[0][3]);
     }
 
     public function testLoadOrCreatePublishesCanonicalPrivateCheckpointAndStrictlyResumesIdentity(): void
@@ -593,7 +665,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame($before, file_get_contents($path));
     }
 
-    public function testPublicSubscriptionCannotSkipTheCompleteBusinessChannelSequence(): void
+    public function testPublicSubscriptionCannotSkipBusinessSubscription(): void
     {
         $directory = $this->datasetDirectory('business-channel-skip');
         $store = new OkxPaperLiveCheckpointStore($directory);
@@ -603,6 +675,12 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'kind' => 'transport_connect',
             'symbol' => null,
             'stream' => 'public',
+            'stage' => 'connect',
+        ]);
+        $checkpoint = $store->saveTransition($checkpoint, 'connecting', [
+            'kind' => 'transport_connect',
+            'symbol' => null,
+            'stream' => 'business',
             'stage' => 'connect',
         ]);
         $checkpoint = $store->saveTransition($checkpoint, 'subscribing', [
@@ -616,7 +694,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
 
         try {
             $store->saveTransition($checkpoint, 'streaming', null);
-            self::fail('PHASE_SKIP_ACCEPTED: Business connect and subscribe must not be skipped.');
+            self::fail('PHASE_SKIP_ACCEPTED: Business subscribe must not be skipped.');
         } catch (OkxPaperLiveIntegrityException $exception) {
             self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
         }
@@ -640,13 +718,13 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $before = file_get_contents($path);
 
         try {
-            $store->saveTransition($checkpoint, 'connecting', [
-                'kind' => 'transport_connect',
+            $store->saveTransition($checkpoint, 'subscribing', [
+                'kind' => 'subscription_send',
                 'symbol' => null,
-                'stream' => 'business',
-                'stage' => 'connect',
+                'stream' => 'public',
+                'stage' => 'subscribe',
             ]);
-            self::fail('PENDING_ACTION_REPLACED: Public connect must advance only to Public subscribe.');
+            self::fail('PENDING_ACTION_REPLACED: Public connect must advance only to Business connect.');
         } catch (OkxPaperLiveIntegrityException $exception) {
             self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
         }
@@ -681,6 +759,41 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame($before, file_get_contents($path));
     }
 
+    public function testInitialTransportPendingCanBeSupersededByPublicCloseForReconnect(): void
+    {
+        $directory = $this->datasetDirectory('initial-public-close-reconnect');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $checkpoint = $this->completeInitialWarmup($store, $checkpoint);
+        $checkpoint = $store->saveTransition($checkpoint, 'connecting', [
+            'kind' => 'transport_connect',
+            'symbol' => null,
+            'stream' => 'public',
+            'stage' => 'connect',
+        ]);
+        $checkpoint = $store->saveTransition($checkpoint, 'connecting', [
+            'kind' => 'transport_connect',
+            'symbol' => null,
+            'stream' => 'business',
+            'stage' => 'connect',
+        ]);
+
+        $reconnecting = $store->saveTransition($checkpoint, 'reconnecting', [
+            'kind' => 'transport_close',
+            'symbol' => null,
+            'stream' => 'public',
+            'stage' => 'close',
+        ]);
+
+        self::assertSame('reconnecting', $reconnecting->phase);
+        self::assertSame([
+            'kind' => 'transport_close',
+            'symbol' => null,
+            'stream' => 'public',
+            'stage' => 'close',
+        ], $reconnecting->pendingTransition);
+    }
+
     public function testTaskSevenPhaseGraphAcceptsTheExactWarmConnectSubscribeStreamPath(): void
     {
         $directory = $this->datasetDirectory('task-seven-phase-path');
@@ -690,8 +803,8 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
 
         $actions = [
             ['connecting', ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect']],
-            ['subscribing', ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe']],
             ['connecting', ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect']],
+            ['subscribing', ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe']],
             ['subscribing', ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe']],
         ];
         foreach ($actions as [$phase, $transition]) {
@@ -1362,8 +1475,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $state['phase'] = 'stopping';
         $state['remaining_boundaries'] = [];
         $state['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
         $this->replaceCheckpointState($directory, $state);
 
@@ -1425,8 +1539,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $state['phase'] = 'stopping';
         $state['remaining_boundaries'] = [];
         $state['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
         $this->replaceCheckpointState($stopDirectory, $state);
         $stopStore = new OkxPaperLiveCheckpointStore($stopDirectory);
@@ -1682,8 +1797,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $candidateState['pending_transition'] = $transition;
         $candidateState['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
         $candidateState['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
 
         try {
@@ -1868,8 +1984,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $activeState = $fresh->toArray();
         $activeState['phase'] = 'stopping';
         $activeState['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT'],
+            'requested' => true,
         ];
         $activeState['pending_transition'] = [
             'kind' => 'healthy_stop',
@@ -2135,8 +2252,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $stableState = $fresh->toArray();
         $stableState['phase'] = 'stopping';
         $stableState['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
         $stableState['pending_transition'] = [
             'kind' => 'healthy_stop',
@@ -2549,6 +2667,56 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         }
     }
 
+    public function testDurableStateHashStreamsASaturatedCheckpointWithoutRebuildingIt(): void
+    {
+        $directory = $this->datasetDirectory('streaming-checkpoint-hash');
+        $seed = new OkxPaperLiveCheckpointStore($directory);
+        $seed->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        unset($seed);
+
+        $state = OkxPaperLiveCheckpoint::fresh(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        )->toArray();
+        foreach (['BTCUSDT', 'ETHUSDT'] as $symbol) {
+            foreach (['public_trade', 'candle_1m', 'candle_5m', 'candle_15m', 'candle_1H'] as $channel) {
+                $stream = $symbol . '/' . $channel;
+                $window = OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($stream);
+                $state['acknowledged_identity_history'][$stream] = array_map(
+                    static fn (int $index): array => [
+                        hash('sha256', $stream . '|identity|' . $index),
+                        hash('sha256', $stream . '|overlap|' . $index),
+                        hash('sha256', $stream . '|rest|' . $index),
+                        OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST,
+                    ],
+                    range(1, $window),
+                );
+            }
+        }
+        $contents = CanonicalJson::encode(
+            OkxPaperLiveCheckpoint::fromArray($state)->toArray(),
+        ) . "\n";
+        self::assertGreaterThan(700_000, \strlen($contents));
+        $path = $this->checkpointPath($directory);
+        self::assertSame(\strlen($contents), file_put_contents($path, $contents));
+        self::assertTrue(chmod($path, 0600));
+        unset($contents, $state);
+        gc_collect_cycles();
+
+        $filesystem = new MemoryTrackingOkxPaperLiveCheckpointFilesystem();
+        $store = new OkxPaperLiveCheckpointStore($directory, $filesystem);
+        $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        gc_collect_cycles();
+        $filesystem->startTrackingMemory();
+
+        $method = new \ReflectionMethod($store, 'checkpointContentHash');
+        self::assertSame(hash_file('sha256', $path), $method->invoke($store));
+        self::assertLessThan(
+            262_144,
+            $filesystem->peakMemoryBytes - $filesystem->baselineMemoryBytes,
+        );
+    }
+
     public function testFileSyncFailureBeforeRenamePreservesPriorCheckpointBytes(): void
     {
         $directory = $this->datasetDirectory('sync-failure');
@@ -2644,6 +2812,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_identity' => 'not-a-trade-id',
             'natural_identity' => 'okx|BTC-USDT-SWAP|public_trade|not-a-trade-id',
             'canonical_digest' => str_repeat('e', 64),
+            'overlap_digest' => str_repeat('f', 64),
         ];
         $this->assertCheckpointInvalid($state);
 
@@ -2812,7 +2981,11 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $complete['phase'] = 'complete';
         $complete['remaining_symbols'] = [];
         $complete['remaining_boundaries'] = [];
-        $complete['healthy_stop'] = ['requested' => true, 'remaining_symbols' => []];
+        $complete['healthy_stop'] = [
+            'liveness_proven' => true,
+            'remaining_symbols' => [],
+            'requested' => true,
+        ];
         $this->assertCheckpointInvalid($complete);
 
         $complete['stream_frontiers']['BTCUSDT/control/connection_state'] =
@@ -2862,7 +3035,11 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $state['phase'] = 'stopping';
         $state['remaining_symbols'] = [];
         $state['remaining_boundaries'] = [];
-        $state['healthy_stop'] = ['requested' => true, 'remaining_symbols' => []];
+        $state['healthy_stop'] = [
+            'liveness_proven' => true,
+            'remaining_symbols' => [],
+            'requested' => true,
+        ];
         $state['stream_frontiers']['BTCUSDT/control/connection_state'] =
             OkxPaperStreamFrontier::fromEvent($this->stoppedConnectionEvent())->toArray();
         $state['stream_frontiers']['ETHUSDT/control/connection_state'] =
@@ -2897,8 +3074,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $stoppingState['phase'] = 'stopping';
         $stoppingState['remaining_boundaries'] = [];
         $stoppingState['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
         $this->replaceCheckpointState($directory, $stoppingState);
 
@@ -2993,7 +3171,11 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $state['phase'] = 'stopping';
         $state['remaining_symbols'] = [];
         $state['remaining_boundaries'] = [];
-        $state['healthy_stop'] = ['requested' => true, 'remaining_symbols' => []];
+        $state['healthy_stop'] = [
+            'liveness_proven' => true,
+            'remaining_symbols' => [],
+            'requested' => true,
+        ];
         $state['stream_frontiers']['BTCUSDT/control/connection_state'] =
             OkxPaperStreamFrontier::fromEvent($this->stoppedConnectionEvent())->toArray();
         $this->replaceCheckpointState($directory, $state);
@@ -3359,8 +3541,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $stopState['phase'] = 'stopping';
         $stopState['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
         $stopState['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
         $writeAhead = $stopStore->saveTransition(
             OkxPaperLiveCheckpoint::fromArray($stopState),
@@ -5122,8 +5305,8 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             $businessSubscription = null;
             foreach ([
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
                 ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
             ] as $transition) {
                 $checkpoint = $store->saveTransition($checkpoint, 'reconnecting', $transition);
@@ -5265,8 +5448,8 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $checkpoint = $this->startReconnectAttempt($store, $checkpoint);
         foreach ([
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
         ] as $transition) {
             $checkpoint = $store->saveTransition($checkpoint, 'reconnecting', $transition);
@@ -5745,8 +5928,8 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             );
             foreach ([
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
                 ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+                ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
                 ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
             ] as $transition) {
                 $checkpoint = $store->saveTransition($checkpoint, 'reconnecting', $transition);
@@ -6033,8 +6216,8 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $checkpoint = $this->completeInitialWarmup($store, $checkpoint);
         foreach ([
             ['connecting', ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect']],
-            ['subscribing', ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe']],
             ['connecting', ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect']],
+            ['subscribing', ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe']],
             ['subscribing', ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe']],
         ] as [$phase, $transition]) {
             $checkpoint = $store->saveTransition($checkpoint, $phase, $transition);
@@ -6094,8 +6277,8 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
     ): OkxPaperLiveCheckpoint {
         foreach ([
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
         ] as $transition) {
             $checkpoint = $store->saveTransition($checkpoint, 'reconnecting', $transition);
@@ -6613,6 +6796,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         string $sequence = '1',
         string $receivedTimestamp = '2026-07-22T10:00:01.000000Z',
         string $symbol = 'BTCUSDT',
+        string $size = '3',
     ): PaperMarketEvent
     {
         $nativeSymbol = $symbol === 'BTCUSDT' ? 'BTC-USDT-SWAP' : 'ETH-USDT-SWAP';
@@ -6629,7 +6813,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
                 'native_symbol' => $nativeSymbol,
                 'trade_id' => $tradeId,
                 'price' => $price,
-                'size_contracts' => '3',
+                'size_contracts' => $size,
                 'taker_side' => 'buy',
                 'aggregate_count' => $aggregated ? '2' : null,
                 'source' => '0',
@@ -6991,6 +7175,30 @@ final class RecordingOkxPaperLiveCheckpointFilesystem extends PaperDatasetRecord
         $this->operations[] = 'sync:' . $operation;
 
         return parent::sync($handle, $operation);
+    }
+}
+
+final class MemoryTrackingOkxPaperLiveCheckpointFilesystem extends PaperDatasetRecorderFilesystem
+{
+    public int $baselineMemoryBytes = 0;
+    public int $peakMemoryBytes = 0;
+
+    private bool $tracking = false;
+
+    public function startTrackingMemory(): void
+    {
+        $this->baselineMemoryBytes = memory_get_usage();
+        $this->peakMemoryBytes = $this->baselineMemoryBytes;
+        $this->tracking = true;
+    }
+
+    public function read($handle, int $length, string $operation): string|false
+    {
+        if ($this->tracking) {
+            $this->peakMemoryBytes = max($this->peakMemoryBytes, memory_get_usage());
+        }
+
+        return parent::read($handle, $length, $operation);
     }
 }
 

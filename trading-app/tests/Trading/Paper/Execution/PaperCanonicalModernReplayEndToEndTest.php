@@ -592,7 +592,7 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
                 'ask_level_count' => '1',
                 'source_time' => $exchangeTimestamp->format('Uv'),
                 'source_epoch' => '1',
-                'source_book_hash' => str_repeat('a', 64),
+                'source_book_hash_nibbles' => array_fill(0, 64, 10),
                 'origin' => 'ws_l2_book',
                 'synthetic' => false,
             ]

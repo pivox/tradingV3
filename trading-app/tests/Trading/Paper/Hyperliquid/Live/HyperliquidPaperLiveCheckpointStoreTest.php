@@ -51,6 +51,7 @@ final class HyperliquidPaperLiveCheckpointStoreTest extends TestCase
     {
         $checkpoint = self::fresh();
 
+        self::assertSame(2, $checkpoint->policyVersion);
         self::assertSame([
             'schema_version', 'policy_version', 'dataset_id', 'network',
             'configuration_sha256', 'phase', 'failure_reason', 'continuity',
@@ -67,6 +68,17 @@ final class HyperliquidPaperLiveCheckpointStoreTest extends TestCase
         );
         self::assertSame(PaperMarketDataNetwork::MAINNET, $checkpoint->network);
         self::assertCount(12, $checkpoint->subscriptions);
+    }
+
+    public function testLegacyRawHashPayloadPolicyCannotResumeIntoNibbleLineage(): void
+    {
+        $legacy = self::fresh()->toArray();
+        $legacy['policy_version'] = 1;
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('hyperliquid_paper_live_checkpoint_invalid');
+
+        HyperliquidPaperLiveCheckpoint::fromArray($legacy);
     }
 
     public function testPendingReplayAcknowledgementAndCandleStateAreImmutable(): void

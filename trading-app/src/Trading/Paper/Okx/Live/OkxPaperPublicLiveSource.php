@@ -81,6 +81,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
     private array $socketOpen = ['public' => false, 'business' => false];
 
     private bool $resumedHealthyStop;
+    private bool $resumedHealthyStopDrain;
+    private bool $resumedUnprovenHealthyStop;
     private bool $resumedBookRecovery;
     private bool $resumedStreaming;
 
@@ -92,6 +94,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
     private ?string $activeQueuedSocket = null;
     private int $activeQueuedEventsRemaining = 0;
 
+    private bool $healthyStopRequested = false;
+    private bool $healthyStopAdmissionQuiesced = false;
     private bool $stopped = false;
 
     public function __construct(
@@ -123,9 +127,20 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->ordinals,
         );
         $this->connectionGeneration = $checkpoint->connectionEpoch;
-        $this->resumedHealthyStop = $checkpoint->phase === 'stopping';
+        $this->resumedHealthyStopDrain = $checkpoint->phase === 'streaming'
+            && $checkpoint->healthyStop['requested']
+            && $checkpoint->healthyStop['liveness_proven'];
+        $this->resumedUnprovenHealthyStop = $checkpoint->phase === 'streaming'
+            && $checkpoint->healthyStop['requested']
+            && !$checkpoint->healthyStop['liveness_proven'];
+        $this->resumedHealthyStop = $checkpoint->phase === 'stopping'
+            || $this->resumedHealthyStopDrain;
         $this->resumedBookRecovery = $checkpoint->phase === 'resyncing';
-        $this->resumedStreaming = $checkpoint->phase === 'streaming';
+        $this->resumedStreaming = $checkpoint->phase === 'streaming'
+            && !$this->resumedHealthyStopDrain
+            && !$this->resumedUnprovenHealthyStop;
+        $this->healthyStopRequested = $this->resumedHealthyStopDrain;
+        $this->healthyStopAdmissionQuiesced = $this->resumedHealthyStopDrain;
         foreach ($this->instruments->nativeInstrumentIds() as $instrumentId) {
             $this->books[$instrumentId] = new OkxPaperOrderBookMaterializer();
         }
@@ -146,6 +161,13 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
         foreach ($checkpoint->streamFrontiers as $stream => $frontier) {
             $this->requiresOverlap[$stream] = $frontier instanceof OkxPaperStreamFrontier;
+        }
+        if ($this->resumedHealthyStopDrain) {
+            foreach ($this->requiresOverlap as $stream => $_requiresOverlap) {
+                if (str_contains($stream, '/ws/')) {
+                    $this->requiresOverlap[$stream] = false;
+                }
+            }
         }
         foreach ($checkpoint->resyncBySymbol as $symbol => $resync) {
             if (\is_array($resync)
@@ -188,7 +210,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             if (!\in_array($this->checkpoint->phase, ['failed', 'complete'], true)) {
                 $reason = $this->terminalPublicFailureReason($exception);
                 if ($reason !== null) {
-                    $this->failTerminal($reason);
+                    $this->failTerminal($reason, $exception);
                 }
             }
 
@@ -222,11 +244,19 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         if ($this->checkpoint->phase === 'complete') {
             return;
         }
+        if ($this->resumedUnprovenHealthyStop) {
+            $this->failTerminal('okx_paper_public_healthy_stop_invalid');
+        }
         if ($this->checkpoint->phase === 'warming') {
             yield from $this->warmup();
         }
         if ($this->checkpoint->phase === 'stopping') {
             yield from $this->healthyStopFlow();
+
+            return;
+        }
+        if ($this->resumedHealthyStopDrain) {
+            yield from $this->resumedHealthyStopDrainFlow();
 
             return;
         }
@@ -239,17 +269,22 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             if ($this->resumedBookRecovery) {
                 $this->connectResumedBookRecoverySockets();
                 $this->resumedBookRecovery = false;
+                if ($this->stopped) {
+                    return;
+                }
             }
-            if ($this->hasAcknowledgedResyncSnapshot()) {
-                yield from $this->emitResyncBoundary();
-            } else {
-                $events = $this->resumePersistedBookResync();
-                $stream = $this->nextEventStream
-                    ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
-                $transition = $this->nextEventTransition;
-                $this->nextEventStream = null;
-                $this->nextEventTransition = [];
-                yield from $this->yieldMarketEvents($events, $stream, $transition);
+            if ($this->checkpoint->phase === 'resyncing') {
+                if ($this->hasAcknowledgedResyncSnapshot()) {
+                    yield from $this->emitResyncBoundary();
+                } else {
+                    $events = $this->resumePersistedBookResync();
+                    $stream = $this->nextEventStream
+                        ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
+                    $transition = $this->nextEventTransition;
+                    $this->nextEventStream = null;
+                    $this->nextEventTransition = [];
+                    yield from $this->yieldMarketEvents($events, $stream, $transition);
+                }
             }
         } elseif ($this->checkpoint->phase === 'reconnecting') {
             $this->resumeReconnectTransportTransition();
@@ -270,6 +305,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->startHeartbeatTimers();
         }
         while (!$this->stopped) {
+            if ($this->healthyStopRequested) {
+                $this->persistHealthyStopWhenDrained();
+            }
             if ($this->checkpoint->phase === 'stopping') {
                 yield from $this->healthyStopFlow();
 
@@ -377,15 +415,62 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         ) {
             return;
         }
-        if (!$this->healthyStopPreconditionsHold()) {
+        if ($this->healthyStopRequested) {
+            return;
+        }
+        if (!$this->healthyStopStructuralPreconditionsHold()
+            || (!$this->socketLivenessProofCompleteForStop()
+                && !$this->canAwaitSocketFreshness())
+        ) {
             $this->failTerminal('okx_paper_public_healthy_stop_invalid');
         }
-        ++$this->connectionGeneration;
+        $this->checkpoint = $this->checkpointStore->requestHealthyStopDrain(
+            $this->checkpoint,
+        );
+        $this->healthyStopRequested = true;
+        $this->persistHealthyStopWhenDrained();
+    }
+
+    private function persistHealthyStopWhenDrained(): void
+    {
+        if (!$this->healthyStopRequested
+        ) {
+            return;
+        }
+        if (!$this->resumedHealthyStopDrain
+            && !$this->healthyStopStructuralPreconditionsHold()
+        ) {
+            $this->failTerminal('okx_paper_public_healthy_stop_invalid');
+        }
+        if (!$this->healthyStopAdmissionQuiesced) {
+            if (!$this->socketLivenessProofCompleteForStop()) {
+                if (!$this->canAwaitSocketFreshness()) {
+                    $this->failTerminal('okx_paper_public_healthy_stop_invalid');
+                }
+
+                return;
+            }
+            $this->confirmAndQuiesceHealthyStopAdmission();
+        }
+        if ($this->checkpoint->pendingEvent !== null
+            || $this->checkpoint->pendingTransition !== null
+            || $this->activeQueuedSocket !== null
+            || $this->publicQueue->count() !== 0
+            || $this->businessQueue->count() !== 0
+        ) {
+            return;
+        }
+        if (!$this->resumedHealthyStopDrain
+            && !$this->healthyStopPreconditionsHold()
+        ) {
+            $this->failTerminal('okx_paper_public_healthy_stop_invalid');
+        }
         $state = $this->checkpoint->toArray();
         $state['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
         $state['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
         $candidate = OkxPaperLiveCheckpoint::fromArray($state);
         $this->checkpoint = $this->checkpointStore->saveTransition(
@@ -393,6 +478,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             'stopping',
             $this->stoppedEventTransition('BTCUSDT'),
         );
+        $this->healthyStopRequested = false;
+        $this->resumedHealthyStopDrain = false;
     }
 
     public function failureReason(): ?string
@@ -621,12 +708,13 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
         $pending = $this->checkpoint->pendingFrontier['frontier'];
         $seenPending = false;
+        $isTrade = str_ends_with($stream, '/public_trade');
         foreach ($pagination['retained_rows'] as $row) {
-            if (!\is_array($row)) {
+            if ((!\is_array($row) && (!$isTrade || !\is_string($row)))) {
                 throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
             }
-            $candidate = str_ends_with($stream, '/public_trade')
-                ? $this->tradeFrontier($row)
+            $candidate = $isTrade
+                ? $this->tradeFrontier(OkxPaperRetainedTradeRow::expand($row))
                 : $this->candleFrontier(
                     $this->instruments->nativeInstrumentId($this->checkpoint->pendingEvent->symbol),
                     substr($stream, strrpos($stream, '_') + 1),
@@ -688,37 +776,64 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         callable $normalize,
         callable $frontierForRow,
         bool $requireSiblingOverlap = false,
+        ?string $candidateSourceKind = null,
     ): array {
         if ($rows === []) {
             throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
         }
+        $candidateSourceKind ??= self::identitySourceKind($stream);
+        if (!\in_array($candidateSourceKind, ['rest', 'ws'], true)) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
+        }
 
         $frontier = $this->checkpoint->streamFrontiers[$stream] ?? null;
-        /** @var array<string, string> $requiredOverlapDigests */
-        $requiredOverlapDigests = [];
+        /** @var list<array{natural_identity: string, canonical_digest: string, overlap_digest: string, source_kind: string}> $requiredOverlaps */
+        $requiredOverlaps = [];
+        /** @var array<string, string> $requiredOverlapByIdentity */
+        $requiredOverlapByIdentity = [];
+        /** @var array<string, true> $requiredIdentities */
+        $requiredIdentities = [];
         if ($frontier instanceof OkxPaperStreamFrontier
             && ($this->requiresOverlap[$stream] ?? false)
         ) {
-            $requiredFrontiers = [$frontier];
+            $requiredFrontiers = [[
+                'frontier' => $frontier,
+                'source_kind' => self::identitySourceKind($stream),
+            ]];
             if ($requireSiblingOverlap) {
-                $requiredFrontiers[] = $this->siblingFrontier($stream);
-            }
-            foreach ($requiredFrontiers as $requiredFrontier) {
-                if (!$requiredFrontier instanceof OkxPaperStreamFrontier) {
-                    continue;
+                $sibling = $this->siblingFrontier($stream);
+                if ($sibling instanceof OkxPaperStreamFrontier) {
+                    $requiredFrontiers[] = [
+                        'frontier' => $sibling,
+                        'source_kind' => self::identitySourceKind(
+                            str_contains($stream, '/rest/')
+                                ? str_replace('/rest/', '/ws/', $stream)
+                                : str_replace('/ws/', '/rest/', $stream),
+                        ),
+                    ];
                 }
-                $existingDigest = $requiredOverlapDigests[
+            }
+            foreach ($requiredFrontiers as $required) {
+                $requiredFrontier = $required['frontier'];
+                $existingDigest = $requiredOverlapByIdentity[
                     $requiredFrontier->naturalIdentity
                 ] ?? null;
                 if (\is_string($existingDigest)
-                    && !hash_equals($existingDigest, $requiredFrontier->canonicalDigest)
+                    && !hash_equals($existingDigest, $requiredFrontier->overlapDigest)
                 ) {
                     throw new OkxPaperLiveIntegrityException(
                         'market_event_identity_conflict',
                     );
                 }
-                $requiredOverlapDigests[$requiredFrontier->naturalIdentity] =
-                    $requiredFrontier->canonicalDigest;
+                $requiredOverlapByIdentity[$requiredFrontier->naturalIdentity] =
+                    $requiredFrontier->overlapDigest;
+                $requiredIdentities[$requiredFrontier->naturalIdentity] = true;
+                $requiredOverlaps[] = [
+                    'natural_identity' => $requiredFrontier->naturalIdentity,
+                    'canonical_digest' => $requiredFrontier->canonicalDigest,
+                    'overlap_digest' => $requiredFrontier->overlapDigest,
+                    'source_kind' => $required['source_kind'],
+                ];
             }
         }
         $candidates = [];
@@ -729,27 +844,45 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             if ($candidateFrontier === null) {
                 continue;
             }
-            $observed = $this->observedFrontiers[$stream][$candidateFrontier->sourceIdentity]
+            $observedKey = $candidateSourceKind . '/' . $candidateFrontier->sourceIdentity;
+            $observed = $this->observedFrontiers[$stream][$observedKey]
                 ?? null;
             if ($observed instanceof OkxPaperStreamFrontier
                 && !hash_equals($observed->canonicalDigest, $candidateFrontier->canonicalDigest)
             ) {
                 throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
             }
-            $acknowledgedDigest = $this->acknowledgedIdentityDigest(
+            $acknowledged = $this->acknowledgedIdentity(
                 $stream,
                 $candidateFrontier,
             );
-            $requiredDurableOverlap = array_key_exists(
-                $candidateFrontier->naturalIdentity,
-                $requiredOverlapDigests,
+            $requiredDurableOverlap = isset(
+                $requiredIdentities[$candidateFrontier->naturalIdentity],
             );
-            if ($acknowledgedDigest !== null && !$requiredDurableOverlap) {
-                if (!hash_equals($acknowledgedDigest, $candidateFrontier->canonicalDigest)) {
+            if ($acknowledged !== null) {
+                $originCanonicalDigest = $candidateSourceKind === 'rest'
+                    ? $acknowledged['rest_canonical_digest']
+                    : $acknowledged['ws_canonical_digest'];
+                if (!hash_equals(
+                    $originCanonicalDigest ?? $acknowledged['overlap_digest'],
+                    $originCanonicalDigest !== null
+                        ? $candidateFrontier->canonicalDigest
+                        : $candidateFrontier->overlapDigest,
+                )) {
                     throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
                 }
-
-                continue;
+                if ($originCanonicalDigest === null) {
+                    $this->checkpoint = $this->checkpointStore
+                        ->rememberAcknowledgedIdentityObservation(
+                            $this->checkpoint,
+                            $stream,
+                            $candidateFrontier,
+                            $candidateSourceKind,
+                        );
+                }
+                if (!$requiredDurableOverlap) {
+                    continue;
+                }
             }
             $alreadyRepresented = isset(
                 $representedInBatch[$candidateFrontier->naturalIdentity],
@@ -760,7 +893,11 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             ) {
                 continue;
             }
-            $this->rememberObservedFrontier($stream, $candidateFrontier);
+            $this->rememberObservedFrontier(
+                $stream,
+                $candidateSourceKind,
+                $candidateFrontier,
+            );
             $representedInBatch[$candidateFrontier->naturalIdentity] = true;
             $candidates[] = [
                 'row' => $row,
@@ -770,16 +907,27 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
 
         $start = 0;
-        if ($requiredOverlapDigests !== []) {
+        if ($requiredOverlaps !== []) {
             $overlaps = [];
-            foreach ($requiredOverlapDigests as $identity => $digest) {
+            foreach ($requiredOverlaps as $required) {
                 $overlap = null;
                 foreach ($candidates as $index => $candidate) {
                     $candidateFrontier = $candidate['frontier'];
-                    if (!hash_equals($identity, $candidateFrontier->naturalIdentity)) {
+                    if (!hash_equals(
+                        $required['natural_identity'],
+                        $candidateFrontier->naturalIdentity,
+                    )) {
                         continue;
                     }
-                    if (!hash_equals($digest, $candidateFrontier->canonicalDigest)) {
+                    $sameOrigin = $required['source_kind'] === $candidateSourceKind;
+                    if (!hash_equals(
+                        $sameOrigin
+                            ? $required['canonical_digest']
+                            : $required['overlap_digest'],
+                        $sameOrigin
+                            ? $candidateFrontier->canonicalDigest
+                            : $candidateFrontier->overlapDigest,
+                    )) {
                         throw new OkxPaperLiveIntegrityException(
                             'market_event_identity_conflict',
                         );
@@ -835,10 +983,12 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
     private function rememberObservedFrontier(
         string $stream,
+        string $sourceKind,
         OkxPaperStreamFrontier $frontier,
     ): void {
-        unset($this->observedFrontiers[$stream][$frontier->sourceIdentity]);
-        $this->observedFrontiers[$stream][$frontier->sourceIdentity] = $frontier;
+        $observedKey = $sourceKind . '/' . $frontier->sourceIdentity;
+        unset($this->observedFrontiers[$stream][$observedKey]);
+        $this->observedFrontiers[$stream][$observedKey] = $frontier;
         $logicalStream = str_replace(['/rest/', '/ws/'], '/', $stream);
         $window = OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($logicalStream);
         if (\count($this->observedFrontiers[$stream]) <= $window) {
@@ -867,10 +1017,11 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         return $frontier instanceof OkxPaperStreamFrontier ? $frontier : null;
     }
 
-    private function acknowledgedIdentityDigest(
+    /** @return array{overlap_digest: string, rest_canonical_digest: string|null, ws_canonical_digest: string|null}|null */
+    private function acknowledgedIdentity(
         string $stream,
         OkxPaperStreamFrontier $candidate,
-    ): ?string {
+    ): ?array {
         if ((!str_contains($stream, '/candle_') && !str_ends_with($stream, '/public_trade'))
             || (!str_contains($stream, '/rest/') && !str_contains($stream, '/ws/'))
         ) {
@@ -879,12 +1030,34 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         $logicalStream = str_replace(['/rest/', '/ws/'], '/', $stream);
         $identityHash = hash('sha256', $candidate->naturalIdentity);
         foreach ($this->checkpoint->acknowledgedIdentityHistory[$logicalStream] ?? [] as $entry) {
-            if (hash_equals($entry['natural_identity_sha256'], $identityHash)) {
-                return $entry['canonical_digest'];
+            if (hash_equals($entry[0], $identityHash)) {
+                return [
+                    'overlap_digest' => $entry[1],
+                    'rest_canonical_digest' => $entry[2]
+                        === OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST
+                            ? null
+                            : $entry[2],
+                    'ws_canonical_digest' => $entry[3]
+                        === OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST
+                            ? null
+                            : $entry[3],
+                ];
             }
         }
 
         return null;
+    }
+
+    private static function identitySourceKind(string $stream): string
+    {
+        if (str_contains($stream, '/rest/')) {
+            return 'rest';
+        }
+        if (str_contains($stream, '/ws/')) {
+            return 'ws';
+        }
+
+        throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
     }
 
     /**
@@ -992,6 +1165,54 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         ));
     }
 
+    /**
+     * @param list<array<array-key, mixed>|string> $rows
+     * @return list<array<string, int|string>>
+     */
+    private function expandedRetainedTradeRows(array $rows): array
+    {
+        try {
+            return array_map(
+                static fn (array|string $row): array => OkxPaperRetainedTradeRow::expand($row),
+                $rows,
+            );
+        } catch (\InvalidArgumentException) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+    }
+
+    /**
+     * @param list<array<array-key, mixed>> $rows
+     * @return list<string>
+     */
+    private function compactRetainedTradeRows(array $rows): array
+    {
+        try {
+            return array_map(
+                static fn (array $row): string => OkxPaperRetainedTradeRow::compact($row),
+                $rows,
+            );
+        } catch (\InvalidArgumentException) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+    }
+
+    /** @param array<string, mixed> $state */
+    private function recoveryCheckpointWithinBudget(array $state): OkxPaperLiveCheckpoint
+    {
+        try {
+            $checkpoint = OkxPaperLiveCheckpoint::fromArray($state);
+            $encoded = CanonicalJson::encode($checkpoint->toArray()) . "\n";
+        } catch (\InvalidArgumentException $exception) {
+            $this->failTerminal('market_data_gap_unresolved', $exception);
+        }
+        if (\strlen($encoded) > OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+
+        return $checkpoint;
+    }
+
     /** @param list<array<array-key, mixed>> $rows */
     private function sortTradeRows(array &$rows): void
     {
@@ -1022,8 +1243,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
     {
         $actions = [
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
         ];
         $start = 0;
@@ -1038,7 +1259,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $action = $actions[$index];
             $durable = $index >= $start;
             if ($action['kind'] === 'transport_connect') {
-                $this->connectSocket(
+                if (!$this->connectSocket(
                     $action['stream'],
                     $action['stream'] === 'public'
                         ? $this->config->webSocketUri
@@ -1050,7 +1271,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                         ? $this->publicQueue
                         : $this->businessQueue,
                     $durable,
-                );
+                )) {
+                    return;
+                }
 
                 continue;
             }
@@ -1075,7 +1298,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         OkxPaperPublicWebSocketTransportInterface $transport,
         OkxPaperPublicFrameQueue $queue,
         bool $durable = true,
-    ): void {
+    ): bool {
         if ($durable) {
             $this->ensureTransition('connecting', [
                 'kind' => 'transport_connect',
@@ -1108,6 +1331,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 if (!$opened) {
                     $terminal = new OkxPaperLiveIntegrityException(
                         'okx_paper_public_reconnect_exhausted',
+                        0,
+                        new \LogicException(
+                            'okx_paper_public_connect_closed_before_open_' . $socket,
+                        ),
                     );
                 } else {
                     $this->beginPairedReconnect();
@@ -1131,15 +1358,43 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $this->loop->stop();
             },
         );
-        if (!$opened && $terminal === null) {
+        while (!$opened && $terminal === null) {
+            $before = [
+                $this->connectionGeneration,
+                $this->socketOpen,
+                $this->publicQueue->count(),
+                $this->publicQueue->bytes(),
+                $this->businessQueue->count(),
+                $this->businessQueue->bytes(),
+            ];
             $this->loop->run();
+            if ($generation !== $this->connectionGeneration) {
+                return false;
+            }
+            $after = [
+                $this->connectionGeneration,
+                $this->socketOpen,
+                $this->publicQueue->count(),
+                $this->publicQueue->bytes(),
+                $this->businessQueue->count(),
+                $this->businessQueue->bytes(),
+            ];
+            if ($before === $after) {
+                break;
+            }
         }
         if ($terminal instanceof \Throwable) {
             throw $terminal;
         }
         if (!$opened) {
-            throw new OkxPaperLiveIntegrityException('okx_paper_public_reconnect_exhausted');
+            throw new OkxPaperLiveIntegrityException(
+                'okx_paper_public_reconnect_exhausted',
+                0,
+                new \LogicException('okx_paper_public_connect_no_progress_' . $socket),
+            );
         }
+
+        return true;
     }
 
     private function admitSocketFrame(
@@ -1164,6 +1419,16 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 ? $this->decoder->decodePublic($frame)
                 : $this->decoder->decodeBusiness($frame);
             $this->refreshInboundFreshness($socket, $frame);
+            if ($this->healthyStopRequested
+                && !$this->healthyStopAdmissionQuiesced
+            ) {
+                if ($this->socketLivenessProofCompleteForStop()) {
+                    $this->confirmAndQuiesceHealthyStopAdmission();
+                }
+                $this->loop->stop();
+
+                return;
+            }
         } catch (OkxPaperLiveIntegrityException $exception) {
             $reason = $this->terminalPublicFailureReason($exception);
             if ($reason !== null) {
@@ -1193,7 +1458,46 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         $this->loop->stop();
     }
 
+    private function quiesceHealthyStopAdmission(): void
+    {
+        if ($this->healthyStopAdmissionQuiesced) {
+            return;
+        }
+        $this->healthyStopAdmissionQuiesced = true;
+        ++$this->connectionGeneration;
+        $this->cancelHeartbeatTimers();
+    }
+
+    private function confirmAndQuiesceHealthyStopAdmission(): void
+    {
+        if (!$this->checkpoint->healthyStop['liveness_proven']) {
+            $this->checkpoint = $this->checkpointStore
+                ->confirmHealthyStopLiveness($this->checkpoint);
+        }
+        $this->quiesceHealthyStopAdmission();
+    }
+
     private function healthyStopPreconditionsHold(): bool
+    {
+        if (!$this->healthyStopStructuralPreconditionsHold()
+            || !$this->socketLivenessProofCompleteForStop()
+            || $this->activeQueuedSocket !== null
+            || $this->publicQueue->count() !== 0
+            || $this->businessQueue->count() !== 0
+        ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function socketLivenessProofCompleteForStop(): bool
+    {
+        return $this->pongTimers === []
+            && $this->socketFreshnessWithinPolicy();
+    }
+
+    private function healthyStopStructuralPreconditionsHold(): bool
     {
         if ($this->checkpoint->phase !== 'streaming'
             || $this->checkpoint->pendingEvent !== null
@@ -1206,12 +1510,23 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $this->checkpoint->resyncBySymbol,
                 static fn (mixed $resync): bool => $resync !== null,
             ) !== []
-            || $this->publicQueue->count() !== 0
-            || $this->businessQueue->count() !== 0
         ) {
             return false;
         }
-        return $this->socketFreshnessWithinPolicy();
+        return true;
+    }
+
+    private function canAwaitSocketFreshness(): bool
+    {
+        foreach (['public', 'business'] as $socket) {
+            if (!isset($this->heartbeatTimers[$socket])
+                && !isset($this->pongTimers[$socket])
+            ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function socketFreshnessWithinPolicy(): bool
@@ -1240,6 +1555,30 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             'stream' => $symbol . '/control/connection_state',
             'stage' => 'emit_stopped',
         ];
+    }
+
+    /** @return \Generator<int, PaperMarketEvent> */
+    private function resumedHealthyStopDrainFlow(): \Generator
+    {
+        while ($this->publicQueue->count() !== 0
+            || $this->businessQueue->count() !== 0
+        ) {
+            $events = $this->nextQueuedEvents();
+            if ($events === []) {
+                continue;
+            }
+            $stream = $this->nextEventStream ?? $this->streamForEvent($events[0]['event']);
+            $transition = $this->nextEventTransition;
+            $this->nextEventStream = null;
+            $this->nextEventTransition = [];
+            yield from $this->yieldMarketEvents($events, $stream, $transition);
+            $this->completeActiveQueuedFrame();
+        }
+        $this->persistHealthyStopWhenDrained();
+        if ($this->checkpoint->phase !== 'stopping') {
+            $this->failTerminal('okx_paper_public_healthy_stop_invalid');
+        }
+        yield from $this->healthyStopFlow();
     }
 
     /** @return \Generator<int, PaperMarketEvent> */
@@ -1333,7 +1672,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
     private function beginPairedReconnect(): void
     {
-        if ($this->checkpoint->phase === 'stopping') {
+        if ($this->checkpoint->phase === 'stopping'
+            || $this->healthyStopRequested
+            || $this->checkpoint->healthyStop['requested']
+        ) {
             $this->failTerminal('okx_paper_public_healthy_stop_invalid');
         }
         if ($this->stopped
@@ -1470,17 +1812,6 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->publicTransport,
             $this->publicQueue,
             function (): void {
-                $publicSubscribe = [
-                    'kind' => 'subscription_send',
-                    'symbol' => null,
-                    'stream' => 'public',
-                    'stage' => 'subscribe',
-                ];
-                $this->ensureTransition('reconnecting', $publicSubscribe);
-                $this->publicTransport->send([
-                    'op' => 'subscribe',
-                    'args' => $this->subscriptions->publicArguments(),
-                ]);
                 $businessConnect = [
                     'kind' => 'transport_connect',
                     'symbol' => null,
@@ -1494,6 +1825,17 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     $this->businessTransport,
                     $this->businessQueue,
                     function (): void {
+                        $publicSubscribe = [
+                            'kind' => 'subscription_send',
+                            'symbol' => null,
+                            'stream' => 'public',
+                            'stage' => 'subscribe',
+                        ];
+                        $this->ensureTransition('reconnecting', $publicSubscribe);
+                        $this->publicTransport->send([
+                            'op' => 'subscribe',
+                            'args' => $this->subscriptions->publicArguments(),
+                        ]);
                         $businessSubscribe = [
                             'kind' => 'subscription_send',
                             'symbol' => null,
@@ -1613,16 +1955,16 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 'stage' => 'connect',
             ],
             [
-                'kind' => 'subscription_send',
-                'symbol' => null,
-                'stream' => 'public',
-                'stage' => 'subscribe',
-            ],
-            [
                 'kind' => 'transport_connect',
                 'symbol' => null,
                 'stream' => 'business',
                 'stage' => 'connect',
+            ],
+            [
+                'kind' => 'subscription_send',
+                'symbol' => null,
+                'stream' => 'public',
+                'stage' => 'subscribe',
             ],
             [
                 'kind' => 'subscription_send',
@@ -1764,7 +2106,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     $events = $this->reconnectBookEvents($symbol, $transition);
                 } catch (\Throwable $exception) {
                     if ($this->isIdentityConflict($exception)) {
-                        $this->failTerminal('market_event_identity_conflict');
+                        $this->failTerminal('market_event_identity_conflict', $exception);
                     }
                     $this->failTerminal('market_data_gap_unresolved');
                 }
@@ -1777,9 +2119,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $events = $this->reconnectFrontierEvents($symbol, $stream, $transition);
             } catch (\Throwable $exception) {
                 if ($this->isIdentityConflict($exception)) {
-                    $this->failTerminal('market_event_identity_conflict');
+                    $this->failTerminal('market_event_identity_conflict', $exception);
                 }
-                if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
                 }
                 $this->failTerminal('market_data_gap_unresolved');
@@ -2062,7 +2404,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     $rows,
                 );
             } catch (OkxPaperLiveIntegrityException $exception) {
-                if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
                 }
             }
@@ -2082,12 +2424,14 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             ) {
                 $this->failTerminal('market_data_gap_unresolved');
             }
-            $rows = $pagination['retained_rows'];
+            $rows = $this->expandedRetainedTradeRows(
+                $pagination['retained_rows'],
+            );
             unset($this->observedFrontiers[$stream]);
             try {
                 return $this->acceptedRecoveryTradeEvents($stream, $rows);
             } catch (OkxPaperLiveIntegrityException $exception) {
-                if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
                 }
             }
@@ -2128,7 +2472,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
                 return $events;
             } catch (OkxPaperLiveIntegrityException $exception) {
-                if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
                 }
             }
@@ -2156,7 +2500,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
             return $events;
         } catch (OkxPaperLiveIntegrityException $exception) {
-            if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+            if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                 throw $exception;
             }
         }
@@ -2188,6 +2532,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             ): PaperMarketEvent => $normalizer->recoveryTrade($row),
             fn (array $row): OkxPaperStreamFrontier => $this->tradeFrontier($row),
             true,
+            'rest',
         );
     }
 
@@ -2216,6 +2561,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $row,
             ),
             true,
+            'rest',
         );
     }
 
@@ -2265,7 +2611,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         ];
         $state['pending_transition'] = $historyTransition;
         $this->checkpoint = $this->checkpointStore->saveTransition(
-            OkxPaperLiveCheckpoint::fromArray($state),
+            $this->recoveryCheckpointWithinBudget($state),
             'reconnecting',
             $historyTransition,
         );
@@ -2293,8 +2639,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->failTerminal('market_data_gap_unresolved');
         }
         $oldestTimestamp = null;
+        $retainedRows = [];
+        $acceptedIndex = 0;
         foreach ($rows as $row) {
-            $this->tradeFrontier($row);
+            $rowFrontier = $this->tradeFrontier($row);
             $timestamp = $row['ts'] ?? null;
             if (!\is_string($timestamp)) {
                 $this->failTerminal('market_data_gap_unresolved');
@@ -2304,8 +2652,27 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             ) {
                 $oldestTimestamp = $timestamp;
             }
+            $acceptedFrontier = $events[$acceptedIndex]['frontier'] ?? null;
+            if (!$acceptedFrontier instanceof OkxPaperStreamFrontier
+                || !hash_equals(
+                    $acceptedFrontier->naturalIdentity,
+                    $rowFrontier->naturalIdentity,
+                )
+            ) {
+                continue;
+            }
+            if (!hash_equals(
+                $acceptedFrontier->canonicalDigest,
+                $rowFrontier->canonicalDigest,
+            )) {
+                throw new OkxPaperLiveIntegrityException(
+                    'market_event_identity_conflict',
+                );
+            }
+            $retainedRows[] = $row;
+            ++$acceptedIndex;
         }
-        if (!\is_string($oldestTimestamp)) {
+        if (!\is_string($oldestTimestamp) || $acceptedIndex !== \count($events)) {
             $this->failTerminal('market_data_gap_unresolved');
         }
         $historyTransition = $this->restTransition(
@@ -2322,11 +2689,11 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
             'target_frontier' => $resync['frontier']->toArray(),
             'deadline_at' => $resync['deadline_at'],
-            'retained_rows' => $rows,
+            'retained_rows' => $this->compactRetainedTradeRows($retainedRows),
         ];
         $state['pending_transition'] = $historyTransition;
         $this->checkpoint = $this->checkpointStore->saveTransition(
-            OkxPaperLiveCheckpoint::fromArray($state),
+            $this->recoveryCheckpointWithinBudget($state),
             'reconnecting',
             $historyTransition,
         );
@@ -2376,7 +2743,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             ];
             $state['pending_transition'] = $historyTransition;
             $this->checkpoint = $this->checkpointStore->saveTransition(
-                OkxPaperLiveCheckpoint::fromArray($state),
+                $this->recoveryCheckpointWithinBudget($state),
                 'reconnecting',
                 $historyTransition,
             );
@@ -2420,7 +2787,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $next['retained_rows'] = $newerRows;
             $state['overlap_pagination_by_stream'][$stream] = $next;
             $this->checkpoint = $this->checkpointStore->saveTransition(
-                OkxPaperLiveCheckpoint::fromArray($state),
+                $this->recoveryCheckpointWithinBudget($state),
                 'reconnecting',
                 $historyTransition,
             );
@@ -2433,7 +2800,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     $newerRows,
                 );
             } catch (OkxPaperLiveIntegrityException $exception) {
-                if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
                 }
             }
@@ -2529,11 +2896,11 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
                 'target_frontier' => $resync['frontier']->toArray(),
                 'deadline_at' => $resync['deadline_at'],
-                'retained_rows' => $newerRows,
+                'retained_rows' => $this->compactRetainedTradeRows($newerRows),
             ];
             $state['pending_transition'] = $historyTransition;
             $this->checkpoint = $this->checkpointStore->saveTransition(
-                OkxPaperLiveCheckpoint::fromArray($state),
+                $this->recoveryCheckpointWithinBudget($state),
                 'reconnecting',
                 $historyTransition,
             );
@@ -2568,7 +2935,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $pagination['pagination_type'],
                 $pagination['next_cursor'],
             );
-            $newerRows = [...$rows, ...$pagination['retained_rows']];
+            $newerRows = [
+                ...$rows,
+                ...$this->expandedRetainedTradeRows($pagination['retained_rows']),
+            ];
             $this->sortTradeRows($newerRows);
             $state = $this->checkpoint->toArray();
             $next = $state['overlap_pagination_by_stream'][$stream];
@@ -2576,10 +2946,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             --$next['pages_remaining'];
             $next['pagination_type'] = 1;
             $next['next_cursor'] = $oldestTradeId;
-            $next['retained_rows'] = $newerRows;
+            $next['retained_rows'] = $this->compactRetainedTradeRows($newerRows);
             $state['overlap_pagination_by_stream'][$stream] = $next;
             $this->checkpoint = $this->checkpointStore->saveTransition(
-                OkxPaperLiveCheckpoint::fromArray($state),
+                $this->recoveryCheckpointWithinBudget($state),
                 'reconnecting',
                 $historyTransition,
             );
@@ -2587,7 +2957,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             try {
                 return $this->acceptedRecoveryTradeEvents($stream, $newerRows);
             } catch (OkxPaperLiveIntegrityException $exception) {
-                if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
                 }
             }
@@ -3007,22 +3377,35 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         OkxPaperPublicFrameQueue $queue,
         bool $business,
     ): void {
+        $unobservableWakeRemaining = 1;
         while (!$this->socketReady($business)) {
             $beforeAsyncProgress = [
                 $this->checkpoint->pendingTransition,
                 $this->socketOpen,
+                $this->publicQueue->count(),
+                $this->publicQueue->bytes(),
+                $this->businessQueue->count(),
+                $this->businessQueue->bytes(),
             ];
             if ($queue->count() === 0) {
                 $this->loop->run();
             }
             $framesToInspect = $queue->count();
             if ($framesToInspect === 0) {
-                if ($this->checkpoint->phase === 'reconnecting'
-                    && $beforeAsyncProgress !== [
+                if ($beforeAsyncProgress !== [
                         $this->checkpoint->pendingTransition,
                         $this->socketOpen,
+                        $this->publicQueue->count(),
+                        $this->publicQueue->bytes(),
+                        $this->businessQueue->count(),
+                        $this->businessQueue->bytes(),
                     ]
                 ) {
+                    $unobservableWakeRemaining = 1;
+                    continue;
+                }
+                if ($unobservableWakeRemaining > 0) {
+                    --$unobservableWakeRemaining;
                     continue;
                 }
                 throw new OkxPaperLiveIntegrityException('okx_paper_public_reconnect_exhausted');
@@ -3103,13 +3486,31 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
      */
     private function nextStreamingEvents(): array
     {
+        if ($this->publicQueue->count() !== 0
+            || $this->businessQueue->count() !== 0
+        ) {
+            return $this->nextQueuedEvents();
+        }
+        $this->loop->run();
+
+        return [];
+    }
+
+    /**
+     * @return list<array{
+     *     event: PaperMarketEvent,
+     *     frontier: OkxPaperStreamFrontier,
+     *     ordinal_state: array<string, mixed>
+     * }>
+     */
+    private function nextQueuedEvents(): array
+    {
         if ($this->publicQueue->count() > 0) {
             return $this->eventsFromQueuedFrame($this->publicQueue, false);
         }
         if ($this->businessQueue->count() > 0) {
             return $this->eventsFromQueuedFrame($this->businessQueue, true);
         }
-        $this->loop->run();
 
         return [];
     }
@@ -3143,7 +3544,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     'market_event_identity_conflict',
                     'market_data_gap_unresolved',
                 ], true)) {
-                    $this->failTerminal($exception->getMessage());
+                    $this->failTerminal($exception->getMessage(), $exception);
                 }
 
                 throw $exception;
@@ -3386,7 +3787,6 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
         }
         $rows = $this->restClient->orderBook($instrumentId, 400);
-        /** @phpstan-ignore-next-line REST test doubles may run timeout callbacks synchronously. */
         if ($this->resyncAttemptExpired($symbol, $generation, $deadline)
             || \count($rows) !== 1
             || !\is_array($rows[0])
@@ -3481,7 +3881,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         unset($this->expiredResyncGenerations[$symbol]);
     }
 
-    private function failTerminal(string $reason): never
+    private function failTerminal(string $reason, ?\Throwable $previous = null): never
     {
         ++$this->connectionGeneration;
         $this->stopped = true;
@@ -3498,7 +3898,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $this->nextCleanupTransition($transition),
             );
         }
-        throw new OkxPaperLiveIntegrityException($reason);
+        throw new OkxPaperLiveIntegrityException($reason, 0, $previous);
     }
 
     private function isIdentityConflict(\Throwable $exception): bool
@@ -3600,8 +4000,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         $continuation = $this->persistedBookResyncContinuation();
         $actions = [
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
-            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'business', 'stage' => 'connect'],
+            ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'public', 'stage' => 'subscribe'],
             ['kind' => 'subscription_send', 'symbol' => null, 'stream' => 'business', 'stage' => 'subscribe'],
         ];
         $start = array_search($this->checkpoint->pendingTransition, $actions, true);
@@ -3612,7 +4012,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->ensureTransition('resyncing', $action);
             if ($action['kind'] === 'transport_connect') {
                 $public = $action['stream'] === 'public';
-                $this->connectSocket(
+                if (!$this->connectSocket(
                     $action['stream'],
                     $public
                         ? $this->config->webSocketUri
@@ -3620,7 +4020,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     $public ? $this->publicTransport : $this->businessTransport,
                     $public ? $this->publicQueue : $this->businessQueue,
                     false,
-                );
+                )) {
+                    return;
+                }
 
                 continue;
             }
@@ -4057,6 +4459,13 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 'trade_id' => $tradeId,
             ],
             $timestamp,
+            [
+                'exchange_timestamp_ms' => $timestamp,
+                'price' => $price,
+                'source' => $source,
+                'taker_side' => $side,
+                'trade_id' => $tradeId,
+            ],
         );
     }
 
@@ -4085,7 +4494,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
     }
 
     /**
-     * @param array<string, mixed> $sourceFields
+     * @param array<string, mixed>      $sourceFields
+     * @param array<string, mixed>|null $overlapSourceFields
      */
     private function frontierFromCanonical(
         string $instrumentId,
@@ -4093,6 +4503,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         string $sourceIdentity,
         array $sourceFields,
         string $exchangeTimestamp,
+        ?array $overlapSourceFields = null,
     ): OkxPaperStreamFrontier {
         $canonical = [
             'channel' => $channel,
@@ -4101,6 +4512,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             'venue' => PaperMarketDataVenue::OKX->value,
             'exchange_timestamp' => $this->formattedTimestamp($exchangeTimestamp),
         ];
+        $overlapCanonical = $canonical;
+        $overlapCanonical['source_fields'] = $overlapSourceFields ?? $sourceFields;
 
         return OkxPaperStreamFrontier::fromArray([
             'source_identity' => $sourceIdentity,
@@ -4111,6 +4524,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $sourceIdentity,
             ]),
             'canonical_digest' => hash('sha256', CanonicalJson::encode($canonical)),
+            'overlap_digest' => hash('sha256', CanonicalJson::encode($overlapCanonical)),
         ]);
     }
 

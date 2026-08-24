@@ -53,7 +53,9 @@ final class HyperliquidPaperPublicSubscriptionSet
             self::invalid();
         }
         /** @var array<array-key, mixed> $subscription */
-        $subscription = $response['subscription'];
+        $subscription = self::normalizeAcknowledgementSubscription(
+            $response['subscription'],
+        );
         self::assertSubscription($subscription);
         $key = CanonicalJson::encode($subscription);
         if (!isset($this->required[$key])) {
@@ -90,6 +92,35 @@ final class HyperliquidPaperPublicSubscriptionSet
     public function reset(): void
     {
         $this->acknowledged = [];
+    }
+
+    /**
+     * @param array<array-key, mixed> $subscription
+     * @return array<array-key, mixed>
+     */
+    private static function normalizeAcknowledgementSubscription(array $subscription): array
+    {
+        if (($subscription['type'] ?? null) !== 'l2Book'
+            || \count($subscription) === 2
+        ) {
+            return $subscription;
+        }
+
+        self::assertExactKeys(
+            $subscription,
+            ['type', 'coin', 'nSigFigs', 'mantissa', 'fast'],
+        );
+        if ($subscription['nSigFigs'] !== null
+            || $subscription['mantissa'] !== null
+            || $subscription['fast'] !== false
+        ) {
+            self::invalid();
+        }
+
+        return [
+            'type' => $subscription['type'],
+            'coin' => $subscription['coin'] ?? null,
+        ];
     }
 
     /** @param array<string, string> $subscription */
