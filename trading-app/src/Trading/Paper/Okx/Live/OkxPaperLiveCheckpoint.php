@@ -1401,9 +1401,10 @@ final readonly class OkxPaperLiveCheckpoint
 
                     continue;
                 }
-                if (!\is_array($row)) {
+                if (!\is_array($row) && !\is_string($row)) {
                     throw new \InvalidArgumentException();
                 }
+                OkxPaperRetainedCandleRow::expand($row);
             }
             $validated['retained_rows'] = $pagination['retained_rows'];
         }
