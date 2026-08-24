@@ -104,6 +104,19 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         );
     }
 
+    public function testCandleFrontierMapOrderDoesNotInvalidateExactCheckpoint(): void
+    {
+        [$directory] = $this->completeDataset(
+            PaperMarketDataNetwork::MAINNET,
+            multipleCandleFrontiers: true,
+        );
+
+        self::assertSame(
+            PaperDatasetState::COMPLETE,
+            (new PaperDatasetVerifier())->verifyForBaseline($directory)->state,
+        );
+    }
+
     public function testMissingTerminalCheckpointIsRejectedForLiveBaseline(): void
     {
         [$directory] = $this->completeDataset(PaperMarketDataNetwork::MAINNET);
@@ -216,6 +229,7 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         int $fundingEpoch = 1,
         bool $periodicFunding = false,
         int $periodicFundingEpoch = 1,
+        bool $multipleCandleFrontiers = false,
     ): array
     {
         $datasetId = 'paper-hyperliquid-equality-' . $network->value;
@@ -351,6 +365,30 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
                 't' => $baseMilliseconds,
                 'v' => '4',
             ], 'BTC', '1m'));
+        if ($multipleCandleFrontiers) {
+            $multipleCandleNormalizer = new HyperliquidPaperMarketEventNormalizer(
+                $network,
+                $ordinals,
+                new MockClock('2026-07-29T10:20:00Z'),
+            );
+            foreach ([
+                ['interval' => '5m', 'duration_ms' => 300_000],
+                ['interval' => '15m', 'duration_ms' => 900_000],
+            ] as $candle) {
+                $events[] = $multipleCandleNormalizer->closedLiveCandle(HyperliquidCandle::fromApiRow([
+                    'T' => $baseMilliseconds + $candle['duration_ms'] - 1,
+                    'c' => '2',
+                    'h' => '3',
+                    'i' => $candle['interval'],
+                    'l' => '0.5',
+                    'n' => 5,
+                    'o' => '1',
+                    's' => 'BTC',
+                    't' => $baseMilliseconds,
+                    'v' => '4',
+                ], 'BTC', $candle['interval']));
+            }
+        }
         if ($periodicFunding) {
             $refreshNormalizer = new HyperliquidPaperMarketEventNormalizer(
                 $network,
@@ -389,8 +427,13 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
                 ->withPending($event, ['kind' => 'certification'])
                 ->acknowledge($event->eventId);
         }
+        $checkpoint = $checkpoint->finalizeCandle('BTC/1m', $baseMilliseconds);
+        if ($multipleCandleFrontiers) {
+            $checkpoint = $checkpoint
+                ->finalizeCandle('BTC/5m', $baseMilliseconds)
+                ->finalizeCandle('BTC/15m', $baseMilliseconds);
+        }
         $checkpoint = $checkpoint
-            ->finalizeCandle('BTC/1m', $baseMilliseconds)
             ->withPhase('streaming')
             ->requestHealthyStop()
             ->completeHealthyStop();

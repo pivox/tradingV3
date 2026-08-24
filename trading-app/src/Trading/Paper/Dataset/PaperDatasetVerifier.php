@@ -1484,6 +1484,8 @@ final class PaperDatasetVerifier
                 $eventIds,
                 -HyperliquidPaperLiveCheckpoint::MAXIMUM_ACKNOWLEDGED_IDENTITIES,
             );
+            $expectedCandleFrontiers = $candleFrontiers;
+            ksort($expectedCandleFrontiers, \SORT_STRING);
             if (!hash_equals($manifest->datasetId, $checkpoint->datasetId)
                 || $manifest->network !== $checkpoint->network
                 || !hash_equals(
@@ -1499,7 +1501,7 @@ final class PaperDatasetVerifier
                 || !$checkpoint->healthyStop['requested']
                 || CanonicalJson::encode($checkpoint->ordinalState)
                     !== CanonicalJson::encode($ordinals->snapshot())
-                || $checkpoint->finalizedCandleFrontiers !== $candleFrontiers
+                || $checkpoint->finalizedCandleFrontiers !== $expectedCandleFrontiers
                 || $checkpoint->acknowledgedIdentities !== $expectedAcknowledged
                 || $checkpoint->tradeIdentityHistory !== $tradeIdentityHistory
                 || $checkpoint->sourceEpoch !== max($snapshotEpochs)
