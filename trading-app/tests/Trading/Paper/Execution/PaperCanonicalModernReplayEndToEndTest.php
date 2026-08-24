@@ -40,6 +40,7 @@ use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceSource;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyInputAssembler;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparation;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparationInterface;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparationResult;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyRuntime;
 use App\Trading\Paper\Execution\Strategy\PaperPreparedEffectCodec;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
@@ -121,13 +122,14 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
             new PaperFakeRuntimeFactory($probeRoot, $clock, 'representative-modern-replay-seed'),
             $resolver,
         );
-        $probeDecision = $probePreparation->prepareFor(
+        $probeResult = $probePreparation->prepareFor(
             $cell,
             $trigger,
             self::DATASET_ID,
             self::EVENTS_SHA256,
             self::SOURCE_BUILD_VERSION,
         );
+        $probeDecision = $probeResult->decision;
         self::assertNotNull($probeDecision, 'The representative prefix must produce a canonical decision.');
         self::assertSame('15m', $probeDecision->executionTimeframe);
         self::assertSame($cell->modernIdentity?->configHash, $probeDecision->lineage->configHash);
@@ -662,22 +664,22 @@ final class TriggerOnlyCanonicalPreparation implements PaperCanonicalStrategyPre
         string $sourceDatasetId,
         string $sourceEventsFileSha256,
         string $sourceBuildVersion,
-    ): ?\App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyDecision {
+    ): PaperCanonicalStrategyPreparationResult {
         if (!hash_equals($this->triggerEventId, $event->eventId)) {
-            return null;
+            return PaperCanonicalStrategyPreparationResult::missingEvidence('paper_strategy_trigger_not_selected');
         }
         ++$this->delegateCalls;
 
-        $decision = $this->delegate->prepareFor(
+        $result = $this->delegate->prepareFor(
             $cell,
             $event,
             $sourceDatasetId,
             $sourceEventsFileSha256,
             $sourceBuildVersion,
         );
-        $this->diagnostic = $decision === null ? 'no_decision' : 'planned';
+        $this->diagnostic = $result->status;
 
-        return $decision;
+        return $result;
     }
 }
 

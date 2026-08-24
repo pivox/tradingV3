@@ -7,6 +7,7 @@ namespace App\Trading\Paper\Execution\Persistence;
 use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshot;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyObservation;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 
 interface PaperExecutionStoreInterface
@@ -30,6 +31,12 @@ interface PaperExecutionStoreInterface
     public function transactional(callable $operation): mixed;
 
     public function claimSource(PaperExecutionCell $cell, int $position, PaperMarketEvent $event): PaperSourceClaim;
+
+    public function appendStrategyObservation(
+        PaperExecutionCell $cell,
+        int $position,
+        PaperCanonicalStrategyObservation $observation,
+    ): void;
 
     /** @param array<string, mixed> $payload */
     public function appendEffect(PaperExecutionCell $cell, int $position, string $effectKey, array $payload): void;

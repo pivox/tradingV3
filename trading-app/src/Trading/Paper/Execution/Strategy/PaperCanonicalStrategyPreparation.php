@@ -25,21 +25,25 @@ final readonly class PaperCanonicalStrategyPreparation implements PaperCanonical
         string $sourceDatasetId,
         string $sourceEventsFileSha256,
         string $sourceBuildVersion,
-    ): ?PaperCanonicalStrategyDecision {
-        $input = $this->assembler->assemble(
-            $cell,
-            $event,
-            $sourceDatasetId,
-            $sourceEventsFileSha256,
-            $sourceBuildVersion,
-        );
+    ): PaperCanonicalStrategyPreparationResult {
+        try {
+            $input = $this->assembler->assemble(
+                $cell,
+                $event,
+                $sourceDatasetId,
+                $sourceEventsFileSha256,
+                $sourceBuildVersion,
+            );
+        } catch (PaperCanonicalStrategyEvidenceUnavailable $exception) {
+            return PaperCanonicalStrategyPreparationResult::missingEvidence($exception->reasonCode);
+        }
         if ($input === null) {
-            return null;
+            return PaperCanonicalStrategyPreparationResult::missingEvidence('paper_strategy_input_unavailable');
         }
 
         $outcome = $this->runtime->run($input->request, $this->policy($cell));
         if ($outcome->status === 'no_trade') {
-            return null;
+            return PaperCanonicalStrategyPreparationResult::noTrade($outcome->reasonCode);
         }
 
         try {
@@ -73,13 +77,16 @@ final readonly class PaperCanonicalStrategyPreparation implements PaperCanonical
                 $reservation,
             );
 
-            return new PaperCanonicalStrategyDecision(
-                $plan,
-                $proof,
-                $reservation,
-                $outcome->lineage,
-                $input->request->decisionKey,
-                $input->executionTimeframe,
+            return PaperCanonicalStrategyPreparationResult::planned(
+                $outcome->reasonCode,
+                new PaperCanonicalStrategyDecision(
+                    $plan,
+                    $proof,
+                    $reservation,
+                    $outcome->lineage,
+                    $input->request->decisionKey,
+                    $input->executionTimeframe,
+                ),
             );
         } catch (\Throwable $exception) {
             if ($exception instanceof \LogicException

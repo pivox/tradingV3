@@ -26,6 +26,8 @@ use App\Trading\Paper\Execution\Strategy\PaperPreparedDecision;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffect;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyDecision;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyObservation;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparationResult;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparationInterface;
 use App\Trading\Paper\Execution\Strategy\PaperPreparedEffectCodec;
 use App\Trading\Paper\Execution\Strategy\PaperStrategyPreparationInterface;
@@ -109,6 +111,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         $snapshot = $this->market->events();
         $prepared = null;
         $canonicalDecision = null;
+        $canonicalPreparation = null;
         try {
             $this->market->apply($event);
             if ($cell->isModern()) {
@@ -120,13 +123,14 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
                 if (!is_string($sourceBuildVersion)) {
                     throw new \LogicException('paper_canonical_strategy_dataset_mismatch');
                 }
-                $canonicalDecision = $this->canonicalStrategy()->prepareFor(
+                $canonicalPreparation = $this->canonicalStrategy()->prepareFor(
                     $cell,
                     $event,
                     $datasetIdentity['dataset_id'],
                     $datasetIdentity['events_file_sha256'],
                     $sourceBuildVersion,
                 );
+                $canonicalDecision = $canonicalPreparation->decision;
             } else {
                 $prepared = $this->strategy->prepareFor($cell, $event);
                 if ($prepared !== null) {
@@ -138,6 +142,9 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         }
 
         $provenance = $cell->provenance($eligibility);
+        $strategyObservation = $canonicalPreparation instanceof PaperCanonicalStrategyPreparationResult
+            ? PaperCanonicalStrategyObservation::fromPreparation($cell, $event, $canonicalPreparation)
+            : null;
         $marketEffectKey = 'sha256:' . hash('sha256', CanonicalJson::encode([
             'cell_id' => $cell->id,
             'source_event_id' => $event->eventId,
@@ -176,9 +183,12 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         $this->crash(PaperCrashPoint::BEFORE_PHASE_1_COMMIT);
         $decision = null;
         $canonicalEffect = null;
-        $claim = $this->store->transactional(function () use ($cell, $sourcePosition, $event, $marketEffectKey, $tradeEffectKey, $prepared, $canonicalDecision, $identity, $provenance, &$decision, &$canonicalEffect): PaperSourceClaim {
+        $claim = $this->store->transactional(function () use ($cell, $sourcePosition, $event, $marketEffectKey, $tradeEffectKey, $prepared, $canonicalDecision, $strategyObservation, $identity, $provenance, &$decision, &$canonicalEffect): PaperSourceClaim {
             $claim = $this->store->claimSource($cell, $sourcePosition, $event);
             if ($claim->status === PaperSourceClaim::ACCEPTED) {
+                if ($strategyObservation instanceof PaperCanonicalStrategyObservation) {
+                    $this->store->appendStrategyObservation($cell, $sourcePosition, $strategyObservation);
+                }
                 $this->store->appendEffect($cell, $sourcePosition, $marketEffectKey, $this->marketCodec->encode($event));
                 if ($prepared !== null && $prepared->plan !== null && $identity !== null && $tradeEffectKey !== null) {
                     $durableIdentity = $this->orderIntents->reserve($prepared, $identity, $provenance);

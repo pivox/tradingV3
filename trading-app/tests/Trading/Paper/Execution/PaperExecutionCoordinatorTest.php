@@ -41,6 +41,7 @@ use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffect;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyDecision;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparationInterface;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparationResult;
 use App\Trading\Paper\Execution\Strategy\PaperStrategyPreparationInterface;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
@@ -103,9 +104,47 @@ final class PaperExecutionCoordinatorTest extends TestCase
             self::assertSame('dataset-modern-1', $canonicalStrategy->observedSourceDatasetId);
             self::assertSame(str_repeat('4', 64), $canonicalStrategy->observedSourceEventsFileSha256);
             self::assertSame('paper-dataset-recorder.v2', $canonicalStrategy->observedSourceBuildVersion);
+            self::assertCount(1, $store->strategyObservations());
+            self::assertSame('planned', $store->strategyObservations()[0]->status);
+            self::assertSame('paper_canonical_strategy_planned', $store->strategyObservations()[0]->reasonCode);
             self::assertSame(2, $coordinator->counters($cell)->requested);
             self::assertSame(2, $coordinator->counters($cell)->acknowledged);
             self::assertSame([], $store->pendingEffects($cell));
+        } finally {
+            $this->cleanup($root);
+        }
+    }
+
+    public function testModernNoTradeObservationIsDurableAndReplaySafeWithoutIntent(): void
+    {
+        $root = sys_get_temp_dir() . '/paper_coord_modern_no_trade_' . bin2hex(random_bytes(5));
+        try {
+            $store = new InMemoryPaperExecutionStore();
+            $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
+            $cell = self::modernCellFromEffect($effect);
+            $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64), 'paper-dataset-recorder.v2');
+            $intents = new RecordingCanonicalPaperOrderIntents();
+            $coordinator = $this->coordinator(
+                $store,
+                new RecordingProjectionStore(),
+                $root,
+                canonicalStrategy: new RejectingCanonicalPaperStrategy(),
+                canonicalIntents: $intents,
+                clock: new MockClock('2026-08-10T12:00:00Z'),
+            );
+            $event = $this->modernEvent();
+
+            $coordinator->consumeAt($cell, PaperProfileEligibility::REFERENCE_ONLY, 'dataset-modern-1', 0, $event);
+            $coordinator->consumeAt($cell, PaperProfileEligibility::REFERENCE_ONLY, 'dataset-modern-1', 0, $event);
+
+            self::assertSame(0, $intents->reservations);
+            self::assertCount(1, $store->strategyObservations());
+            $observation = $store->strategyObservations()[0];
+            self::assertSame('no_trade', $observation->status);
+            self::assertSame('scalping_shadow_setup_filter_failed', $observation->reasonCode);
+            self::assertSame($event->eventId, $observation->sourceEventId);
+            self::assertSame(1, $coordinator->counters($cell)->requested);
+            self::assertSame(1, $coordinator->counters($cell)->acknowledged);
         } finally {
             $this->cleanup($root);
         }
@@ -513,12 +552,28 @@ final class DeterministicCanonicalPaperStrategy implements PaperCanonicalStrateg
         string $sourceDatasetId,
         string $sourceEventsFileSha256,
         string $sourceBuildVersion,
-    ): ?PaperCanonicalStrategyDecision {
+    ): PaperCanonicalStrategyPreparationResult {
         $this->observedSourceDatasetId = $sourceDatasetId;
         $this->observedSourceEventsFileSha256 = $sourceEventsFileSha256;
         $this->observedSourceBuildVersion = $sourceBuildVersion;
 
-        return PaperCanonicalStrategyDecision::fromPreparedEffect($this->effect);
+        return PaperCanonicalStrategyPreparationResult::planned(
+            'paper_canonical_strategy_planned',
+            PaperCanonicalStrategyDecision::fromPreparedEffect($this->effect),
+        );
+    }
+}
+
+final class RejectingCanonicalPaperStrategy implements PaperCanonicalStrategyPreparationInterface
+{
+    public function prepareFor(
+        PaperExecutionCell $cell,
+        PaperMarketEvent $event,
+        string $sourceDatasetId,
+        string $sourceEventsFileSha256,
+        string $sourceBuildVersion,
+    ): PaperCanonicalStrategyPreparationResult {
+        return PaperCanonicalStrategyPreparationResult::noTrade('scalping_shadow_setup_filter_failed');
     }
 }
 

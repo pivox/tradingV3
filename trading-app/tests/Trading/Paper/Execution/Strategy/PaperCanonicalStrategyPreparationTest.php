@@ -8,7 +8,9 @@ use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyInput;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyInputAssemblerInterface;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceUnavailable;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparation;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparationResult;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyRuntimeInterface;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
@@ -24,6 +26,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(PaperCanonicalStrategyPreparation::class)]
+#[CoversClass(PaperCanonicalStrategyPreparationResult::class)]
 final class PaperCanonicalStrategyPreparationTest extends TestCase
 {
     private const SOURCE_BUILD_VERSION = 'paper-dataset-recorder.v2';
@@ -33,7 +36,7 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
         $assembler = new RecordingCanonicalInputAssembler(null);
         $runtime = new RecordingCanonicalStrategyRuntime(self::noTradeOutcome());
 
-        $decision = (new PaperCanonicalStrategyPreparation($assembler, $runtime))->prepareFor(
+        $result = (new PaperCanonicalStrategyPreparation($assembler, $runtime))->prepareFor(
             self::cell(),
             self::event(),
             'paper-dataset-001',
@@ -41,7 +44,9 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
             self::SOURCE_BUILD_VERSION,
         );
 
-        self::assertNull($decision);
+        self::assertSame('missing_evidence', $result->status);
+        self::assertSame('paper_strategy_input_unavailable', $result->reasonCode);
+        self::assertNull($result->decision);
         self::assertSame(0, $runtime->calls);
         self::assertSame('paper-dataset-001', $assembler->sourceDatasetId);
         self::assertSame(str_repeat('a', 64), $assembler->sourceEventsFileSha256);
@@ -56,13 +61,16 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
             $runtime,
         );
 
-        self::assertNull($preparation->prepareFor(
+        $result = $preparation->prepareFor(
             self::cell(),
             self::event(),
             'paper-dataset-001',
             str_repeat('a', 64),
             self::SOURCE_BUILD_VERSION,
-        ));
+        );
+        self::assertSame('no_trade', $result->status);
+        self::assertSame('paper_canonical_strategy_setup_filter_failed', $result->reasonCode);
+        self::assertNull($result->decision);
         self::assertSame(1, $runtime->calls);
         self::assertNotNull($runtime->policy);
         self::assertSame([[
@@ -74,6 +82,35 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
         ]], $runtime->policy->identities);
         self::assertTrue($runtime->policy->requiresCanonicalOrderBook);
         self::assertFalse($runtime->policy->requiresCanonicalMicrostructure);
+    }
+
+    public function testExactEvidenceFailureIsPreservedWithoutRunningCanonicalRuntime(): void
+    {
+        $assembler = new class implements PaperCanonicalStrategyInputAssemblerInterface {
+            public function assemble(
+                PaperExecutionCell $cell,
+                PaperMarketEvent $event,
+                string $sourceDatasetId,
+                string $sourceEventsFileSha256,
+                string $sourceBuildVersion,
+            ): ?PaperCanonicalStrategyInput {
+                throw PaperCanonicalStrategyEvidenceUnavailable::orderBook();
+            }
+        };
+        $runtime = new RecordingCanonicalStrategyRuntime(self::noTradeOutcome());
+
+        $result = (new PaperCanonicalStrategyPreparation($assembler, $runtime))->prepareFor(
+            self::cell(),
+            self::event(),
+            'paper-dataset-001',
+            str_repeat('a', 64),
+            self::SOURCE_BUILD_VERSION,
+        );
+
+        self::assertSame('missing_evidence', $result->status);
+        self::assertSame('paper_order_book_unavailable', $result->reasonCode);
+        self::assertNull($result->decision);
+        self::assertSame(0, $runtime->calls);
     }
 
     public function testPlannedOutcomeBecomesVerifiedPaperDecision(): void
@@ -97,11 +134,14 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
             ['admission_proof' => $legacyProof->toArray()],
         );
 
-        $decision = (new PaperCanonicalStrategyPreparation(
+        $result = (new PaperCanonicalStrategyPreparation(
             new RecordingCanonicalInputAssembler(self::input()),
             new RecordingCanonicalStrategyRuntime($outcome),
         ))->prepareFor(self::cell(), self::event(), 'paper-dataset-001', str_repeat('a', 64), self::SOURCE_BUILD_VERSION);
 
+        self::assertSame('planned', $result->status);
+        self::assertSame('paper_canonical_strategy_planned', $result->reasonCode);
+        $decision = $result->decision;
         self::assertNotNull($decision);
         self::assertSame($effect->plan->planHash, $decision->plan->planHash);
         self::assertSame($effect->reservation->stateHash, $decision->reservation->stateHash);
@@ -160,6 +200,14 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
             new RecordingCanonicalInputAssembler(self::input()),
             new RecordingCanonicalStrategyRuntime($outcome),
         ))->prepareFor(self::cell(), self::event(), 'paper-dataset-001', str_repeat('a', 64), self::SOURCE_BUILD_VERSION);
+    }
+
+    public function testPreparationResultRejectsUnboundedReasonCode(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_strategy_preparation_result_invalid');
+
+        PaperCanonicalStrategyPreparationResult::missingEvidence('Not Canonical');
     }
 
     private static function input(): PaperCanonicalStrategyInput
