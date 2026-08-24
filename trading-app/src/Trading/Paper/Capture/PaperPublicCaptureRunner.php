@@ -58,6 +58,10 @@ final readonly class PaperPublicCaptureRunner
 
         $stops = new PaperPublicCaptureStopController($captureLoop, $source);
         $stops->startAfterInitialSnapshots($durationSeconds, array_keys($manifest->symbols));
+        $durableTail = $recorder->lastDurableEvent();
+        if ($durableTail !== null) {
+            $stops->observe($durableTail);
+        }
         try {
             $completed = $this->capture->run(
                 $recorder,
