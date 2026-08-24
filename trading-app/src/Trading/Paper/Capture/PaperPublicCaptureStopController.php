@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Trading\Paper\Capture;
 
 use App\Trading\Paper\MarketData\PaperLiveMarketDataSourceInterface;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketEvent;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\TimerInterface;
 
@@ -20,6 +22,10 @@ final class PaperPublicCaptureStopController
 
     private bool $stopRequested = false;
 
+    private ?int $deferredDurationSeconds = null;
+
+    private ?string $completionSnapshotSymbol = null;
+
     public function __construct(
         private readonly LoopInterface $loop,
         private readonly PaperLiveMarketDataSourceInterface $source,
@@ -28,24 +34,50 @@ final class PaperPublicCaptureStopController
 
     public function start(int $durationSeconds): void
     {
-        if ($durationSeconds < self::MIN_DURATION_SECONDS
-            || $durationSeconds > self::MAX_DURATION_SECONDS
-            || $this->timer !== null
-        ) {
-            throw new \InvalidArgumentException('paper_public_capture_duration_invalid');
+        $this->assertCanStart($durationSeconds);
+        $this->registerSignalListeners();
+        $this->scheduleTimer($durationSeconds);
+    }
+
+    /**
+     * The sources emit durable initial boundaries in canonical symbol order. The final
+     * symbol is therefore the warmup completion sentinel; accepting its reconnect
+     * boundary also preserves a restart between two already durable boundaries.
+     *
+     * @param list<string> $symbols
+     */
+    public function startAfterInitialSnapshots(int $durationSeconds, array $symbols): void
+    {
+        $this->assertCanStart($durationSeconds);
+        if ($symbols === [] || count($symbols) !== count(array_unique($symbols))) {
+            throw new \InvalidArgumentException('paper_public_capture_symbols_invalid');
         }
-
-        $listener = function (): void {
-            $this->requestStop();
-        };
-        $this->timer = $this->loop->addTimer($durationSeconds, $listener);
-
-        if (function_exists('pcntl_signal')) {
-            foreach ([\SIGINT, \SIGTERM] as $signal) {
-                $this->signalListeners[$signal] = $listener;
-                $this->loop->addSignal($signal, $listener);
+        sort($symbols, SORT_STRING);
+        foreach ($symbols as $symbol) {
+            if (preg_match('/\A[A-Z0-9]{2,32}\z/D', $symbol) !== 1) {
+                throw new \InvalidArgumentException('paper_public_capture_symbols_invalid');
             }
         }
+        $this->completionSnapshotSymbol = $symbols[array_key_last($symbols)];
+
+        $this->deferredDurationSeconds = $durationSeconds;
+        $this->registerSignalListeners();
+    }
+
+    public function observe(PaperMarketEvent $event): void
+    {
+        if ($this->stopRequested
+            || $this->deferredDurationSeconds === null
+            || $event->channel !== PaperMarketDataChannel::SNAPSHOT_BOUNDARY
+            || !in_array($event->payload['reason'] ?? null, ['initial', 'reconnect'], true)
+            || $event->symbol !== $this->completionSnapshotSymbol
+        ) {
+            return;
+        }
+
+        $durationSeconds = $this->deferredDurationSeconds;
+        $this->deferredDurationSeconds = null;
+        $this->scheduleTimer($durationSeconds);
     }
 
     public function close(): void
@@ -58,6 +90,41 @@ final class PaperPublicCaptureStopController
             $this->loop->removeSignal($signal, $listener);
         }
         $this->signalListeners = [];
+        $this->deferredDurationSeconds = null;
+        $this->completionSnapshotSymbol = null;
+    }
+
+    private function assertCanStart(int $durationSeconds): void
+    {
+        if ($durationSeconds < self::MIN_DURATION_SECONDS
+            || $durationSeconds > self::MAX_DURATION_SECONDS
+            || $this->timer !== null
+            || $this->deferredDurationSeconds !== null
+            || $this->signalListeners !== []
+        ) {
+            throw new \InvalidArgumentException('paper_public_capture_duration_invalid');
+        }
+    }
+
+    private function scheduleTimer(int $durationSeconds): void
+    {
+        $this->timer = $this->loop->addTimer($durationSeconds, function (): void {
+            $this->requestStop();
+        });
+    }
+
+    private function registerSignalListeners(): void
+    {
+        $listener = function (): void {
+            $this->requestStop();
+        };
+
+        if (function_exists('pcntl_signal')) {
+            foreach ([\SIGINT, \SIGTERM] as $signal) {
+                $this->signalListeners[$signal] = $listener;
+                $this->loop->addSignal($signal, $listener);
+            }
+        }
     }
 
     private function requestStop(): void
