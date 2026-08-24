@@ -626,12 +626,13 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
         $pending = $this->checkpoint->pendingFrontier['frontier'];
         $seenPending = false;
+        $isTrade = str_ends_with($stream, '/public_trade');
         foreach ($pagination['retained_rows'] as $row) {
-            if (!\is_array($row)) {
+            if ((!\is_array($row) && (!$isTrade || !\is_string($row)))) {
                 throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
             }
-            $candidate = str_ends_with($stream, '/public_trade')
-                ? $this->tradeFrontier($row)
+            $candidate = $isTrade
+                ? $this->tradeFrontier(OkxPaperRetainedTradeRow::expand($row))
                 : $this->candleFrontier(
                     $this->instruments->nativeInstrumentId($this->checkpoint->pendingEvent->symbol),
                     substr($stream, strrpos($stream, '_') + 1),
@@ -995,6 +996,38 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $left[0] ?? null,
             $right[0] ?? null,
         ));
+    }
+
+    /**
+     * @param list<array<array-key, mixed>|string> $rows
+     * @return list<array<string, string>>
+     */
+    private function expandedRetainedTradeRows(array $rows): array
+    {
+        try {
+            return array_map(
+                static fn (array|string $row): array => OkxPaperRetainedTradeRow::expand($row),
+                $rows,
+            );
+        } catch (\InvalidArgumentException) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+    }
+
+    /**
+     * @param list<array<array-key, mixed>> $rows
+     * @return list<string>
+     */
+    private function compactRetainedTradeRows(array $rows): array
+    {
+        try {
+            return array_map(
+                static fn (array $row): string => OkxPaperRetainedTradeRow::compact($row),
+                $rows,
+            );
+        } catch (\InvalidArgumentException) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
     }
 
     /** @param list<array<array-key, mixed>> $rows */
@@ -2121,7 +2154,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             ) {
                 $this->failTerminal('market_data_gap_unresolved');
             }
-            $rows = $pagination['retained_rows'];
+            $rows = $this->expandedRetainedTradeRows(
+                $pagination['retained_rows'],
+            );
             unset($this->observedFrontiers[$stream]);
             try {
                 return $this->acceptedRecoveryTradeEvents($stream, $rows);
@@ -2382,7 +2417,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
             'target_frontier' => $resync['frontier']->toArray(),
             'deadline_at' => $resync['deadline_at'],
-            'retained_rows' => $retainedRows,
+            'retained_rows' => $this->compactRetainedTradeRows($retainedRows),
         ];
         $state['pending_transition'] = $historyTransition;
         $this->checkpoint = $this->checkpointStore->saveTransition(
@@ -2589,7 +2624,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
                 'target_frontier' => $resync['frontier']->toArray(),
                 'deadline_at' => $resync['deadline_at'],
-                'retained_rows' => $newerRows,
+                'retained_rows' => $this->compactRetainedTradeRows($newerRows),
             ];
             $state['pending_transition'] = $historyTransition;
             $this->checkpoint = $this->checkpointStore->saveTransition(
@@ -2628,7 +2663,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $pagination['pagination_type'],
                 $pagination['next_cursor'],
             );
-            $newerRows = [...$rows, ...$pagination['retained_rows']];
+            $newerRows = [
+                ...$rows,
+                ...$this->expandedRetainedTradeRows($pagination['retained_rows']),
+            ];
             $this->sortTradeRows($newerRows);
             $state = $this->checkpoint->toArray();
             $next = $state['overlap_pagination_by_stream'][$stream];
@@ -2636,7 +2674,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             --$next['pages_remaining'];
             $next['pagination_type'] = 1;
             $next['next_cursor'] = $oldestTradeId;
-            $next['retained_rows'] = $newerRows;
+            $next['retained_rows'] = $this->compactRetainedTradeRows($newerRows);
             $state['overlap_pagination_by_stream'][$stream] = $next;
             $this->checkpoint = $this->checkpointStore->saveTransition(
                 OkxPaperLiveCheckpoint::fromArray($state),

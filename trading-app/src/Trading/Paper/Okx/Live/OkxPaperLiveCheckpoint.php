@@ -1368,6 +1368,14 @@ final readonly class OkxPaperLiveCheckpoint
                 throw new \InvalidArgumentException();
             }
             foreach ($pagination['retained_rows'] as $row) {
+                if ($isTrade) {
+                    if (!\is_array($row) && !\is_string($row)) {
+                        throw new \InvalidArgumentException();
+                    }
+                    OkxPaperRetainedTradeRow::expand($row);
+
+                    continue;
+                }
                 if (!\is_array($row)) {
                     throw new \InvalidArgumentException();
                 }

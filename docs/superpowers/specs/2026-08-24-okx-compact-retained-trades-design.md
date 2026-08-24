@@ -10,16 +10,18 @@ fail with `paper_canonical_json_keys_exceeded`.
 
 ## Decision
 
-Persist retained trade rows as exact seven-element lists in this order:
+Persist each retained trade row as one canonical JSON string containing an
+exact seven-element list in this order:
 
 ```text
 [instId, tradeId, px, sz, side, source, ts]
 ```
 
-Lists consume nodes and bytes but no associative keys. Candle rows already use
-an ordered list representation and remain unchanged. Existing associative
-retained trade rows remain readable so an in-progress checkpoint can migrate on
-its next write; all new writes use only the compact representation.
+Each string consumes one node and no associative keys, so even the 3,500-row
+contract maximum remains below both structural budgets. Candle rows already use
+an ordered list representation and remain unchanged. Existing associative maps
+and seven-element lists remain readable so an in-progress checkpoint can
+migrate on its next write; all new writes use only the string representation.
 
 An external content-addressed blob was rejected for this fix because it adds a
 second durability protocol. Merely checking the remaining key budget was also
@@ -28,11 +30,11 @@ rejected because it would still terminate otherwise recoverable busy captures.
 ## Data flow and validation
 
 The live source owns two strict conversions: an exchange REST trade map becomes
-the compact checkpoint row immediately before persistence, and a retained row
-becomes the exact REST map immediately after checkpoint load. Decoding accepts
-only the seven-element compact form or the existing exact seven-key map. The
-normal frontier, identity, decimal, side and timestamp validation remains the
-ultimate semantic authority.
+the canonical string immediately before persistence, and a retained row becomes
+the exact REST map immediately after checkpoint load. Decoding accepts only the
+canonical string, the transitional seven-element list or the existing exact
+seven-key map. The normal frontier, identity, decimal, side and timestamp
+validation remains the ultimate semantic authority.
 
 Every trade-pagination path uses decoded maps for sorting, overlap checks and
 normalization, then compacts the full retained set before writing the next

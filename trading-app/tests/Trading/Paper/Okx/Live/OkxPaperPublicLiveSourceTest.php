@@ -5267,7 +5267,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             $clock,
         );
         $frontier = \App\Trading\Paper\Okx\Live\OkxPaperStreamFrontier::fromEvent(
-            $normalizer->recoveryTrade($rows[497]),
+            $normalizer->recoveryTrade($rows[0]),
         );
         $stream = 'BTCUSDT/rest/public_trade';
         $this->seedSaturatedIdentityCheckpoint();
@@ -5334,12 +5334,18 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $first = $events->current();
 
         self::assertInstanceOf(PaperMarketEvent::class, $first);
-        self::assertSame('1498', $first->payload['trade_id'] ?? null);
+        self::assertSame('1001', $first->payload['trade_id'] ?? null);
         $retained = $this->checkpointState()['overlap_pagination_by_stream'][$stream][
             'retained_rows'
         ] ?? null;
         self::assertIsArray($retained);
-        self::assertSame(['1498', '1499'], array_column($retained, 'tradeId'));
+        self::assertCount(499, $retained);
+        self::assertSame(CanonicalJson::encode([
+            'BTC-USDT-SWAP', '1001', '100.5', '2', 'buy', '0', '1784970100001',
+        ]), $retained[0]);
+        self::assertSame(CanonicalJson::encode([
+            'BTC-USDT-SWAP', '1499', '100.5', '2', 'buy', '0', '1784970100499',
+        ]), $retained[498]);
     }
 
     public function testHistoryTradePaginationCheckpointDurablyRoundTripsRetainedRows(): void

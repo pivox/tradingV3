@@ -4,7 +4,7 @@
 
 **Goal:** Keep every valid OKX retained-trade suffix inside the canonical checkpoint budget without weakening overlap or identity validation.
 
-**Architecture:** Add one focused codec that converts the exact seven-key OKX REST trade map to a seven-element checkpoint list and expands either that list or the legacy map. The live source decodes at every runtime boundary and compacts at every pagination write; the checkpoint contract validates both shapes fail-closed.
+**Architecture:** Add one focused codec that converts the exact seven-key OKX REST trade map to a canonical JSON string containing a seven-element list and expands that string, a transitional list or the legacy map. The live source decodes at every runtime boundary and compacts at every pagination write; the checkpoint contract validates all supported read shapes fail-closed.
 
 **Tech Stack:** PHP 8.4, Symfony 7.1, PHPUnit 11, PHPStan, existing canonical JSON and OKX checkpoint contracts.
 
@@ -30,14 +30,23 @@ $map = [
     'source' => '0',
     'ts' => '1784970100000',
 ];
-$compact = ['BTC-USDT-SWAP', '42', '100.5', '2', 'buy', '0', '1784970100000'];
+$compact = CanonicalJson::encode([
+    'BTC-USDT-SWAP', '42', '100.5', '2', 'buy', '0', '1784970100000',
+]);
 self::assertSame($compact, OkxPaperRetainedTradeRow::compact($map));
 self::assertSame($map, OkxPaperRetainedTradeRow::expand($compact));
+self::assertSame($map, OkxPaperRetainedTradeRow::expand(json_decode(
+    $compact,
+    true,
+    16,
+    JSON_THROW_ON_ERROR,
+)));
 self::assertSame($map, OkxPaperRetainedTradeRow::expand($map));
 ```
 
-Use a data provider to reject a short list, non-string member, missing map key,
-extra map key and numeric non-list map with `okx_paper_retained_trade_row_invalid`.
+Use a data provider to reject malformed JSON, a short list, non-string member,
+missing map key, extra map key and numeric non-list map with
+`okx_paper_retained_trade_row_invalid`.
 
 - [ ] **Step 2: Run the codec test and verify RED**
 
@@ -57,11 +66,10 @@ Create a final class with this public contract:
 ```php
 final class OkxPaperRetainedTradeRow
 {
-    /** @return list<string> */
-    public static function compact(array $row): array;
+    public static function compact(array $row): string;
 
     /** @return array{instId: string, tradeId: string, px: string, sz: string, side: string, source: string, ts: string} */
-    public static function expand(array $row): array;
+    public static function expand(array|string $row): array;
 }
 ```
 
@@ -88,7 +96,7 @@ Move the durable frontier in
 `testReconnectRecentTradeSuffixFitsTheCanonicalCheckpointBudget()` from row 497
 to row 0 so 499 accepted trades must survive. Assert the first emitted trade is
 `1001`, retained row count is 499, and the first/last persisted rows are exact
-seven-element lists for trades `1001` and `1499`.
+canonical strings for trades `1001` and `1499`.
 
 Run:
 
@@ -103,10 +111,10 @@ Expected: `okx_paper_live_checkpoint_invalid` caused by
 - [ ] **Step 2: Validate compact and legacy retained rows at checkpoint load**
 
 In `OkxPaperLiveCheckpoint::pagination()`, when the stream ends in
-`/public_trade`, call `OkxPaperRetainedTradeRow::expand($row)` for validation.
-Keep the original row shape in the checkpoint object so a legacy map remains
-readable until the next live-source write. Candle pagination keeps its existing
-list validation.
+`/public_trade`, require a string or array and call
+`OkxPaperRetainedTradeRow::expand($row)` for validation. Keep the original row
+shape in the checkpoint object so a legacy map/list remains readable until the
+next live-source write. Candle pagination keeps its existing list validation.
 
 - [ ] **Step 3: Decode on runtime read and compact on every runtime write**
 
@@ -116,7 +124,7 @@ Add private source helpers:
 /** @return list<array<string, string>> */
 private function expandedRetainedTradeRows(array $rows): array;
 
-/** @return list<list<string>> */
+/** @return list<string> */
 private function compactRetainedTradeRows(array $rows): array;
 ```
 
