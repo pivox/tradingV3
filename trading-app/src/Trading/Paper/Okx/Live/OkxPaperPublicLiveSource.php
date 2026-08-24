@@ -92,6 +92,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
     private ?string $activeQueuedSocket = null;
     private int $activeQueuedEventsRemaining = 0;
 
+    private bool $healthyStopRequested = false;
     private bool $stopped = false;
 
     public function __construct(
@@ -275,6 +276,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->startHeartbeatTimers();
         }
         while (!$this->stopped) {
+            if ($this->healthyStopRequested) {
+                $this->persistHealthyStopWhenDrained();
+            }
             if ($this->checkpoint->phase === 'stopping') {
                 yield from $this->healthyStopFlow();
 
@@ -382,10 +386,33 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         ) {
             return;
         }
+        if ($this->healthyStopRequested) {
+            return;
+        }
+        if (!$this->healthyStopRequestPreconditionsHold()) {
+            $this->failTerminal('okx_paper_public_healthy_stop_invalid');
+        }
+        $this->healthyStopRequested = true;
+        ++$this->connectionGeneration;
+        $this->cancelHeartbeatTimers();
+        $this->persistHealthyStopWhenDrained();
+    }
+
+    private function persistHealthyStopWhenDrained(): void
+    {
+        if (!$this->healthyStopRequested
+            || $this->checkpoint->phase !== 'streaming'
+            || $this->checkpoint->pendingEvent !== null
+            || $this->checkpoint->pendingTransition !== null
+            || $this->activeQueuedSocket !== null
+            || $this->publicQueue->count() !== 0
+            || $this->businessQueue->count() !== 0
+        ) {
+            return;
+        }
         if (!$this->healthyStopPreconditionsHold()) {
             $this->failTerminal('okx_paper_public_healthy_stop_invalid');
         }
-        ++$this->connectionGeneration;
         $state = $this->checkpoint->toArray();
         $state['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
         $state['healthy_stop'] = [
@@ -1368,6 +1395,19 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
     private function healthyStopPreconditionsHold(): bool
     {
+        if (!$this->healthyStopRequestPreconditionsHold()
+            || $this->activeQueuedSocket !== null
+            || $this->publicQueue->count() !== 0
+            || $this->businessQueue->count() !== 0
+        ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function healthyStopRequestPreconditionsHold(): bool
+    {
         if ($this->checkpoint->phase !== 'streaming'
             || $this->checkpoint->pendingEvent !== null
             || $this->checkpoint->pendingTransition !== null
@@ -1379,8 +1419,6 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $this->checkpoint->resyncBySymbol,
                 static fn (mixed $resync): bool => $resync !== null,
             ) !== []
-            || $this->publicQueue->count() !== 0
-            || $this->businessQueue->count() !== 0
         ) {
             return false;
         }

@@ -3410,6 +3410,60 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame([], $complete['healthy_stop']['remaining_symbols']);
     }
 
+    public function testHealthyStopDrainsFrameAdmittedInTimerIterationBeforeStopping(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9910']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            checkpointStore: $store,
+            clock: $clock,
+            loop: new DeterministicLoop(),
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+        $firstTrade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $firstTrade);
+        $source->acknowledge($firstTrade->eventId);
+
+        $public->message(Task7Transport::tradeFrame(['9911']));
+        $source->requestHealthyOperatorStop();
+        self::assertSame('streaming', $this->checkpointState()['phase']);
+
+        $events->next();
+        $queuedTrade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $queuedTrade);
+        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $queuedTrade->channel);
+        $source->acknowledge($queuedTrade->eventId);
+
+        foreach (['BTCUSDT', 'ETHUSDT'] as $symbol) {
+            $events->next();
+            $stopped = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $stopped);
+            self::assertSame($symbol, $stopped->symbol);
+            self::assertSame('stopped', $stopped->payload['state'] ?? null);
+            $source->acknowledge($stopped->eventId);
+        }
+        $events->next();
+
+        self::assertFalse($events->valid());
+        self::assertTrue($source->isComplete());
+        self::assertSame('complete', $this->checkpointState()['phase']);
+    }
+
     public function testHealthyStopFailsStablyWhenSocketFreshnessExpiresMidFlow(): void
     {
         $clock = new MockClock('2026-07-25T10:00:00.000000Z');

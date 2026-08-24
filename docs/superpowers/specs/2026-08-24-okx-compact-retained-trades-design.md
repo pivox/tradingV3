@@ -111,3 +111,19 @@ r18 passed the former memory failure point on schema v5 and reached 3,581
 durable events. A subsequent real reconnect could not prove bounded market-data
 continuity and therefore finalized correctly as incomplete with
 `market_data_gap_unresolved`; it is not certification evidence.
+
+## Live r19 healthy-stop finding
+
+r19 ran on schema v6 without reconnect or resync and reached 3,465 durable
+events. Its 450-second timer fired in the same event-loop iteration as an
+already-admitted WebSocket frame. The old stop precondition required both
+durable queues to be empty immediately, so this transient and recoverable state
+was finalized incomplete as `okx_paper_public_healthy_stop_invalid`.
+
+An operator-stop request now first invalidates subsequent socket callback
+generations and cancels heartbeat timers. Any frame already admitted and
+persisted is still normalized, appended and acknowledged. The source writes the
+`stopping` transition only after both queues and the active frame are empty.
+Socket freshness, subscription readiness, reconnect/resync absence and pending
+event guards remain fail-closed both before the request and at the durable
+transition. r19 remains immutable, incomplete and non-certifiable.

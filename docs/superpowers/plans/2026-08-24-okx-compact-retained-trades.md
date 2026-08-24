@@ -227,3 +227,12 @@ and request a fresh Codex review before marking PR #409 ready.
 - [x] Move to schema v6 with fixed-width reserved digest slots, so filling the
   opposite origin is byte-size neutral.
 - [x] Keep the saturated retained-suffix and one-MiB budget regressions green.
+
+### Task 8: Drain an already-admitted frame before healthy stop
+
+- [x] Reproduce the r19 timer race where a WebSocket frame is durably queued in
+  the same event-loop iteration as the operator-stop callback.
+- [x] Quiesce subsequent callback generations, drain and acknowledge the
+  already-admitted queue, then persist the `stopping` transition.
+- [x] Preserve fail-closed checks for stale sockets, reconnect/resync state,
+  pending events and interrupted cleanup.
