@@ -236,3 +236,5 @@ and request a fresh Codex review before marking PR #409 ready.
   already-admitted queue, then persist the `stopping` transition.
 - [x] Preserve fail-closed checks for stale sockets, reconnect/resync state,
   pending events and interrupted cleanup.
+- [x] Let an in-flight heartbeat prove socket freshness before quiescing, while
+  keeping pong timeout and reconnect terminal for the requested healthy stop.

@@ -93,6 +93,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
     private int $activeQueuedEventsRemaining = 0;
 
     private bool $healthyStopRequested = false;
+    private bool $healthyStopAdmissionQuiesced = false;
     private bool $stopped = false;
 
     public function __construct(
@@ -389,20 +390,38 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         if ($this->healthyStopRequested) {
             return;
         }
-        if (!$this->healthyStopRequestPreconditionsHold()) {
+        if (!$this->healthyStopStructuralPreconditionsHold()
+            || (!$this->socketFreshnessWithinPolicy()
+                && !$this->canAwaitSocketFreshness())
+        ) {
             $this->failTerminal('okx_paper_public_healthy_stop_invalid');
         }
         $this->healthyStopRequested = true;
-        ++$this->connectionGeneration;
-        $this->cancelHeartbeatTimers();
         $this->persistHealthyStopWhenDrained();
     }
 
     private function persistHealthyStopWhenDrained(): void
     {
         if (!$this->healthyStopRequested
-            || $this->checkpoint->phase !== 'streaming'
-            || $this->checkpoint->pendingEvent !== null
+        ) {
+            return;
+        }
+        if (!$this->healthyStopStructuralPreconditionsHold()) {
+            $this->failTerminal('okx_paper_public_healthy_stop_invalid');
+        }
+        if (!$this->healthyStopAdmissionQuiesced) {
+            if (!$this->socketFreshnessWithinPolicy()) {
+                if (!$this->canAwaitSocketFreshness()) {
+                    $this->failTerminal('okx_paper_public_healthy_stop_invalid');
+                }
+
+                return;
+            }
+            $this->healthyStopAdmissionQuiesced = true;
+            ++$this->connectionGeneration;
+            $this->cancelHeartbeatTimers();
+        }
+        if ($this->checkpoint->pendingEvent !== null
             || $this->checkpoint->pendingTransition !== null
             || $this->activeQueuedSocket !== null
             || $this->publicQueue->count() !== 0
@@ -425,6 +444,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             'stopping',
             $this->stoppedEventTransition('BTCUSDT'),
         );
+        $this->healthyStopRequested = false;
     }
 
     public function failureReason(): ?string
@@ -1395,7 +1415,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
     private function healthyStopPreconditionsHold(): bool
     {
-        if (!$this->healthyStopRequestPreconditionsHold()
+        if (!$this->healthyStopStructuralPreconditionsHold()
+            || !$this->socketFreshnessWithinPolicy()
             || $this->activeQueuedSocket !== null
             || $this->publicQueue->count() !== 0
             || $this->businessQueue->count() !== 0
@@ -1406,7 +1427,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         return true;
     }
 
-    private function healthyStopRequestPreconditionsHold(): bool
+    private function healthyStopStructuralPreconditionsHold(): bool
     {
         if ($this->checkpoint->phase !== 'streaming'
             || $this->checkpoint->pendingEvent !== null
@@ -1422,7 +1443,20 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         ) {
             return false;
         }
-        return $this->socketFreshnessWithinPolicy();
+        return true;
+    }
+
+    private function canAwaitSocketFreshness(): bool
+    {
+        foreach (['public', 'business'] as $socket) {
+            if (!isset($this->heartbeatTimers[$socket])
+                && !isset($this->pongTimers[$socket])
+            ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function socketFreshnessWithinPolicy(): bool

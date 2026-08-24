@@ -127,3 +127,12 @@ persisted is still normalized, appended and acknowledged. The source writes the
 Socket freshness, subscription readiness, reconnect/resync absence and pending
 event guards remain fail-closed both before the request and at the durable
 transition. r19 remains immutable, incomplete and non-certifiable.
+
+r20 reached 3,442 durable events with no reconnect or resync, then exposed the
+second half of the same timer boundary. A socket may be just beyond its
+20-second idle threshold while an already-armed heartbeat is waiting to run or
+its pong deadline is still open. That socket is not yet proven stale. The stop
+request now waits for the existing heartbeat proof before quiescing admission.
+A valid pong or market frame permits the normal drain and stop transition; pong
+timeout or a reconnect still fails the requested healthy stop. r20 remains
+immutable, incomplete and non-certifiable.

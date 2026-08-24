@@ -3464,6 +3464,98 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame('complete', $this->checkpointState()['phase']);
     }
 
+    public function testHealthyStopWaitsForPendingSocketFreshnessProof(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9910']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            clock: $clock,
+            loop: new DeterministicLoop(),
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+        $trade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $trade);
+        $source->acknowledge($trade->eventId);
+
+        $clock->sleep(21);
+        $source->requestHealthyOperatorStop();
+        self::assertSame('streaming', $this->checkpointState()['phase']);
+
+        $public->message('pong');
+        $business->message('pong');
+        foreach (['BTCUSDT', 'ETHUSDT'] as $symbol) {
+            $events->next();
+            $stopped = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $stopped);
+            self::assertSame($symbol, $stopped->symbol);
+            $source->acknowledge($stopped->eventId);
+        }
+        $events->next();
+
+        self::assertFalse($events->valid());
+        self::assertTrue($source->isComplete());
+        self::assertSame('complete', $this->checkpointState()['phase']);
+    }
+
+    public function testHealthyStopFailsIfPendingFreshnessProofTimesOut(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9910']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $loop = new DeterministicLoop();
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            clock: $clock,
+            loop: $loop,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+        $trade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $trade);
+        $source->acknowledge($trade->eventId);
+
+        $clock->sleep(21);
+        $loop->fireTimerInterval(OkxPaperLivePolicy::HEARTBEAT_IDLE_SECONDS);
+        $source->requestHealthyOperatorStop();
+        $clock->sleep((int) OkxPaperLivePolicy::PONG_TIMEOUT_SECONDS);
+        $loop->fireTimerInterval(OkxPaperLivePolicy::PONG_TIMEOUT_SECONDS);
+
+        try {
+            $events->next();
+            self::fail('A timed-out freshness proof must invalidate healthy stop.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('okx_paper_public_healthy_stop_invalid', $exception->getMessage());
+        }
+        self::assertSame('failed', $this->checkpointState()['phase']);
+        self::assertSame('okx_paper_public_healthy_stop_invalid', $source->failureReason());
+        self::assertFalse($source->isComplete());
+    }
+
     public function testHealthyStopFailsStablyWhenSocketFreshnessExpiresMidFlow(): void
     {
         $clock = new MockClock('2026-07-25T10:00:00.000000Z');
