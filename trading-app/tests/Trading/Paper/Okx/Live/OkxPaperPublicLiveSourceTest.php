@@ -4427,6 +4427,76 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame([1.0], $deterministic->timerIntervals());
     }
 
+    public function testHeartbeatDoesNotPingASocketWhileItsDurableInboundQueueIsBacklogged(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $public = new FakeOkxPaperPublicWebSocketTransport();
+        $business = new FakeOkxPaperPublicWebSocketTransport();
+        $publicQueue = new OkxPaperPublicFrameQueue();
+        $businessQueue = new OkxPaperPublicFrameQueue();
+        $deterministic = new DeterministicLoop();
+        $loop = new Task7ScriptedLoop($deterministic);
+        $loop->scripts = [
+            static fn () => $public->open(),
+            static fn () => $business->open(),
+            static function () use ($public): void {
+                foreach (Task7Transport::acknowledgements(
+                    self::publicArguments(),
+                    'public',
+                ) as $acknowledgement) {
+                    $public->message($acknowledgement);
+                }
+            },
+            static function () use ($business): void {
+                foreach (Task7Transport::acknowledgements(
+                    self::businessArguments(),
+                    'business',
+                ) as $acknowledgement) {
+                    $business->message($acknowledgement);
+                }
+            },
+            static fn () => $public->message(Task7Transport::tradeFrame(['9914'])),
+        ];
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            clock: $clock,
+            loop: $loop,
+            publicQueue: $publicQueue,
+            businessQueue: $businessQueue,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+        self::assertInstanceOf(PaperMarketEvent::class, $events->current());
+
+        $business->message([
+            'arg' => ['channel' => 'candle1m', 'instId' => 'BTC-USDT-SWAP'],
+            'data' => [[
+                '1784970460000', '101', '102', '100', '101.5', '11', '1', '1100', '1',
+            ]],
+        ]);
+        self::assertSame(1, $publicQueue->count());
+        self::assertSame(1, $businessQueue->count());
+
+        $clock->sleep(20);
+        self::assertCount(2, $deterministic->timers);
+        $deterministic->fireNextTimer();
+        $deterministic->fireNextTimer();
+
+        self::assertSame(
+            [['op' => 'subscribe', 'args' => self::publicArguments()]],
+            $public->sent,
+        );
+        self::assertSame(
+            [['op' => 'subscribe', 'args' => self::businessArguments()]],
+            $business->sent,
+        );
+        self::assertSame([20.0, 20.0], $deterministic->timerIntervals());
+        self::assertSame('streaming', $this->checkpointState()['phase']);
+    }
+
     public function testValidNonPongFrameRefreshesOnlyItsRoutedSocket(): void
     {
         $clock = new MockClock('2026-07-25T10:00:00.000000Z');

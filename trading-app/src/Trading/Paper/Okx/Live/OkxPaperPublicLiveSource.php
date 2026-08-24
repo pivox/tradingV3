@@ -3312,6 +3312,14 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     return;
                 }
                 unset($this->heartbeatTimers[$socket]);
+                $queue = $socket === 'public'
+                    ? $this->publicQueue
+                    : $this->businessQueue;
+                if ($queue->count() !== 0) {
+                    $this->armHeartbeatTimer($socket);
+
+                    return;
+                }
                 $lastInbound = $this->lastInboundAt[$socket];
                 if (!$lastInbound instanceof \DateTimeImmutable) {
                     $this->beginPairedReconnect();
