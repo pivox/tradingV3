@@ -3370,6 +3370,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame('stopping', $requested['phase']);
         self::assertSame(
             [
+                'liveness_proven' => true,
                 'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
                 'requested' => true,
             ],
@@ -3543,10 +3544,8 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $loop->fireTimerInterval(OkxPaperLivePolicy::HEARTBEAT_IDLE_SECONDS);
         $source->requestHealthyOperatorStop();
         $clock->sleep((int) OkxPaperLivePolicy::PONG_TIMEOUT_SECONDS);
-        $loop->fireTimerInterval(OkxPaperLivePolicy::PONG_TIMEOUT_SECONDS);
-
         try {
-            $events->next();
+            $loop->fireTimerInterval(OkxPaperLivePolicy::PONG_TIMEOUT_SECONDS);
             self::fail('A timed-out freshness proof must invalidate healthy stop.');
         } catch (OkxPaperLiveIntegrityException $exception) {
             self::assertSame('okx_paper_public_healthy_stop_invalid', $exception->getMessage());
@@ -3602,6 +3601,194 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertFalse($events->valid());
         self::assertTrue($source->isComplete());
         self::assertSame('complete', $this->checkpointState()['phase']);
+    }
+
+    public function testHealthyStopCannotReplaceOutstandingPongWithMarketFrameFreshness(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9910']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $loop = new DeterministicLoop();
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            clock: $clock,
+            loop: $loop,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+        $trade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $trade);
+        $source->acknowledge($trade->eventId);
+
+        $clock->sleep(21);
+        $loop->fireTimerInterval(OkxPaperLivePolicy::HEARTBEAT_IDLE_SECONDS);
+        $source->requestHealthyOperatorStop();
+        $public->message(Task7Transport::tradeFrame(['9911']));
+        $business->message('pong');
+
+        self::assertContains(
+            OkxPaperLivePolicy::PONG_TIMEOUT_SECONDS,
+            $loop->timerIntervals(),
+        );
+        $clock->sleep((int) OkxPaperLivePolicy::PONG_TIMEOUT_SECONDS);
+        try {
+            $loop->fireTimerInterval(OkxPaperLivePolicy::PONG_TIMEOUT_SECONDS);
+            self::fail('Outstanding pong timeout must invalidate the requested stop.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('okx_paper_public_healthy_stop_invalid', $exception->getMessage());
+        }
+        self::assertSame('failed', $this->checkpointState()['phase']);
+        self::assertFalse($source->isComplete());
+    }
+
+    public function testHealthyStopIntentAndQueuedFrameResumeWithoutReconnect(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9910']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            checkpointStore: $store,
+            clock: $clock,
+            loop: new DeterministicLoop(),
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+        $firstTrade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $firstTrade);
+        $source->acknowledge($firstTrade->eventId);
+        $public->message(Task7Transport::tradeFrame(['9911']));
+
+        $source->requestHealthyOperatorStop();
+        $requested = $this->checkpointState();
+        self::assertSame('streaming', $requested['phase']);
+        self::assertSame(
+            [
+                'liveness_proven' => true,
+                'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+                'requested' => true,
+            ],
+            $requested['healthy_stop'],
+        );
+        $source->stop();
+        unset($events, $source, $store, $public, $business);
+        gc_collect_cycles();
+
+        $restartPublic = new Task7Transport();
+        $restartBusiness = new Task7Transport();
+        $restartStore = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
+        $resumed = $this->source(
+            new Task7RestClient(),
+            $restartPublic,
+            $restartBusiness,
+            checkpointStore: $restartStore,
+            clock: $clock,
+            loop: new DeterministicLoop(),
+        );
+        $resumedEvents = $resumed->events();
+        self::assertInstanceOf(\Generator::class, $resumedEvents);
+        $queuedTrade = $resumedEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $queuedTrade);
+        self::assertSame('9911', $queuedTrade->payload['trade_id'] ?? null);
+        $resumed->acknowledge($queuedTrade->eventId);
+        foreach (['BTCUSDT', 'ETHUSDT'] as $symbol) {
+            $resumedEvents->next();
+            $stopped = $resumedEvents->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $stopped);
+            self::assertSame($symbol, $stopped->symbol);
+            $resumed->acknowledge($stopped->eventId);
+        }
+        $resumedEvents->next();
+
+        self::assertFalse($resumedEvents->valid());
+        self::assertTrue($resumed->isComplete());
+        self::assertSame([], $restartPublic->connections);
+        self::assertSame([], $restartBusiness->connections);
+    }
+
+    public function testUnprovenHealthyStopRestartFailsWithoutReconnect(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9910']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $loop = new DeterministicLoop();
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            checkpointStore: $store,
+            clock: $clock,
+            loop: $loop,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+        $trade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $trade);
+        $source->acknowledge($trade->eventId);
+        $clock->sleep(21);
+        $loop->fireTimerInterval(OkxPaperLivePolicy::HEARTBEAT_IDLE_SECONDS);
+
+        $source->requestHealthyOperatorStop();
+        self::assertSame(false, $this->checkpointState()['healthy_stop']['liveness_proven']);
+        $source->stop();
+        unset($events, $source, $store, $public, $business);
+        gc_collect_cycles();
+
+        $restartPublic = new Task7Transport();
+        $restartBusiness = new Task7Transport();
+        $restartStore = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
+        $resumed = $this->source(
+            new Task7RestClient(),
+            $restartPublic,
+            $restartBusiness,
+            checkpointStore: $restartStore,
+            clock: $clock,
+            loop: new DeterministicLoop(),
+        );
+        try {
+            $resumedEvents = $resumed->events();
+            self::assertInstanceOf(\Generator::class, $resumedEvents);
+            $resumedEvents->current();
+            self::fail('Unproven liveness cannot become a healthy stop after restart.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('okx_paper_public_healthy_stop_invalid', $exception->getMessage());
+        }
+        self::assertSame('failed', $this->checkpointState()['phase']);
+        self::assertSame([], $restartPublic->connections);
+        self::assertSame([], $restartBusiness->connections);
     }
 
     public function testHealthyStopFailsStablyWhenSocketFreshnessExpiresMidFlow(): void

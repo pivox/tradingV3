@@ -11,7 +11,7 @@ use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
 
 final readonly class OkxPaperLiveCheckpoint
 {
-    public const SCHEMA_VERSION = 6;
+    public const SCHEMA_VERSION = 7;
     public const MISSING_CANONICAL_DIGEST = '----------------------------------------------------------------';
 
     /** @var list<string> */
@@ -57,7 +57,7 @@ final readonly class OkxPaperLiveCheckpoint
      * @param list<string>                               $remainingSymbols
      * @param list<array{symbol: string, reason: string}> $remainingBoundaries
      * @param array<string, int>                         $sourceEpochs
-     * @param array{requested: bool, remaining_symbols: list<string>} $healthyStop
+     * @param array{liveness_proven: bool, remaining_symbols: list<string>, requested: bool} $healthyStop
      * @param array<string, mixed>                       $reconnect
      * @param array<string, mixed>                       $resyncBySymbol
      * @param array<string, mixed>                       $overlapPaginationByStream
@@ -109,7 +109,11 @@ final readonly class OkxPaperLiveCheckpoint
             'connection_epoch' => 1,
             'dataset_id' => $datasetId,
             'failure_reason' => null,
-            'healthy_stop' => ['requested' => false, 'remaining_symbols' => []],
+            'healthy_stop' => [
+                'liveness_proven' => false,
+                'remaining_symbols' => [],
+                'requested' => false,
+            ],
             'last_acknowledged_event_id' => null,
             'ordinal_state' => ['schema_version' => 1, 'scopes' => []],
             'overlap_pagination_by_stream' => $pagination,
@@ -283,14 +287,20 @@ final readonly class OkxPaperLiveCheckpoint
             if ($state['phase'] === 'failed' && $pendingEvent !== null) {
                 throw new \InvalidArgumentException();
             }
-            if (!$healthyStop['requested'] && $healthyStop['remaining_symbols'] !== []) {
+            if (!$healthyStop['requested']
+                && ($healthyStop['remaining_symbols'] !== []
+                    || $healthyStop['liveness_proven'])
+            ) {
                 throw new \InvalidArgumentException();
             }
-            if ($state['phase'] === 'stopping' && !$healthyStop['requested']) {
+            if ($state['phase'] === 'stopping'
+                && (!$healthyStop['requested'] || !$healthyStop['liveness_proven'])
+            ) {
                 throw new \InvalidArgumentException();
             }
             if ($state['phase'] === 'complete') {
                 if (!$healthyStop['requested']
+                    || !$healthyStop['liveness_proven']
                     || $healthyStop['remaining_symbols'] !== []
                     || $remainingSymbols !== []
                     || $remainingBoundaries !== []
@@ -1130,18 +1140,26 @@ final readonly class OkxPaperLiveCheckpoint
 
     /**
      * @param array<string, mixed> $healthyStop
-     * @return array{requested: bool, remaining_symbols: list<string>}
+     * @return array{liveness_proven: bool, remaining_symbols: list<string>, requested: bool}
      */
     private static function healthyStop(array $healthyStop): array
     {
-        self::assertExactKeys($healthyStop, ['requested', 'remaining_symbols']);
-        if (!\is_bool($healthyStop['requested']) || !\is_array($healthyStop['remaining_symbols'])) {
+        self::assertExactKeys($healthyStop, [
+            'liveness_proven',
+            'remaining_symbols',
+            'requested',
+        ]);
+        if (!\is_bool($healthyStop['liveness_proven'])
+            || !\is_bool($healthyStop['requested'])
+            || !\is_array($healthyStop['remaining_symbols'])
+        ) {
             throw new \InvalidArgumentException();
         }
 
         return [
-            'requested' => $healthyStop['requested'],
+            'liveness_proven' => $healthyStop['liveness_proven'],
             'remaining_symbols' => self::orderedSymbols($healthyStop['remaining_symbols']),
+            'requested' => $healthyStop['requested'],
         ];
     }
 

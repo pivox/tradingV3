@@ -92,8 +92,8 @@ after a proven opposite-origin overlap never grows the checkpoint beyond the
 budget already reserved. The canonical digest is persisted before continuing,
 so a restart cannot weaken later same-origin comparisons. Schema-v5 and earlier
 checkpoints are rejected instead of being interpreted with the new history
-semantics. A new capture must start with schema v6; the incomplete r16 through
-r18 datasets remain immutable and non-certifiable.
+semantics. Captures for that contract started with schema v6; the incomplete
+r16 through r18 datasets remain immutable and non-certifiable.
 
 ## Live r17 memory finding
 
@@ -162,3 +162,23 @@ the manifest value
 `9b8299caad6573e6a857e892cf1a2092bcc4f871df99246c33e3b360671168ef`.
 This short capture proves the hardened acquisition and healthy-stop boundary;
 it does not claim 24-hour representativeness or 50 certified trades per cell.
+
+## Review findings and healthy-stop schema v7
+
+Two review findings tighten the crash boundary after r22. First, a valid market
+frame may refresh a socket timestamp while a ping still has an outstanding pong
+deadline. Healthy stop must wait for that exact pong; market traffic cannot
+replace it or cancel its timeout. Second, an accepted operator request must be
+durable before any pre-request queue is drained.
+
+Schema v7 adds `healthy_stop.liveness_proven`. The initial request persists
+`requested=true`, both remaining symbols and `liveness_proven=false`. A valid
+pong proof is then persisted before callback generations are quiesced. A crash
+in the unproven state fails the requested stop without reconnecting. A crash
+after proof resumes the admission cutoff, drains durable non-book frames without
+opening sockets, and proceeds through the existing acknowledgement-gated
+stopped events and cleanup. A queued book delta without its former in-memory
+materializer base remains fail-closed; restart never invents order-book state.
+Schema-v6 and earlier live checkpoints are rejected by the new runtime. r22
+remains valid immutable acquisition evidence for its captured commit, while the
+next final-code capture must start on schema v7.

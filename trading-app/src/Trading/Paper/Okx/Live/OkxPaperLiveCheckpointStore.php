@@ -180,6 +180,69 @@ final class OkxPaperLiveCheckpointStore
         $this->persist($checkpoint);
     }
 
+    public function requestHealthyStopDrain(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+    ): OkxPaperLiveCheckpoint {
+        $this->assertCurrent($checkpoint);
+        if ($checkpoint->phase !== 'streaming'
+            || $checkpoint->healthyStop['requested']
+            || $checkpoint->pendingEvent !== null
+            || $checkpoint->pendingTransition !== null
+            || $checkpoint->remainingSymbols !== []
+            || $checkpoint->remainingBoundaries !== []
+            || $checkpoint->reconnect !== [
+                'attempt' => 0,
+                'deadline_at' => null,
+                'stable_since' => null,
+                'accepted_events' => 0,
+            ]
+            || array_filter(
+                $checkpoint->resyncBySymbol,
+                static fn (mixed $value): bool => $value !== null,
+            ) !== []
+            || array_filter(
+                $checkpoint->overlapPaginationByStream,
+                static fn (mixed $value): bool => $value !== null,
+            ) !== []
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $state = $checkpoint->toArray();
+        $state['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
+        $state['healthy_stop'] = [
+            'liveness_proven' => false,
+            'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
+        ];
+        $next = $this->validatedCheckpoint($state);
+        $this->assertCompleteIsTerminal($next);
+        $this->persist($next);
+
+        return $next;
+    }
+
+    public function confirmHealthyStopLiveness(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+    ): OkxPaperLiveCheckpoint {
+        $this->assertCurrent($checkpoint);
+        if ($checkpoint->phase !== 'streaming'
+            || !$checkpoint->healthyStop['requested']
+            || $checkpoint->healthyStop['liveness_proven']
+            || $checkpoint->healthyStop['remaining_symbols'] !== ['BTCUSDT', 'ETHUSDT']
+            || $checkpoint->remainingSymbols !== ['BTCUSDT', 'ETHUSDT']
+            || $checkpoint->pendingEvent !== null
+            || $checkpoint->pendingTransition !== null
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $state = $checkpoint->toArray();
+        $state['healthy_stop']['liveness_proven'] = true;
+        $next = $this->validatedCheckpoint($state);
+        $this->persist($next);
+
+        return $next;
+    }
+
     public function rememberAcknowledgedIdentityObservation(
         #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
         string $stream,
@@ -3824,8 +3887,9 @@ final class OkxPaperLiveCheckpointStore
             || $current->remainingBoundaries !== []
             || $candidate->remainingSymbols !== ['BTCUSDT', 'ETHUSDT']
             || $candidate->healthyStop !== [
-                'requested' => true,
+                'liveness_proven' => true,
                 'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+                'requested' => true,
             ]
         ) {
             throw self::invalidCheckpoint();

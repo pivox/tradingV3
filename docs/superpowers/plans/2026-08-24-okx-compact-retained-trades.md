@@ -242,7 +242,7 @@ and request a fresh Codex review before marking PR #409 ready.
   proof: validate later frames for liveness but never queue them, preventing a
   hot public socket from exhausting backpressure before the quiet socket pongs.
 
-### Task 9: Prove a complete public capture on the final boundary
+### Task 9: Prove a complete public capture on the schema-v6 boundary
 
 - [x] Complete r22 for 450 seconds with execution forced disabled, schema v6,
   epoch 1 and no reconnect or resync.
@@ -250,3 +250,15 @@ and request a fresh Codex review before marking PR #409 ready.
   checks and an external SHA-256 recalculation.
 - [x] Keep the result scoped as technical capture evidence, not a 24-hour
   representative baseline or a certified-trade claim.
+
+### Task 10: Preserve healthy-stop intent and pong proof across restart
+
+- [x] Reproduce the review P1 where market traffic could refresh a timestamp
+  and cancel an outstanding pong deadline during stop.
+- [x] Reproduce the review P2 where a crash before durable-queue drainage lost
+  the one-shot operator request and resumed through reconnect.
+- [x] Move to schema v7 with explicit durable `liveness_proven`; unproven
+  restart fails without reconnect, while proven restart drains durable
+  non-book frames and completes the requested stop.
+- [x] Keep unreconstructable queued book deltas fail-closed rather than
+  fabricating a materialized-book base after restart.

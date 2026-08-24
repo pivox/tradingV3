@@ -230,7 +230,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame('43', $acknowledged->streamFrontiers[$stream]?->sourceIdentity);
     }
 
-    public function testFreshCheckpointHasTheCompleteClosedVersionSixSchema(): void
+    public function testFreshCheckpointHasTheCompleteClosedVersionSevenSchema(): void
     {
         $checkpoint = OkxPaperLiveCheckpoint::fresh(self::DATASET_ID, self::CONFIGURATION_SHA256);
         $state = $checkpoint->toArray();
@@ -256,7 +256,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_epochs',
             'stream_frontiers',
         ], array_keys($state));
-        self::assertSame(6, $state['schema_version']);
+        self::assertSame(7, $state['schema_version']);
         self::assertSame(self::DATASET_ID, $state['dataset_id']);
         self::assertSame(self::CONFIGURATION_SHA256, $state['configuration_sha256']);
         self::assertSame('warming', $state['phase']);
@@ -277,7 +277,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
 
     public function testEarlierCheckpointVersionsAreRejectedInsteadOfReusingOldDigestSemantics(): void
     {
-        foreach ([3, 4, 5] as $schemaVersion) {
+        foreach ([3, 4, 5, 6] as $schemaVersion) {
             $state = OkxPaperLiveCheckpoint::fresh(
                 self::DATASET_ID,
                 self::CONFIGURATION_SHA256,
@@ -320,7 +320,11 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             $state = OkxPaperLiveCheckpoint::fresh(self::DATASET_ID, self::CONFIGURATION_SHA256)->toArray();
             $state['phase'] = $phase;
             if ($phase === 'stopping') {
-                $state['healthy_stop'] = ['requested' => true, 'remaining_symbols' => ['BTCUSDT', 'ETHUSDT']];
+                $state['healthy_stop'] = [
+                    'liveness_proven' => true,
+                    'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+                    'requested' => true,
+                ];
             }
             $state['pending_transition'] = $transition;
             if ($transition['stage'] === 'reconnect_delay') {
@@ -1471,8 +1475,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $state['phase'] = 'stopping';
         $state['remaining_boundaries'] = [];
         $state['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
         $this->replaceCheckpointState($directory, $state);
 
@@ -1534,8 +1539,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $state['phase'] = 'stopping';
         $state['remaining_boundaries'] = [];
         $state['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
         $this->replaceCheckpointState($stopDirectory, $state);
         $stopStore = new OkxPaperLiveCheckpointStore($stopDirectory);
@@ -1791,8 +1797,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $candidateState['pending_transition'] = $transition;
         $candidateState['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
         $candidateState['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
 
         try {
@@ -1977,8 +1984,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $activeState = $fresh->toArray();
         $activeState['phase'] = 'stopping';
         $activeState['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT'],
+            'requested' => true,
         ];
         $activeState['pending_transition'] = [
             'kind' => 'healthy_stop',
@@ -2244,8 +2252,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $stableState = $fresh->toArray();
         $stableState['phase'] = 'stopping';
         $stableState['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
         $stableState['pending_transition'] = [
             'kind' => 'healthy_stop',
@@ -2972,7 +2981,11 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $complete['phase'] = 'complete';
         $complete['remaining_symbols'] = [];
         $complete['remaining_boundaries'] = [];
-        $complete['healthy_stop'] = ['requested' => true, 'remaining_symbols' => []];
+        $complete['healthy_stop'] = [
+            'liveness_proven' => true,
+            'remaining_symbols' => [],
+            'requested' => true,
+        ];
         $this->assertCheckpointInvalid($complete);
 
         $complete['stream_frontiers']['BTCUSDT/control/connection_state'] =
@@ -3022,7 +3035,11 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $state['phase'] = 'stopping';
         $state['remaining_symbols'] = [];
         $state['remaining_boundaries'] = [];
-        $state['healthy_stop'] = ['requested' => true, 'remaining_symbols' => []];
+        $state['healthy_stop'] = [
+            'liveness_proven' => true,
+            'remaining_symbols' => [],
+            'requested' => true,
+        ];
         $state['stream_frontiers']['BTCUSDT/control/connection_state'] =
             OkxPaperStreamFrontier::fromEvent($this->stoppedConnectionEvent())->toArray();
         $state['stream_frontiers']['ETHUSDT/control/connection_state'] =
@@ -3057,8 +3074,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $stoppingState['phase'] = 'stopping';
         $stoppingState['remaining_boundaries'] = [];
         $stoppingState['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
         $this->replaceCheckpointState($directory, $stoppingState);
 
@@ -3153,7 +3171,11 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $state['phase'] = 'stopping';
         $state['remaining_symbols'] = [];
         $state['remaining_boundaries'] = [];
-        $state['healthy_stop'] = ['requested' => true, 'remaining_symbols' => []];
+        $state['healthy_stop'] = [
+            'liveness_proven' => true,
+            'remaining_symbols' => [],
+            'requested' => true,
+        ];
         $state['stream_frontiers']['BTCUSDT/control/connection_state'] =
             OkxPaperStreamFrontier::fromEvent($this->stoppedConnectionEvent())->toArray();
         $this->replaceCheckpointState($directory, $state);
@@ -3519,8 +3541,9 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $stopState['phase'] = 'stopping';
         $stopState['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
         $stopState['healthy_stop'] = [
-            'requested' => true,
+            'liveness_proven' => true,
             'remaining_symbols' => ['BTCUSDT', 'ETHUSDT'],
+            'requested' => true,
         ];
         $writeAhead = $stopStore->saveTransition(
             OkxPaperLiveCheckpoint::fromArray($stopState),
