@@ -4469,7 +4469,8 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $events = $source->events();
         self::assertInstanceOf(\Generator::class, $events);
         $this->acknowledgeWarmup($source, $events);
-        self::assertInstanceOf(PaperMarketEvent::class, $events->current());
+        $pendingPublic = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $pendingPublic);
 
         $business->message([
             'arg' => ['channel' => 'candle1m', 'instId' => 'BTC-USDT-SWAP'],
@@ -4495,6 +4496,13 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         );
         self::assertSame([20.0, 20.0], $deterministic->timerIntervals());
         self::assertSame('streaming', $this->checkpointState()['phase']);
+
+        $source->acknowledge($pendingPublic->eventId);
+        self::assertSame(0, $publicQueue->count());
+        self::assertSame(1, $businessQueue->count());
+        $drainedIntervals = $deterministic->timerIntervals();
+        sort($drainedIntervals);
+        self::assertSame([0.0, 20.0], $drainedIntervals);
     }
 
     public function testValidNonPongFrameRefreshesOnlyItsRoutedSocket(): void
