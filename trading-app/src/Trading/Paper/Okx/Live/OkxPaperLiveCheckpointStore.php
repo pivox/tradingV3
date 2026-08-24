@@ -758,7 +758,12 @@ final class OkxPaperLiveCheckpointStore
                 }
             }
             $state['stream_frontiers'][$stream] = $nextFrontier->toArray();
-            $this->appendAcknowledgedIdentityHistory($state, $stream, $nextFrontier);
+            $this->appendAcknowledgedIdentityHistory(
+                $state,
+                $stream,
+                $nextFrontier,
+                $checkpoint->pendingEvent,
+            );
         }
         $recoveryContinues = $this->isExactReconnectRecoveryContinuation(
             $checkpoint,
@@ -815,6 +820,7 @@ final class OkxPaperLiveCheckpointStore
         array &$state,
         string $stream,
         OkxPaperStreamFrontier $frontier,
+        #[\SensitiveParameter] PaperMarketEvent $event,
     ): void {
         if ((!str_contains($stream, '/candle_') && !str_ends_with($stream, '/public_trade'))
             || (!str_contains($stream, '/rest/') && !str_contains($stream, '/ws/'))
@@ -824,19 +830,30 @@ final class OkxPaperLiveCheckpointStore
         $logicalStream = str_replace(['/rest/', '/ws/'], '/', $stream);
         $history = $state['acknowledged_identity_history'][$logicalStream] ?? [];
         $identityHash = hash('sha256', $frontier->naturalIdentity);
+        $originStream = $this->recoveryStreamForEvent($event);
+        if ($originStream === null) {
+            throw self::invalidCheckpoint();
+        }
+        $sourceKind = str_contains($originStream, '/rest/') ? 'rest' : 'ws';
         foreach ($history as $entry) {
-            if (!hash_equals($entry['natural_identity_sha256'], $identityHash)) {
+            if (!hash_equals($entry[0], $identityHash)) {
                 continue;
             }
-            if (!hash_equals($entry['canonical_digest'], $frontier->canonicalDigest)) {
+            $sameOrigin = $entry[3] === $sourceKind;
+            if (!hash_equals(
+                $sameOrigin ? $entry[1] : $entry[2],
+                $sameOrigin ? $frontier->canonicalDigest : $frontier->overlapDigest,
+            )) {
                 throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
             }
 
             return;
         }
         $history[] = [
-            'natural_identity_sha256' => $identityHash,
-            'canonical_digest' => $frontier->canonicalDigest,
+            $identityHash,
+            $frontier->canonicalDigest,
+            $frontier->overlapDigest,
+            $sourceKind,
         ];
         $window = OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($logicalStream);
         if (\count($history) > $window) {

@@ -189,3 +189,16 @@ and request a fresh Codex review before marking PR #409 ready.
   `market_data_gap_unresolved`.
 - [x] Prevent a terminal budget failure from being swallowed by the normal
   overlap-history fallback.
+
+### Task 4: Preserve strict identity across OKX aggregate trade representations
+
+- [x] Reproduce the r16 conflict with a WebSocket aggregate trade and its
+  public REST constituent using the same `tradeId`.
+- [x] Add schema-v4 canonical and cross-origin overlap digests; exclude only
+  trade size from the latter.
+- [x] Keep same-origin observations strict and partitioned by actual REST/WS
+  origin.
+- [x] Store compact bounded digest/origin history and reject schema-v3
+  checkpoints fail-closed.
+- [x] Cover different REST/WS sizes, strict price conflict, reconnect overlap,
+  restart origin, compaction and checkpoint-budget regressions.

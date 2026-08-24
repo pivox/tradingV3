@@ -11,7 +11,7 @@ use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
 
 final readonly class OkxPaperLiveCheckpoint
 {
-    public const SCHEMA_VERSION = 3;
+    public const SCHEMA_VERSION = 4;
 
     /** @var list<string> */
     private const SYMBOLS = ['BTCUSDT', 'ETHUSDT'];
@@ -68,7 +68,7 @@ final readonly class OkxPaperLiveCheckpoint
      *     public: array{frames: int, bytes: int},
      *     business: array{frames: int, bytes: int}
      * }|null $streamingQueueRef
-     * @param array<string, list<array{natural_identity_sha256: string, canonical_digest: string}>> $acknowledgedIdentityHistory
+     * @param array<string, list<array{string, string, string, string}>> $acknowledgedIdentityHistory
      * @param array{stream: string, frontier: OkxPaperStreamFrontier}|null $pendingFrontier
      */
     private function __construct(
@@ -442,7 +442,7 @@ final readonly class OkxPaperLiveCheckpoint
     }
 
     /**
-     * @return array<string, list<array{natural_identity_sha256: string, canonical_digest: string}>>
+     * @return array<string, list<array{string, string, string, string}>>
      */
     private static function acknowledgedIdentityHistory(mixed $value): array
     {
@@ -463,19 +463,21 @@ final readonly class OkxPaperLiveCheckpoint
             }
             $seen = [];
             foreach ($entries as $entry) {
-                if (!\is_array($entry) || array_is_list($entry)) {
+                if (!\is_array($entry)
+                    || !array_is_list($entry)
+                    || \count($entry) !== 4
+                ) {
                     throw new \InvalidArgumentException();
                 }
-                self::assertExactKeys(
-                    $entry,
-                    ['natural_identity_sha256', 'canonical_digest'],
-                );
-                $identity = $entry['natural_identity_sha256'] ?? null;
-                $digest = $entry['canonical_digest'] ?? null;
+                [$identity, $digest, $overlapDigest, $sourceKind] = $entry;
                 if (!\is_string($identity)
                     || !\is_string($digest)
+                    || !\is_string($overlapDigest)
+                    || !\is_string($sourceKind)
                     || preg_match(self::SHA256_PATTERN, $identity) !== 1
                     || preg_match(self::SHA256_PATTERN, $digest) !== 1
+                    || preg_match(self::SHA256_PATTERN, $overlapDigest) !== 1
+                    || !\in_array($sourceKind, ['rest', 'ws'], true)
                     || isset($seen[$identity])
                 ) {
                     throw new \InvalidArgumentException();

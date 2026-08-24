@@ -57,6 +57,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_identity' => '1m|1784714400000',
             'natural_identity' => 'okx|BTC-USDT-SWAP|candle_1m|1m|1784714400000',
             'canonical_digest' => $restFrontier->canonicalDigest,
+            'overlap_digest' => $restFrontier->overlapDigest,
         ], $restFrontier->toArray());
         self::assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/D', $restFrontier->canonicalDigest);
     }
@@ -67,6 +68,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_identity' => '242720721',
             'natural_identity' => 'okx|BTC-USDT-SWAP|public_trade|242720721',
             'canonical_digest' => str_repeat('b', 64),
+            'overlap_digest' => str_repeat('c', 64),
         ];
 
         self::assertSame($valid, OkxPaperStreamFrontier::fromArray($valid)->toArray());
@@ -77,6 +79,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             array_replace($valid, ['source_identity' => '']),
             array_replace($valid, ['natural_identity' => str_repeat('x', 1025)]),
             array_replace($valid, ['canonical_digest' => str_repeat('A', 64)]),
+            array_replace($valid, ['overlap_digest' => str_repeat('A', 64)]),
         ] as $invalid) {
             try {
                 OkxPaperStreamFrontier::fromArray($invalid);
@@ -226,7 +229,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame('43', $acknowledged->streamFrontiers[$stream]?->sourceIdentity);
     }
 
-    public function testFreshCheckpointHasTheCompleteClosedVersionThreeSchema(): void
+    public function testFreshCheckpointHasTheCompleteClosedVersionFourSchema(): void
     {
         $checkpoint = OkxPaperLiveCheckpoint::fresh(self::DATASET_ID, self::CONFIGURATION_SHA256);
         $state = $checkpoint->toArray();
@@ -252,7 +255,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_epochs',
             'stream_frontiers',
         ], array_keys($state));
-        self::assertSame(3, $state['schema_version']);
+        self::assertSame(4, $state['schema_version']);
         self::assertSame(self::DATASET_ID, $state['dataset_id']);
         self::assertSame(self::CONFIGURATION_SHA256, $state['configuration_sha256']);
         self::assertSame('warming', $state['phase']);
@@ -266,6 +269,19 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame($state, OkxPaperLiveCheckpoint::fromArray($state)->toArray());
 
         $state['unexpected'] = true;
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_paper_live_checkpoint_invalid');
+        OkxPaperLiveCheckpoint::fromArray($state);
+    }
+
+    public function testVersionThreeCheckpointIsRejectedInsteadOfReusingOldDigestSemantics(): void
+    {
+        $state = OkxPaperLiveCheckpoint::fresh(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        )->toArray();
+        $state['schema_version'] = 3;
+
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('okx_paper_live_checkpoint_invalid');
         OkxPaperLiveCheckpoint::fromArray($state);
@@ -502,13 +518,25 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
     public function testRestAndWebSocketCopiesOfTheSameTradeExcludeTransportAggregationFromFrontier(): void
     {
         $rest = OkxPaperStreamFrontier::fromEvent($this->tradeEvent('rest_recovery'));
-        $webSocket = OkxPaperStreamFrontier::fromEvent($this->tradeEvent('ws_aggregated', true));
+        $webSocket = OkxPaperStreamFrontier::fromEvent($this->tradeEvent(
+            'ws_aggregated',
+            true,
+            size: '4',
+        ));
 
-        self::assertSame($rest->toArray(), $webSocket->toArray());
+        self::assertNotSame($rest->canonicalDigest, $webSocket->canonicalDigest);
+        self::assertSame($rest->overlapDigest, $webSocket->overlapDigest);
         self::assertSame('242720721', $rest->sourceIdentity);
         self::assertSame(
             'okx|BTC-USDT-SWAP|public_trade|242720721',
             $rest->naturalIdentity,
+        );
+        self::assertNotSame(
+            $rest->overlapDigest,
+            OkxPaperStreamFrontier::fromEvent($this->tradeEvent(
+                'rest_recovery',
+                price: '65000.2',
+            ))->overlapDigest,
         );
     }
 
@@ -2685,6 +2713,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_identity' => 'not-a-trade-id',
             'natural_identity' => 'okx|BTC-USDT-SWAP|public_trade|not-a-trade-id',
             'canonical_digest' => str_repeat('e', 64),
+            'overlap_digest' => str_repeat('f', 64),
         ];
         $this->assertCheckpointInvalid($state);
 
@@ -6654,6 +6683,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         string $sequence = '1',
         string $receivedTimestamp = '2026-07-22T10:00:01.000000Z',
         string $symbol = 'BTCUSDT',
+        string $size = '3',
     ): PaperMarketEvent
     {
         $nativeSymbol = $symbol === 'BTCUSDT' ? 'BTC-USDT-SWAP' : 'ETH-USDT-SWAP';
@@ -6670,7 +6700,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
                 'native_symbol' => $nativeSymbol,
                 'trade_id' => $tradeId,
                 'price' => $price,
-                'size_contracts' => '3',
+                'size_contracts' => $size,
                 'taker_side' => 'buy',
                 'aggregate_count' => $aggregated ? '2' : null,
                 'source' => '0',

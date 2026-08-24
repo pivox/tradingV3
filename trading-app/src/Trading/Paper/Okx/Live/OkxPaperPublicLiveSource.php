@@ -694,37 +694,64 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         callable $normalize,
         callable $frontierForRow,
         bool $requireSiblingOverlap = false,
+        ?string $candidateSourceKind = null,
     ): array {
         if ($rows === []) {
             throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
         }
+        $candidateSourceKind ??= self::identitySourceKind($stream);
+        if (!\in_array($candidateSourceKind, ['rest', 'ws'], true)) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
+        }
 
         $frontier = $this->checkpoint->streamFrontiers[$stream] ?? null;
-        /** @var array<string, string> $requiredOverlapDigests */
-        $requiredOverlapDigests = [];
+        /** @var list<array{natural_identity: string, canonical_digest: string, overlap_digest: string, source_kind: string}> $requiredOverlaps */
+        $requiredOverlaps = [];
+        /** @var array<string, string> $requiredOverlapByIdentity */
+        $requiredOverlapByIdentity = [];
+        /** @var array<string, true> $requiredIdentities */
+        $requiredIdentities = [];
         if ($frontier instanceof OkxPaperStreamFrontier
             && ($this->requiresOverlap[$stream] ?? false)
         ) {
-            $requiredFrontiers = [$frontier];
+            $requiredFrontiers = [[
+                'frontier' => $frontier,
+                'source_kind' => self::identitySourceKind($stream),
+            ]];
             if ($requireSiblingOverlap) {
-                $requiredFrontiers[] = $this->siblingFrontier($stream);
-            }
-            foreach ($requiredFrontiers as $requiredFrontier) {
-                if (!$requiredFrontier instanceof OkxPaperStreamFrontier) {
-                    continue;
+                $sibling = $this->siblingFrontier($stream);
+                if ($sibling instanceof OkxPaperStreamFrontier) {
+                    $requiredFrontiers[] = [
+                        'frontier' => $sibling,
+                        'source_kind' => self::identitySourceKind(
+                            str_contains($stream, '/rest/')
+                                ? str_replace('/rest/', '/ws/', $stream)
+                                : str_replace('/ws/', '/rest/', $stream),
+                        ),
+                    ];
                 }
-                $existingDigest = $requiredOverlapDigests[
+            }
+            foreach ($requiredFrontiers as $required) {
+                $requiredFrontier = $required['frontier'];
+                $existingDigest = $requiredOverlapByIdentity[
                     $requiredFrontier->naturalIdentity
                 ] ?? null;
                 if (\is_string($existingDigest)
-                    && !hash_equals($existingDigest, $requiredFrontier->canonicalDigest)
+                    && !hash_equals($existingDigest, $requiredFrontier->overlapDigest)
                 ) {
                     throw new OkxPaperLiveIntegrityException(
                         'market_event_identity_conflict',
                     );
                 }
-                $requiredOverlapDigests[$requiredFrontier->naturalIdentity] =
-                    $requiredFrontier->canonicalDigest;
+                $requiredOverlapByIdentity[$requiredFrontier->naturalIdentity] =
+                    $requiredFrontier->overlapDigest;
+                $requiredIdentities[$requiredFrontier->naturalIdentity] = true;
+                $requiredOverlaps[] = [
+                    'natural_identity' => $requiredFrontier->naturalIdentity,
+                    'canonical_digest' => $requiredFrontier->canonicalDigest,
+                    'overlap_digest' => $requiredFrontier->overlapDigest,
+                    'source_kind' => $required['source_kind'],
+                ];
             }
         }
         $candidates = [];
@@ -735,23 +762,31 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             if ($candidateFrontier === null) {
                 continue;
             }
-            $observed = $this->observedFrontiers[$stream][$candidateFrontier->sourceIdentity]
+            $observedKey = $candidateSourceKind . '/' . $candidateFrontier->sourceIdentity;
+            $observed = $this->observedFrontiers[$stream][$observedKey]
                 ?? null;
             if ($observed instanceof OkxPaperStreamFrontier
                 && !hash_equals($observed->canonicalDigest, $candidateFrontier->canonicalDigest)
             ) {
                 throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
             }
-            $acknowledgedDigest = $this->acknowledgedIdentityDigest(
+            $acknowledged = $this->acknowledgedIdentity(
                 $stream,
                 $candidateFrontier,
             );
-            $requiredDurableOverlap = array_key_exists(
-                $candidateFrontier->naturalIdentity,
-                $requiredOverlapDigests,
+            $requiredDurableOverlap = isset(
+                $requiredIdentities[$candidateFrontier->naturalIdentity],
             );
-            if ($acknowledgedDigest !== null && !$requiredDurableOverlap) {
-                if (!hash_equals($acknowledgedDigest, $candidateFrontier->canonicalDigest)) {
+            if ($acknowledged !== null && !$requiredDurableOverlap) {
+                $sameOrigin = $acknowledged['source_kind'] === $candidateSourceKind;
+                if (!hash_equals(
+                    $sameOrigin
+                        ? $acknowledged['canonical_digest']
+                        : $acknowledged['overlap_digest'],
+                    $sameOrigin
+                        ? $candidateFrontier->canonicalDigest
+                        : $candidateFrontier->overlapDigest,
+                )) {
                     throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
                 }
 
@@ -766,7 +801,11 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             ) {
                 continue;
             }
-            $this->rememberObservedFrontier($stream, $candidateFrontier);
+            $this->rememberObservedFrontier(
+                $stream,
+                $candidateSourceKind,
+                $candidateFrontier,
+            );
             $representedInBatch[$candidateFrontier->naturalIdentity] = true;
             $candidates[] = [
                 'row' => $row,
@@ -776,16 +815,27 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
 
         $start = 0;
-        if ($requiredOverlapDigests !== []) {
+        if ($requiredOverlaps !== []) {
             $overlaps = [];
-            foreach ($requiredOverlapDigests as $identity => $digest) {
+            foreach ($requiredOverlaps as $required) {
                 $overlap = null;
                 foreach ($candidates as $index => $candidate) {
                     $candidateFrontier = $candidate['frontier'];
-                    if (!hash_equals($identity, $candidateFrontier->naturalIdentity)) {
+                    if (!hash_equals(
+                        $required['natural_identity'],
+                        $candidateFrontier->naturalIdentity,
+                    )) {
                         continue;
                     }
-                    if (!hash_equals($digest, $candidateFrontier->canonicalDigest)) {
+                    $sameOrigin = $required['source_kind'] === $candidateSourceKind;
+                    if (!hash_equals(
+                        $sameOrigin
+                            ? $required['canonical_digest']
+                            : $required['overlap_digest'],
+                        $sameOrigin
+                            ? $candidateFrontier->canonicalDigest
+                            : $candidateFrontier->overlapDigest,
+                    )) {
                         throw new OkxPaperLiveIntegrityException(
                             'market_event_identity_conflict',
                         );
@@ -841,10 +891,12 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
     private function rememberObservedFrontier(
         string $stream,
+        string $sourceKind,
         OkxPaperStreamFrontier $frontier,
     ): void {
-        unset($this->observedFrontiers[$stream][$frontier->sourceIdentity]);
-        $this->observedFrontiers[$stream][$frontier->sourceIdentity] = $frontier;
+        $observedKey = $sourceKind . '/' . $frontier->sourceIdentity;
+        unset($this->observedFrontiers[$stream][$observedKey]);
+        $this->observedFrontiers[$stream][$observedKey] = $frontier;
         $logicalStream = str_replace(['/rest/', '/ws/'], '/', $stream);
         $window = OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($logicalStream);
         if (\count($this->observedFrontiers[$stream]) <= $window) {
@@ -873,10 +925,11 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         return $frontier instanceof OkxPaperStreamFrontier ? $frontier : null;
     }
 
-    private function acknowledgedIdentityDigest(
+    /** @return array{canonical_digest: string, overlap_digest: string, source_kind: string}|null */
+    private function acknowledgedIdentity(
         string $stream,
         OkxPaperStreamFrontier $candidate,
-    ): ?string {
+    ): ?array {
         if ((!str_contains($stream, '/candle_') && !str_ends_with($stream, '/public_trade'))
             || (!str_contains($stream, '/rest/') && !str_contains($stream, '/ws/'))
         ) {
@@ -885,12 +938,28 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         $logicalStream = str_replace(['/rest/', '/ws/'], '/', $stream);
         $identityHash = hash('sha256', $candidate->naturalIdentity);
         foreach ($this->checkpoint->acknowledgedIdentityHistory[$logicalStream] ?? [] as $entry) {
-            if (hash_equals($entry['natural_identity_sha256'], $identityHash)) {
-                return $entry['canonical_digest'];
+            if (hash_equals($entry[0], $identityHash)) {
+                return [
+                    'canonical_digest' => $entry[1],
+                    'overlap_digest' => $entry[2],
+                    'source_kind' => $entry[3],
+                ];
             }
         }
 
         return null;
+    }
+
+    private static function identitySourceKind(string $stream): string
+    {
+        if (str_contains($stream, '/rest/')) {
+            return 'rest';
+        }
+        if (str_contains($stream, '/ws/')) {
+            return 'ws';
+        }
+
+        throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
     }
 
     /**
@@ -1852,7 +1921,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     $events = $this->reconnectBookEvents($symbol, $transition);
                 } catch (\Throwable $exception) {
                     if ($this->isIdentityConflict($exception)) {
-                        $this->failTerminal('market_event_identity_conflict');
+                        $this->failTerminal('market_event_identity_conflict', $exception);
                     }
                     $this->failTerminal('market_data_gap_unresolved');
                 }
@@ -1865,7 +1934,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $events = $this->reconnectFrontierEvents($symbol, $stream, $transition);
             } catch (\Throwable $exception) {
                 if ($this->isIdentityConflict($exception)) {
-                    $this->failTerminal('market_event_identity_conflict');
+                    $this->failTerminal('market_event_identity_conflict', $exception);
                 }
                 if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
@@ -2278,6 +2347,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             ): PaperMarketEvent => $normalizer->recoveryTrade($row),
             fn (array $row): OkxPaperStreamFrontier => $this->tradeFrontier($row),
             true,
+            'rest',
         );
     }
 
@@ -2306,6 +2376,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $row,
             ),
             true,
+            'rest',
         );
     }
 
@@ -3270,7 +3341,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     'market_event_identity_conflict',
                     'market_data_gap_unresolved',
                 ], true)) {
-                    $this->failTerminal($exception->getMessage());
+                    $this->failTerminal($exception->getMessage(), $exception);
                 }
 
                 throw $exception;
@@ -4186,6 +4257,13 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 'trade_id' => $tradeId,
             ],
             $timestamp,
+            [
+                'exchange_timestamp_ms' => $timestamp,
+                'price' => $price,
+                'source' => $source,
+                'taker_side' => $side,
+                'trade_id' => $tradeId,
+            ],
         );
     }
 
@@ -4214,7 +4292,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
     }
 
     /**
-     * @param array<string, mixed> $sourceFields
+     * @param array<string, mixed>      $sourceFields
+     * @param array<string, mixed>|null $overlapSourceFields
      */
     private function frontierFromCanonical(
         string $instrumentId,
@@ -4222,6 +4301,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         string $sourceIdentity,
         array $sourceFields,
         string $exchangeTimestamp,
+        ?array $overlapSourceFields = null,
     ): OkxPaperStreamFrontier {
         $canonical = [
             'channel' => $channel,
@@ -4230,6 +4310,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             'venue' => PaperMarketDataVenue::OKX->value,
             'exchange_timestamp' => $this->formattedTimestamp($exchangeTimestamp),
         ];
+        $overlapCanonical = $canonical;
+        $overlapCanonical['source_fields'] = $overlapSourceFields ?? $sourceFields;
 
         return OkxPaperStreamFrontier::fromArray([
             'source_identity' => $sourceIdentity,
@@ -4240,6 +4322,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $sourceIdentity,
             ]),
             'canonical_digest' => hash('sha256', CanonicalJson::encode($canonical)),
+            'overlap_digest' => hash('sha256', CanonicalJson::encode($overlapCanonical)),
         ]);
     }
 

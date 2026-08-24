@@ -62,3 +62,30 @@ the second. Existing
 restart, pagination, conflict and replay-equality tests cover decoding and
 continuity. The full OKX Live suite and targeted PHPStan remain required before
 the PR can merge.
+
+## Live r16 finding and frontier schema v4
+
+Capture `first-baseline-okx-r16-20260824-mainnet` passed warm-up and reached
+streaming, then stopped incomplete after 3,556 events on
+`market_event_identity_conflict`. Read-only comparison with the public OKX
+history endpoint proved that a WebSocket `trades` row may aggregate several
+fills under the final `tradeId`, while the REST row for that same identity
+contains one constituent size. Price, side, source and exchange timestamp were
+identical; only `sz` differed. This is a valid cross-transport representation,
+not a market identity conflict.
+
+Checkpoint schema v4 therefore stores two frontier digests. The
+`canonical_digest` still includes the complete validated trade size and remains
+the fail-closed comparison inside one origin. The `overlap_digest` excludes only
+`size_contracts` for public trades and is used only across REST/WebSocket
+origins. Candles, books and control events have identical canonical and overlap
+digests. Observed identities are partitioned by their actual `rest` or `ws`
+origin, and the bounded durable history stores compact four-element entries:
+
+```text
+[natural_identity_sha256, canonical_digest, overlap_digest, source_kind]
+```
+
+Schema-v3 checkpoints are rejected instead of being interpreted with the new
+digest semantics. A new capture must start with schema v4; the incomplete r16
+dataset remains immutable and non-certifiable.

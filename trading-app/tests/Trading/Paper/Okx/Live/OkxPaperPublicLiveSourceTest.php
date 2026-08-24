@@ -5462,6 +5462,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             'source_identity' => '100',
             'natural_identity' => 'okx|BTC-USDT-SWAP|public_trade|100',
             'canonical_digest' => str_repeat('b', 64),
+            'overlap_digest' => str_repeat('c', 64),
         ];
         $state['phase'] = 'reconnecting';
         $state['connection_epoch'] = 2;
@@ -5542,6 +5543,19 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 'venue' => 'okx',
                 'exchange_timestamp' => '2026-07-25T09:01:40.000000Z',
             ])),
+            'overlap_digest' => hash('sha256', CanonicalJson::encode([
+                'channel' => 'public_trade',
+                'native_symbol' => 'BTC-USDT-SWAP',
+                'source_fields' => [
+                    'exchange_timestamp_ms' => '1784970100000',
+                    'price' => '100.5',
+                    'source' => '0',
+                    'taker_side' => 'buy',
+                    'trade_id' => '100',
+                ],
+                'venue' => 'okx',
+                'exchange_timestamp' => '2026-07-25T09:01:40.000000Z',
+            ])),
         ];
         $state['phase'] = 'reconnecting';
         $state['connection_epoch'] = 2;
@@ -5556,7 +5570,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             'stable_since' => null,
             'accepted_events' => 0,
         ];
-        $state['stream_frontiers']['BTCUSDT/rest/public_trade'] = $frontier;
+        $state['stream_frontiers']['BTCUSDT/ws/public_trade'] = $frontier;
         $state['resync_by_symbol']['BTCUSDT'] = [
             'attempt' => 1,
             'frontier' => $frontier,
@@ -5564,7 +5578,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             'deadline_at' => '2026-07-25T10:00:10.000000Z',
             'policy' => 'frontier_overlap_v1',
         ];
-        $state['overlap_pagination_by_stream']['BTCUSDT/rest/public_trade'] = [
+        $state['overlap_pagination_by_stream']['BTCUSDT/ws/public_trade'] = [
             'endpoint' => 'history_trades',
             'pagination_type' => 2,
             'next_cursor' => '1784970101000',
@@ -5577,7 +5591,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $state['pending_transition'] = [
             'kind' => 'rest_fetch',
             'symbol' => 'BTCUSDT',
-            'stream' => 'BTCUSDT/rest/public_trade',
+            'stream' => 'BTCUSDT/ws/public_trade',
             'stage' => 'history_trades',
         ];
         $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
@@ -5638,6 +5652,17 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         ], $observedPublicConnectTransition);
         self::assertSame([OkxPaperPublicConfig::WEB_SOCKET_URI], $public->connections);
         self::assertSame([OkxPaperPublicConfig::BUSINESS_WEB_SOCKET_URI], $business->connections);
+        $source->acknowledge($first->eventId);
+        $history = $this->checkpointState()['acknowledged_identity_history'][
+            'BTCUSDT/public_trade'
+        ] ?? [];
+        self::assertSame(
+            'rest',
+            array_column($history, 3, 0)[hash(
+                'sha256',
+                'okx|BTC-USDT-SWAP|public_trade|150',
+            )] ?? null,
+        );
     }
 
     public function testHistoryCandlePaginationRestartCallsSavedCursorAndEmitsDurableSuffix(): void
@@ -5670,6 +5695,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 'exchange_timestamp' => '2026-07-25T09:00:00.000000Z',
             ])),
         ];
+        $frontier['overlap_digest'] = $frontier['canonical_digest'];
         $state = OkxPaperLiveCheckpoint::fresh(
             self::DATASET_ID,
             self::CONFIGURATION_SHA256,
@@ -5771,6 +5797,19 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                     'exchange_timestamp_ms' => '1784970100000',
                     'price' => '100.5',
                     'size_contracts' => '2',
+                    'source' => '0',
+                    'taker_side' => 'buy',
+                    'trade_id' => '100',
+                ],
+                'venue' => 'okx',
+                'exchange_timestamp' => '2026-07-25T09:01:40.000000Z',
+            ])),
+            'overlap_digest' => hash('sha256', CanonicalJson::encode([
+                'channel' => 'public_trade',
+                'native_symbol' => 'BTC-USDT-SWAP',
+                'source_fields' => [
+                    'exchange_timestamp_ms' => '1784970100000',
+                    'price' => '100.5',
                     'source' => '0',
                     'taker_side' => 'buy',
                     'trade_id' => '100',
@@ -6274,6 +6313,16 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(PaperMarketEvent::class, $firstRecoveredTrade);
         self::assertSame('150', $firstRecoveredTrade->payload['trade_id'] ?? null);
         $source->acknowledge($firstRecoveredTrade->eventId);
+        $history = $this->checkpointState()['acknowledged_identity_history'][
+            'BTCUSDT/public_trade'
+        ] ?? [];
+        self::assertSame(
+            'rest',
+            array_column($history, 3, 0)[hash(
+                'sha256',
+                'okx|BTC-USDT-SWAP|public_trade|150',
+            )] ?? null,
+        );
         $events->next();
         $secondRecoveredTrade = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $secondRecoveredTrade);
@@ -6301,9 +6350,12 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 '1784970460000', '101', '102', '100', '101.5', '11', '1', '1100', '1',
             ]],
         ];
+        $initialTrade = Task7Transport::tradeFrame(['9500']);
+        $initialTrade['data'][0]['sz'] = '4';
+        $initialTrade['data'][0]['count'] = '7';
         $public->responses = [
             ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
-            Task7Transport::tradeFrame(['9500']),
+            $initialTrade,
             Task7Transport::bookFrame('9002', '9001', '4'),
             $initialEthBook,
         ];
@@ -6409,6 +6461,13 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $restartBusiness = new Task7Transport();
         $restartEthBook = Task7Transport::bookFrame('9005', '9004', '5');
         $restartEthBook['arg']['instId'] = 'ETH-USDT-SWAP';
+        $queuedTrade = Task7Transport::tradeFrame(
+            $includeExactOverlap ? ['9500', '12'] : ['12'],
+        );
+        if ($includeExactOverlap) {
+            $queuedTrade['data'][0]['sz'] = '4';
+            $queuedTrade['data'][0]['count'] = '7';
+        }
         $queuedCandle = [
             'arg' => ['channel' => 'candle1m', 'instId' => 'BTC-USDT-SWAP'],
             'data' => $includeExactOverlap
@@ -6422,9 +6481,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         ];
         $restartPublic->responses = [
             ...Task7Transport::acknowledgements(self::publicArguments(), 'restartPublic'),
-            ...($kind === 'trade' ? [
-                Task7Transport::tradeFrame($includeExactOverlap ? ['9500', '12'] : ['12']),
-            ] : []),
+            ...($kind === 'trade' ? [$queuedTrade] : []),
             Task7Transport::bookFrame('9004', '9003', '5'),
             $restartEthBook,
         ];
@@ -6825,11 +6882,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertCount(500, $history);
         self::assertNotContains(
             hash('sha256', 'okx|BTC-USDT-SWAP|public_trade|1000'),
-            array_column($history, 'natural_identity_sha256'),
+            array_column($history, 0),
         );
         self::assertContains(
             hash('sha256', 'okx|BTC-USDT-SWAP|public_trade|6602'),
-            array_column($history, 'natural_identity_sha256'),
+            array_column($history, 0),
         );
         $checkpointBytes = strlen(
             json_encode($state, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_SLASHES),
@@ -6909,7 +6966,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             $frontier = $tradeFrontier->invoke($source, $row);
             self::assertNotNull($frontier);
             $frontiers[] = $frontier;
-            $rememberObserved->invoke($source, $stream, $frontier);
+            $rememberObserved->invoke($source, $stream, 'rest', $frontier);
         }
 
         $checkpointProperty = new \ReflectionProperty($source, 'checkpoint');
@@ -6951,9 +7008,12 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertIsArray($observed);
         $retained = $observed[$stream] ?? [];
         self::assertCount(OkxPaperLivePolicy::MAX_TRADE_ACKNOWLEDGED_IDENTITIES, $retained);
-        self::assertArrayHasKey('1', $retained);
-        self::assertArrayNotHasKey('2', $retained);
-        self::assertSame([1, 500, 501], array_slice(array_keys($retained), -3));
+        self::assertArrayHasKey('rest/1', $retained);
+        self::assertArrayNotHasKey('rest/2', $retained);
+        self::assertSame(
+            ['rest/1', 'rest/500', 'rest/501'],
+            array_slice(array_keys($retained), -3),
+        );
 
         $changed = $rows[0];
         $changed['px'] = '999.9';
@@ -7395,6 +7455,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 'source_identity' => '9002',
                 'natural_identity' => 'okx|BTC-USDT-SWAP|top_of_book|9002',
                 'canonical_digest' => str_repeat('b', 64),
+                'overlap_digest' => str_repeat('b', 64),
             ];
             $state = $checkpoint->toArray();
             $state['phase'] = 'resyncing';
@@ -8230,11 +8291,13 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $state['acknowledged_identity_history'] = [
             'BTCUSDT/public_trade' => array_map(
                 static fn (int $index): array => [
-                    'natural_identity_sha256' => hash(
+                    hash(
                         'sha256',
                         'okx|BTC-USDT-SWAP|public_trade|T' . $index,
                     ),
-                    'canonical_digest' => str_repeat('a', 64),
+                    str_repeat('a', 64),
+                    str_repeat('b', 64),
+                    'rest',
                 ],
                 range(1, 500),
             ),
@@ -8918,14 +8981,19 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 $window = OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($stream);
                 $state['acknowledged_identity_history'][$stream] = array_map(
                     static fn (int $index): array => [
-                        'natural_identity_sha256' => hash(
+                        hash(
                             'sha256',
                             $stream . '|identity|' . $index,
                         ),
-                        'canonical_digest' => hash(
+                        hash(
                             'sha256',
                             $stream . '|digest|' . $index,
                         ),
+                        hash(
+                            'sha256',
+                            $stream . '|overlap|' . $index,
+                        ),
+                        'rest',
                     ],
                     range(1, $window),
                 );
@@ -9143,6 +9211,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             'source_identity' => '9002',
             'natural_identity' => 'okx|BTC-USDT-SWAP|top_of_book|9002',
             'canonical_digest' => str_repeat('b', 64),
+            'overlap_digest' => str_repeat('b', 64),
         ];
         $state = $checkpoint->toArray();
         $state['phase'] = 'resyncing';
