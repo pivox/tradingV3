@@ -9,7 +9,7 @@ use App\Trading\Paper\MarketData\CanonicalJson;
 final class OkxPaperRetainedTradeRow
 {
     /** @var list<string> */
-    private const KEYS = [
+    private const LEGACY_KEYS = [
         'instId',
         'tradeId',
         'px',
@@ -17,6 +17,19 @@ final class OkxPaperRetainedTradeRow
         'side',
         'source',
         'ts',
+    ];
+
+    /** @var list<string> */
+    private const MODERN_KEYS = [
+        'instId',
+        'tradeId',
+        'px',
+        'sz',
+        'side',
+        'count',
+        'source',
+        'ts',
+        'seqId',
     ];
 
     /**
@@ -34,7 +47,7 @@ final class OkxPaperRetainedTradeRow
 
     /**
      * @param array<array-key, mixed>|string $row
-     * @return array{instId: string, tradeId: string, px: string, sz: string, side: string, source: string, ts: string}
+     * @return array{instId: string, tradeId: string, px: string, sz: string, side: string, source: string, ts: string}|array{instId: string, tradeId: string, px: string, sz: string, side: string, count: string, source: string, ts: string, seqId: int|string}
      */
     public static function expand(array|string $row): array
     {
@@ -56,24 +69,43 @@ final class OkxPaperRetainedTradeRow
             }
         }
         if (array_is_list($row)) {
-            if (\count($row) !== \count(self::KEYS)) {
+            $keys = match (\count($row)) {
+                7 => self::LEGACY_KEYS,
+                9 => self::MODERN_KEYS,
+                default => throw self::invalid(),
+            };
+            if (\count($row) !== \count($keys)) {
                 throw self::invalid();
             }
             $values = $row;
         } else {
-            $keys = array_keys($row);
-            sort($keys, \SORT_STRING);
-            $expected = self::KEYS;
-            sort($expected, \SORT_STRING);
-            if ($keys !== $expected) {
-                throw self::invalid();
-            }
+            $actual = array_keys($row);
+            sort($actual, \SORT_STRING);
+            $legacy = self::LEGACY_KEYS;
+            sort($legacy, \SORT_STRING);
+            $modern = self::MODERN_KEYS;
+            sort($modern, \SORT_STRING);
+            $keys = match ($actual) {
+                $legacy => self::LEGACY_KEYS,
+                $modern => self::MODERN_KEYS,
+                default => throw self::invalid(),
+            };
             $values = array_map(
                 static fn (string $key): mixed => $row[$key],
-                self::KEYS,
+                $keys,
             );
         }
-        foreach ($values as $value) {
+        foreach ($values as $index => $value) {
+            if ($keys[$index] === 'seqId') {
+                if (!\is_int($value)
+                    && (!\is_string($value)
+                        || preg_match('/\A-?(?:0|[1-9][0-9]*)\z/D', $value) !== 1)
+                ) {
+                    throw self::invalid();
+                }
+
+                continue;
+            }
             if (!\is_string($value)) {
                 throw self::invalid();
             }
@@ -84,7 +116,7 @@ final class OkxPaperRetainedTradeRow
             throw self::invalid();
         }
 
-        return array_combine(self::KEYS, $values);
+        return array_combine($keys, $values);
     }
 
     private static function invalid(): \InvalidArgumentException

@@ -1380,9 +1380,6 @@ final readonly class OkxPaperLiveCheckpoint
                     throw new \InvalidArgumentException();
                 }
             }
-            if (\strlen(CanonicalJson::encode($pagination['retained_rows'])) > 786_432) {
-                throw new \InvalidArgumentException();
-            }
             $validated['retained_rows'] = $pagination['retained_rows'];
         }
 

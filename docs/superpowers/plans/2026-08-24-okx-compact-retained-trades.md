@@ -4,7 +4,7 @@
 
 **Goal:** Keep every valid OKX retained-trade suffix inside the canonical checkpoint budget without weakening overlap or identity validation.
 
-**Architecture:** Add one focused codec that converts the exact seven-key OKX REST trade map to a canonical JSON string containing a seven-element list and expands that string, a transitional list or the legacy map. The live source decodes at every runtime boundary and compacts at every pagination write; the checkpoint contract validates all supported read shapes fail-closed.
+**Architecture:** Add one focused codec that converts the exact legacy seven-key or modern nine-key OKX REST trade map to a canonical JSON string and expands that string, a transitional list or the legacy map. The live source decodes at every runtime boundary, compacts at every pagination write, and reserves the budget of the complete enclosing checkpoint before persistence; the checkpoint contract validates all supported read shapes fail-closed.
 
 **Tech Stack:** PHP 8.4, Symfony 7.1, PHPUnit 11, PHPStan, existing canonical JSON and OKX checkpoint contracts.
 
@@ -73,8 +73,9 @@ final class OkxPaperRetainedTradeRow
 }
 ```
 
-Require exactly `instId, tradeId, px, sz, side, source, ts`, require every
-value to be a string, and throw
+Require either the legacy `instId, tradeId, px, sz, side, source, ts` shape or
+the modern shape adding `count` and `seqId`. Require string values except for
+the supported integer-or-string `seqId`, and throw
 `InvalidArgumentException('okx_paper_retained_trade_row_invalid')` for every
 other shape.
 
@@ -175,3 +176,16 @@ git commit -m "fix(paper): compact OKX retained trades"
 
 Push the branch, reply in the P1 thread with the exact test evidence, resolve it,
 and request a fresh Codex review before marking PR #409 ready.
+
+### Task 3: Reserve the enclosing checkpoint budget
+
+- [x] Add a padded, structurally valid 500-trade regression beside the saturated
+  acknowledged-identity ledger and verify the old code leaks
+  `okx_paper_live_checkpoint_invalid`.
+- [x] Preflight the complete candidate checkpoint before every retained trade or
+  candle pagination write, including canonical nodes, keys, scalar bytes and the
+  final one-MiB storage size.
+- [x] Never truncate a suffix: persist all rows or durably fail with
+  `market_data_gap_unresolved`.
+- [x] Prevent a terminal budget failure from being swallowed by the normal
+  overlap-history fallback.

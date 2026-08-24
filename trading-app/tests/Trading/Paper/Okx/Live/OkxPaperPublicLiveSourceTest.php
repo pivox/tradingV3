@@ -5257,10 +5257,14 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
     {
         $clock = new MockClock('2026-07-25T10:00:00.000000Z');
         $rows = array_map(
-            static fn (int $index): array => self::restTrade(
-                (string) (1_000 + $index),
-                (string) (1784970100000 + $index),
-            ),
+            static fn (int $index): array => [
+                ...self::restTrade(
+                    (string) (1_000 + $index),
+                    (string) (1784970100000 + $index),
+                ),
+                'count' => '2',
+                'seqId' => 88_001 + $index,
+            ],
             range(0, 499),
         );
         $normalizer = new \App\Trading\Paper\Okx\Normalization\OkxPaperMarketEventNormalizer(
@@ -5335,17 +5339,117 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
 
         self::assertInstanceOf(PaperMarketEvent::class, $first);
         self::assertSame('1001', $first->payload['trade_id'] ?? null);
+        self::assertSame('2', $first->payload['aggregate_count'] ?? null);
+        self::assertSame('88002', $first->payload['source_seq_id'] ?? null);
         $retained = $this->checkpointState()['overlap_pagination_by_stream'][$stream][
             'retained_rows'
         ] ?? null;
         self::assertIsArray($retained);
         self::assertCount(499, $retained);
         self::assertSame(CanonicalJson::encode([
-            'BTC-USDT-SWAP', '1001', '100.5', '2', 'buy', '0', '1784970100001',
+            'BTC-USDT-SWAP', '1001', '100.5', '2', 'buy', '2', '0',
+            '1784970100001', 88_002,
         ]), $retained[0]);
         self::assertSame(CanonicalJson::encode([
-            'BTC-USDT-SWAP', '1499', '100.5', '2', 'buy', '0', '1784970100499',
+            'BTC-USDT-SWAP', '1499', '100.5', '2', 'buy', '2', '0',
+            '1784970100499', 88_500,
         ]), $retained[498]);
+    }
+
+    public function testReconnectRecentTradeSuffixReservesTheEnclosingCheckpointBudget(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $rows = array_map(
+            static function (int $index): array {
+                $row = self::restTrade(
+                    (string) (2_000 + $index),
+                    (string) (1784970200000 + $index),
+                );
+                $row['px'] = '1.' . str_repeat('0', 997) . '1';
+
+                return $row;
+            },
+            range(0, 499),
+        );
+        $normalizer = new \App\Trading\Paper\Okx\Normalization\OkxPaperMarketEventNormalizer(
+            $clock,
+        );
+        $frontier = \App\Trading\Paper\Okx\Live\OkxPaperStreamFrontier::fromEvent(
+            $normalizer->recoveryTrade($rows[0]),
+        );
+        $stream = 'BTCUSDT/rest/public_trade';
+        $this->seedSaturatedIdentityCheckpoint();
+        $state = $this->checkpointState();
+        $state['phase'] = 'reconnecting';
+        $state['connection_epoch'] = 2;
+        $state['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
+        $state['remaining_boundaries'] = [
+            ['symbol' => 'BTCUSDT', 'reason' => 'reconnect'],
+            ['symbol' => 'ETHUSDT', 'reason' => 'reconnect'],
+        ];
+        $state['reconnect'] = [
+            'attempt' => 1,
+            'deadline_at' => '2026-07-25T10:00:01.000000Z',
+            'stable_since' => null,
+            'accepted_events' => 0,
+        ];
+        $state['stream_frontiers'][$stream] = $frontier->toArray();
+        $state['resync_by_symbol']['BTCUSDT'] = [
+            'attempt' => 1,
+            'frontier' => $frontier->toArray(),
+            'source_sequence' => null,
+            'deadline_at' => '2026-07-25T10:00:10.000000Z',
+            'policy' => 'frontier_overlap_v1',
+        ];
+        $state['pending_transition'] = [
+            'kind' => 'rest_fetch',
+            'symbol' => 'BTCUSDT',
+            'stream' => $stream,
+            'stage' => 'recent_trades',
+        ];
+        self::assertNotFalse(file_put_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+            CanonicalJson::encode(
+                OkxPaperLiveCheckpoint::fromArray($state)->toArray(),
+            ) . "\n",
+        ));
+
+        $rest = new Task7RestClient();
+        $rest->tradeRows['BTC-USDT-SWAP'] = $rows;
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = Task7Transport::acknowledgements(
+            self::publicArguments(),
+            'public',
+        );
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(
+            $rest,
+            $public,
+            $business,
+            checkpointStore: new OkxPaperLiveCheckpointStore(
+                $this->testRoot,
+                clock: $clock,
+            ),
+            clock: $clock,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+
+        try {
+            $events->current();
+            self::fail('The retained suffix must reserve the enclosing checkpoint byte budget.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('market_data_gap_unresolved', $exception->getMessage());
+        }
+
+        $failed = $this->checkpointState();
+        self::assertSame('failed', $failed['phase']);
+        self::assertSame('market_data_gap_unresolved', $failed['failure_reason']);
+        self::assertNull($failed['overlap_pagination_by_stream'][$stream]);
     }
 
     public function testHistoryTradePaginationCheckpointDurablyRoundTripsRetainedRows(): void

@@ -22,13 +22,32 @@ final class OkxPaperRetainedTradeRowTest extends TestCase
             '100.5',
             '2',
             'buy',
+            '3',
             '0',
             '1784970100000',
+            88001,
         ];
         $compact = CanonicalJson::encode($list);
 
         self::assertSame($compact, OkxPaperRetainedTradeRow::compact($map));
         self::assertSame($map, OkxPaperRetainedTradeRow::expand($compact));
+        self::assertSame($map, OkxPaperRetainedTradeRow::expand($list));
+        self::assertSame($map, OkxPaperRetainedTradeRow::expand($map));
+    }
+
+    public function testStillExpandsTheLegacyRestTradeShape(): void
+    {
+        $map = self::legacyTradeMap();
+        $list = [
+            'BTC-USDT-SWAP',
+            '42',
+            '100.5',
+            '2',
+            'buy',
+            '0',
+            '1784970100000',
+        ];
+
         self::assertSame($map, OkxPaperRetainedTradeRow::expand($list));
         self::assertSame($map, OkxPaperRetainedTradeRow::expand($map));
     }
@@ -58,7 +77,8 @@ final class OkxPaperRetainedTradeRowTest extends TestCase
         unset($missing['source']);
         yield 'missing map key' => [$missing];
 
-        yield 'extra map key' => [[...self::tradeMap(), 'count' => '1']];
+        yield 'partial modern map' => [[...self::legacyTradeMap(), 'count' => '1']];
+        yield 'invalid modern seqId' => [[...self::tradeMap(), 'seqId' => 1.5]];
         yield 'numeric non-list map' => [[
             1 => 'BTC-USDT-SWAP',
             2 => '42',
@@ -70,8 +90,24 @@ final class OkxPaperRetainedTradeRowTest extends TestCase
         ]];
     }
 
-    /** @return array<string, string> */
+    /** @return array{instId: string, tradeId: string, px: string, sz: string, side: string, count: string, source: string, ts: string, seqId: int} */
     private static function tradeMap(): array
+    {
+        return [
+            'instId' => 'BTC-USDT-SWAP',
+            'tradeId' => '42',
+            'px' => '100.5',
+            'sz' => '2',
+            'side' => 'buy',
+            'count' => '3',
+            'source' => '0',
+            'ts' => '1784970100000',
+            'seqId' => 88001,
+        ];
+    }
+
+    /** @return array<string, string> */
+    private static function legacyTradeMap(): array
     {
         return [
             'instId' => 'BTC-USDT-SWAP',

@@ -1000,7 +1000,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
     /**
      * @param list<array<array-key, mixed>|string> $rows
-     * @return list<array<string, string>>
+     * @return list<array<string, int|string>>
      */
     private function expandedRetainedTradeRows(array $rows): array
     {
@@ -1028,6 +1028,22 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         } catch (\InvalidArgumentException) {
             $this->failTerminal('market_data_gap_unresolved');
         }
+    }
+
+    /** @param array<string, mixed> $state */
+    private function recoveryCheckpointWithinBudget(array $state): OkxPaperLiveCheckpoint
+    {
+        try {
+            $checkpoint = OkxPaperLiveCheckpoint::fromArray($state);
+            $encoded = CanonicalJson::encode($checkpoint->toArray()) . "\n";
+        } catch (\InvalidArgumentException $exception) {
+            $this->failTerminal('market_data_gap_unresolved', $exception);
+        }
+        if (\strlen($encoded) > OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+
+        return $checkpoint;
     }
 
     /** @param list<array<array-key, mixed>> $rows */
@@ -1851,7 +1867,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 if ($this->isIdentityConflict($exception)) {
                     $this->failTerminal('market_event_identity_conflict');
                 }
-                if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
                 }
                 $this->failTerminal('market_data_gap_unresolved');
@@ -2134,7 +2150,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     $rows,
                 );
             } catch (OkxPaperLiveIntegrityException $exception) {
-                if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
                 }
             }
@@ -2161,7 +2177,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             try {
                 return $this->acceptedRecoveryTradeEvents($stream, $rows);
             } catch (OkxPaperLiveIntegrityException $exception) {
-                if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
                 }
             }
@@ -2202,7 +2218,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
                 return $events;
             } catch (OkxPaperLiveIntegrityException $exception) {
-                if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
                 }
             }
@@ -2230,7 +2246,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
             return $events;
         } catch (OkxPaperLiveIntegrityException $exception) {
-            if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+            if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                 throw $exception;
             }
         }
@@ -2339,7 +2355,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         ];
         $state['pending_transition'] = $historyTransition;
         $this->checkpoint = $this->checkpointStore->saveTransition(
-            OkxPaperLiveCheckpoint::fromArray($state),
+            $this->recoveryCheckpointWithinBudget($state),
             'reconnecting',
             $historyTransition,
         );
@@ -2421,7 +2437,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         ];
         $state['pending_transition'] = $historyTransition;
         $this->checkpoint = $this->checkpointStore->saveTransition(
-            OkxPaperLiveCheckpoint::fromArray($state),
+            $this->recoveryCheckpointWithinBudget($state),
             'reconnecting',
             $historyTransition,
         );
@@ -2471,7 +2487,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             ];
             $state['pending_transition'] = $historyTransition;
             $this->checkpoint = $this->checkpointStore->saveTransition(
-                OkxPaperLiveCheckpoint::fromArray($state),
+                $this->recoveryCheckpointWithinBudget($state),
                 'reconnecting',
                 $historyTransition,
             );
@@ -2515,7 +2531,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $next['retained_rows'] = $newerRows;
             $state['overlap_pagination_by_stream'][$stream] = $next;
             $this->checkpoint = $this->checkpointStore->saveTransition(
-                OkxPaperLiveCheckpoint::fromArray($state),
+                $this->recoveryCheckpointWithinBudget($state),
                 'reconnecting',
                 $historyTransition,
             );
@@ -2528,7 +2544,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     $newerRows,
                 );
             } catch (OkxPaperLiveIntegrityException $exception) {
-                if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
                 }
             }
@@ -2628,7 +2644,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             ];
             $state['pending_transition'] = $historyTransition;
             $this->checkpoint = $this->checkpointStore->saveTransition(
-                OkxPaperLiveCheckpoint::fromArray($state),
+                $this->recoveryCheckpointWithinBudget($state),
                 'reconnecting',
                 $historyTransition,
             );
@@ -2677,7 +2693,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $next['retained_rows'] = $this->compactRetainedTradeRows($newerRows);
             $state['overlap_pagination_by_stream'][$stream] = $next;
             $this->checkpoint = $this->checkpointStore->saveTransition(
-                OkxPaperLiveCheckpoint::fromArray($state),
+                $this->recoveryCheckpointWithinBudget($state),
                 'reconnecting',
                 $historyTransition,
             );
@@ -2685,7 +2701,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             try {
                 return $this->acceptedRecoveryTradeEvents($stream, $newerRows);
             } catch (OkxPaperLiveIntegrityException $exception) {
-                if ($exception->getMessage() !== 'market_data_gap_unresolved') {
+                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                     throw $exception;
                 }
             }
