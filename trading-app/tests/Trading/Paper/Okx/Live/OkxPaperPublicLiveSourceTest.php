@@ -5712,6 +5712,115 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         yield 'recent trades' => ['trade'];
     }
 
+    public function testReconnectCurrentCandleSuffixFitsTheCanonicalCheckpointBudget(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $rows = array_map(
+            static fn (int $index): array => [
+                (string) (1784970000000 + (60_000 * $index)),
+                '100',
+                '101',
+                '99',
+                '100.5',
+                '10',
+                '1',
+                '1000',
+                '1',
+            ],
+            range(0, 299),
+        );
+        $normalizer = new \App\Trading\Paper\Okx\Normalization\OkxPaperMarketEventNormalizer(
+            $clock,
+        );
+        $anchor = $normalizer->warmupCandle('BTC-USDT-SWAP', '1m', $rows[0]);
+        self::assertInstanceOf(PaperMarketEvent::class, $anchor);
+        $frontier = \App\Trading\Paper\Okx\Live\OkxPaperStreamFrontier::fromEvent(
+            $anchor,
+        );
+        $stream = 'BTCUSDT/rest/candle_1m';
+        $this->seedSaturatedIdentityCheckpoint();
+        $state = $this->checkpointState();
+        $state['phase'] = 'reconnecting';
+        $state['connection_epoch'] = 2;
+        $state['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
+        $state['remaining_boundaries'] = [
+            ['symbol' => 'BTCUSDT', 'reason' => 'reconnect'],
+            ['symbol' => 'ETHUSDT', 'reason' => 'reconnect'],
+        ];
+        $state['reconnect'] = [
+            'attempt' => 1,
+            'deadline_at' => '2026-07-25T10:00:01.000000Z',
+            'stable_since' => null,
+            'accepted_events' => 0,
+        ];
+        $state['stream_frontiers'][$stream] = $frontier->toArray();
+        $state['resync_by_symbol']['BTCUSDT'] = [
+            'attempt' => 1,
+            'frontier' => $frontier->toArray(),
+            'source_sequence' => null,
+            'deadline_at' => '2026-07-25T10:00:10.000000Z',
+            'policy' => 'frontier_overlap_v1',
+        ];
+        $state['pending_transition'] = [
+            'kind' => 'rest_fetch',
+            'symbol' => 'BTCUSDT',
+            'stream' => $stream,
+            'stage' => 'current_candles',
+        ];
+        self::assertNotFalse(file_put_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+            CanonicalJson::encode(
+                OkxPaperLiveCheckpoint::fromArray($state)->toArray(),
+            ) . "\n",
+        ));
+
+        $rest = new Task7RestClient();
+        $rest->candleRows['BTC-USDT-SWAP/1m'] = $rows;
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = Task7Transport::acknowledgements(
+            self::publicArguments(),
+            'public',
+        );
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(
+            $rest,
+            $public,
+            $business,
+            checkpointStore: new OkxPaperLiveCheckpointStore(
+                $this->testRoot,
+                clock: $clock,
+            ),
+            clock: $clock,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+
+        $first = $events->current();
+
+        self::assertInstanceOf(PaperMarketEvent::class, $first);
+        self::assertSame('1784970060000', $first->exchangeTimestamp->format('Uv'));
+        $retained = $this->checkpointState()['overlap_pagination_by_stream'][$stream][
+            'retained_rows'
+        ] ?? null;
+        self::assertIsArray($retained);
+        self::assertCount(300, $retained);
+        foreach ($retained as $row) {
+            self::assertIsString($row);
+        }
+        $checkpoint = file_get_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+        );
+        self::assertIsString($checkpoint);
+        self::assertLessThanOrEqual(
+            OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES,
+            \strlen($checkpoint),
+        );
+    }
+
     public function testReconnectRecentTradeSuffixFitsTheCanonicalCheckpointBudget(): void
     {
         $clock = new MockClock('2026-07-25T10:00:00.000000Z');
