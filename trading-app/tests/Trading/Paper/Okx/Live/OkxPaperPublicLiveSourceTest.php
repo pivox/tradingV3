@@ -3042,6 +3042,48 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         ], $writeAhead);
     }
 
+    public function testStopDuringResumedResyncConnectAbortsTheRemainingTransportActions(): void
+    {
+        [
+            'source' => $source,
+            'events' => $events,
+            'replacement' => $replacement,
+            'store' => $store,
+        ] = $this->sourceAtGapReplacement();
+        $source->acknowledge($replacement->eventId);
+        $source->stop();
+        unset($events, $source);
+        gc_collect_cycles();
+
+        $public = new FakeOkxPaperPublicWebSocketTransport();
+        $business = new FakeOkxPaperPublicWebSocketTransport();
+        $loop = new Task7ScriptedLoop(new DeterministicLoop());
+        $resumed = null;
+        $loop->scripts = [
+            static function () use (&$resumed): void {
+                self::assertInstanceOf(OkxPaperPublicLiveSource::class, $resumed);
+                $resumed->stop();
+            },
+        ];
+        $resumed = $this->source(
+            new Task7RestClient(),
+            $public,
+            $business,
+            checkpointStore: $store,
+            loop: $loop,
+        );
+        $resumedEvents = $resumed->events();
+        self::assertInstanceOf(\Generator::class, $resumedEvents);
+
+        $resumedEvents->rewind();
+
+        self::assertFalse($resumedEvents->valid());
+        self::assertCount(1, $public->connections);
+        self::assertCount(0, $business->connections);
+        self::assertSame([], $public->sent);
+        self::assertSame([], $business->sent);
+    }
+
     /** @return iterable<string, array{array<string, mixed>}> */
     public static function lateResyncTransportTransitionProvider(): iterable
     {

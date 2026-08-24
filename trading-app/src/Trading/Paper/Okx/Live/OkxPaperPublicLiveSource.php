@@ -239,6 +239,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             if ($this->resumedBookRecovery) {
                 $this->connectResumedBookRecoverySockets();
                 $this->resumedBookRecovery = false;
+                if ($this->stopped) {
+                    return;
+                }
             }
             if ($this->hasAcknowledgedResyncSnapshot()) {
                 yield from $this->emitResyncBoundary();
@@ -3659,7 +3662,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->ensureTransition('resyncing', $action);
             if ($action['kind'] === 'transport_connect') {
                 $public = $action['stream'] === 'public';
-                $this->connectSocket(
+                if (!$this->connectSocket(
                     $action['stream'],
                     $public
                         ? $this->config->webSocketUri
@@ -3667,7 +3670,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     $public ? $this->publicTransport : $this->businessTransport,
                     $public ? $this->publicQueue : $this->businessQueue,
                     false,
-                );
+                )) {
+                    return;
+                }
 
                 continue;
             }
