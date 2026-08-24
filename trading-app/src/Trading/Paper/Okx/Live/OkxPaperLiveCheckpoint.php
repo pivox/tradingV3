@@ -11,7 +11,7 @@ use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
 
 final readonly class OkxPaperLiveCheckpoint
 {
-    public const SCHEMA_VERSION = 4;
+    public const SCHEMA_VERSION = 5;
 
     /** @var list<string> */
     private const SYMBOLS = ['BTCUSDT', 'ETHUSDT'];
@@ -68,7 +68,7 @@ final readonly class OkxPaperLiveCheckpoint
      *     public: array{frames: int, bytes: int},
      *     business: array{frames: int, bytes: int}
      * }|null $streamingQueueRef
-     * @param array<string, list<array{string, string, string, string}>> $acknowledgedIdentityHistory
+     * @param array<string, list<array{string, string, string|null, string|null}>> $acknowledgedIdentityHistory
      * @param array{stream: string, frontier: OkxPaperStreamFrontier}|null $pendingFrontier
      */
     private function __construct(
@@ -442,7 +442,7 @@ final readonly class OkxPaperLiveCheckpoint
     }
 
     /**
-     * @return array<string, list<array{string, string, string, string}>>
+     * @return array<string, list<array{string, string, string|null, string|null}>>
      */
     private static function acknowledgedIdentityHistory(mixed $value): array
     {
@@ -469,15 +469,18 @@ final readonly class OkxPaperLiveCheckpoint
                 ) {
                     throw new \InvalidArgumentException();
                 }
-                [$identity, $digest, $overlapDigest, $sourceKind] = $entry;
+                [$identity, $overlapDigest, $restDigest, $webSocketDigest] = $entry;
                 if (!\is_string($identity)
-                    || !\is_string($digest)
                     || !\is_string($overlapDigest)
-                    || !\is_string($sourceKind)
                     || preg_match(self::SHA256_PATTERN, $identity) !== 1
-                    || preg_match(self::SHA256_PATTERN, $digest) !== 1
                     || preg_match(self::SHA256_PATTERN, $overlapDigest) !== 1
-                    || !\in_array($sourceKind, ['rest', 'ws'], true)
+                    || ($restDigest !== null
+                        && (!\is_string($restDigest)
+                            || preg_match(self::SHA256_PATTERN, $restDigest) !== 1))
+                    || ($webSocketDigest !== null
+                        && (!\is_string($webSocketDigest)
+                            || preg_match(self::SHA256_PATTERN, $webSocketDigest) !== 1))
+                    || ($restDigest === null && $webSocketDigest === null)
                     || isset($seen[$identity])
                 ) {
                     throw new \InvalidArgumentException();

@@ -12,6 +12,7 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpoint;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveIntegrityException;
+use App\Trading\Paper\Okx\Live\OkxPaperLivePolicy;
 use App\Trading\Paper\Okx\Live\OkxPaperStreamFrontier;
 use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -229,7 +230,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame('43', $acknowledged->streamFrontiers[$stream]?->sourceIdentity);
     }
 
-    public function testFreshCheckpointHasTheCompleteClosedVersionFourSchema(): void
+    public function testFreshCheckpointHasTheCompleteClosedVersionFiveSchema(): void
     {
         $checkpoint = OkxPaperLiveCheckpoint::fresh(self::DATASET_ID, self::CONFIGURATION_SHA256);
         $state = $checkpoint->toArray();
@@ -255,7 +256,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_epochs',
             'stream_frontiers',
         ], array_keys($state));
-        self::assertSame(4, $state['schema_version']);
+        self::assertSame(5, $state['schema_version']);
         self::assertSame(self::DATASET_ID, $state['dataset_id']);
         self::assertSame(self::CONFIGURATION_SHA256, $state['configuration_sha256']);
         self::assertSame('warming', $state['phase']);
@@ -274,17 +275,22 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         OkxPaperLiveCheckpoint::fromArray($state);
     }
 
-    public function testVersionThreeCheckpointIsRejectedInsteadOfReusingOldDigestSemantics(): void
+    public function testEarlierCheckpointVersionsAreRejectedInsteadOfReusingOldDigestSemantics(): void
     {
-        $state = OkxPaperLiveCheckpoint::fresh(
-            self::DATASET_ID,
-            self::CONFIGURATION_SHA256,
-        )->toArray();
-        $state['schema_version'] = 3;
+        foreach ([3, 4] as $schemaVersion) {
+            $state = OkxPaperLiveCheckpoint::fresh(
+                self::DATASET_ID,
+                self::CONFIGURATION_SHA256,
+            )->toArray();
+            $state['schema_version'] = $schemaVersion;
 
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('okx_paper_live_checkpoint_invalid');
-        OkxPaperLiveCheckpoint::fromArray($state);
+            try {
+                OkxPaperLiveCheckpoint::fromArray($state);
+                self::fail('An earlier digest contract must not be reinterpreted.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
+            }
+        }
     }
 
     public function testEveryTransitionKindHasOnlyItsExactRepresentableStagesAndArguments(): void
@@ -2616,6 +2622,56 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         } catch (OkxPaperLiveIntegrityException $exception) {
             self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
         }
+    }
+
+    public function testDurableStateHashStreamsASaturatedCheckpointWithoutRebuildingIt(): void
+    {
+        $directory = $this->datasetDirectory('streaming-checkpoint-hash');
+        $seed = new OkxPaperLiveCheckpointStore($directory);
+        $seed->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        unset($seed);
+
+        $state = OkxPaperLiveCheckpoint::fresh(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        )->toArray();
+        foreach (['BTCUSDT', 'ETHUSDT'] as $symbol) {
+            foreach (['public_trade', 'candle_1m', 'candle_5m', 'candle_15m', 'candle_1H'] as $channel) {
+                $stream = $symbol . '/' . $channel;
+                $window = OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($stream);
+                $state['acknowledged_identity_history'][$stream] = array_map(
+                    static fn (int $index): array => [
+                        hash('sha256', $stream . '|identity|' . $index),
+                        hash('sha256', $stream . '|overlap|' . $index),
+                        hash('sha256', $stream . '|rest|' . $index),
+                        null,
+                    ],
+                    range(1, $window),
+                );
+            }
+        }
+        $contents = CanonicalJson::encode(
+            OkxPaperLiveCheckpoint::fromArray($state)->toArray(),
+        ) . "\n";
+        self::assertGreaterThan(700_000, \strlen($contents));
+        $path = $this->checkpointPath($directory);
+        self::assertSame(\strlen($contents), file_put_contents($path, $contents));
+        self::assertTrue(chmod($path, 0600));
+        unset($contents, $state);
+        gc_collect_cycles();
+
+        $filesystem = new MemoryTrackingOkxPaperLiveCheckpointFilesystem();
+        $store = new OkxPaperLiveCheckpointStore($directory, $filesystem);
+        $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        gc_collect_cycles();
+        $filesystem->startTrackingMemory();
+
+        $method = new \ReflectionMethod($store, 'checkpointContentHash');
+        self::assertSame(hash_file('sha256', $path), $method->invoke($store));
+        self::assertLessThan(
+            262_144,
+            $filesystem->peakMemoryBytes - $filesystem->baselineMemoryBytes,
+        );
     }
 
     public function testFileSyncFailureBeforeRenamePreservesPriorCheckpointBytes(): void
@@ -7062,6 +7118,30 @@ final class RecordingOkxPaperLiveCheckpointFilesystem extends PaperDatasetRecord
         $this->operations[] = 'sync:' . $operation;
 
         return parent::sync($handle, $operation);
+    }
+}
+
+final class MemoryTrackingOkxPaperLiveCheckpointFilesystem extends PaperDatasetRecorderFilesystem
+{
+    public int $baselineMemoryBytes = 0;
+    public int $peakMemoryBytes = 0;
+
+    private bool $tracking = false;
+
+    public function startTrackingMemory(): void
+    {
+        $this->baselineMemoryBytes = memory_get_usage();
+        $this->peakMemoryBytes = $this->baselineMemoryBytes;
+        $this->tracking = true;
+    }
+
+    public function read($handle, int $length, string $operation): string|false
+    {
+        if ($this->tracking) {
+            $this->peakMemoryBytes = max($this->peakMemoryBytes, memory_get_usage());
+        }
+
+        return parent::read($handle, $length, $operation);
     }
 }
 

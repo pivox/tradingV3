@@ -194,11 +194,28 @@ and request a fresh Codex review before marking PR #409 ready.
 
 - [x] Reproduce the r16 conflict with a WebSocket aggregate trade and its
   public REST constituent using the same `tradeId`.
-- [x] Add schema-v4 canonical and cross-origin overlap digests; exclude only
+- [x] Add canonical and cross-origin overlap digests; exclude only
   trade size from the latter.
 - [x] Keep same-origin observations strict and partitioned by actual REST/WS
   origin.
-- [x] Store compact bounded digest/origin history and reject schema-v3
-  checkpoints fail-closed.
+- [x] Store compact bounded per-origin canonical history in schema v5 and reject
+  schema-v4 and earlier checkpoints fail-closed.
 - [x] Cover different REST/WS sizes, strict price conflict, reconnect overlap,
   restart origin, compaction and checkpoint-budget regressions.
+
+### Task 5: Stream durable checkpoint identity verification
+
+- [x] Reproduce the r17 128-MiB failure at a 737,653-byte saturated checkpoint
+  during streaming queue persistence.
+- [x] Replace the pre-write full checkpoint copy with incremental SHA-256 reads
+  under the existing pinned-file and TOCTOU guards.
+- [x] Pin the exact digest and a bounded memory delta on a checkpoint larger
+  than 700 KiB.
+
+### Task 6: Preserve both origin-specific canonical digests durably
+
+- [x] Reproduce the review P1 where a skipped WebSocket copy remained only an
+  in-memory observation after a REST acknowledgement.
+- [x] Persist the missing REST or WebSocket canonical digest as soon as its
+  cross-origin overlap is proven.
+- [x] Restart and reject a changed canonical size for that same origin.

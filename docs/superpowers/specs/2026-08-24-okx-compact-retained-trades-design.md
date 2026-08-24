@@ -63,7 +63,7 @@ restart, pagination, conflict and replay-equality tests cover decoding and
 continuity. The full OKX Live suite and targeted PHPStan remain required before
 the PR can merge.
 
-## Live r16 finding and frontier schema v4
+## Live r16 finding and frontier schema v5
 
 Capture `first-baseline-okx-r16-20260824-mainnet` passed warm-up and reached
 streaming, then stopped incomplete after 3,556 events on
@@ -74,18 +74,33 @@ contains one constituent size. Price, side, source and exchange timestamp were
 identical; only `sz` differed. This is a valid cross-transport representation,
 not a market identity conflict.
 
-Checkpoint schema v4 therefore stores two frontier digests. The
+Checkpoint schema v5 therefore stores two frontier digests. The
 `canonical_digest` still includes the complete validated trade size and remains
 the fail-closed comparison inside one origin. The `overlap_digest` excludes only
 `size_contracts` for public trades and is used only across REST/WebSocket
 origins. Candles, books and control events have identical canonical and overlap
 digests. Observed identities are partitioned by their actual `rest` or `ws`
-origin, and the bounded durable history stores compact four-element entries:
+origin. The bounded durable history also retains the canonical digest for each
+origin after it is first observed, using compact four-element entries:
 
 ```text
-[natural_identity_sha256, canonical_digest, overlap_digest, source_kind]
+[natural_identity_sha256, overlap_digest, rest_canonical_digest_or_null, ws_canonical_digest_or_null]
 ```
 
-Schema-v3 checkpoints are rejected instead of being interpreted with the new
-digest semantics. A new capture must start with schema v4; the incomplete r16
-dataset remains immutable and non-certifiable.
+When an opposite-origin overlap is skipped, its canonical digest is persisted
+before continuing so a restart cannot weaken later same-origin comparisons.
+Schema-v4 and earlier checkpoints are rejected instead of being interpreted
+with the new history semantics. A new capture must start with schema v5; the
+incomplete r16 and r17 datasets remain immutable and non-certifiable.
+
+## Live r17 memory finding
+
+r17 reached schema-v4 streaming and 3,496 durable events, then the 128-MiB
+process exhausted memory while the store rebuilt a 737,653-byte checkpoint
+string solely to verify that its durable hash had not changed before a queue
+write. The checkpoint was already held in decoded and newly encoded forms at
+that point. The immutability check now hashes the pinned file incrementally in
+8-KiB chunks while retaining the same size, ownership, type, identity and
+before/after metadata checks. Full content loading remains limited to actual
+checkpoint restore and reconciliation. A saturated checkpoint regression pins
+both the resulting SHA-256 and a sub-256-KiB incremental memory delta.

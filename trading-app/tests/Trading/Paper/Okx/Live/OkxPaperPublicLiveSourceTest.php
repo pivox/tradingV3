@@ -5656,9 +5656,8 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $history = $this->checkpointState()['acknowledged_identity_history'][
             'BTCUSDT/public_trade'
         ] ?? [];
-        self::assertSame(
-            'rest',
-            array_column($history, 3, 0)[hash(
+        self::assertIsString(
+            array_column($history, 2, 0)[hash(
                 'sha256',
                 'okx|BTC-USDT-SWAP|public_trade|150',
             )] ?? null,
@@ -6316,9 +6315,8 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $history = $this->checkpointState()['acknowledged_identity_history'][
             'BTCUSDT/public_trade'
         ] ?? [];
-        self::assertSame(
-            'rest',
-            array_column($history, 3, 0)[hash(
+        self::assertIsString(
+            array_column($history, 2, 0)[hash(
                 'sha256',
                 'okx|BTC-USDT-SWAP|public_trade|150',
             )] ?? null,
@@ -7024,6 +7022,101 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             self::assertSame('market_event_identity_conflict', $exception->getMessage());
         }
         self::assertSame([], $invoke([$rows[0]], false));
+    }
+
+    public function testCrossOriginTradeObservationPersistsBothCanonicalDigestsAcrossRestart(): void
+    {
+        $seedStore = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $seedStore->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $frontierSource = $this->source(
+            new Task7RestClient(),
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $seedStore,
+        );
+        $tradeFrontier = new \ReflectionMethod($frontierSource, 'tradeFrontier');
+        $restRow = self::restTrade('777', '1784970100777');
+        $webSocketRow = [...$restRow, 'sz' => '4', 'count' => '7', 'seqId' => 123];
+        $restFrontier = $tradeFrontier->invoke($frontierSource, $restRow);
+        $webSocketFrontier = $tradeFrontier->invoke($frontierSource, $webSocketRow);
+        self::assertNotNull($restFrontier);
+        self::assertNotNull($webSocketFrontier);
+        self::assertSame($restFrontier->overlapDigest, $webSocketFrontier->overlapDigest);
+        self::assertNotSame($restFrontier->canonicalDigest, $webSocketFrontier->canonicalDigest);
+        unset($frontierSource, $seedStore);
+        gc_collect_cycles();
+
+        $state = OkxPaperLiveCheckpoint::fresh(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        )->toArray();
+        $identityHash = hash('sha256', $restFrontier->naturalIdentity);
+        $state['acknowledged_identity_history'] = [
+            'BTCUSDT/public_trade' => [[
+                $identityHash,
+                $restFrontier->overlapDigest,
+                $restFrontier->canonicalDigest,
+                null,
+            ]],
+        ];
+        self::assertNotFalse(file_put_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+            CanonicalJson::encode($state) . "\n",
+        ));
+
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $source = $this->source(
+            new Task7RestClient(),
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+        );
+        $acceptedEvents = new \ReflectionMethod($source, 'acceptedEvents');
+        $tradeFrontier = new \ReflectionMethod($source, 'tradeFrontier');
+        self::assertSame([], $acceptedEvents->invoke(
+            $source,
+            'BTCUSDT/ws/public_trade',
+            [$webSocketRow],
+            static fn (array $row, $normalizer): PaperMarketEvent => $normalizer
+                ->webSocketTrade($row),
+            static fn (array $row) => $tradeFrontier->invoke($source, $row),
+        ));
+        $persisted = $this->checkpointState()['acknowledged_identity_history'][
+            'BTCUSDT/public_trade'
+        ][0];
+        self::assertSame($webSocketFrontier->canonicalDigest, $persisted[3]);
+        unset($source, $store);
+        gc_collect_cycles();
+
+        $conflictingRow = [...$webSocketRow, 'sz' => '5'];
+        $resumed = $this->source(
+            new Task7RestClient(),
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: new OkxPaperLiveCheckpointStore($this->testRoot),
+        );
+        $acceptedEvents = new \ReflectionMethod($resumed, 'acceptedEvents');
+        $tradeFrontier = new \ReflectionMethod($resumed, 'tradeFrontier');
+        $invoke = static function (array $rows) use (
+            $resumed,
+            $acceptedEvents,
+            $tradeFrontier,
+        ): array {
+            return $acceptedEvents->invoke(
+                $resumed,
+                'BTCUSDT/ws/public_trade',
+                $rows,
+                static fn (array $row, $normalizer): PaperMarketEvent => $normalizer
+                    ->webSocketTrade($row),
+                static fn (array $row) => $tradeFrontier->invoke($resumed, $row),
+            );
+        };
+        try {
+            $invoke([$conflictingRow]);
+            self::fail('A changed same-origin aggregate must remain fatal after restart.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('market_event_identity_conflict', $exception->getMessage());
+        }
     }
 
     public function testAcknowledgedIdentityHistoryWindowRejectsUnsupportedLogicalStreams(): void
@@ -8297,7 +8390,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                     ),
                     str_repeat('a', 64),
                     str_repeat('b', 64),
-                    'rest',
+                    null,
                 ],
                 range(1, 500),
             ),
@@ -8987,13 +9080,13 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                         ),
                         hash(
                             'sha256',
-                            $stream . '|digest|' . $index,
+                            $stream . '|overlap|' . $index,
                         ),
                         hash(
                             'sha256',
-                            $stream . '|overlap|' . $index,
+                            $stream . '|rest|' . $index,
                         ),
-                        'rest',
+                        null,
                     ],
                     range(1, $window),
                 );

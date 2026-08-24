@@ -777,20 +777,30 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $requiredDurableOverlap = isset(
                 $requiredIdentities[$candidateFrontier->naturalIdentity],
             );
-            if ($acknowledged !== null && !$requiredDurableOverlap) {
-                $sameOrigin = $acknowledged['source_kind'] === $candidateSourceKind;
+            if ($acknowledged !== null) {
+                $originCanonicalDigest = $candidateSourceKind === 'rest'
+                    ? $acknowledged['rest_canonical_digest']
+                    : $acknowledged['ws_canonical_digest'];
                 if (!hash_equals(
-                    $sameOrigin
-                        ? $acknowledged['canonical_digest']
-                        : $acknowledged['overlap_digest'],
-                    $sameOrigin
+                    $originCanonicalDigest ?? $acknowledged['overlap_digest'],
+                    $originCanonicalDigest !== null
                         ? $candidateFrontier->canonicalDigest
                         : $candidateFrontier->overlapDigest,
                 )) {
                     throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
                 }
-
-                continue;
+                if ($originCanonicalDigest === null) {
+                    $this->checkpoint = $this->checkpointStore
+                        ->rememberAcknowledgedIdentityObservation(
+                            $this->checkpoint,
+                            $stream,
+                            $candidateFrontier,
+                            $candidateSourceKind,
+                        );
+                }
+                if (!$requiredDurableOverlap) {
+                    continue;
+                }
             }
             $alreadyRepresented = isset(
                 $representedInBatch[$candidateFrontier->naturalIdentity],
@@ -925,7 +935,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         return $frontier instanceof OkxPaperStreamFrontier ? $frontier : null;
     }
 
-    /** @return array{canonical_digest: string, overlap_digest: string, source_kind: string}|null */
+    /** @return array{overlap_digest: string, rest_canonical_digest: string|null, ws_canonical_digest: string|null}|null */
     private function acknowledgedIdentity(
         string $stream,
         OkxPaperStreamFrontier $candidate,
@@ -940,9 +950,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         foreach ($this->checkpoint->acknowledgedIdentityHistory[$logicalStream] ?? [] as $entry) {
             if (hash_equals($entry[0], $identityHash)) {
                 return [
-                    'canonical_digest' => $entry[1],
-                    'overlap_digest' => $entry[2],
-                    'source_kind' => $entry[3],
+                    'overlap_digest' => $entry[1],
+                    'rest_canonical_digest' => $entry[2],
+                    'ws_canonical_digest' => $entry[3],
                 ];
             }
         }

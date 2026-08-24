@@ -180,6 +180,31 @@ final class OkxPaperLiveCheckpointStore
         $this->persist($checkpoint);
     }
 
+    public function rememberAcknowledgedIdentityObservation(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+        string $stream,
+        OkxPaperStreamFrontier $frontier,
+        string $sourceKind,
+    ): OkxPaperLiveCheckpoint {
+        $this->assertCurrent($checkpoint);
+        if (!\in_array($sourceKind, ['rest', 'ws'], true)) {
+            throw self::invalidCheckpoint();
+        }
+        $state = $checkpoint->toArray();
+        if (!$this->upsertAcknowledgedIdentityHistory(
+            $state,
+            $stream,
+            $frontier,
+            $sourceKind,
+        )) {
+            return $checkpoint;
+        }
+        $next = $this->validatedCheckpoint($state);
+        $this->persist($next);
+
+        return $next;
+    }
+
     public function fail(
         #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
         string $failureReason,
@@ -827,39 +852,63 @@ final class OkxPaperLiveCheckpointStore
         ) {
             return;
         }
-        $logicalStream = str_replace(['/rest/', '/ws/'], '/', $stream);
-        $history = $state['acknowledged_identity_history'][$logicalStream] ?? [];
-        $identityHash = hash('sha256', $frontier->naturalIdentity);
         $originStream = $this->recoveryStreamForEvent($event);
         if ($originStream === null) {
             throw self::invalidCheckpoint();
         }
         $sourceKind = str_contains($originStream, '/rest/') ? 'rest' : 'ws';
-        foreach ($history as $entry) {
+        $this->upsertAcknowledgedIdentityHistory($state, $stream, $frontier, $sourceKind);
+    }
+
+    /** @param array<string, mixed> $state */
+    private function upsertAcknowledgedIdentityHistory(
+        array &$state,
+        string $stream,
+        OkxPaperStreamFrontier $frontier,
+        string $sourceKind,
+    ): bool {
+        if ((!str_contains($stream, '/candle_') && !str_ends_with($stream, '/public_trade'))
+            || (!str_contains($stream, '/rest/') && !str_contains($stream, '/ws/'))
+            || !\in_array($sourceKind, ['rest', 'ws'], true)
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $logicalStream = str_replace(['/rest/', '/ws/'], '/', $stream);
+        $history = $state['acknowledged_identity_history'][$logicalStream] ?? [];
+        $identityHash = hash('sha256', $frontier->naturalIdentity);
+        $originIndex = $sourceKind === 'rest' ? 2 : 3;
+        foreach ($history as $index => $entry) {
             if (!hash_equals($entry[0], $identityHash)) {
                 continue;
             }
-            $sameOrigin = $entry[3] === $sourceKind;
-            if (!hash_equals(
-                $sameOrigin ? $entry[1] : $entry[2],
-                $sameOrigin ? $frontier->canonicalDigest : $frontier->overlapDigest,
-            )) {
+            if (!hash_equals($entry[1], $frontier->overlapDigest)
+                || (\is_string($entry[$originIndex])
+                    && !hash_equals($entry[$originIndex], $frontier->canonicalDigest))
+            ) {
                 throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
             }
+            if ($entry[$originIndex] !== null) {
+                return false;
+            }
+            $entry[$originIndex] = $frontier->canonicalDigest;
+            $history[$index] = $entry;
+            $state['acknowledged_identity_history'][$logicalStream] = $history;
 
-            return;
+            return true;
         }
         $history[] = [
             $identityHash,
-            $frontier->canonicalDigest,
             $frontier->overlapDigest,
-            $sourceKind,
+            $sourceKind === 'rest' ? $frontier->canonicalDigest : null,
+            $sourceKind === 'ws' ? $frontier->canonicalDigest : null,
         ];
         $window = OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($logicalStream);
         if (\count($history) > $window) {
             $history = array_slice($history, -$window);
         }
         $state['acknowledged_identity_history'][$logicalStream] = $history;
+
+        return true;
     }
 
     /** @param array<string, mixed>|null $continuationTransition */
@@ -4100,7 +4149,7 @@ final class OkxPaperLiveCheckpointStore
         }
         $identity = $this->checkpointIdentity();
         if (!$this->sameFile($this->currentFileIdentity, $identity)
-            || !hash_equals($this->currentStateHash, hash('sha256', $this->readCheckpoint()))
+            || !hash_equals($this->currentStateHash, $this->checkpointContentHash())
         ) {
             throw self::invalidCheckpoint();
         }
@@ -4480,6 +4529,64 @@ final class OkxPaperLiveCheckpointStore
             }
 
             return $contents;
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    private function checkpointContentHash(): string
+    {
+        $this->assertManagedDirectories();
+        $before = $this->pathStatistics($this->checkpointPath);
+        if ($before === false
+            || $this->isSymlink($before)
+            || !$this->isPrivateRegularFile($before)
+            || !isset($before['size'])
+            || !\is_int($before['size'])
+            || $before['size'] < 2
+            || $before['size'] > OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $handle = @fopen($this->checkpointPath, 'rb');
+        if ($handle === false) {
+            throw self::invalidCheckpoint();
+        }
+        try {
+            $opened = $this->filesystem->stat($handle, 'okx_paper_live_checkpoint_load');
+            if ($opened === false
+                || !$this->isPrivateRegularFile($opened)
+                || !$this->sameSnapshot($before, $opened)
+            ) {
+                throw self::invalidCheckpoint();
+            }
+            $context = hash_init('sha256');
+            $remaining = $opened['size'];
+            while ($remaining > 0) {
+                $chunk = $this->filesystem->read(
+                    $handle,
+                    min(8192, $remaining),
+                    'okx_paper_live_checkpoint_load',
+                );
+                if ($chunk === false || $chunk === '') {
+                    throw self::invalidCheckpoint();
+                }
+                hash_update($context, $chunk);
+                $remaining -= \strlen($chunk);
+            }
+            $extra = $this->filesystem->read($handle, 1, 'okx_paper_live_checkpoint_load');
+            $afterHandle = $this->filesystem->stat($handle, 'okx_paper_live_checkpoint_load');
+            $afterPath = $this->pathStatistics($this->checkpointPath);
+            $this->assertManagedDirectories();
+            if ($extra === false
+                || $extra !== ''
+                || !$this->sameSnapshot($opened, $afterHandle)
+                || !$this->sameSnapshot($opened, $afterPath)
+            ) {
+                throw self::invalidCheckpoint();
+            }
+
+            return hash_final($context);
         } finally {
             fclose($handle);
         }
