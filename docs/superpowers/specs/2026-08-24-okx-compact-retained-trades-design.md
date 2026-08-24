@@ -146,3 +146,19 @@ queued or persisted. Once both sockets are proven fresh, callback generations
 are quiesced and only the frames durable before the request are drained. A
 300-frame burst regression pins this boundary. r21 remains immutable,
 incomplete and non-certifiable.
+
+## Live r22 completion evidence
+
+r22 completed its 450-second public mainnet capture on schema v6 with execution
+forced disabled. It persisted 3,454 events across the required candle, funding,
+instrument, trade, book, snapshot and connection-state channels. The final
+checkpoint is `complete`, connection epoch is 1, reconnect attempt is zero and
+neither symbol entered resync.
+
+`PaperDatasetVerifier::verifyForBaseline()` independently scanned the immutable
+dataset and accepted its network provenance, event count, channel set,
+timestamps, identities and checksum. A separate SHA-256 recalculation matched
+the manifest value
+`9b8299caad6573e6a857e892cf1a2092bcc4f871df99246c33e3b360671168ef`.
+This short capture proves the hardened acquisition and healthy-stop boundary;
+it does not claim 24-hour representativeness or 50 certified trades per cell.

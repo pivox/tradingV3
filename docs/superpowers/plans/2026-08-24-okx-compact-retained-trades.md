@@ -241,3 +241,12 @@ and request a fresh Codex review before marking PR #409 ready.
 - [x] Treat the operator request as the admission boundary while awaiting that
   proof: validate later frames for liveness but never queue them, preventing a
   hot public socket from exhausting backpressure before the quiet socket pongs.
+
+### Task 9: Prove a complete public capture on the final boundary
+
+- [x] Complete r22 for 450 seconds with execution forced disabled, schema v6,
+  epoch 1 and no reconnect or resync.
+- [x] Verify all 3,454 events independently with `PaperDatasetVerifier` baseline
+  checks and an external SHA-256 recalculation.
+- [x] Keep the result scoped as technical capture evidence, not a 24-hour
+  representative baseline or a certified-trade claim.
