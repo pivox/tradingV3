@@ -29,6 +29,7 @@ use DoctrineMigrations\Version20260801120000;
 use DoctrineMigrations\Version20260820170000;
 use DoctrineMigrations\Version20260821030000;
 use DoctrineMigrations\Version20260823190000;
+use DoctrineMigrations\Version20260824123000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -101,6 +102,21 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_configuration_snapshot_conflict');
         $this->store->registerSnapshot($this->snapshot);
+    }
+
+    public function testRecoveryIndexesIncludeTheJournalEventType(): void
+    {
+        $definitions = $this->connection->fetchFirstColumn(<<<'SQL'
+SELECT indexdef
+FROM pg_indexes
+WHERE schemaname = current_schema()
+  AND indexname IN ('idx_paper_execution_event_typed_source', 'idx_paper_execution_event_typed_effect')
+ORDER BY indexname
+SQL);
+
+        self::assertCount(2, $definitions);
+        self::assertStringContainsString('(cell_id, event_type, effect_key)', $definitions[0]);
+        self::assertStringContainsString('(cell_id, event_type, source_position)', $definitions[1]);
     }
 
     public function testRunIdCannotBeReusedForAnotherCellTuple(): void
@@ -430,7 +446,8 @@ SQL);
         require_once __DIR__ . '/../../../../../migrations/Version20260820170000.php';
         require_once __DIR__ . '/../../../../../migrations/Version20260821030000.php';
         require_once __DIR__ . '/../../../../../migrations/Version20260823190000.php';
-        foreach ([Version20260801120000::class, Version20260820170000::class, Version20260821030000::class, Version20260823190000::class] as $class) {
+        require_once __DIR__ . '/../../../../../migrations/Version20260824123000.php';
+        foreach ([Version20260801120000::class, Version20260820170000::class, Version20260821030000::class, Version20260823190000::class, Version20260824123000::class] as $class) {
             /** @var AbstractMigration $migration */
             $migration = new $class($this->connection, new NullLogger());
             $migration->up(new Schema());
