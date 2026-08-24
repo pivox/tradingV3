@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Persistence;
 
 use App\Entity\FillCostLedgerEntry;
+use App\Entity\IndicatorSnapshot;
 use App\Entity\OrderIntent;
 use App\Entity\TradeLifecycleEvent;
 use App\Entity\TradeLineage;
@@ -79,7 +80,7 @@ final class MarketDataVenueEntityContractTest extends TestCase
         }
     }
 
-    /** @return list<OrderIntent|TradeLineage|TradeLifecycleEvent|FillCostLedgerEntry|TradeZoneEvent> */
+    /** @return list<OrderIntent|TradeLineage|TradeLifecycleEvent|FillCostLedgerEntry|TradeZoneEvent|IndicatorSnapshot> */
     private function entities(): array
     {
         $occurredAt = new \DateTimeImmutable('2026-07-19 12:00:00+00');
@@ -101,6 +102,7 @@ final class MarketDataVenueEntityContractTest extends TestCase
                 'v1',
             ),
             new TradeZoneEvent('BTCUSDT', 'inside_zone', 99.0, 101.0, 100.0, 0.01, 0.02, $occurredAt),
+            new IndicatorSnapshot(),
         ];
     }
 
@@ -113,6 +115,7 @@ final class MarketDataVenueEntityContractTest extends TestCase
             TradeLifecycleEvent::class,
             FillCostLedgerEntry::class,
             TradeZoneEvent::class,
+            IndicatorSnapshot::class,
         ];
     }
 }
