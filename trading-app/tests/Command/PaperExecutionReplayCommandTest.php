@@ -49,7 +49,7 @@ final class PaperExecutionReplayCommandTest extends TestCase
         self::assertSame(Command::INVALID, $tester->execute([
             '--dataset' => 'relative/dataset',
             '--configuration' => 'relative/config.json',
-            '--profile' => 'regular',
+            '--strategy-profile' => 'regular',
             '--run-id' => 'paper-run-001',
         ]));
         self::assertStringContainsString('paper_execution_path_must_be_absolute', $tester->getDisplay());
@@ -75,7 +75,7 @@ final class PaperExecutionReplayCommandTest extends TestCase
             self::assertSame(Command::INVALID, $tester->execute([
                 '--dataset' => $dataset,
                 '--configuration' => $configuration,
-                '--profile' => 'regular',
+                '--strategy-profile' => 'regular',
                 '--run-id' => 'paper-run-001',
             ]));
             self::assertStringContainsString('paper_dataset_network_provenance_uncertifiable', $tester->getDisplay());
@@ -142,7 +142,7 @@ final class PaperExecutionReplayCommandTest extends TestCase
             self::assertSame(Command::INVALID, $tester->execute([
                 '--dataset' => $dataset,
                 '--configuration' => $configuration,
-                '--profile' => 'scalper_micro',
+                '--strategy-profile' => 'scalper_micro',
                 '--run-id' => 'paper-run-guard',
             ]));
             self::assertStringContainsString('paper_execution_disabled', $tester->getDisplay());
@@ -242,7 +242,7 @@ final class PaperExecutionReplayCommandTest extends TestCase
             self::assertSame(Command::SUCCESS, $tester->execute([
                 '--dataset' => $dataset,
                 '--configuration' => $configuration,
-                '--profile' => 'regular',
+                '--strategy-profile' => 'regular',
                 '--run-id' => 'paper-source-build-run',
             ]));
             self::assertNotNull($coordinator->cell);

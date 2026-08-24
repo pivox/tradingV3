@@ -188,7 +188,7 @@ implicite :
 php bin/console app:paper-market:runtime-check \
   --dataset=/chemin/absolu/dataset \
   --configuration=/chemin/absolu/configuration.json \
-  --profile=scalper_micro \
+  --strategy-profile=scalper_micro \
   --run-id=run-20260801-001
 ```
 
@@ -211,7 +211,7 @@ Le rejeu réutilise exactement cette préparation avant toute écriture :
 php bin/console app:paper-market:replay \
   --dataset=/chemin/absolu/dataset \
   --configuration=/chemin/absolu/configuration.json \
-  --profile=scalper_micro \
+  --strategy-profile=scalper_micro \
   --run-id=run-20260801-001
 ```
 

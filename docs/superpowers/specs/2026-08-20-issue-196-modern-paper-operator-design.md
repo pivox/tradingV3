@@ -8,9 +8,9 @@ a canonical order plan into the legacy Paper prepared-effect format.
 
 ## Selection contract
 
-Legacy usage keeps the single exact `--profile` option. Modern usage requires
+Legacy usage keeps the single exact `--strategy-profile` option. Modern usage requires
 all of `--mode-id`, `--mode-version`, `--setup-id`, `--setup-version` and
-`--side`, and forbids `--profile`. The verified dataset supplies the public
+`--side`, and forbids `--strategy-profile`. The verified dataset supplies the public
 venue and network environment; the capability is always exactly `paper`.
 Missing, partial or mixed selection fails closed without aliases or fallback.
 Identity errors and resolver failures are normalized to stable blocker codes;

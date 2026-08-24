@@ -26,7 +26,7 @@ final class PaperReplayRuntimeCheckCommand extends Command
         $this
             ->addOption('dataset', null, InputOption::VALUE_REQUIRED, 'Absolute private dataset directory')
             ->addOption('configuration', null, InputOption::VALUE_REQUIRED, 'Absolute private JSON configuration snapshot')
-            ->addOption('profile', null, InputOption::VALUE_REQUIRED, 'Exact legacy strategy profile')
+            ->addOption('strategy-profile', null, InputOption::VALUE_REQUIRED, 'Exact legacy strategy profile')
             ->addOption('mode-id', null, InputOption::VALUE_REQUIRED, 'Exact modern mode ID')
             ->addOption('mode-version', null, InputOption::VALUE_REQUIRED, 'Exact modern mode version')
             ->addOption('setup-id', null, InputOption::VALUE_REQUIRED, 'Exact modern setup ID')
@@ -74,7 +74,7 @@ final class PaperReplayRuntimeCheckCommand extends Command
     private function strategySelection(InputInterface $input): PaperReplayStrategySelection
     {
         return PaperReplayStrategySelection::fromOptions(
-            $this->optionalOption($input, 'profile'),
+            $this->optionalOption($input, 'strategy-profile'),
             $this->optionalOption($input, 'mode-id'),
             $this->optionalOption($input, 'mode-version'),
             $this->optionalOption($input, 'setup-id'),
