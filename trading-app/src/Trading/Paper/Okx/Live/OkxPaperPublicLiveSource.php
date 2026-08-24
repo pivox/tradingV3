@@ -951,8 +951,14 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             if (hash_equals($entry[0], $identityHash)) {
                 return [
                     'overlap_digest' => $entry[1],
-                    'rest_canonical_digest' => $entry[2],
-                    'ws_canonical_digest' => $entry[3],
+                    'rest_canonical_digest' => $entry[2]
+                        === OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST
+                            ? null
+                            : $entry[2],
+                    'ws_canonical_digest' => $entry[3]
+                        === OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST
+                            ? null
+                            : $entry[3],
                 ];
             }
         }
@@ -3594,7 +3600,6 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
         }
         $rows = $this->restClient->orderBook($instrumentId, 400);
-        /** @phpstan-ignore-next-line REST test doubles may run timeout callbacks synchronously. */
         if ($this->resyncAttemptExpired($symbol, $generation, $deadline)
             || \count($rows) !== 1
             || !\is_array($rows[0])

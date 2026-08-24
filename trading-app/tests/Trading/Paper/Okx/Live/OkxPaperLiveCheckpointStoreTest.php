@@ -230,7 +230,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame('43', $acknowledged->streamFrontiers[$stream]?->sourceIdentity);
     }
 
-    public function testFreshCheckpointHasTheCompleteClosedVersionFiveSchema(): void
+    public function testFreshCheckpointHasTheCompleteClosedVersionSixSchema(): void
     {
         $checkpoint = OkxPaperLiveCheckpoint::fresh(self::DATASET_ID, self::CONFIGURATION_SHA256);
         $state = $checkpoint->toArray();
@@ -256,7 +256,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_epochs',
             'stream_frontiers',
         ], array_keys($state));
-        self::assertSame(5, $state['schema_version']);
+        self::assertSame(6, $state['schema_version']);
         self::assertSame(self::DATASET_ID, $state['dataset_id']);
         self::assertSame(self::CONFIGURATION_SHA256, $state['configuration_sha256']);
         self::assertSame('warming', $state['phase']);
@@ -277,7 +277,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
 
     public function testEarlierCheckpointVersionsAreRejectedInsteadOfReusingOldDigestSemantics(): void
     {
-        foreach ([3, 4] as $schemaVersion) {
+        foreach ([3, 4, 5] as $schemaVersion) {
             $state = OkxPaperLiveCheckpoint::fresh(
                 self::DATASET_ID,
                 self::CONFIGURATION_SHA256,
@@ -544,6 +544,40 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
                 price: '65000.2',
             ))->overlapDigest,
         );
+    }
+
+    public function testOppositeOriginCanonicalDigestUsesAlreadyReservedCheckpointBytes(): void
+    {
+        $directory = $this->datasetDirectory('reserved-opposite-origin-digest');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $restEvent = $this->tradeEvent('rest_recovery');
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $restEvent,
+            'trade|242720721',
+            'BTCUSDT/rest/public_trade',
+        );
+        $path = $this->checkpointPath($directory);
+        $beforeBytes = filesize($path);
+        self::assertIsInt($beforeBytes);
+        $webSocketFrontier = OkxPaperStreamFrontier::fromEvent($this->tradeEvent(
+            'ws_aggregated',
+            true,
+            size: '4',
+        ));
+
+        $checkpoint = $store->rememberAcknowledgedIdentityObservation(
+            $checkpoint,
+            'BTCUSDT/ws/public_trade',
+            $webSocketFrontier,
+            'ws',
+        );
+
+        self::assertSame($beforeBytes, filesize($path));
+        $history = $checkpoint->acknowledgedIdentityHistory['BTCUSDT/public_trade'];
+        self::assertSame($webSocketFrontier->canonicalDigest, $history[0][3]);
     }
 
     public function testLoadOrCreatePublishesCanonicalPrivateCheckpointAndStrictlyResumesIdentity(): void
@@ -2644,7 +2678,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
                         hash('sha256', $stream . '|identity|' . $index),
                         hash('sha256', $stream . '|overlap|' . $index),
                         hash('sha256', $stream . '|rest|' . $index),
-                        null,
+                        OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST,
                     ],
                     range(1, $window),
                 );

@@ -882,12 +882,12 @@ final class OkxPaperLiveCheckpointStore
                 continue;
             }
             if (!hash_equals($entry[1], $frontier->overlapDigest)
-                || (\is_string($entry[$originIndex])
+                || ($entry[$originIndex] !== OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST
                     && !hash_equals($entry[$originIndex], $frontier->canonicalDigest))
             ) {
                 throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
             }
-            if ($entry[$originIndex] !== null) {
+            if ($entry[$originIndex] !== OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST) {
                 return false;
             }
             $entry[$originIndex] = $frontier->canonicalDigest;
@@ -899,8 +899,12 @@ final class OkxPaperLiveCheckpointStore
         $history[] = [
             $identityHash,
             $frontier->overlapDigest,
-            $sourceKind === 'rest' ? $frontier->canonicalDigest : null,
-            $sourceKind === 'ws' ? $frontier->canonicalDigest : null,
+            $sourceKind === 'rest'
+                ? $frontier->canonicalDigest
+                : OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST,
+            $sourceKind === 'ws'
+                ? $frontier->canonicalDigest
+                : OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST,
         ];
         $window = OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($logicalStream);
         if (\count($history) > $window) {

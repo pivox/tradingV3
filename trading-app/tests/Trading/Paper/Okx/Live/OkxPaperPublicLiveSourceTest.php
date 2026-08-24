@@ -7056,7 +7056,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 $identityHash,
                 $restFrontier->overlapDigest,
                 $restFrontier->canonicalDigest,
-                null,
+                OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST,
             ]],
         ];
         self::assertNotFalse(file_put_contents(
@@ -8390,7 +8390,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                     ),
                     str_repeat('a', 64),
                     str_repeat('b', 64),
-                    null,
+                    OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST,
                 ],
                 range(1, 500),
             ),
@@ -9086,7 +9086,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                             'sha256',
                             $stream . '|rest|' . $index,
                         ),
-                        null,
+                        OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST,
                     ],
                     range(1, $window),
                 );

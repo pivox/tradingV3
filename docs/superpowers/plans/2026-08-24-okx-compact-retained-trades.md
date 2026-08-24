@@ -198,8 +198,8 @@ and request a fresh Codex review before marking PR #409 ready.
   trade size from the latter.
 - [x] Keep same-origin observations strict and partitioned by actual REST/WS
   origin.
-- [x] Store compact bounded per-origin canonical history in schema v5 and reject
-  schema-v4 and earlier checkpoints fail-closed.
+- [x] Store compact bounded per-origin canonical history and reject earlier
+  checkpoint contracts fail-closed.
 - [x] Cover different REST/WS sizes, strict price conflict, reconnect overlap,
   restart origin, compaction and checkpoint-budget regressions.
 
@@ -219,3 +219,11 @@ and request a fresh Codex review before marking PR #409 ready.
 - [x] Persist the missing REST or WebSocket canonical digest as soon as its
   cross-origin overlap is proven.
 - [x] Restart and reject a changed canonical size for that same origin.
+
+### Task 7: Reserve the missing-origin digest bytes
+
+- [x] Reproduce the review P2 where filling a null origin slot grows a valid
+  near-limit checkpoint after pagination preflight.
+- [x] Move to schema v6 with fixed-width reserved digest slots, so filling the
+  opposite origin is byte-size neutral.
+- [x] Keep the saturated retained-suffix and one-MiB budget regressions green.
