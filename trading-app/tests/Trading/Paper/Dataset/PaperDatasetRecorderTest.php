@@ -6,6 +6,7 @@ namespace App\Tests\Trading\Paper\Dataset;
 
 use App\Trading\Paper\Dataset\PaperDatasetAppendResult;
 use App\Trading\Paper\Dataset\PaperDatasetFormatLimits;
+use App\Trading\Paper\Dataset\PaperDatasetLineReader;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
 use App\Trading\Paper\Dataset\PaperDatasetRecorder;
@@ -677,7 +678,7 @@ final class PaperDatasetRecorderTest extends TestCase
 
         self::assertNotEmpty($filesystem->lineReadLengths);
         self::assertSame(
-            [PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES + 1],
+            [PaperDatasetLineReader::READ_CHUNK_BYTES + 1],
             array_values(array_unique($filesystem->lineReadLengths)),
         );
     }
