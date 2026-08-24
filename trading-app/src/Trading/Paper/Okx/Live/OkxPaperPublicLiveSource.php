@@ -243,16 +243,18 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     return;
                 }
             }
-            if ($this->hasAcknowledgedResyncSnapshot()) {
-                yield from $this->emitResyncBoundary();
-            } else {
-                $events = $this->resumePersistedBookResync();
-                $stream = $this->nextEventStream
-                    ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
-                $transition = $this->nextEventTransition;
-                $this->nextEventStream = null;
-                $this->nextEventTransition = [];
-                yield from $this->yieldMarketEvents($events, $stream, $transition);
+            if ($this->checkpoint->phase === 'resyncing') {
+                if ($this->hasAcknowledgedResyncSnapshot()) {
+                    yield from $this->emitResyncBoundary();
+                } else {
+                    $events = $this->resumePersistedBookResync();
+                    $stream = $this->nextEventStream
+                        ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
+                    $transition = $this->nextEventTransition;
+                    $this->nextEventStream = null;
+                    $this->nextEventTransition = [];
+                    yield from $this->yieldMarketEvents($events, $stream, $transition);
+                }
             }
         } elseif ($this->checkpoint->phase === 'reconnecting') {
             $this->resumeReconnectTransportTransition();
@@ -2330,8 +2332,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->failTerminal('market_data_gap_unresolved');
         }
         $oldestTimestamp = null;
+        $retainedRows = [];
+        $acceptedIndex = 0;
         foreach ($rows as $row) {
-            $this->tradeFrontier($row);
+            $rowFrontier = $this->tradeFrontier($row);
             $timestamp = $row['ts'] ?? null;
             if (!\is_string($timestamp)) {
                 $this->failTerminal('market_data_gap_unresolved');
@@ -2341,8 +2345,27 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             ) {
                 $oldestTimestamp = $timestamp;
             }
+            $acceptedFrontier = $events[$acceptedIndex]['frontier'] ?? null;
+            if (!$acceptedFrontier instanceof OkxPaperStreamFrontier
+                || !hash_equals(
+                    $acceptedFrontier->naturalIdentity,
+                    $rowFrontier->naturalIdentity,
+                )
+            ) {
+                continue;
+            }
+            if (!hash_equals(
+                $acceptedFrontier->canonicalDigest,
+                $rowFrontier->canonicalDigest,
+            )) {
+                throw new OkxPaperLiveIntegrityException(
+                    'market_event_identity_conflict',
+                );
+            }
+            $retainedRows[] = $row;
+            ++$acceptedIndex;
         }
-        if (!\is_string($oldestTimestamp)) {
+        if (!\is_string($oldestTimestamp) || $acceptedIndex !== \count($events)) {
             $this->failTerminal('market_data_gap_unresolved');
         }
         $historyTransition = $this->restTransition(
@@ -2359,7 +2382,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
             'target_frontier' => $resync['frontier']->toArray(),
             'deadline_at' => $resync['deadline_at'],
-            'retained_rows' => $rows,
+            'retained_rows' => $retainedRows,
         ];
         $state['pending_transition'] = $historyTransition;
         $this->checkpoint = $this->checkpointStore->saveTransition(

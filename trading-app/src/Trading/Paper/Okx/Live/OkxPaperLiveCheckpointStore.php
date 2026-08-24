@@ -2150,7 +2150,7 @@ final class OkxPaperLiveCheckpointStore
     ): bool {
         if ($current->pendingTransition !== null) {
             return $this->sameCanonicalValue($current->pendingTransition, $pendingTransition)
-                || $this->initialTransportPendingCanBeInterruptedByPublicClose(
+                || $this->transportPendingCanBeInterruptedByPublicClose(
                     $current,
                     $pendingTransition,
                 );
@@ -2160,11 +2160,11 @@ final class OkxPaperLiveCheckpointStore
     }
 
     /** @param array<string, mixed>|null $pendingTransition */
-    private function initialTransportPendingCanBeInterruptedByPublicClose(
+    private function transportPendingCanBeInterruptedByPublicClose(
         #[\SensitiveParameter] OkxPaperLiveCheckpoint $current,
         #[\SensitiveParameter] ?array $pendingTransition,
     ): bool {
-        if (!\in_array($current->phase, ['connecting', 'subscribing'], true)
+        if (!\in_array($current->phase, ['connecting', 'subscribing', 'resyncing'], true)
             || !$this->isTransportTransition(
                 $pendingTransition,
                 'transport_close',
