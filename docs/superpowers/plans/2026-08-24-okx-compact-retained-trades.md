@@ -262,3 +262,12 @@ and request a fresh Codex review before marking PR #409 ready.
   non-book frames and completes the requested stop.
 - [x] Keep unreconstructable queued book deltas fail-closed rather than
   fabricating a materialized-book base after restart.
+
+### Task 11: Verify the final schema-v7 live boundary
+
+- [x] Complete r23 for 450 seconds with execution forced disabled, schema v7,
+  `liveness_proven=true`, epoch 1 and no reconnect or resync.
+- [x] Independently verify all 3,485 events and match external SHA-256
+  `6051210c93040290c88d133d1228f12e01501e4058b08573f700af411cf0992c`.
+- [x] Keep the short result as acquisition evidence only; representative
+  capture and certified-trade generation remain later campaign work.

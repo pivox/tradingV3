@@ -182,3 +182,17 @@ materializer base remains fail-closed; restart never invents order-book state.
 Schema-v6 and earlier live checkpoints are rejected by the new runtime. r22
 remains valid immutable acquisition evidence for its captured commit, while the
 next final-code capture must start on schema v7.
+
+## Live r23 schema-v7 completion evidence
+
+r23 completed the same 450-second public mainnet boundary on the final schema-v7
+runtime with execution forced disabled. It persisted 3,485 events across every
+required channel. The terminal checkpoint records `liveness_proven=true`,
+connection epoch 1, reconnect attempt zero, no symbol resync and no failure.
+
+`PaperDatasetVerifier::verifyForBaseline()` independently accepted the complete
+dataset and its provenance. A separate SHA-256 recalculation matched
+`6051210c93040290c88d133d1228f12e01501e4058b08573f700af411cf0992c`.
+This validates the final acquisition, liveness and healthy-stop boundary for the
+PR. It still does not establish 24-hour representativeness or produce 50
+certified trades per executable cell.
