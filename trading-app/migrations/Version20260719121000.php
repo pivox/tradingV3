@@ -6,6 +6,7 @@ namespace DoctrineMigrations;
 
 use Doctrine\DBAL\Schema\Schema;
 use Doctrine\Migrations\AbstractMigration;
+use Doctrine\Migrations\Exception\IrreversibleMigration;
 
 final class Version20260719121000 extends AbstractMigration
 {
@@ -33,11 +34,31 @@ final class Version20260719121000 extends AbstractMigration
 
     public function down(Schema $schema): void
     {
+        $this->abortDownIfVenueRowsCollide();
+
         $this->addSql('DROP INDEX idx_ind_snap_paper_market_identity_time');
         $this->addSql('DROP INDEX ux_ind_snap_exchange_market_venue_symbol_tf_time');
         $this->addSql('DROP INDEX ux_ind_snap_exchange_market_symbol_tf_time');
         $this->addSql('CREATE UNIQUE INDEX ux_ind_snap_exchange_market_symbol_tf_time ON indicator_snapshots (exchange, market_type, symbol, timeframe, kline_time)');
         $this->addSql('ALTER TABLE indicator_snapshots DROP CONSTRAINT chk_indicator_snapshots_market_data_venue');
         $this->addSql('ALTER TABLE indicator_snapshots DROP COLUMN market_data_venue');
+    }
+
+    private function abortDownIfVenueRowsCollide(): void
+    {
+        $duplicates = $this->connection->fetchOne(<<<'SQL'
+SELECT COUNT(*)
+FROM (
+    SELECT exchange, market_type, symbol, timeframe, kline_time
+    FROM indicator_snapshots
+    GROUP BY exchange, market_type, symbol, timeframe, kline_time
+    HAVING COUNT(*) > 1
+) legacy_collisions
+SQL);
+        if ((int) $duplicates > 0) {
+            throw new IrreversibleMigration(
+                'Cannot rollback indicator snapshot venue scoping: rows collide on the legacy identity.',
+            );
+        }
     }
 }

@@ -10,6 +10,7 @@ use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Exception\DriverException;
 use Doctrine\DBAL\Schema\Schema;
 use Doctrine\Migrations\AbstractMigration;
+use Doctrine\Migrations\Exception\IrreversibleMigration;
 use DoctrineMigrations\Version20260719121000;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\TestCase;
@@ -87,6 +88,16 @@ SQL);
                 self::fail('The indicator snapshot accepted an unsupported market-data venue.');
             } catch (DriverException $exception) {
                 self::assertSame('23514', $exception->getSQLState());
+            }
+
+            try {
+                $this->executeMigration($connection, 'down');
+                self::fail('The migration down accepted venue rows that collide on the legacy identity.');
+            } catch (IrreversibleMigration $exception) {
+                self::assertSame(
+                    'Cannot rollback indicator snapshot venue scoping: rows collide on the legacy identity.',
+                    $exception->getMessage(),
+                );
             }
 
             $connection->executeStatement('DELETE FROM indicator_snapshots WHERE market_data_venue IS NOT NULL');
