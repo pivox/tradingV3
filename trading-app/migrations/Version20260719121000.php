@@ -18,7 +18,6 @@ final class Version20260719121000 extends AbstractMigration
     {
         $this->addSql('ALTER TABLE indicator_snapshots ADD COLUMN IF NOT EXISTS market_data_venue VARCHAR(32) DEFAULT NULL');
         $this->addSql('ALTER TABLE indicator_snapshots ALTER COLUMN market_data_venue DROP DEFAULT');
-        $this->addSql('ALTER TABLE indicator_snapshots ALTER COLUMN market_data_venue TYPE VARCHAR(32) USING market_data_venue::VARCHAR(32)');
         $this->addSql('ALTER TABLE indicator_snapshots ALTER COLUMN market_data_venue DROP NOT NULL');
         $this->addSql('ALTER TABLE indicator_snapshots DROP CONSTRAINT IF EXISTS chk_indicator_snapshots_market_data_venue');
         $this->addSql("ALTER TABLE indicator_snapshots ADD CONSTRAINT chk_indicator_snapshots_market_data_venue CHECK (market_data_venue IS NULL OR market_data_venue IN ('okx', 'hyperliquid'))");

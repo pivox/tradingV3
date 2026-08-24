@@ -136,16 +136,20 @@ CREATE TABLE indicator_snapshots (
         UNIQUE (exchange, market_type, symbol, timeframe, kline_time)
 )
 SQL);
+            $connection->executeStatement('CREATE VIEW indicator_snapshot_venue_probe AS SELECT market_data_venue FROM indicator_snapshots');
 
             $this->executeMigration($connection, 'up');
 
-            self::assertSame(32, (int) $connection->fetchOne(<<<'SQL'
-SELECT character_maximum_length
+            self::assertSame(
+                ['text', 'YES', null],
+                array_values($connection->fetchAssociative(<<<'SQL'
+SELECT data_type, is_nullable, column_default
 FROM information_schema.columns
 WHERE table_schema = current_schema()
   AND table_name = 'indicator_snapshots'
   AND column_name = 'market_data_venue'
-SQL));
+SQL) ?: []),
+            );
             self::assertSame(2, (int) $connection->fetchOne(<<<'SQL'
 SELECT COUNT(*)
 FROM pg_indexes
