@@ -97,7 +97,7 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
         $store = new InMemoryPaperExecutionStore();
         $tester = new CommandTester($this->command($this->acceptingCoordinator(), store: $store));
         $options = $this->options();
-        unset($options['--profile']);
+        unset($options['--strategy-profile']);
         $options += [
             '--mode-id' => 'day_trading',
             '--mode-version' => '1.1.0',
@@ -152,7 +152,7 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
     {
         $tester = new CommandTester($this->command($this->acceptingCoordinator()));
         $options = $this->options();
-        unset($options['--profile']);
+        unset($options['--strategy-profile']);
         $options += [
             '--mode-id' => 'regular',
             '--mode-version' => '1.1.0',
@@ -175,7 +175,7 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
             resolver: new EffectiveTradingConfigResolver(loader: new TradingConfigLayerLoader($privateRoot)),
         ));
         $options = $this->options();
-        unset($options['--profile']);
+        unset($options['--strategy-profile']);
         $options += [
             '--mode-id' => 'day_trading',
             '--mode-version' => '1.1.0',
@@ -377,7 +377,7 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
         return [
             '--dataset' => $this->dataset,
             '--configuration' => $this->configuration,
-            '--profile' => 'regular',
+            '--strategy-profile' => 'regular',
             '--run-id' => 'paper-readiness-001',
         ];
     }

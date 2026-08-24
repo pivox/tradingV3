@@ -97,7 +97,7 @@ Run the read-only check with the exact inputs that will be replayed:
 PAPER_EXECUTION_ENABLED=1 php bin/console app:paper-market:runtime-check \
   --dataset=/absolute/private/dataset \
   --configuration=/absolute/private/configuration.json \
-  --profile=regular \
+  --strategy-profile=regular \
   --run-id=run-20260820-001
 ```
 
@@ -133,7 +133,7 @@ After a successful check, execute the same tuple:
 PAPER_EXECUTION_ENABLED=1 php bin/console app:paper-market:replay \
   --dataset=/absolute/private/dataset \
   --configuration=/absolute/private/configuration.json \
-  --profile=regular \
+  --strategy-profile=regular \
   --run-id=run-20260820-001
 ```
 
@@ -141,7 +141,7 @@ The replay command uses the same preparation contract before any state write.
 
 ### Modern operator identity
 
-To inspect a modern cell, omit `--profile` and provide the complete canonical
+To inspect a modern cell, omit `--strategy-profile` and provide the complete canonical
 identity:
 
 ```bash
@@ -157,7 +157,7 @@ PAPER_EXECUTION_ENABLED=1 php bin/console app:paper-market:runtime-check \
 ```
 
 The dataset fixes the public venue and network environment; the command fixes
-the capability to `paper`. Mixing `--profile` with modern options, omitting one
+the capability to `paper`. Mixing `--strategy-profile` with modern options, omitting one
 modern field or using a legacy alias fails closed. The check resolves the exact
 Effective Config and emits only its canonical hashes and identity. A successful
 modern check returns `ready=true` and `baseline_eligible=true`; the replay still
