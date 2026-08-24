@@ -70,6 +70,7 @@ final class PaperDatasetRecorder
     private ?array $scannedFileIdentity = null;
 
     private ?string $lastEventId = null;
+    private ?PaperMarketEvent $lastDurableEvent = null;
     private ?\DateTimeImmutable $startExchangeTimestamp = null;
     private ?\DateTimeImmutable $latestExchangeTimestamp = null;
     private bool $terminalTransitionAwaitingAuthentication = false;
@@ -174,6 +175,14 @@ final class PaperDatasetRecorder
         return $this->datasetDirectory;
     }
 
+    /**
+     * Returns the tail event from the recorder's authenticated durable scan.
+     */
+    public function lastDurableEvent(): ?PaperMarketEvent
+    {
+        return $this->lastDurableEvent;
+    }
+
     public function append(#[\SensitiveParameter] PaperMarketEvent $event): PaperDatasetAppendResult
     {
         $this->assertUsable();
@@ -273,6 +282,7 @@ final class PaperDatasetRecorder
         $this->scannedPrefixSha256 = $durableAppend['sha256'];
         $this->scannedFileIdentity = $durableAppend['identity'];
         $this->lastEventId = $event->eventId;
+        $this->lastDurableEvent = $event;
         $this->startExchangeTimestamp = $nextStart;
         $this->latestExchangeTimestamp = $this->maximumTimestamp(
             $this->latestExchangeTimestamp,
@@ -826,6 +836,7 @@ final class PaperDatasetRecorder
             $channels = $this->channels;
             $eventCount = $this->eventCount;
             $lastEventId = $this->lastEventId;
+            $lastDurableEvent = $this->lastDurableEvent;
             $startExchangeTimestamp = $this->startExchangeTimestamp;
             $latestExchangeTimestamp = $this->latestExchangeTimestamp;
 
@@ -876,6 +887,7 @@ final class PaperDatasetRecorder
                 $channels[] = $event->channel->value;
                 ++$eventCount;
                 $lastEventId = $event->eventId;
+                $lastDurableEvent = $event;
                 $startExchangeTimestamp = $this->minimumTimestamp(
                     $startExchangeTimestamp,
                     $event->exchangeTimestamp,
@@ -936,6 +948,7 @@ final class PaperDatasetRecorder
             'ino' => $statistics['ino'],
         ];
         $this->lastEventId = $lastEventId;
+        $this->lastDurableEvent = $lastDurableEvent;
         $this->startExchangeTimestamp = $startExchangeTimestamp;
         $this->latestExchangeTimestamp = $latestExchangeTimestamp;
     }

@@ -79,6 +79,26 @@ final class PaperPublicDatasetCaptureTest extends TestCase
         self::assertSame(1, $source->stopCalls);
     }
 
+    public function testNotifiesOnlyAfterTheEventIsDurableAndAcknowledged(): void
+    {
+        $recorder = $this->recorder('durable-observer-mainnet');
+        $events = [$this->event('1', 1), $this->event('2', 2)];
+        $source = new DatasetOnlyCaptureSource($events, true);
+        $observed = [];
+
+        (new PaperPublicDatasetCapture())->run(
+            $recorder,
+            $source,
+            static function (PaperMarketEvent $event) use ($recorder, $source, &$observed): void {
+                self::assertContains($event->eventId, $source->acknowledged);
+                self::assertSame($event->eventId, $recorder->manifest()->lastEventId);
+                $observed[] = $event->eventId;
+            },
+        );
+
+        self::assertSame([$events[0]->eventId, $events[1]->eventId], $observed);
+    }
+
     public function testPersistsIncompleteAndRethrowsAStableSourceFailure(): void
     {
         $recorder = $this->recorder('source-failure-mainnet');

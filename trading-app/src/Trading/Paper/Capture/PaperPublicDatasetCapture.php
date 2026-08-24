@@ -17,6 +17,7 @@ final class PaperPublicDatasetCapture
     public function run(
         PaperDatasetRecorder $recorder,
         PaperLiveMarketDataSourceInterface $source,
+        ?\Closure $afterDurableEvent = null,
     ): PaperDatasetManifest {
         $this->lastStopFailure = null;
         $this->lastIncompletePersistenceFailure = null;
@@ -30,6 +31,9 @@ final class PaperPublicDatasetCapture
                     || $result === PaperDatasetAppendResult::REPLAYED,
                 );
                 $source->acknowledge($event->eventId);
+                if ($afterDurableEvent !== null) {
+                    $afterDurableEvent($event);
+                }
             }
 
             $isComplete = $source->isComplete();

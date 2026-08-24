@@ -19,6 +19,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\StreamSelectLoop;
+use React\EventLoop\TimerInterface;
 
 #[CoversClass(PaperPublicCaptureRunner::class)]
 #[CoversClass(PaperPublicCaptureResult::class)]
@@ -109,6 +110,31 @@ final class PaperPublicCaptureRunnerTest extends TestCase
         self::assertSame(1, $okx->calls);
     }
 
+    public function testResumedFinalDurableSnapshotStartsTheLiveDurationBeforeReadingTheSource(): void
+    {
+        $datasetId = 'resume-final-snapshot-okx-mainnet';
+        $manifest = (new PaperPublicLiveManifestFactory())->create(PaperMarketDataVenue::OKX, $datasetId);
+        $recorder = new PaperDatasetRecorder($this->root, $manifest);
+        $recorder->append($this->snapshotBoundary('ETHUSDT'));
+        unset($recorder);
+
+        $loop = new CaptureRunnerTrackingLoop();
+        $okx = new CaptureRunnerSourceFactory(
+            PaperMarketDataVenue::OKX,
+            [],
+            static function () use ($loop): void {
+                self::assertSame(1, $loop->timerRegistrations);
+            },
+        );
+
+        $this->runner($okx, new CaptureRunnerSourceFactory(
+            PaperMarketDataVenue::HYPERLIQUID,
+            [],
+        ))->run('okx', $datasetId, 300, $loop);
+
+        self::assertSame(1, $loop->timerRegistrations);
+    }
+
     public function testRefusesToReopenATerminalDatasetBeforeCreatingASource(): void
     {
         $datasetId = 'terminal-okx-mainnet';
@@ -178,6 +204,25 @@ final class PaperPublicCaptureRunnerTest extends TestCase
             ['price' => '65000.0', 'size' => '0.01'],
         );
     }
+
+    private function snapshotBoundary(string $symbol): PaperMarketEvent
+    {
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::OKX,
+            $symbol,
+            PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
+            new \DateTimeImmutable('2026-08-23T10:00:00Z'),
+            new \DateTimeImmutable('2026-08-23T10:00:00.100000Z'),
+            '1',
+            [
+                'native_symbol' => 'ETH-USDT-SWAP',
+                'reason' => 'initial',
+                'source_epoch' => 1,
+                'source_seq_id' => '10',
+            ],
+        );
+    }
 }
 
 final class CaptureRunnerSourceFactory implements PaperPublicLiveSourceFactoryInterface
@@ -186,10 +231,14 @@ final class CaptureRunnerSourceFactory implements PaperPublicLiveSourceFactoryIn
     public ?string $receivedDirectory = null;
     public ?LoopInterface $receivedLoop = null;
 
-    /** @param list<PaperMarketEvent> $events */
+    /**
+     * @param list<PaperMarketEvent> $events
+     * @param (\Closure(): void)|null $onEvents
+     */
     public function __construct(
         private readonly PaperMarketDataVenue $venue,
         private readonly array $events,
+        private readonly ?\Closure $onEvents = null,
     ) {
     }
 
@@ -199,16 +248,20 @@ final class CaptureRunnerSourceFactory implements PaperPublicLiveSourceFactoryIn
         $this->receivedDirectory = $datasetDirectory;
         $this->receivedLoop = $loop;
 
-        return new CaptureRunnerSource($this->venue, $this->events);
+        return new CaptureRunnerSource($this->venue, $this->events, $this->onEvents);
     }
 }
 
 final class CaptureRunnerSource implements PaperLiveMarketDataSourceInterface
 {
-    /** @param list<PaperMarketEvent> $events */
+    /**
+     * @param list<PaperMarketEvent> $events
+     * @param (\Closure(): void)|null $onEvents
+     */
     public function __construct(
         private readonly PaperMarketDataVenue $venue,
         private readonly array $events,
+        private readonly ?\Closure $onEvents = null,
     ) {
     }
 
@@ -219,6 +272,9 @@ final class CaptureRunnerSource implements PaperLiveMarketDataSourceInterface
 
     public function events(): iterable
     {
+        if ($this->onEvents !== null) {
+            ($this->onEvents)();
+        }
         yield from $this->events;
     }
 
@@ -242,5 +298,79 @@ final class CaptureRunnerSource implements PaperLiveMarketDataSourceInterface
     public function failureReason(): ?string
     {
         return null;
+    }
+}
+
+final class CaptureRunnerTrackingLoop implements LoopInterface
+{
+    public int $timerRegistrations = 0;
+
+    private StreamSelectLoop $inner;
+
+    public function __construct()
+    {
+        $this->inner = new StreamSelectLoop();
+    }
+
+    public function addReadStream($stream, $listener): void
+    {
+        $this->inner->addReadStream($stream, $listener);
+    }
+
+    public function addWriteStream($stream, $listener): void
+    {
+        $this->inner->addWriteStream($stream, $listener);
+    }
+
+    public function removeReadStream($stream): void
+    {
+        $this->inner->removeReadStream($stream);
+    }
+
+    public function removeWriteStream($stream): void
+    {
+        $this->inner->removeWriteStream($stream);
+    }
+
+    public function addTimer($interval, $callback): TimerInterface
+    {
+        ++$this->timerRegistrations;
+
+        return $this->inner->addTimer($interval, $callback);
+    }
+
+    public function addPeriodicTimer($interval, $callback): TimerInterface
+    {
+        return $this->inner->addPeriodicTimer($interval, $callback);
+    }
+
+    public function cancelTimer(TimerInterface $timer): void
+    {
+        $this->inner->cancelTimer($timer);
+    }
+
+    public function futureTick($listener): void
+    {
+        $this->inner->futureTick($listener);
+    }
+
+    public function addSignal($signal, $listener): void
+    {
+        $this->inner->addSignal($signal, $listener);
+    }
+
+    public function removeSignal($signal, $listener): void
+    {
+        $this->inner->removeSignal($signal, $listener);
+    }
+
+    public function run(): void
+    {
+        $this->inner->run();
+    }
+
+    public function stop(): void
+    {
+        $this->inner->stop();
     }
 }

@@ -7,6 +7,7 @@ namespace App\Trading\Paper\Capture;
 use App\Trading\Paper\Dataset\PaperDatasetRecorder;
 use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
+use App\Trading\Paper\MarketData\PaperMarketEvent;
 use React\EventLoop\Loop;
 use React\EventLoop\LoopInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -56,9 +57,19 @@ final readonly class PaperPublicCaptureRunner
         }
 
         $stops = new PaperPublicCaptureStopController($captureLoop, $source);
-        $stops->start($durationSeconds);
+        $stops->startAfterInitialSnapshots($durationSeconds, array_keys($manifest->symbols));
+        $durableTail = $recorder->lastDurableEvent();
+        if ($durableTail !== null) {
+            $stops->observe($durableTail);
+        }
         try {
-            $completed = $this->capture->run($recorder, $source);
+            $completed = $this->capture->run(
+                $recorder,
+                $source,
+                static function (PaperMarketEvent $event) use ($stops): void {
+                    $stops->observe($event);
+                },
+            );
         } finally {
             $stops->close();
         }
