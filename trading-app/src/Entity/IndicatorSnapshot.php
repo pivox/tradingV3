@@ -7,6 +7,7 @@ namespace App\Entity;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Repository\IndicatorSnapshotRepository;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
@@ -14,7 +15,16 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Table(name: 'indicator_snapshots')]
 #[ORM\Index(name: 'idx_ind_snap_symbol_tf', columns: ['exchange', 'market_type', 'symbol', 'timeframe'])]
 #[ORM\Index(name: 'idx_ind_snap_kline_time', columns: ['kline_time'])]
-#[ORM\UniqueConstraint(name: 'ux_ind_snap_exchange_market_symbol_tf_time', columns: ['exchange', 'market_type', 'symbol', 'timeframe', 'kline_time'])]
+#[ORM\UniqueConstraint(
+    name: 'ux_ind_snap_exchange_market_symbol_tf_time',
+    columns: ['exchange', 'market_type', 'symbol', 'timeframe', 'kline_time'],
+    options: ['where' => 'market_data_venue IS NULL'],
+)]
+#[ORM\UniqueConstraint(
+    name: 'ux_ind_snap_exchange_market_venue_symbol_tf_time',
+    columns: ['exchange', 'market_type', 'market_data_venue', 'symbol', 'timeframe', 'kline_time'],
+    options: ['where' => 'market_data_venue IS NOT NULL'],
+)]
 class IndicatorSnapshot
 {
     #[ORM\Id]
@@ -24,6 +34,9 @@ class IndicatorSnapshot
 
     #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
     private string $exchange = 'bitmart';
+
+    #[ORM\Column(name: 'market_data_venue', type: Types::STRING, length: 32, nullable: true)]
+    private ?string $marketDataVenue = null;
 
     #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
     private string $marketType = 'perpetual';
@@ -40,6 +53,7 @@ class IndicatorSnapshot
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE)]
     private \DateTimeImmutable $klineTime;
 
+    /** @var array<string,mixed> */
     #[ORM\Column(name: '`values`', type: Types::JSON)]
     private array $values = [];
 
@@ -75,6 +89,31 @@ class IndicatorSnapshot
     public function setExchange(Exchange|string $exchange): static
     {
         $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange);
+        return $this;
+    }
+
+    public function getMarketDataVenue(): ?string
+    {
+        return $this->marketDataVenue;
+    }
+
+    public function setMarketDataVenue(PaperMarketDataVenue|string|null $marketDataVenue): static
+    {
+        if ($marketDataVenue === null) {
+            $this->marketDataVenue = null;
+
+            return $this;
+        }
+
+        $normalized = $marketDataVenue instanceof PaperMarketDataVenue
+            ? $marketDataVenue->value
+            : strtolower(trim($marketDataVenue));
+        if (PaperMarketDataVenue::tryFrom($normalized) === null) {
+            throw new \InvalidArgumentException('market_data_venue_invalid');
+        }
+
+        $this->marketDataVenue = $normalized;
+
         return $this;
     }
 
@@ -133,11 +172,13 @@ class IndicatorSnapshot
         return $this;
     }
 
+    /** @return array<string,mixed> */
     public function getValues(): array
     {
         return $this->values;
     }
 
+    /** @param array<string,mixed> $values */
     public function setValues(array $values): static
     {
         $this->values = $values;

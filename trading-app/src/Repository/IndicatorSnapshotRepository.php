@@ -51,6 +51,8 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
 
     /**
      * Récupère les snapshots d'indicateurs pour une période
+     *
+     * @return list<IndicatorSnapshot>
      */
     public function findBySymbolTimeframeAndDateRange(
         string $symbol,
@@ -79,6 +81,8 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
 
     /**
      * Récupère les snapshots récents pour le calcul des indicateurs
+     *
+     * @return list<IndicatorSnapshot>
      */
     public function findRecentForIndicators(
         string $symbol,
@@ -115,6 +119,7 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
         $existing = $this->findOneBy([
             'exchange' => $snapshot->getExchange(),
             'marketType' => $snapshot->getMarketType(),
+            'marketDataVenue' => $snapshot->getMarketDataVenue(),
             'symbol' => $snapshot->getSymbol(),
             'timeframe' => $snapshot->getTimeframe(),
             'klineTime' => $snapshot->getKlineTime()
@@ -130,6 +135,7 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
                 'symbol' => $existing->getSymbol(),
                 'exchange' => $existing->getExchange(),
                 'market_type' => $existing->getMarketType(),
+                'market_data_venue' => $existing->getMarketDataVenue(),
                 'timeframe' => $existing->getTimeframe()->value,
                 'kline_time' => $existing->getKlineTime()->format('Y-m-d H:i:s'),
                 'run_id' => $existing->getRunId(),
@@ -141,6 +147,7 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
                 'symbol' => $snapshot->getSymbol(),
                 'exchange' => $snapshot->getExchange(),
                 'market_type' => $snapshot->getMarketType(),
+                'market_data_venue' => $snapshot->getMarketDataVenue(),
                 'timeframe' => $snapshot->getTimeframe()->value,
                 'kline_time' => $snapshot->getKlineTime()->format('Y-m-d H:i:s'),
                 'run_id' => $snapshot->getRunId(),
@@ -149,4 +156,3 @@ class IndicatorSnapshotRepository extends ServiceEntityRepository
         }
     }
 }
-

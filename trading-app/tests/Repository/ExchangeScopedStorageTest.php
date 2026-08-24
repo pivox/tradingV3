@@ -191,6 +191,28 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         );
     }
 
+    public function testIndicatorSnapshotUpsertSeparatesPaperMarketDataVenues(): void
+    {
+        $klineTime = new \DateTimeImmutable('2026-08-24 07:00:00', new \DateTimeZone('UTC'));
+
+        /** @var IndicatorSnapshotRepository $repository */
+        $repository = $this->em->getRepository(IndicatorSnapshot::class);
+
+        $repository->upsert($this->newSnapshot('fake', $klineTime, ['rsi' => 51])->setMarketDataVenue('okx'));
+        $repository->upsert($this->newSnapshot('fake', $klineTime, ['rsi' => 61])->setMarketDataVenue('hyperliquid'));
+        $repository->upsert($this->newSnapshot('fake', $klineTime, ['rsi' => 52])->setMarketDataVenue('okx'));
+
+        self::assertCount(2, $repository->findBy([
+            'exchange' => 'fake',
+            'marketType' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'timeframe' => Timeframe::TF_1M,
+            'klineTime' => $klineTime,
+        ]));
+        self::assertSame(52, $repository->findOneBy(['marketDataVenue' => 'okx'])?->getValue('rsi'));
+        self::assertSame(61, $repository->findOneBy(['marketDataVenue' => 'hyperliquid'])?->getValue('rsi'));
+    }
+
     public function testPositionAndOrderIntentRepositoriesFallbackToBitmartOnly(): void
     {
         $this->em->persist((new Position('BTCUSDT', 'LONG'))->setSize('1'));
@@ -1179,6 +1201,18 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $connection->executeStatement(
             'CREATE UNIQUE INDEX ux_symbol_execution_lock_active_symbol ' .
             'ON symbol_execution_lock (exchange, market_type, symbol) WHERE released_at IS NULL'
+        );
+        $connection->executeStatement('DROP INDEX IF EXISTS ux_ind_snap_exchange_market_symbol_tf_time');
+        $connection->executeStatement(
+            'CREATE UNIQUE INDEX ux_ind_snap_exchange_market_symbol_tf_time ' .
+            'ON indicator_snapshots (exchange, market_type, symbol, timeframe, kline_time) ' .
+            'WHERE market_data_venue IS NULL'
+        );
+        $connection->executeStatement('DROP INDEX IF EXISTS ux_ind_snap_exchange_market_venue_symbol_tf_time');
+        $connection->executeStatement(
+            'CREATE UNIQUE INDEX ux_ind_snap_exchange_market_venue_symbol_tf_time ' .
+            'ON indicator_snapshots (exchange, market_type, market_data_venue, symbol, timeframe, kline_time) ' .
+            'WHERE market_data_venue IS NOT NULL'
         );
     }
 

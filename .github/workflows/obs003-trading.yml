@@ -84,13 +84,22 @@ jobs:
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      - name: Create isolated Paper test database
+      - name: Create isolated Paper and migration test databases
         env:
           PGPASSWORD: trading
-        run: >-
-          psql --host=127.0.0.1 --username=trading --dbname=postgres
-          --set=ON_ERROR_STOP=1
-          --command='CREATE DATABASE trading_app_paper_test'
+        run: |
+          psql --host=127.0.0.1 --username=trading --dbname=postgres \
+            --set=ON_ERROR_STOP=1 --command='CREATE DATABASE trading_app_paper_test'
+          psql --host=127.0.0.1 --username=trading --dbname=postgres \
+            --set=ON_ERROR_STOP=1 --command='CREATE DATABASE trading_app_migration_test'
+
+      - name: PostgreSQL fresh migration chain
+        env:
+          APP_ENV: dev
+          APP_DEBUG: '0'
+          PAPER_EXECUTION_ENABLED: '0'
+          DATABASE_URL: 'postgresql://trading:trading@127.0.0.1:5432/trading_app_migration_test?serverVersion=16&charset=utf8'
+        run: php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration
 
       - name: Lint container
         run: php bin/console lint:container

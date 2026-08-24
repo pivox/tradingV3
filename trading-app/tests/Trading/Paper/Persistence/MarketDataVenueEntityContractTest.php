@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Persistence;
 
 use App\Entity\FillCostLedgerEntry;
+use App\Entity\IndicatorSnapshot;
 use App\Entity\OrderIntent;
 use App\Entity\TradeLifecycleEvent;
 use App\Entity\TradeLineage;
@@ -12,6 +13,7 @@ use App\Entity\TradeZoneEvent;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping\Column;
+use Doctrine\ORM\Mapping\UniqueConstraint;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\TestCase;
 
@@ -79,7 +81,30 @@ final class MarketDataVenueEntityContractTest extends TestCase
         }
     }
 
-    /** @return list<OrderIntent|TradeLineage|TradeLifecycleEvent|FillCostLedgerEntry|TradeZoneEvent> */
+    public function testIndicatorSnapshotDoctrineIdentitySeparatesLegacyAndVenueRows(): void
+    {
+        $constraints = [];
+        foreach ((new \ReflectionClass(IndicatorSnapshot::class))->getAttributes(UniqueConstraint::class) as $attribute) {
+            $constraint = $attribute->newInstance();
+            $constraints[$constraint->name] = [
+                'columns' => $constraint->columns,
+                'where' => $constraint->options['where'] ?? null,
+            ];
+        }
+
+        self::assertSame([
+            'ux_ind_snap_exchange_market_symbol_tf_time' => [
+                'columns' => ['exchange', 'market_type', 'symbol', 'timeframe', 'kline_time'],
+                'where' => 'market_data_venue IS NULL',
+            ],
+            'ux_ind_snap_exchange_market_venue_symbol_tf_time' => [
+                'columns' => ['exchange', 'market_type', 'market_data_venue', 'symbol', 'timeframe', 'kline_time'],
+                'where' => 'market_data_venue IS NOT NULL',
+            ],
+        ], $constraints);
+    }
+
+    /** @return list<OrderIntent|TradeLineage|TradeLifecycleEvent|FillCostLedgerEntry|TradeZoneEvent|IndicatorSnapshot> */
     private function entities(): array
     {
         $occurredAt = new \DateTimeImmutable('2026-07-19 12:00:00+00');
@@ -101,6 +126,7 @@ final class MarketDataVenueEntityContractTest extends TestCase
                 'v1',
             ),
             new TradeZoneEvent('BTCUSDT', 'inside_zone', 99.0, 101.0, 100.0, 0.01, 0.02, $occurredAt),
+            new IndicatorSnapshot(),
         ];
     }
 
@@ -113,6 +139,7 @@ final class MarketDataVenueEntityContractTest extends TestCase
             TradeLifecycleEvent::class,
             FillCostLedgerEntry::class,
             TradeZoneEvent::class,
+            IndicatorSnapshot::class,
         ];
     }
 }
