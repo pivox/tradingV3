@@ -30,6 +30,9 @@ final readonly class PaperCanonicalStrategyObservation
         if ($event->sourceNetwork !== $cell->network || $event->sourceVenue !== $cell->marketDataVenue) {
             throw new \LogicException('paper_strategy_observation_market_scope_mismatch');
         }
+        if (preg_match('/\A[a-f0-9]{64}\z/D', $event->eventId) !== 1) {
+            throw new \LogicException('paper_strategy_observation_source_event_id_invalid');
+        }
         $payload = [
             'schema_version' => 'paper-strategy-observation.v1',
             'status' => $result->status,
@@ -43,7 +46,9 @@ final readonly class PaperCanonicalStrategyObservation
             'config_hash' => $identity->configHash,
             'condition_catalog_hash' => $identity->conditionCatalogHash,
         ];
-        PaperMarketEventRedactor::assertSafe($payload);
+        $payloadToInspect = $payload;
+        unset($payloadToInspect['source_event_id']);
+        PaperMarketEventRedactor::assertSafe($payloadToInspect);
 
         return new self($cell->id, $event->eventId, $result->status, $result->reasonCode, $payload);
     }

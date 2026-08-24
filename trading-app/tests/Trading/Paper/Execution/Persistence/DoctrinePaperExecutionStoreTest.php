@@ -376,6 +376,26 @@ SQL);
         );
     }
 
+    public function testStrategyObservationAcceptsCanonicalSourceDigestThatLooksEncoded(): void
+    {
+        $event = PaperMarketEvent::fromArray(json_decode(
+            <<<'JSON'
+{"channel":"public_trade","event_id":"4a2fa1c927ca195728949396d54b73d404a3ddab1214d05c9eac945fb144f77a","exchange_timestamp":"2026-08-24T06:25:53.889000Z","payload":{"block_time":"1787552753889","native_symbol":"BTC","origin":"ws_trades","price":"77421","side":"buy","size":"0.28776","trade_id":"545366555278346","transaction_hash_nibbles":[7,1,0,2,9,10,15,15,7,14,14,10,15,15,5,6,7,2,7,12,0,4,4,2,13,10,7,0,13,9,0,2,0,1,15,9,0,0,14,5,1,9,14,14,1,14,2,8,1,4,12,11,4,6,5,2,3,13,14,14,13,9,4,1]},"payload_hash":"146c301b882ed66d2bf632aa204ebb4ad8f970bfee59f501162218dc4de4470d","received_timestamp":"2026-08-24T06:25:54.228195Z","schema_version":2,"sequence":"111","source_network":"mainnet","source_venue":"hyperliquid","symbol":"BTCUSDT"}
+JSON,
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        ));
+
+        $observation = PaperCanonicalStrategyObservation::fromPreparation(
+            $this->modernCell(network: PaperMarketDataNetwork::MAINNET),
+            $event,
+            PaperCanonicalStrategyPreparationResult::missingEvidence('paper_indicator_projection_unavailable'),
+        );
+
+        self::assertSame($event->eventId, $observation->sourceEventId);
+    }
+
     public function testPendingEffectsAreOrderedIdempotentAndBlockFurtherSourceClaims(): void
     {
         $this->store->claimSource($this->cell, 0, $this->event(0));
@@ -501,7 +521,7 @@ SQL);
         }
     }
 
-    private function modernCell(): PaperExecutionCell
+    private function modernCell(PaperMarketDataNetwork $network = PaperMarketDataNetwork::TESTNET): PaperExecutionCell
     {
         $conditionHash = 'sha256:' . str_repeat('c', 64);
         $payload = ['decision' => ['enabled' => true]];
@@ -512,7 +532,7 @@ SQL);
         $snapshot = new EffectiveTradingConfigSnapshot(
             new EffectiveTradingConfigRequest(
                 'micro_scalping', '1.1.0', 'micro_scalping.momentum_ofi.long', '1.1.0',
-                'hyperliquid', 'testnet', 'long', ShadowExecutionCapability::Paper,
+                'hyperliquid', $network->value, 'long', ShadowExecutionCapability::Paper,
             ),
             $payload,
             CanonicalEffectiveConfigSnapshot::calculateConfigHash($payload, $conditionHash),
@@ -522,11 +542,11 @@ SQL);
         );
 
         return PaperExecutionCell::createModern(
-            PaperMarketDataNetwork::TESTNET,
+            $network,
             PaperMarketDataVenue::HYPERLIQUID,
             $this->snapshot->id,
             PaperModernStrategyIdentity::fromResolvedSnapshot(
-                PaperMarketDataNetwork::TESTNET,
+                $network,
                 PaperMarketDataVenue::HYPERLIQUID,
                 $snapshot,
             ),
