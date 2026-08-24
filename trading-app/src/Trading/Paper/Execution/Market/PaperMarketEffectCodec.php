@@ -34,7 +34,12 @@ final class PaperMarketEffectCodec
     public function decode(array $encoded): PaperMarketEvent
     {
         try {
-            if (array_keys($encoded) !== ['effect_type', 'schema_version', 'payload', 'payload_checksum']
+            $actualKeys = array_keys($encoded);
+            $expectedKeys = ['effect_type', 'schema_version', 'payload', 'payload_checksum'];
+            sort($actualKeys, SORT_STRING);
+            sort($expectedKeys, SORT_STRING);
+
+            if ($actualKeys !== $expectedKeys
                 || !$this->supports($encoded)
                 || $encoded['schema_version'] !== self::SCHEMA_VERSION
                 || !is_array($encoded['payload'])

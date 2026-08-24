@@ -9,6 +9,7 @@ use App\Trading\Paper\Execution\Market\PaperKlineProvider;
 use App\Trading\Paper\Execution\Market\PaperKlineProviderAdapter;
 use App\Trading\Paper\Execution\Market\PaperMarketEffectCodec;
 use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
+use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
@@ -113,6 +114,11 @@ final class PaperMarketStateProjectorTest extends TestCase
         $codec = new PaperMarketEffectCodec();
         $encoded = $codec->encode($event);
         self::assertSame($event->eventId, $codec->decode($encoded)->eventId);
+
+        $persisted = json_decode(CanonicalJson::encode($encoded), true, 32, JSON_THROW_ON_ERROR);
+        self::assertIsArray($persisted);
+        self::assertNotSame(array_keys($encoded), array_keys($persisted));
+        self::assertSame($event->eventId, $codec->decode($persisted)->eventId);
 
         $encoded['payload']['sequence'] = '11';
         $this->expectException(\InvalidArgumentException::class);
