@@ -14,6 +14,8 @@ use App\Trading\Paper\Execution\Persistence\PaperExecutionCellState;
 use App\Trading\Paper\Execution\Persistence\PaperPendingEffect;
 use App\Trading\Paper\Execution\Persistence\PaperSourceClaim;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyObservation;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparationResult;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
@@ -37,6 +39,7 @@ use Psr\Log\NullLogger;
 
 #[CoversClass(DoctrinePaperExecutionStore::class)]
 #[CoversClass(PaperExecutionCellState::class)]
+#[CoversClass(PaperCanonicalStrategyObservation::class)]
 final class DoctrinePaperExecutionStoreTest extends TestCase
 {
     private Connection $connection;
@@ -330,6 +333,47 @@ SQL);
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_execution_source_gap');
         $this->store->claimSource($this->cell, 2, $this->event(2));
+    }
+
+    public function testStrategyObservationIsSourceLinkedIdempotentAndConflictSafe(): void
+    {
+        $cell = $this->modernCell();
+        $event = $this->event(0);
+        $this->store->registerCell($cell, PaperProfileEligibility::REFERENCE_ONLY);
+        $this->store->claimSource($cell, 0, $event);
+        $observation = PaperCanonicalStrategyObservation::fromPreparation(
+            $cell,
+            $event,
+            PaperCanonicalStrategyPreparationResult::missingEvidence('paper_order_book_unavailable'),
+        );
+
+        $this->store->appendStrategyObservation($cell, 0, $observation);
+        $this->store->appendStrategyObservation($cell, 0, $observation);
+
+        $rows = $this->connection->fetchAllAssociative(
+            "SELECT source_position, source_event_id, payload::text AS payload FROM paper_execution_event WHERE cell_id = ? AND event_type = 'strategy_observed'",
+            [$cell->id],
+        );
+        self::assertCount(1, $rows);
+        self::assertSame(0, (int) $rows[0]['source_position']);
+        self::assertSame($event->eventId, $rows[0]['source_event_id']);
+        $payload = json_decode((string) $rows[0]['payload'], true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('paper-strategy-observation.v1', $payload['schema_version']);
+        self::assertSame('missing_evidence', $payload['status']);
+        self::assertSame('paper_order_book_unavailable', $payload['reason_code']);
+        self::assertSame($cell->modernIdentity?->configHash, $payload['config_hash']);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_strategy_observation_conflict');
+        $this->store->appendStrategyObservation(
+            $cell,
+            0,
+            PaperCanonicalStrategyObservation::fromPreparation(
+                $cell,
+                $event,
+                PaperCanonicalStrategyPreparationResult::noTrade('micro_scalping_shadow_setup_filter_failed'),
+            ),
+        );
     }
 
     public function testPendingEffectsAreOrderedIdempotentAndBlockFurtherSourceClaims(): void

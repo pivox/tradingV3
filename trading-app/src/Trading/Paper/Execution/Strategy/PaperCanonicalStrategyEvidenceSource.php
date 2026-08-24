@@ -46,16 +46,19 @@ final readonly class PaperCanonicalStrategyEvidenceSource implements PaperCanoni
             'test',
         );
         if ($projection === null) {
-            return null;
+            throw PaperCanonicalStrategyEvidenceUnavailable::indicatorProjection();
         }
         $book = $this->books->snapshotFor($cell, $event);
         if ($book === null) {
-            return null;
+            throw PaperCanonicalStrategyEvidenceUnavailable::orderBook();
         }
         $instrument = $this->instruments->evidenceFor($cell, $event, $book);
+        if ($instrument === null) {
+            throw PaperCanonicalStrategyEvidenceUnavailable::instrument();
+        }
         $costs = $this->costs->snapshotFor($cell, $event, $policy);
-        if ($instrument === null || $costs === null) {
-            return null;
+        if ($costs === null) {
+            throw PaperCanonicalStrategyEvidenceUnavailable::executionCosts();
         }
         $portfolio = $this->portfolios->snapshot(
             $this->runtimes->forCell($cell),
@@ -63,7 +66,7 @@ final readonly class PaperCanonicalStrategyEvidenceSource implements PaperCanoni
         );
         $plan = $this->orderPlans->build($policy, $projection, $instrument, $book, $costs, $portfolio);
         if ($plan === null) {
-            return null;
+            throw PaperCanonicalStrategyEvidenceUnavailable::orderPlan();
         }
 
         return new PaperCanonicalStrategyEvidenceInputs($projection, $plan, $portfolio, $book);

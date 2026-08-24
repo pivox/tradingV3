@@ -15,5 +15,5 @@ interface PaperCanonicalStrategyPreparationInterface
         string $sourceDatasetId,
         string $sourceEventsFileSha256,
         string $sourceBuildVersion,
-    ): ?PaperCanonicalStrategyDecision;
+    ): PaperCanonicalStrategyPreparationResult;
 }

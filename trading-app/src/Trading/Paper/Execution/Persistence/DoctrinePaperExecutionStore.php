@@ -8,6 +8,7 @@ use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshot;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Profile\PaperProfileRegistry;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyObservation;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use Doctrine\DBAL\Connection;
@@ -294,6 +295,59 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
             }
 
             $this->appendJournal($checkpoint, 'effect_requested', $payload, $position, null, $effectKey);
+            $this->rememberCheckpoint($cell->id);
+        });
+    }
+
+    public function appendStrategyObservation(
+        PaperExecutionCell $cell,
+        int $position,
+        PaperCanonicalStrategyObservation $observation,
+    ): void {
+        if ($position < 0 || !hash_equals($cell->id, $observation->cellId)) {
+            throw new \InvalidArgumentException('paper_strategy_observation_identity_invalid');
+        }
+
+        $this->atomic(function () use ($cell, $position, $observation): void {
+            $checkpoint = $this->lockCheckpoint($cell);
+            $this->verifyCheckpoint($checkpoint);
+            $sourceEventId = $this->connection->fetchOne(
+                "SELECT source_event_id FROM paper_execution_event WHERE cell_id = ? AND source_position = ? AND event_type = 'source_claimed'",
+                [$cell->id, $position],
+            );
+            if (!is_string($sourceEventId) || !hash_equals($sourceEventId, $observation->sourceEventId)) {
+                throw new \LogicException('paper_strategy_observation_source_unclaimed');
+            }
+
+            $payload = $observation->toArray();
+            $payloadChecksum = hash('sha256', CanonicalJson::encode($payload));
+            $existing = $this->connection->fetchAllAssociative(
+                "SELECT source_event_id, payload_checksum FROM paper_execution_event WHERE cell_id = ? AND source_position = ? AND event_type = 'strategy_observed'",
+                [$cell->id, $position],
+            );
+            if (count($existing) > 1) {
+                throw new \LogicException('paper_strategy_observation_conflict');
+            }
+            if ($existing !== []) {
+                $stored = $existing[0];
+                if (!is_string($stored['source_event_id'] ?? null)
+                    || !hash_equals($observation->sourceEventId, $stored['source_event_id'])
+                    || !hash_equals($payloadChecksum, (string) ($stored['payload_checksum'] ?? ''))
+                ) {
+                    throw new \LogicException('paper_strategy_observation_conflict');
+                }
+
+                return;
+            }
+
+            $this->appendJournal(
+                $checkpoint,
+                'strategy_observed',
+                $payload,
+                $position,
+                $observation->sourceEventId,
+                null,
+            );
             $this->rememberCheckpoint($cell->id);
         });
     }

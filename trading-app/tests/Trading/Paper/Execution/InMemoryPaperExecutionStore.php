@@ -12,6 +12,7 @@ use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
 use App\Trading\Paper\Execution\Persistence\PaperPendingEffect;
 use App\Trading\Paper\Execution\Persistence\PaperSourceClaim;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyObservation;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 
 final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
@@ -33,6 +34,8 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
     private int $acks = 0;
     private int $retries = 0;
     private int $failures = 0;
+    /** @var array<int, PaperCanonicalStrategyObservation> */
+    private array $strategyObservations = [];
     /** @var array{dataset_id: string, events_file_sha256: string, source_build_version: string|null}|null */
     private ?array $datasetIdentity = null;
     /** @var array<string, PaperProfileEligibility> */
@@ -154,6 +157,35 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
         }
     }
 
+    public function appendStrategyObservation(
+        PaperExecutionCell $cell,
+        int $position,
+        PaperCanonicalStrategyObservation $observation,
+    ): void {
+        if (!isset($this->sources[$position])
+            || !hash_equals($cell->id, $observation->cellId)
+            || !hash_equals($this->sources[$position]->eventId, $observation->sourceEventId)
+        ) {
+            throw new \LogicException('paper_strategy_observation_source_unclaimed');
+        }
+        $existing = $this->strategyObservations[$position] ?? null;
+        if ($existing !== null) {
+            if ($existing->toArray() !== $observation->toArray()) {
+                throw new \LogicException('paper_strategy_observation_conflict');
+            }
+
+            return;
+        }
+        $this->strategyObservations[$position] = $observation;
+        ++$this->ordinal;
+    }
+
+    /** @return list<PaperCanonicalStrategyObservation> */
+    public function strategyObservations(): array
+    {
+        return array_values($this->strategyObservations);
+    }
+
     public function pendingEffects(PaperExecutionCell $cell): array { return array_values($this->pending); }
 
     public function acknowledge(PaperExecutionCell $cell, int $position, string $effectKey, array $payload, int $fakeEventCursor): void
@@ -193,7 +225,7 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
 
     public function journalEventCounts(PaperExecutionCell $cell): array
     {
-        return ['effect_requested' => $this->requested, 'effect_acknowledged' => $this->acks, 'effect_retried' => $this->retries, 'effect_failed' => $this->failures];
+        return ['effect_requested' => $this->requested, 'effect_acknowledged' => $this->acks, 'effect_retried' => $this->retries, 'effect_failed' => $this->failures, 'strategy_observed' => count($this->strategyObservations)];
     }
 
     private function hasEffectFor(int $position): bool
