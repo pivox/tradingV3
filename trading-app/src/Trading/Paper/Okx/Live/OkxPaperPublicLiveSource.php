@@ -74,6 +74,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
     /** @var array{public: int, business: int} */
     private array $heartbeatGenerations = ['public' => 0, 'business' => 0];
 
+    /** @var array{public: bool, business: bool} */
+    private array $heartbeatDeferredForBacklog = ['public' => false, 'business' => false];
+
     /** @var array{public: int, business: int} */
     private array $pongGenerations = ['public' => 0, 'business' => 0];
 
@@ -3285,6 +3288,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             return;
         }
         $this->lastInboundAt[$socket] = $this->clock->now();
+        $this->heartbeatDeferredForBacklog[$socket] = false;
         if ($frame === 'pong' && isset($this->pongTimers[$socket])) {
             $this->loop->cancelTimer($this->pongTimers[$socket]);
             unset($this->pongTimers[$socket]);
@@ -3312,6 +3316,15 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     return;
                 }
                 unset($this->heartbeatTimers[$socket]);
+                $queue = $socket === 'public'
+                    ? $this->publicQueue
+                    : $this->businessQueue;
+                if ($queue->count() !== 0) {
+                    $this->heartbeatDeferredForBacklog[$socket] = true;
+                    $this->armHeartbeatTimer($socket);
+
+                    return;
+                }
                 $lastInbound = $this->lastInboundAt[$socket];
                 if (!$lastInbound instanceof \DateTimeImmutable) {
                     $this->beginPairedReconnect();
@@ -3363,6 +3376,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
         ++$this->heartbeatGenerations['public'];
         ++$this->heartbeatGenerations['business'];
+        $this->heartbeatDeferredForBacklog = ['public' => false, 'business' => false];
         ++$this->pongGenerations['public'];
         ++$this->pongGenerations['business'];
     }
@@ -3555,6 +3569,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         if ($events === []) {
             $queue->dequeue();
             $this->persistStreamingQueues();
+            $this->rescheduleHeartbeatAfterQueueDrain(
+                $business ? 'business' : 'public',
+                $queue,
+            );
         } else {
             $this->activeQueuedSocket = $business ? 'business' : 'public';
             $this->activeQueuedEventsRemaining = \count($events);
@@ -3568,13 +3586,44 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         if ($this->activeQueuedSocket === null) {
             return;
         }
-        $queue = $this->activeQueuedSocket === 'public'
+        $socket = $this->activeQueuedSocket;
+        $queue = $socket === 'public'
             ? $this->publicQueue
             : $this->businessQueue;
         $queue->dequeue();
         $this->activeQueuedSocket = null;
         $this->activeQueuedEventsRemaining = 0;
         $this->persistStreamingQueues();
+        $this->rescheduleHeartbeatAfterQueueDrain($socket, $queue);
+    }
+
+    private function rescheduleHeartbeatAfterQueueDrain(
+        string $socket,
+        OkxPaperPublicFrameQueue $queue,
+    ): void {
+        if ($queue->count() !== 0
+            || $this->checkpoint->phase !== 'streaming'
+            || !$this->heartbeatDeferredForBacklog[$socket]
+            || !isset($this->heartbeatTimers[$socket])
+            || isset($this->pongTimers[$socket])
+        ) {
+            return;
+        }
+        $this->heartbeatDeferredForBacklog[$socket] = false;
+        $lastInbound = $this->lastInboundAt[$socket];
+        $delay = 0.0;
+        if ($lastInbound instanceof \DateTimeImmutable) {
+            $deadline = $lastInbound->modify(sprintf(
+                '+%d seconds',
+                (int) OkxPaperLivePolicy::HEARTBEAT_IDLE_SECONDS,
+            ));
+            $delay = max(
+                0.0,
+                (float) $deadline->format('U.u')
+                    - (float) $this->clock->now()->format('U.u'),
+            );
+        }
+        $this->armHeartbeatTimer($socket, $delay);
     }
 
     private function persistStreamingQueues(): void
