@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Trading\Paper\Okx\Live;
 
-use App\Trading\Paper\MarketData\PaperLiveMarketDataSourceInterface;
+use App\Trading\Paper\MarketData\PaperDurableBatchSourceInterface;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
@@ -21,7 +21,7 @@ use React\EventLoop\LoopInterface;
 use React\EventLoop\TimerInterface;
 use Symfony\Component\Clock\ClockInterface;
 
-final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterface
+final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 {
     private const MAX_WARMUP_EVENT_BATCH = 100;
 
@@ -99,6 +99,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
     private ?string $activeQueuedSocket = null;
     private int $activeQueuedEventsRemaining = 0;
+
+    private ?OkxPaperLiveCheckpoint $durableEventBatchBase = null;
 
     private bool $healthyStopRequested = false;
     private bool $healthyStopAdmissionQuiesced = false;
@@ -219,6 +221,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         try {
             yield from $this->eventFlow();
         } catch (\Throwable $exception) {
+            if ($this->durableEventBatchBase instanceof OkxPaperLiveCheckpoint) {
+                $this->checkpoint = $this->durableEventBatchBase;
+                $this->durableEventBatchBase = null;
+            }
             if (!\in_array($this->checkpoint->phase, ['failed', 'complete'], true)) {
                 $reason = $this->terminalPublicFailureReason($exception);
                 if ($reason !== null) {
@@ -364,11 +370,29 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
     public function acknowledge(string $eventId): void
     {
         try {
-            $this->checkpoint = $this->checkpointStore->acknowledgeOpaqueUnsequenced(
-                $this->checkpoint,
-                $eventId,
-                $this->continuationTransition,
-            );
+            if ($this->durableEventBatchBase instanceof OkxPaperLiveCheckpoint) {
+                $prepared = $this->checkpointStore
+                    ->prepareOpaqueUnsequencedAcknowledgement(
+                        $this->checkpoint,
+                        $eventId,
+                        $this->continuationTransition,
+                    );
+                $this->checkpoint = $this->activeQueuedEventsRemaining === 1
+                    ? $this->checkpointStore->commitPreparedEventBatch(
+                        $this->durableEventBatchBase,
+                        $prepared,
+                    )
+                    : $prepared;
+                if ($this->activeQueuedEventsRemaining === 1) {
+                    $this->durableEventBatchBase = null;
+                }
+            } else {
+                $this->checkpoint = $this->checkpointStore->acknowledgeOpaqueUnsequenced(
+                    $this->checkpoint,
+                    $eventId,
+                    $this->continuationTransition,
+                );
+            }
         } catch (\Throwable $exception) {
             if ($this->isIdentityConflict($exception)) {
                 $this->failTerminal('market_event_identity_conflict');
@@ -386,6 +410,20 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $this->completeActiveQueuedFrame();
             }
         }
+    }
+
+    public function pendingDurableBatchSize(): int
+    {
+        if ($this->activeQueuedEventsRemaining > 1
+            && !$this->durableEventBatchBase instanceof OkxPaperLiveCheckpoint
+        ) {
+            if ($this->checkpoint->pendingEvent === null) {
+                throw new \LogicException('okx_paper_durable_batch_boundary_invalid');
+            }
+            $this->durableEventBatchBase = $this->checkpoint;
+        }
+
+        return max(1, $this->activeQueuedEventsRemaining);
     }
 
     public function stop(): void
@@ -1370,12 +1408,22 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         foreach ($events as $index => $accepted) {
             $event = $accepted['event'];
             $frontier = $accepted['frontier'];
-            $this->checkpoint = $this->checkpointStore->savePending(
-                $this->checkpoint,
-                $event,
-                $accepted['ordinal_state'],
-                ['stream' => $stream, 'frontier' => $frontier->toArray()],
-            );
+            $pendingFrontier = ['stream' => $stream, 'frontier' => $frontier->toArray()];
+            if ($this->durableEventBatchBase instanceof OkxPaperLiveCheckpoint) {
+                $this->checkpoint = $this->checkpointStore->preparePending(
+                    $this->checkpoint,
+                    $event,
+                    $accepted['ordinal_state'],
+                    $pendingFrontier,
+                );
+            } else {
+                $this->checkpoint = $this->checkpointStore->savePending(
+                    $this->checkpoint,
+                    $event,
+                    $accepted['ordinal_state'],
+                    $pendingFrontier,
+                );
+            }
             $this->continuationTransition = ($index < $last || $continueTransitionAfterBatch)
                 && $transition !== []
                 ? $transition

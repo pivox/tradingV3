@@ -602,7 +602,48 @@ final class OkxPaperLiveCheckpointStore
         #[\SensitiveParameter] array $ordinalState,
         #[\SensitiveParameter] ?array $pendingFrontier,
     ): OkxPaperLiveCheckpoint {
-        $this->assertCurrent($checkpoint);
+        return $this->pendingCheckpoint(
+            $checkpoint,
+            $event,
+            $ordinalState,
+            $pendingFrontier,
+            true,
+        );
+    }
+
+    /**
+     * @param array<string, mixed>      $ordinalState
+     * @param array<string, mixed>|null $pendingFrontier
+     */
+    public function preparePending(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+        #[\SensitiveParameter] PaperMarketEvent $event,
+        #[\SensitiveParameter] array $ordinalState,
+        #[\SensitiveParameter] ?array $pendingFrontier,
+    ): OkxPaperLiveCheckpoint {
+        return $this->pendingCheckpoint(
+            $checkpoint,
+            $event,
+            $ordinalState,
+            $pendingFrontier,
+            false,
+        );
+    }
+
+    /**
+     * @param array<string, mixed>      $ordinalState
+     * @param array<string, mixed>|null $pendingFrontier
+     */
+    private function pendingCheckpoint(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+        #[\SensitiveParameter] PaperMarketEvent $event,
+        #[\SensitiveParameter] array $ordinalState,
+        #[\SensitiveParameter] ?array $pendingFrontier,
+        bool $persist,
+    ): OkxPaperLiveCheckpoint {
+        if ($persist) {
+            $this->assertCurrent($checkpoint);
+        }
         if ($checkpoint->pendingEvent !== null) {
             throw self::invalidCheckpoint();
         }
@@ -636,7 +677,9 @@ final class OkxPaperLiveCheckpointStore
         $state['pending_frontier'] = $pendingFrontier;
         $state['pending_transition'] = null;
         $next = $this->validatedCheckpoint($state);
-        $this->persist($next);
+        if ($persist) {
+            $this->persist($next);
+        }
 
         return $next;
     }
@@ -815,6 +858,22 @@ final class OkxPaperLiveCheckpointStore
             $eventId,
             $continuationTransition,
             true,
+            true,
+        );
+    }
+
+    /** @param array<string, mixed>|null $continuationTransition */
+    public function prepareOpaqueUnsequencedAcknowledgement(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+        string $eventId,
+        #[\SensitiveParameter] ?array $continuationTransition = null,
+    ): OkxPaperLiveCheckpoint {
+        return $this->acknowledgeWithFrontierPolicy(
+            $checkpoint,
+            $eventId,
+            $continuationTransition,
+            true,
+            false,
         );
     }
 
@@ -824,8 +883,11 @@ final class OkxPaperLiveCheckpointStore
         string $eventId,
         #[\SensitiveParameter] ?array $continuationTransition,
         bool $opaqueUnsequencedFrontiers,
+        bool $persist = true,
     ): OkxPaperLiveCheckpoint {
-        $this->assertCurrent($checkpoint);
+        if ($persist) {
+            $this->assertCurrent($checkpoint);
+        }
         if (preg_match(self::SHA256_PATTERN, $eventId) !== 1) {
             throw new OkxPaperLiveIntegrityException('okx_paper_live_acknowledgement_invalid');
         }
@@ -938,6 +1000,32 @@ final class OkxPaperLiveCheckpointStore
             allowFrontierContinuation: $recoveryContinues,
         );
         $this->assertTransitionTargetsWorkHead($next);
+        if ($persist) {
+            $this->persist($next);
+        }
+
+        return $next;
+    }
+
+    public function commitPreparedEventBatch(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $durableBase,
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $prepared,
+    ): OkxPaperLiveCheckpoint {
+        $this->assertCurrent($durableBase);
+        if ($durableBase->pendingEvent === null
+            || $prepared->pendingEvent !== null
+            || $durableBase->phase !== $prepared->phase
+            || !\in_array($prepared->phase, ['streaming', 'stopping'], true)
+            || $durableBase->pendingTransition !== null
+            || $prepared->pendingTransition !== null
+            || $durableBase->streamingQueueRef !== $prepared->streamingQueueRef
+            || $durableBase->datasetId !== $prepared->datasetId
+            || $durableBase->configurationSha256 !== $prepared->configurationSha256
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $next = $this->validatedCheckpoint($prepared->toArray());
+        $this->assertCompleteIsTerminal($next);
         $this->persist($next);
 
         return $next;
