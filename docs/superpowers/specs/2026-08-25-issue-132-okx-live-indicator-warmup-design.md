@@ -32,10 +32,11 @@ contract and still leave interval-retention composition unresolved elsewhere.
 ## Pagination Contract
 
 For each OKX instrument, the source first requests the existing 300 current
-`1H` rows. It validates and identifies the oldest returned timestamp, then
-requests older pages of at most 300 rows with that timestamp as the exclusive
-cursor. Pagination stops only when at least 1,000 unique confirmed rows are
-available.
+`1H` rows. It durably pins the newest confirmed timestamp observed on that
+first page, then requests older pages of at most 300 rows with the oldest
+returned timestamp as the exclusive cursor. The source selects the newest
+1,000-row base whose first opening timestamp is aligned to the UTC four-hour
+grid and paginates until that base is complete.
 
 Every page must:
 
@@ -45,17 +46,21 @@ Every page must:
 - agree byte-for-byte on duplicate natural identities;
 - contain a contiguous confirmed one-hour grid after deduplication.
 
-The source retains exactly the newest 1,000 confirmed rows for emission. It
-fails closed with a stable public-response integrity reason on an empty page,
+The source emits the aligned 1,000-row base followed by the zero to three newer
+confirmed rows already observed on the first page. Preserving that suffix keeps
+the recorded 1H stream contiguous when the websocket takes over. It fails
+closed with a stable public-response integrity reason on an empty page,
 non-progress, conflicting duplicate, malformed row, gap or exhaustion of a
 fixed four-history-page budget. No partial snapshot boundary is emitted.
 
 ## Resume and Safety
 
 Events still use the existing pending-event acknowledgement and durable live
-checkpoint path. If power is lost during emission, restart refetches the bounded
-warmup, skips identities already committed through the stream frontier, and
-continues exactly. A completed warmup transition is not repeated.
+checkpoint path. The pinned newest-confirmed timestamp freezes both the aligned
+base and its observed suffix. If power is lost during emission, restart fetches
+history through that timestamp without consulting the shifted current page,
+skips identities already committed through the stream frontier, and continues
+exactly. A completed warmup transition is not repeated.
 
 Only the already allowlisted public OKX REST client is used. No credential,
 account, private websocket, order endpoint or execution adapter is introduced.
@@ -63,10 +68,11 @@ Mainnet remains public and read-only; all later replay execution remains Fake.
 
 ## Verification
 
-Tests prove 1,000 confirmed contiguous hourly emissions for both symbols,
-exclusive cursor progression, deterministic deduplication, restart during
-emission, and fail-closed behavior for gap, empty/non-progressing pages,
-conflicting duplicates and page-budget exhaustion. Existing lower-timeframe,
-reconnect, capture/replay equality and checkpoint tests must remain unchanged.
+Tests prove an aligned 1,000-hour base plus its confirmed contiguous suffix for
+both symbols, exclusive cursor progression, deterministic deduplication,
+restart during emission, and fail-closed behavior for gap,
+empty/non-progressing pages, conflicting duplicates and page-budget exhaustion.
+Existing lower-timeframe, reconnect, capture/replay equality and checkpoint
+tests must remain unchanged.
 Required gates are related PHPUnit suites, PHPStan on the changed source,
 `git diff --check`, CI and one substantive Codex review before merge.

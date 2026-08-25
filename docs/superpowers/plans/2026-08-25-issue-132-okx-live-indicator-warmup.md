@@ -4,7 +4,7 @@
 
 **Goal:** Emit 1,000 proven one-hour candles per symbol during the existing OKX public live warmup so canonical 4h indicators become available in the same live dataset.
 
-**Architecture:** A private bounded pagination helper extends only the `1H` initial REST warmup. It validates progress, deduplicates exact rows, proves a contiguous confirmed grid, and returns the newest 1,000 rows to the existing normalization/acknowledgement pipeline.
+**Architecture:** A private bounded pagination helper extends only the `1H` initial REST warmup. It validates progress, deduplicates exact rows, pins the observed confirmed frontier, and returns an aligned 1,000-row base plus its zero-to-three-row confirmed suffix to the existing normalization/acknowledgement pipeline.
 
 **Tech Stack:** PHP 8.4, existing OKX public REST client, PHPUnit, PHPStan.
 

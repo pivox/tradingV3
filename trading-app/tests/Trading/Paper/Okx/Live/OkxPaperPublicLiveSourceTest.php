@@ -226,7 +226,6 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
     {
         $rest = Task7RestClient::withInitialDataset();
         $hourlyRows = self::contiguousHourlyRows(1002);
-        $expectedWindow = array_slice($hourlyRows, 0, 1000);
         $rest->candleRows['BTC-USDT-SWAP/1H'] = array_reverse(array_slice($hourlyRows, 702, 300));
         $rest->historyCandlePages = [
             array_reverse(array_slice($hourlyRows, 402, 300)),
@@ -244,20 +243,22 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $this->acknowledgeWarmupEvents($source, $events, 3);
 
         $hourlyTimestamps = [];
-        for ($index = 0; $index < 1000; ++$index) {
+        for ($index = 0; $index < 1002; ++$index) {
             $event = $events->current();
             self::assertInstanceOf(PaperMarketEvent::class, $event);
             $hourlyTimestamps[] = $event->exchangeTimestamp->format('Uv');
             $source->acknowledge($event->eventId);
-            if ($index < 999) {
+            if ($index < 1001) {
                 $events->next();
             }
         }
 
-        self::assertSame(array_column($expectedWindow, 0), $hourlyTimestamps);
+        self::assertSame(array_column($hourlyRows, 0), $hourlyTimestamps);
         self::assertSame(
             '00',
-            $events->current()->exchangeTimestamp->modify('-999 hours')->format('H'),
+            (new \DateTimeImmutable('@' . ((int) $hourlyTimestamps[0] / 1000)))
+                ->setTimezone(new \DateTimeZone('UTC'))
+                ->format('H'),
         );
     }
 

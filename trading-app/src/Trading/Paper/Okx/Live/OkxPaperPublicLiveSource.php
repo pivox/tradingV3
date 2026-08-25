@@ -665,10 +665,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
 
         $symbol = $this->instruments->normalizedSymbol($instrumentId);
-        $windowEnd = $this->checkpoint->initialHourlyWindowEnds[$symbol];
+        $observedEnd = $this->checkpoint->initialHourlyWindowEnds[$symbol];
         /** @var array<string, array{canonical: string, row: array<array-key, mixed>}> $byTimestamp */
         $byTimestamp = [];
-        if ($windowEnd === null) {
+        if ($observedEnd === null) {
             $rows = $this->restClient->currentCandles(
                 $instrumentId,
                 $bar,
@@ -682,17 +682,18 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 null,
                 $byTimestamp,
             );
-            $windowEnd = $this->newestConfirmedInitialHourlyTimestamp($byTimestamp);
+            $observedEnd = $this->newestConfirmedInitialHourlyTimestamp($byTimestamp);
             $this->checkpoint = $this->checkpointStore->pinInitialHourlyWindowEnd(
                 $this->checkpoint,
                 $symbol,
-                $windowEnd,
+                $observedEnd,
             );
         } else {
-            $cursor = (string) BigInteger::of($windowEnd)->plus(1);
+            $cursor = (string) BigInteger::of($observedEnd)->plus(1);
         }
+        $alignedWindowEnd = $this->alignedInitialHourlyWindowEnd($byTimestamp, $observedEnd);
         for ($page = 0; $page < OkxPaperLivePolicy::MAX_INITIAL_HOURLY_HISTORY_PAGES; ++$page) {
-            if ($this->confirmedInitialHourlyCountThrough($byTimestamp, $windowEnd)
+            if ($this->confirmedInitialHourlyCountThrough($byTimestamp, $alignedWindowEnd)
                 >= $this->initialHourlyCandleTarget
             ) {
                 break;
@@ -705,10 +706,11 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $byTimestamp,
             );
         }
-        if ($this->confirmedInitialHourlyCountThrough($byTimestamp, $windowEnd)
+        if ($this->confirmedInitialHourlyCountThrough($byTimestamp, $alignedWindowEnd)
             < $this->initialHourlyCandleTarget
-            || !isset($byTimestamp[$windowEnd])
-            || ($byTimestamp[$windowEnd]['row'][8] ?? null) !== '1'
+            || !isset($byTimestamp[$observedEnd], $byTimestamp[$alignedWindowEnd])
+            || ($byTimestamp[$observedEnd]['row'][8] ?? null) !== '1'
+            || ($byTimestamp[$alignedWindowEnd]['row'][8] ?? null) !== '1'
         ) {
             throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
         }
@@ -716,7 +718,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         $confirmed = array_values(array_filter(
             $byTimestamp,
             static fn (array $entry): bool => ($entry['row'][8] ?? null) === '1'
-                && self::compareUnsigned($entry['row'][0] ?? null, $windowEnd) <= 0,
+                && self::compareUnsigned($entry['row'][0] ?? null, $observedEnd) <= 0,
         ));
         usort(
             $confirmed,
@@ -725,7 +727,22 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $right['row'][0] ?? null,
             ),
         );
-        $confirmed = array_slice($confirmed, -$this->initialHourlyCandleTarget);
+        $alignedPosition = null;
+        foreach ($confirmed as $position => $entry) {
+            if (hash_equals($alignedWindowEnd, $entry['row'][0])) {
+                $alignedPosition = $position;
+                break;
+            }
+        }
+        if (!\is_int($alignedPosition)
+            || $alignedPosition < $this->initialHourlyCandleTarget - 1
+        ) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
+        $confirmed = array_slice(
+            $confirmed,
+            $alignedPosition - $this->initialHourlyCandleTarget + 1,
+        );
         $previous = null;
         foreach ($confirmed as $entry) {
             $timestamp = $entry['row'][0];
@@ -747,14 +764,6 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 continue;
             }
             $timestamp = $entry['row'][0] ?? null;
-            if ($this->initialHourlyCandleTarget === OkxPaperLivePolicy::INITIAL_HOURLY_CANDLE_TARGET
-                && !BigInteger::of($timestamp)
-                    ->minus(($this->initialHourlyCandleTarget - 1) * 3_600_000)
-                    ->mod(4 * 3_600_000)
-                    ->isZero()
-            ) {
-                continue;
-            }
             $newest = $newest === null || self::compareUnsigned($timestamp, $newest) > 0
                 ? $timestamp
                 : $newest;
@@ -764,6 +773,37 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
 
         return $newest;
+    }
+
+    /** @param array<string, array{canonical: string, row: array<array-key, mixed>}> $rows */
+    private function alignedInitialHourlyWindowEnd(array $rows, string $observedEnd): string
+    {
+        if ($this->initialHourlyCandleTarget !== OkxPaperLivePolicy::INITIAL_HOURLY_CANDLE_TARGET) {
+            return $observedEnd;
+        }
+        $aligned = null;
+        foreach ($rows as $entry) {
+            if (($entry['row'][8] ?? null) !== '1') {
+                continue;
+            }
+            $timestamp = $entry['row'][0] ?? null;
+            if (self::compareUnsigned($timestamp, $observedEnd) > 0
+                || !BigInteger::of($timestamp)
+                    ->minus(($this->initialHourlyCandleTarget - 1) * 3_600_000)
+                    ->mod(4 * 3_600_000)
+                    ->isZero()
+            ) {
+                continue;
+            }
+            $aligned = $aligned === null || self::compareUnsigned($timestamp, $aligned) > 0
+                ? $timestamp
+                : $aligned;
+        }
+        if ($aligned === null) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
+
+        return $aligned;
     }
 
     /** @param array<string, array{canonical: string, row: array<array-key, mixed>}> $rows */
