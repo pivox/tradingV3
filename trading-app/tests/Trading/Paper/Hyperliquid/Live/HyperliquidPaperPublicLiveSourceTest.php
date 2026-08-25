@@ -8,6 +8,7 @@ use App\Trading\Paper\Capture\PaperPublicCaptureStopController;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpointStore;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveIntegrityException;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSource;
@@ -29,6 +30,59 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(HyperliquidPaperPublicLiveSource::class)]
 final class HyperliquidPaperPublicLiveSourceTest extends TestCase
 {
+    public function testRejectsWarmupRestClientFromAnotherNetwork(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('hyperliquid_paper_live_rest_client_network_mismatch');
+
+        $this->source(
+            new DeterministicHyperliquidTransport([]),
+            restClient: new LiveSourceWarmupRestClient(
+                PaperMarketDataNetwork::TESTNET,
+            ),
+        );
+    }
+
+    public function testWarmupPinsObservationAndResumesAfterAcknowledgedCandle(): void
+    {
+        $rest = new LiveSourceWarmupRestClient();
+        $first = $this->source(
+            new DeterministicHyperliquidTransport([]),
+            restClient: $rest,
+        );
+        $events = self::generator($first->events());
+        $events->rewind();
+        $firstCandle = $events->current();
+
+        self::assertInstanceOf(PaperMarketEvent::class, $firstCandle);
+        self::assertStringStartsWith('candle_', $firstCandle->channel->value);
+        self::assertSame([
+            'BTC' => '1785319200000',
+            'ETH' => '1785319200000',
+        ], $this->checkpoint()->initialCandleWindowEnds);
+        $first->acknowledge($firstCandle->eventId);
+
+        $resumed = $this->source(
+            new DeterministicHyperliquidTransport([]),
+            restClient: $rest,
+        );
+        $resumedEvents = self::generator($resumed->events());
+        $resumedEvents->rewind();
+
+        self::assertInstanceOf(PaperMarketEvent::class, $resumedEvents->current());
+        self::assertNotSame($firstCandle->eventId, $resumedEvents->current()->eventId);
+        self::assertNotSame([
+            $firstCandle->symbol,
+            $firstCandle->channel->value,
+            $firstCandle->payload['start_time'],
+        ], [
+            $resumedEvents->current()->symbol,
+            $resumedEvents->current()->channel->value,
+            $resumedEvents->current()->payload['start_time'],
+        ]);
+        self::assertSame(24, count($rest->requests));
+    }
+
     public function testAuthenticatedMetadataAndFundingPrecedeInitialSnapshotBoundaries(): void
     {
         $source = $this->source(
@@ -806,6 +860,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         ?HyperliquidPaperInstrumentMetadataClientInterface $metadataClient = null,
         ?HyperliquidPaperFundingRateClientInterface $fundingClient = null,
         ?MockClock $clock = null,
+        ?HyperliquidPaperPublicRestClientInterface $restClient = null,
     ): HyperliquidPaperPublicLiveSource {
         $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
         $checkpoint = $store->loadOrCreate(
@@ -830,6 +885,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
             $loop ?? new StreamSelectLoop(),
             metadataClient: $metadataClient,
             fundingClient: $fundingClient,
+            restClient: $restClient,
         );
     }
 
@@ -989,6 +1045,45 @@ final class StaticHyperliquidPaperFundingClient implements HyperliquidPaperFundi
             ['coin' => 'BTC', 'funding_rate' => '0.0000125'],
             ['coin' => 'ETH', 'funding_rate' => '-0.000025'],
         ];
+    }
+}
+
+final class LiveSourceWarmupRestClient implements HyperliquidPaperPublicRestClientInterface
+{
+    /** @var list<array{string, string, int, int}> */
+    public array $requests = [];
+
+    public function __construct(
+        private readonly PaperMarketDataNetwork $network = PaperMarketDataNetwork::MAINNET,
+    ) {
+    }
+
+    public function network(): PaperMarketDataNetwork
+    {
+        return $this->network;
+    }
+
+    public function candleSnapshot(
+        string $coin,
+        string $interval,
+        int $startTime,
+        int $endTime,
+        int $maximumResponseBytes = 1_048_576,
+        int $maximumRetries = 5,
+    ): array {
+        $this->requests[] = [$coin, $interval, $startTime, $endTime];
+        $step = ['1m' => 60_000, '5m' => 300_000, '15m' => 900_000, '1h' => 3_600_000][$interval];
+        $rows = [];
+        for ($start = $startTime; $start <= $endTime; $start += $step) {
+            $rows[] = [
+                'T' => $start + $step - 1,
+                'c' => '100', 'h' => '101', 'i' => $interval,
+                'l' => '99', 'n' => 1, 'o' => '100', 's' => $coin,
+                't' => $start, 'v' => '10',
+            ];
+        }
+
+        return $rows;
     }
 }
 

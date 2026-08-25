@@ -51,13 +51,14 @@ final class HyperliquidPaperLiveCheckpointStoreTest extends TestCase
     {
         $checkpoint = self::fresh();
 
-        self::assertSame(2, $checkpoint->policyVersion);
+        self::assertSame(3, $checkpoint->policyVersion);
         self::assertSame([
             'schema_version', 'policy_version', 'dataset_id', 'network',
             'configuration_sha256', 'phase', 'failure_reason', 'continuity',
             'connection_epoch', 'source_epoch', 'subscriptions',
             'ordinal_state', 'pending_event', 'pending_continuation',
             'current_candles', 'finalized_candle_frontiers',
+            'initial_candle_window_ends',
             'acknowledged_identities', 'trade_identity_history',
             'reconnect_attempt',
             'heartbeat', 'healthy_stop',
@@ -68,6 +69,34 @@ final class HyperliquidPaperLiveCheckpointStoreTest extends TestCase
         );
         self::assertSame(PaperMarketDataNetwork::MAINNET, $checkpoint->network);
         self::assertCount(12, $checkpoint->subscriptions);
+        self::assertSame(
+            ['BTC' => null, 'ETH' => null],
+            $checkpoint->initialCandleWindowEnds,
+        );
+    }
+
+    public function testInitialCandleWindowEndsAreExactAndImmutable(): void
+    {
+        $fresh = self::fresh();
+        $pinned = $fresh->withInitialCandleWindowEnds([
+            'BTC' => '1785290399999',
+            'ETH' => '1785290399999',
+        ]);
+
+        self::assertSame([
+            'BTC' => '1785290399999',
+            'ETH' => '1785290399999',
+        ], $pinned->initialCandleWindowEnds);
+        self::assertSame($pinned->toArray(), $pinned->withInitialCandleWindowEnds(
+            $pinned->initialCandleWindowEnds,
+        )->toArray());
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('hyperliquid_paper_live_checkpoint_invalid');
+        $pinned->withInitialCandleWindowEnds([
+            'BTC' => '1785293999999',
+            'ETH' => '1785290399999',
+        ]);
     }
 
     public function testLegacyRawHashPayloadPolicyCannotResumeIntoNibbleLineage(): void

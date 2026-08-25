@@ -13,6 +13,7 @@ use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfigFactory;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use React\EventLoop\Loop;
@@ -36,6 +37,7 @@ final readonly class HyperliquidPaperPublicLiveSourceFactory implements PaperPub
         private PaperDatasetRecorderFilesystem $filesystem,
         private ?HyperliquidPaperInstrumentMetadataClientInterface $metadataClient = null,
         private ?HyperliquidPaperFundingRateClientInterface $fundingClient = null,
+        private ?HyperliquidPaperPublicRestClientInterface $restClient = null,
     ) {
     }
 
@@ -77,6 +79,7 @@ final readonly class HyperliquidPaperPublicLiveSourceFactory implements PaperPub
                 transport: $transport,
                 metadataClient: $this->metadataClient,
                 fundingClient: $this->fundingClient,
+                restClient: $this->restClient,
                 config: $config,
                 clock: $this->clock,
                 checkpointStore: $checkpointStore,

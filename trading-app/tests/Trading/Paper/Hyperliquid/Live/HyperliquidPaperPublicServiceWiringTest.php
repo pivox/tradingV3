@@ -10,6 +10,7 @@ use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfigFactory;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSource;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSourceFactory;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicWebSocketTransportFactoryInterface;
@@ -59,6 +60,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
             'filesystem',
             'metadataClient',
             'fundingClient',
+            'restClient',
         ], array_map(
             static fn (\ReflectionParameter $parameter): string => $parameter->getName(),
             $parameters,
@@ -71,6 +73,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
             PaperDatasetRecorderFilesystem::class,
             HyperliquidPaperInstrumentMetadataClientInterface::class,
             HyperliquidPaperFundingRateClientInterface::class,
+            HyperliquidPaperPublicRestClientInterface::class,
         ], array_map(
             static function (\ReflectionParameter $parameter): string {
                 $type = $parameter->getType();
