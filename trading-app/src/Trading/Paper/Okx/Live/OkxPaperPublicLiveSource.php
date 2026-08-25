@@ -23,6 +23,8 @@ use Symfony\Component\Clock\ClockInterface;
 
 final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterface
 {
+    private const MAX_WARMUP_EVENT_BATCH = 100;
+
     private readonly OkxPaperInstrumentMap $instruments;
     private readonly OkxPaperPublicSubscriptionSet $subscriptions;
     private readonly OkxPaperPublicFrameDecoder $decoder;
@@ -556,8 +558,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     $bar,
                 );
                 $this->sortCandleRows($rows);
-                $events = $this->acceptedEvents(
+                yield from $this->yieldWarmupRowEvents(
                     $stream,
+                    $transition,
                     $rows,
                     fn (array $row, OkxPaperMarketEventNormalizer $normalizer): ?PaperMarketEvent => $normalizer
                         ->warmupCandle($instrumentId, $bar, $row),
@@ -566,15 +569,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                         $bar,
                         $row,
                     ),
+                    true,
                 );
-                if ($events === []
-                    && ($this->checkpoint->streamFrontiers[$stream] ?? null) === null
-                ) {
-                    throw new OkxPaperLiveIntegrityException(
-                        'okx_paper_public_response_invalid',
-                    );
-                }
-                yield from $this->yieldMarketEvents($events, $stream, $transition);
             }
 
             $tradeStream = $symbol . '/rest/public_trade';
@@ -587,8 +583,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $this->ensureTransition('warming', $tradeTransition);
                 $rows = $this->restClient->recentTrades($instrumentId, 500);
                 $this->sortTradeRows($rows);
-                $events = $this->acceptedEvents(
+                yield from $this->yieldWarmupRowEvents(
                     $tradeStream,
+                    $tradeTransition,
                     $rows,
                     static fn (
                         array $row,
@@ -596,7 +593,6 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     ): PaperMarketEvent => $normalizer->recoveryTrade($row),
                     fn (array $row): OkxPaperStreamFrontier => $this->tradeFrontier($row),
                 );
-                yield from $this->yieldMarketEvents($events, $tradeStream, $tradeTransition);
             }
 
             $bookStream = $symbol . '/rest/top_of_book';
@@ -1360,7 +1356,12 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
      * @param array<string, mixed> $transition
      * @return \Generator<int, PaperMarketEvent>
      */
-    private function yieldMarketEvents(array $events, string $stream, array $transition): \Generator
+    private function yieldMarketEvents(
+        array $events,
+        string $stream,
+        array $transition,
+        bool $continueTransitionAfterBatch = false,
+    ): \Generator
     {
         if ($events === []) {
             return;
@@ -1375,12 +1376,159 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $accepted['ordinal_state'],
                 ['stream' => $stream, 'frontier' => $frontier->toArray()],
             );
-            $this->continuationTransition = $index < $last && $transition !== []
+            $this->continuationTransition = ($index < $last || $continueTransitionAfterBatch)
+                && $transition !== []
                 ? $transition
                 : null;
             yield $this->checkpoint->pendingEvent
                 ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
             $this->assertPendingWasAcknowledged();
+        }
+    }
+
+    /**
+     * @param list<array<array-key, mixed>> $rows
+     * @param callable(array<array-key, mixed>, OkxPaperMarketEventNormalizer): ?PaperMarketEvent $normalize
+     * @param callable(array<array-key, mixed>): ?OkxPaperStreamFrontier $frontierForRow
+     * @param array<string, mixed> $transition
+     * @return \Generator<int, PaperMarketEvent>
+     */
+    private function yieldWarmupRowEvents(
+        string $stream,
+        array $transition,
+        array $rows,
+        callable $normalize,
+        callable $frontierForRow,
+        bool $requireInitialEvent = false,
+    ): \Generator {
+        if ($rows === []) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
+        if ($this->requiresOverlap[$stream] ?? false) {
+            $required = $this->checkpoint->streamFrontiers[$stream] ?? null;
+            if (!$required instanceof OkxPaperStreamFrontier) {
+                throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+            }
+            $overlap = null;
+            /** @var array<string, OkxPaperStreamFrontier> $prefixFrontiers */
+            $prefixFrontiers = [];
+            foreach ($rows as $index => $row) {
+                $candidate = $frontierForRow($row);
+                if (!$candidate instanceof OkxPaperStreamFrontier
+                    || !hash_equals($required->naturalIdentity, $candidate->naturalIdentity)
+                ) {
+                    if ($candidate instanceof OkxPaperStreamFrontier) {
+                        $this->assertWarmupPrefixIdentity(
+                            $stream,
+                            $candidate,
+                            $prefixFrontiers,
+                        );
+                    }
+                    continue;
+                }
+                if (!hash_equals($required->canonicalDigest, $candidate->canonicalDigest)) {
+                    throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
+                }
+                $overlap = $index;
+                break;
+            }
+            if (!\is_int($overlap)) {
+                throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+            }
+            $rows = array_slice($rows, $overlap);
+        }
+
+        $acceptedAny = false;
+        $pendingEvents = null;
+        foreach ($this->warmupRowBatches($rows) as $batch) {
+            $events = $this->acceptedEvents(
+                $stream,
+                $batch,
+                $normalize,
+                $frontierForRow,
+            );
+            if ($events === []) {
+                continue;
+            }
+            $acceptedAny = true;
+            if (\is_array($pendingEvents)) {
+                yield from $this->yieldMarketEvents(
+                    $pendingEvents,
+                    $stream,
+                    $transition,
+                    true,
+                );
+            }
+            $pendingEvents = $events;
+        }
+        if (\is_array($pendingEvents)) {
+            yield from $this->yieldMarketEvents(
+                $pendingEvents,
+                $stream,
+                $transition,
+            );
+        }
+        if ($requireInitialEvent
+            && !$acceptedAny
+            && ($this->checkpoint->streamFrontiers[$stream] ?? null) === null
+        ) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
+    }
+
+    /**
+     * @param array<string, OkxPaperStreamFrontier> $prefixFrontiers
+     */
+    private function assertWarmupPrefixIdentity(
+        string $stream,
+        OkxPaperStreamFrontier $candidate,
+        array &$prefixFrontiers,
+    ): void {
+        $sourceKind = self::identitySourceKind($stream);
+        $observedKey = $sourceKind . '/' . $candidate->sourceIdentity;
+        $observed = $prefixFrontiers[$observedKey] ?? null;
+        if ($observed instanceof OkxPaperStreamFrontier
+            && !hash_equals($observed->canonicalDigest, $candidate->canonicalDigest)
+        ) {
+            throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
+        }
+        $prefixFrontiers[$observedKey] = $candidate;
+
+        $acknowledged = $this->acknowledgedIdentity($stream, $candidate);
+        if ($acknowledged === null) {
+            return;
+        }
+        $originCanonicalDigest = $sourceKind === 'rest'
+            ? $acknowledged['rest_canonical_digest']
+            : $acknowledged['ws_canonical_digest'];
+        if (!hash_equals(
+            $originCanonicalDigest ?? $acknowledged['overlap_digest'],
+            $originCanonicalDigest !== null
+                ? $candidate->canonicalDigest
+                : $candidate->overlapDigest,
+        )) {
+            throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
+        }
+        if ($originCanonicalDigest === null) {
+            $this->checkpoint = $this->checkpointStore
+                ->rememberAcknowledgedIdentityObservation(
+                    $this->checkpoint,
+                    $stream,
+                    $candidate,
+                    $sourceKind,
+                );
+        }
+    }
+
+    /**
+     * @param list<array<array-key, mixed>> $rows
+     * @return \Generator<int, list<array<array-key, mixed>>>
+     */
+    private function warmupRowBatches(array $rows): \Generator
+    {
+        $count = \count($rows);
+        for ($offset = 0; $offset < $count; $offset += self::MAX_WARMUP_EVENT_BATCH) {
+            yield array_slice($rows, $offset, self::MAX_WARMUP_EVENT_BATCH);
         }
     }
 

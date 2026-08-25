@@ -223,6 +223,27 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         )));
     }
 
+    public function testWarmupRowsAreExposedInBoundedHundredRowBatches(): void
+    {
+        $source = $this->source(
+            new Task7RestClient(),
+            new Task7Transport(),
+            new Task7Transport(),
+        );
+        $rows = array_map(
+            static fn (int $index): array => [$index],
+            range(0, 250),
+        );
+
+        $batches = new \ReflectionMethod($source, 'warmupRowBatches');
+        $sizes = array_map(
+            count(...),
+            iterator_to_array($batches->invoke($source, $rows), false),
+        );
+
+        self::assertSame([100, 100, 51], $sizes);
+    }
+
     public function testWarmupAlignsTheThousandHourWindowToTheFourHourGrid(): void
     {
         $rest = Task7RestClient::withInitialDataset();
@@ -423,6 +444,61 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         );
     }
 
+    public function testWarmupResumeRejectsChangedAcknowledgedRowBeforeOverlap(): void
+    {
+        $rows = self::contiguousHourlyRows(6);
+        $originalWindow = array_slice($rows, 0, 5);
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $initialRest = Task7RestClient::withInitialDataset();
+        $initialRest->candleRows['BTC-USDT-SWAP/1H'] = array_reverse(array_slice($originalWindow, 2, 3));
+        $initialRest->historyCandlePages = [[$rows[2], $rows[1], $rows[0]]];
+        $source = $this->source(
+            $initialRest,
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+            initialHourlyCandleTarget: 5,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmupEvents($source, $events, 3);
+        for ($index = 0; $index < 2; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            $events->next();
+        }
+
+        unset($events, $source);
+        gc_collect_cycles();
+
+        $changed = $rows[0];
+        $changed[4] = '999';
+        $restartRest = Task7RestClient::withInitialDataset();
+        $restartRest->candleRows['BTC-USDT-SWAP/1H'] = array_reverse(array_slice($rows, 3, 3));
+        $restartRest->historyCandlePages = [
+            array_reverse(array_slice($originalWindow, 2, 3)),
+            [$rows[2], $rows[1], $changed],
+        ];
+        $resumed = $this->source(
+            $restartRest,
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+            initialHourlyCandleTarget: 5,
+        );
+
+        $resumedEvents = $resumed->events();
+        self::assertInstanceOf(\Generator::class, $resumedEvents);
+        $pending = $resumedEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $pending);
+        $resumed->acknowledge($pending->eventId);
+
+        $this->expectException(OkxPaperLiveIntegrityException::class);
+        $this->expectExceptionMessage('market_event_identity_conflict');
+        $resumedEvents->next();
+    }
+
     public function testProductionHourlyWarmupResumesBeyondAcknowledgedIdentityWindow(): void
     {
         $rows = self::contiguousHourlyRows(1002);
@@ -565,6 +641,27 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             }
         }
         self::assertSame(['2', '10'], $tradeIds);
+    }
+
+    public function testWarmupRejectsEmptyRecentTradeBatch(): void
+    {
+        $rest = Task7RestClient::withInitialDataset();
+        $rest->tradeRows['BTC-USDT-SWAP'] = [];
+        $source = $this->source($rest, new Task7Transport(), new Task7Transport());
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        for ($index = 0; $index < 4; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            if ($index < 3) {
+                $events->next();
+            }
+        }
+
+        $this->expectException(OkxPaperLiveIntegrityException::class);
+        $this->expectExceptionMessage('okx_paper_public_response_invalid');
+        $events->next();
     }
 
     #[DataProvider('invalidInitialBookCardinalityProvider')]
