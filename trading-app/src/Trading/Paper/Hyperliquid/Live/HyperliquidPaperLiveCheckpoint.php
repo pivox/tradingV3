@@ -13,8 +13,8 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 
 final readonly class HyperliquidPaperLiveCheckpoint
 {
-    public const SCHEMA_VERSION = 2;
-    public const POLICY_VERSION = 2;
+    public const SCHEMA_VERSION = 3;
+    public const POLICY_VERSION = 3;
     public const MAXIMUM_BYTES = 1_048_576;
     public const MAXIMUM_ACKNOWLEDGED_IDENTITIES = 4_096;
     public const MAXIMUM_TRADE_IDENTITIES = 4_096;
@@ -37,6 +37,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
      * @param array<string, mixed>|null $pendingContinuation
      * @param array<string, array<string, mixed>> $currentCandles
      * @param array<string, int> $finalizedCandleFrontiers
+     * @param array{BTC: string|null, ETH: string|null} $initialCandleWindowEnds
      * @param list<string> $acknowledgedIdentities
      * @param list<array{identity_hash: string, assignment_digest: string}> $tradeIdentityHistory
      * @param array{last_received_at: string|null, last_ping_at: string|null, pong_deadline_at: string|null} $heartbeat
@@ -59,6 +60,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
         public ?array $pendingContinuation,
         public array $currentCandles,
         public array $finalizedCandleFrontiers,
+        public array $initialCandleWindowEnds,
         public array $acknowledgedIdentities,
         public array $tradeIdentityHistory,
         public int $reconnectAttempt,
@@ -89,6 +91,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
             'pending_continuation' => null,
             'current_candles' => [],
             'finalized_candle_frontiers' => [],
+            'initial_candle_window_ends' => ['BTC' => null, 'ETH' => null],
             'acknowledged_identities' => [],
             'trade_identity_history' => [],
             'reconnect_attempt' => 0,
@@ -122,6 +125,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
                 'pending_continuation',
                 'current_candles',
                 'finalized_candle_frontiers',
+                'initial_candle_window_ends',
                 'acknowledged_identities',
                 'trade_identity_history',
                 'reconnect_attempt',
@@ -145,6 +149,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
                 || !\is_array($state['ordinal_state'])
                 || !\is_array($state['current_candles'])
                 || !\is_array($state['finalized_candle_frontiers'])
+                || !\is_array($state['initial_candle_window_ends'])
                 || !\is_array($state['acknowledged_identities'])
                 || !\is_array($state['trade_identity_history'])
                 || !\is_int($state['reconnect_attempt'])
@@ -182,6 +187,9 @@ final readonly class HyperliquidPaperLiveCheckpoint
             }
             $currentCandles = self::currentCandles($state['current_candles']);
             $frontiers = self::frontiers($state['finalized_candle_frontiers']);
+            $initialCandleWindowEnds = self::initialCandleWindowEnds(
+                $state['initial_candle_window_ends'],
+            );
             $acknowledged = self::acknowledged($state['acknowledged_identities']);
             $tradeIdentityHistory = self::tradeIdentityHistory(
                 $state['trade_identity_history'],
@@ -219,6 +227,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
                 pendingContinuation: $pendingContinuation,
                 currentCandles: $currentCandles,
                 finalizedCandleFrontiers: $frontiers,
+                initialCandleWindowEnds: $initialCandleWindowEnds,
                 acknowledgedIdentities: $acknowledged,
                 tradeIdentityHistory: $tradeIdentityHistory,
                 reconnectAttempt: $state['reconnect_attempt'],
@@ -255,6 +264,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
             'pending_continuation' => $this->pendingContinuation,
             'current_candles' => $this->currentCandles,
             'finalized_candle_frontiers' => $this->finalizedCandleFrontiers,
+            'initial_candle_window_ends' => $this->initialCandleWindowEnds,
             'acknowledged_identities' => $this->acknowledgedIdentities,
             'trade_identity_history' => $this->tradeIdentityHistory,
             'reconnect_attempt' => $this->reconnectAttempt,
@@ -401,6 +411,19 @@ final readonly class HyperliquidPaperLiveCheckpoint
         return $this->with(['ordinal_state' => $ordinalState]);
     }
 
+    /** @param array{BTC: string|null, ETH: string|null} $ends */
+    public function withInitialCandleWindowEnds(array $ends): self
+    {
+        $ends = self::initialCandleWindowEnds($ends);
+        foreach ($this->initialCandleWindowEnds as $coin => $existing) {
+            if ($existing !== null && $ends[$coin] !== $existing) {
+                throw self::invalid();
+            }
+        }
+
+        return $this->with(['initial_candle_window_ends' => $ends]);
+    }
+
     public function withPhase(string $phase): self
     {
         return $this->with([
@@ -527,6 +550,29 @@ final readonly class HyperliquidPaperLiveCheckpoint
         }
         CanonicalJson::encode($value);
 
+        return $value;
+    }
+
+    /** @return array{BTC: string|null, ETH: string|null} */
+    private static function initialCandleWindowEnds(mixed $value): array
+    {
+        if (!\is_array($value)
+            || array_keys($value) !== ['BTC', 'ETH']
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        foreach ($value as $end) {
+            if ($end !== null
+                && (!\is_string($end)
+                    || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $end) !== 1
+                    || strlen($end) > 19
+                    || (strlen($end) === 19 && strcmp($end, (string) \PHP_INT_MAX) > 0))
+            ) {
+                throw new \InvalidArgumentException();
+            }
+        }
+
+        /** @var array{BTC: string|null, ETH: string|null} $value */
         return $value;
     }
 
