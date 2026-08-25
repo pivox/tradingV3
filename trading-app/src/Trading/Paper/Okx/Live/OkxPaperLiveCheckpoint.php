@@ -12,7 +12,7 @@ use Brick\Math\BigInteger;
 
 final readonly class OkxPaperLiveCheckpoint
 {
-    public const SCHEMA_VERSION = 8;
+    public const SCHEMA_VERSION = 9;
     public const MISSING_CANONICAL_DIGEST = '----------------------------------------------------------------';
 
     /** @var list<string> */

@@ -4881,24 +4881,26 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             return null;
         }
         $sourceIdentity = $normalizedBar . '|' . $timestamp;
+        $sourceFields = [
+            'bar' => $normalizedBar,
+            'close' => $close,
+            'confirmed' => true,
+            'high' => $high,
+            'low' => $low,
+            'open' => $open,
+            'opening_timestamp_ms' => $timestamp,
+            'volume_base' => $volumeBase,
+            'volume_contracts' => $volumeContracts,
+            'volume_quote' => $volumeQuote,
+        ];
 
         return $this->frontierFromCanonical(
             $instrumentId,
             $channel,
             $sourceIdentity,
-            [
-                'bar' => $normalizedBar,
-                'close' => $close,
-                'confirmed' => true,
-                'high' => $high,
-                'low' => $low,
-                'open' => $open,
-                'opening_timestamp_ms' => $timestamp,
-                'volume_base' => $volumeBase,
-                'volume_contracts' => $volumeContracts,
-                'volume_quote' => $volumeQuote,
-            ],
+            $sourceFields,
             $timestamp,
+            OkxPaperStreamFrontier::canonicalCandleOverlapFields($sourceFields),
         );
     }
 

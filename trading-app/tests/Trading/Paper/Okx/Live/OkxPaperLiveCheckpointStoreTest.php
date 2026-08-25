@@ -302,7 +302,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
 
     public function testEarlierCheckpointVersionsAreRejectedInsteadOfReusingOldDigestSemantics(): void
     {
-        foreach ([3, 4, 5, 6, 7] as $schemaVersion) {
+        foreach ([3, 4, 5, 6, 7, 8] as $schemaVersion) {
             $state = OkxPaperLiveCheckpoint::fresh(
                 self::DATASET_ID,
                 self::CONFIGURATION_SHA256,

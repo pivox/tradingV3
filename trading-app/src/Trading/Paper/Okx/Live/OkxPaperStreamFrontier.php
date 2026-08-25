@@ -108,19 +108,9 @@ final readonly class OkxPaperStreamFrontier
             PaperMarketDataChannel::CANDLE_15M,
             PaperMarketDataChannel::CANDLE_1H,
         ], true)) {
-            foreach ([
-                'open',
-                'high',
-                'low',
-                'close',
-                'volume_contracts',
-                'volume_base',
-                'volume_quote',
-            ] as $key) {
-                $overlapCanonical['source_fields'][$key] = self::canonicalDecimal(
-                    $overlapCanonical['source_fields'][$key] ?? null,
-                );
-            }
+            $overlapCanonical['source_fields'] = self::canonicalCandleOverlapFields(
+                $overlapCanonical['source_fields'],
+            );
         }
 
         return self::fromArray([
@@ -145,6 +135,27 @@ final readonly class OkxPaperStreamFrontier
             'canonical_digest' => $this->canonicalDigest,
             'overlap_digest' => $this->overlapDigest,
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $sourceFields
+     * @return array<string, mixed>
+     */
+    public static function canonicalCandleOverlapFields(array $sourceFields): array
+    {
+        foreach ([
+            'open',
+            'high',
+            'low',
+            'close',
+            'volume_contracts',
+            'volume_base',
+            'volume_quote',
+        ] as $key) {
+            $sourceFields[$key] = self::canonicalDecimal($sourceFields[$key] ?? null);
+        }
+
+        return $sourceFields;
     }
 
     /** @return array{string, array<string, mixed>} */
