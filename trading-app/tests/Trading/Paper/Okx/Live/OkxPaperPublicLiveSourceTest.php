@@ -422,7 +422,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         );
     }
 
-    public function testProductionHourlyWarmupDerivesItsAlignedWindowAfterRestart(): void
+    public function testProductionHourlyWarmupResumesBeyondAcknowledgedIdentityWindow(): void
     {
         $rows = self::contiguousHourlyRows(1000);
         $store = new OkxPaperLiveCheckpointStore($this->testRoot);
@@ -443,9 +443,15 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $events = $source->events();
         self::assertInstanceOf(\Generator::class, $events);
         $this->acknowledgeWarmupEvents($source, $events, 3);
-        $pending = $events->current();
-        self::assertInstanceOf(PaperMarketEvent::class, $pending);
-        self::assertSame($rows[0][0], $pending->exchangeTimestamp->format('Uv'));
+        for ($index = 0; $index < 351; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            self::assertSame($rows[$index][0], $event->exchangeTimestamp->format('Uv'));
+            $source->acknowledge($event->eventId);
+            if ($index < 350) {
+                $events->next();
+            }
+        }
 
         unset($events, $source);
         gc_collect_cycles();
@@ -466,16 +472,9 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         );
         $resumedEvents = $resumed->events();
         self::assertInstanceOf(\Generator::class, $resumedEvents);
-        $replayed = $resumedEvents->current();
-        self::assertInstanceOf(PaperMarketEvent::class, $replayed);
-        self::assertEquals($pending->toArray(), $replayed->toArray());
-        self::assertSame([], $restartRest->calls);
-
-        $resumed->acknowledge($replayed->eventId);
-        $resumedEvents->next();
         $next = $resumedEvents->current();
         self::assertInstanceOf(PaperMarketEvent::class, $next);
-        self::assertSame($rows[1][0], $next->exchangeTimestamp->format('Uv'));
+        self::assertSame($rows[351][0], $next->exchangeTimestamp->format('Uv'));
         self::assertNotContains(
             ['currentCandles', ['BTC-USDT-SWAP', '1H', null, null, 300]],
             $restartRest->calls,
