@@ -4219,6 +4219,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
         $events = [];
         $framesConsumed = 0;
+        $advertisedRows = 0;
         foreach ($frames as $frame) {
             $message = null;
             try {
@@ -4226,12 +4227,15 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     ? $this->decoder->decodeBusiness($frame)
                     : $this->decoder->decodePublic($frame);
                 $messageRows = $message['data'] ?? null;
-                if ($events !== []
+                if ($framesConsumed > 0
                     && \is_array($messageRows)
-                    && \count($events) + \count($messageRows)
+                    && $advertisedRows + \count($messageRows)
                         > self::MAX_DURABLE_EVENT_BATCH
                 ) {
                     break;
+                }
+                if (\is_array($messageRows)) {
+                    $advertisedRows += \count($messageRows);
                 }
                 $frameEvents = $this->eventsFromMessage($message, $business);
             } catch (\RuntimeException $exception) {

@@ -2192,6 +2192,41 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $source->acknowledge($trade->eventId);
     }
 
+    public function testDurableFrameBatchCapsAdvertisedRowsBeforeFiltering(): void
+    {
+        $public = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+            Task7Transport::tradeFrame(array_fill(0, 100, '9101')),
+            Task7Transport::tradeFrame(array_map(
+                static fn (int $offset): string => (string) (9200 + $offset),
+                range(0, 99),
+            )),
+        ];
+        $business = new Task7Transport();
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(Task7RestClient::withInitialDataset(), $public, $business);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($sentinel->eventId);
+        $events->next();
+
+        $deduplicated = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $deduplicated);
+        self::assertSame('9101', $deduplicated->payload['trade_id'] ?? null);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($deduplicated->eventId);
+    }
+
     public function testMultiRowWebSocketExactDuplicateInSameFrameIsSilentAndUsesOneOrdinal(): void
     {
         $public = new Task7Transport();
