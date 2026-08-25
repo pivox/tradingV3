@@ -65,6 +65,24 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/D', $restFrontier->canonicalDigest);
     }
 
+    public function testCandleOverlapIgnoresInsignificantCrossOriginDecimalZeros(): void
+    {
+        $rest = OkxPaperStreamFrontier::fromEvent($this->candleEvent(
+            'rest_recovery',
+            '2026-07-22T10:00:01.000000Z',
+            volumeQuote: '1167537.48657',
+        ));
+        $webSocket = OkxPaperStreamFrontier::fromEvent($this->candleEvent(
+            'ws_candle',
+            '2026-07-22T10:00:02.000000Z',
+            volumeQuote: '1167537.48657000',
+        ));
+
+        self::assertSame($rest->naturalIdentity, $webSocket->naturalIdentity);
+        self::assertNotSame($rest->canonicalDigest, $webSocket->canonicalDigest);
+        self::assertSame($rest->overlapDigest, $webSocket->overlapDigest);
+    }
+
     public function testFrontierIsClosedAndEveryIdentityIsBounded(): void
     {
         $valid = [
@@ -6827,6 +6845,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         string $symbol = 'BTCUSDT',
         string $exchangeTimestamp = '2026-07-22T10:00:00.000000Z',
         string $sequence = '1',
+        string $volumeQuote = '6505.0',
     ): PaperMarketEvent
     {
         $channel = match ($bar) {
@@ -6855,7 +6874,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
                 'close' => '65050.0',
                 'volume_contracts' => '10',
                 'volume_base' => '0.1',
-                'volume_quote' => '6505.0',
+                'volume_quote' => $volumeQuote,
                 'confirmed' => true,
                 'origin' => $origin,
             ],

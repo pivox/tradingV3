@@ -8,6 +8,7 @@ use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use Brick\Math\BigDecimal;
 
 final readonly class OkxPaperStreamFrontier
 {
@@ -100,6 +101,26 @@ final readonly class OkxPaperStreamFrontier
         $overlapCanonical = $canonical;
         if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
             unset($overlapCanonical['source_fields']['size_contracts']);
+        }
+        if (\in_array($event->channel, [
+            PaperMarketDataChannel::CANDLE_1M,
+            PaperMarketDataChannel::CANDLE_5M,
+            PaperMarketDataChannel::CANDLE_15M,
+            PaperMarketDataChannel::CANDLE_1H,
+        ], true)) {
+            foreach ([
+                'open',
+                'high',
+                'low',
+                'close',
+                'volume_contracts',
+                'volume_base',
+                'volume_quote',
+            ] as $key) {
+                $overlapCanonical['source_fields'][$key] = self::canonicalDecimal(
+                    $overlapCanonical['source_fields'][$key] ?? null,
+                );
+            }
         }
 
         return self::fromArray([
@@ -292,6 +313,17 @@ final readonly class OkxPaperStreamFrontier
         }
 
         return $value;
+    }
+
+    private static function canonicalDecimal(mixed $value): string
+    {
+        if (!\is_string($value)
+            || preg_match('/\A(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $value) !== 1
+        ) {
+            throw self::invalid();
+        }
+
+        return (string) BigDecimal::of($value)->stripTrailingZeros();
     }
 
     private static function assertIdentity(string $identity): void
