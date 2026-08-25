@@ -1404,6 +1404,47 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         );
     }
 
+    public function testPreparedBatchPendingReusesValidatedEventWithoutDurableWrite(): void
+    {
+        $directory = $this->datasetDirectory('prepared-batch-pending');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $this->completeInitialWarmupAndEnterStreaming(
+            $store,
+            $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256),
+        );
+        $event = $this->tradeEvent('ws_aggregated', true, sequence: '2');
+        $frontier = OkxPaperStreamFrontier::fromEvent($event);
+        $ordinalState = $this->advanceOrdinal(
+            $checkpoint->ordinalState,
+            $event,
+            $frontier->naturalIdentity,
+        );
+        $before = file_get_contents($this->checkpointPath($directory));
+        self::assertIsString($before);
+
+        $prepared = $store->preparePending($checkpoint, $event, $ordinalState, [
+            'stream' => 'BTCUSDT/ws/public_trade',
+            'frontier' => $frontier->toArray(),
+        ]);
+
+        self::assertSame($event, $prepared->pendingEvent);
+        self::assertSame($ordinalState, $prepared->ordinalState);
+        self::assertSame($frontier->toArray(), $prepared->pendingFrontier['frontier']->toArray());
+        self::assertSame($before, file_get_contents($this->checkpointPath($directory)));
+
+        $acknowledged = $store->prepareStreamingBatchAcknowledgement(
+            $prepared,
+            $event->eventId,
+        );
+        self::assertNull($acknowledged->pendingEvent);
+        self::assertSame($event->eventId, $acknowledged->lastAcknowledgedEventId);
+        self::assertSame(
+            $prepared->pendingFrontier['frontier'],
+            $acknowledged->streamFrontiers['BTCUSDT/ws/public_trade'],
+        );
+        self::assertSame($before, file_get_contents($this->checkpointPath($directory)));
+    }
+
     public function testPendingWarmupRestAcknowledgementAtomicallyPersistsExactContinuation(): void
     {
         $directory = $this->datasetDirectory('pending-warmup-rest-continuation');

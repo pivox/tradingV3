@@ -380,11 +380,13 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     {
         try {
             if ($this->durableEventBatchBase instanceof OkxPaperLiveCheckpoint) {
+                if ($this->continuationTransition !== null) {
+                    throw new \LogicException('okx_paper_durable_batch_boundary_invalid');
+                }
                 $prepared = $this->checkpointStore
-                    ->prepareOpaqueUnsequencedAcknowledgement(
+                    ->prepareStreamingBatchAcknowledgement(
                         $this->checkpoint,
                         $eventId,
-                        $this->continuationTransition,
                     );
                 $this->checkpoint = $this->activeQueuedEventsRemaining === 1
                     ? $this->checkpointStore->commitPreparedEventBatch(

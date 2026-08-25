@@ -15,6 +15,9 @@ use Symfony\Component\Clock\NativeClock;
 
 final class OkxPaperLiveCheckpointStore
 {
+    private ?OkxPaperLiveCheckpoint $preparedOrdinalCheckpoint = null;
+    private ?OkxPaperSourceOrdinal $preparedOrdinals = null;
+
     private const REGULAR_FILE_TYPE = 0100000;
     private const DIRECTORY_FILE_TYPE = 0040000;
     private const SYMLINK_FILE_TYPE = 0120000;
@@ -661,7 +664,21 @@ final class OkxPaperLiveCheckpointStore
             $event,
             $pendingFrontier,
         );
-        $this->assertOrdinalAdvancesExactly($checkpoint, $event, $ordinalState);
+        $validatedOrdinals = $this->validatedOrdinalAdvance(
+            $checkpoint,
+            $event,
+            $ordinalState,
+        );
+        if (!$persist) {
+            $next = $checkpoint->withPreparedPending(
+                $event,
+                $validatedOrdinals,
+                $pendingFrontier,
+            );
+            $this->rememberPreparedOrdinals($next, $validatedOrdinals);
+
+            return $next;
+        }
         $state = $checkpoint->toArray();
         $state['ordinal_state'] = $ordinalState;
         $canonicalEvent = json_decode(
@@ -677,19 +694,18 @@ final class OkxPaperLiveCheckpointStore
         $state['pending_frontier'] = $pendingFrontier;
         $state['pending_transition'] = null;
         $next = $this->validatedCheckpoint($state);
-        if ($persist) {
-            $this->persist($next);
-        }
+        $this->persist($next);
+        $this->rememberPreparedOrdinals($next, $validatedOrdinals);
 
         return $next;
     }
 
     /** @param array<string, mixed> $ordinalState */
-    private function assertOrdinalAdvancesExactly(
+    private function validatedOrdinalAdvance(
         #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
         #[\SensitiveParameter] PaperMarketEvent $event,
         #[\SensitiveParameter] array $ordinalState,
-    ): void {
+    ): OkxPaperSourceOrdinal {
         try {
             $scope = implode('/', [
                 $event->sourceVenue->value,
@@ -703,7 +719,10 @@ final class OkxPaperLiveCheckpointStore
             ) {
                 throw new \InvalidArgumentException();
             }
-            $expected = OkxPaperSourceOrdinal::restore($checkpoint->ordinalState);
+            $expected = $checkpoint === $this->preparedOrdinalCheckpoint
+                && $this->preparedOrdinals instanceof OkxPaperSourceOrdinal
+                ? clone $this->preparedOrdinals
+                : OkxPaperSourceOrdinal::restore($checkpoint->ordinalState);
             $expected->commit(
                 $scope,
                 $latest['natural_identity'],
@@ -713,6 +732,8 @@ final class OkxPaperLiveCheckpointStore
             if (!$this->sameCanonicalValue($expected->snapshot(), $ordinalState)) {
                 throw new \InvalidArgumentException();
             }
+
+            return $expected;
         } catch (\Throwable $exception) {
             throw self::invalidCheckpoint($exception);
         }
@@ -875,6 +896,76 @@ final class OkxPaperLiveCheckpointStore
             true,
             false,
         );
+    }
+
+    public function prepareStreamingBatchAcknowledgement(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+        string $eventId,
+    ): OkxPaperLiveCheckpoint {
+        $event = $checkpoint->pendingEvent;
+        $pendingFrontier = $checkpoint->pendingFrontier;
+        if (!$event instanceof PaperMarketEvent
+            || $pendingFrontier === null
+            || !hash_equals($event->eventId, $eventId)
+            || $checkpoint->pendingTransition !== null
+            || $checkpoint->reconnect !== [
+                'attempt' => 0,
+                'deadline_at' => null,
+                'stable_since' => null,
+                'accepted_events' => 0,
+            ]
+            || array_filter(
+                $checkpoint->resyncBySymbol,
+                static fn (mixed $value): bool => $value !== null,
+            ) !== []
+            || array_filter(
+                $checkpoint->overlapPaginationByStream,
+                static fn (mixed $value): bool => $value !== null,
+            ) !== []
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $stream = $pendingFrontier['stream'];
+        $nextFrontier = $pendingFrontier['frontier'];
+        $currentFrontier = $checkpoint->streamFrontiers[$stream] ?? null;
+        if ($currentFrontier instanceof OkxPaperStreamFrontier) {
+            $this->assertFrontierAdvances(
+                $stream,
+                $currentFrontier,
+                $nextFrontier,
+                true,
+                $event,
+            );
+        }
+        $state = [
+            'acknowledged_identity_history' => $checkpoint->acknowledgedIdentityHistory,
+        ];
+        $this->appendAcknowledgedIdentityHistory(
+            $state,
+            $stream,
+            $nextFrontier,
+            $event,
+        );
+
+        $next = $checkpoint->withPreparedStreamingAcknowledgement(
+            $eventId,
+            $state['acknowledged_identity_history'],
+        );
+        $ordinals = $checkpoint === $this->preparedOrdinalCheckpoint
+            && $this->preparedOrdinals instanceof OkxPaperSourceOrdinal
+            ? $this->preparedOrdinals
+            : OkxPaperSourceOrdinal::restore($checkpoint->ordinalState);
+        $this->rememberPreparedOrdinals($next, $ordinals);
+
+        return $next;
+    }
+
+    private function rememberPreparedOrdinals(
+        OkxPaperLiveCheckpoint $checkpoint,
+        OkxPaperSourceOrdinal $ordinals,
+    ): void {
+        $this->preparedOrdinalCheckpoint = $checkpoint;
+        $this->preparedOrdinals = $ordinals;
     }
 
     /** @param array<string, mixed>|null $continuationTransition */
