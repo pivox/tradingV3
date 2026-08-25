@@ -314,10 +314,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
 
     public function testWarmupHourlyPaginationRestartsFromPendingEventWithoutDuplicate(): void
     {
-        $rows = self::contiguousHourlyRows(5);
+        $rows = self::contiguousHourlyRows(6);
+        $originalWindow = array_slice($rows, 0, 5);
         $store = new OkxPaperLiveCheckpointStore($this->testRoot);
         $initialRest = Task7RestClient::withInitialDataset();
-        $initialRest->candleRows['BTC-USDT-SWAP/1H'] = array_reverse(array_slice($rows, 2, 3));
+        $initialRest->candleRows['BTC-USDT-SWAP/1H'] = array_reverse(array_slice($originalWindow, 2, 3));
         $initialRest->historyCandlePages = [[$rows[2], $rows[1], $rows[0]]];
         $source = $this->source(
             $initialRest,
@@ -345,8 +346,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         gc_collect_cycles();
 
         $restartRest = Task7RestClient::withInitialDataset();
-        $restartRest->candleRows['BTC-USDT-SWAP/1H'] = array_reverse(array_slice($rows, 2, 3));
-        $restartRest->historyCandlePages = [[$rows[2], $rows[1], $rows[0]]];
+        $restartRest->candleRows['BTC-USDT-SWAP/1H'] = array_reverse(array_slice($rows, 3, 3));
+        $restartRest->historyCandlePages = [
+            array_reverse(array_slice($originalWindow, 2, 3)),
+            [$rows[2], $rows[1], $rows[0]],
+        ];
         $resumed = $this->source(
             $restartRest,
             new Task7Transport(),
@@ -370,8 +374,12 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 $resumedEvents->next();
             }
         }
-        self::assertSame(array_column($rows, 0), $actual);
+        self::assertSame(array_column($originalWindow, 0), $actual);
         self::assertCount(5, array_unique($actual));
+        self::assertNotContains(
+            ['currentCandles', ['BTC-USDT-SWAP', '1H', null, null, 300]],
+            $restartRest->calls,
+        );
     }
 
     public function testWarmupHourlyPaginationAppliesTheTargetToBothSymbols(): void

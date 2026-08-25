@@ -16,6 +16,7 @@ use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
 use App\Trading\Paper\Okx\OkxPaperInstrumentMap;
 use App\Trading\Paper\Okx\OkxPaperPublicConfig;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use Brick\Math\BigInteger;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\TimerInterface;
 use Symfony\Component\Clock\ClockInterface;
@@ -653,25 +654,43 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
     /** @return list<array<array-key, mixed>> */
     private function initialCandleRows(string $instrumentId, string $bar): array
     {
-        $rows = $this->restClient->currentCandles(
-            $instrumentId,
-            $bar,
-            null,
-            null,
-            300,
-        );
         if ($bar !== '1H' || $this->initialHourlyCandleTarget === 1) {
-            return $rows;
+            return $this->restClient->currentCandles(
+                $instrumentId,
+                $bar,
+                null,
+                null,
+                300,
+            );
         }
 
+        $symbol = $this->instruments->normalizedSymbol($instrumentId);
+        $windowEnd = $this->checkpoint->initialHourlyWindowEnds[$symbol];
         /** @var array<string, array{canonical: string, row: array<array-key, mixed>}> $byTimestamp */
         $byTimestamp = [];
-        $cursor = $this->mergeInitialHourlyPage(
-            $instrumentId,
-            $rows,
-            null,
-            $byTimestamp,
-        );
+        if ($windowEnd === null) {
+            $rows = $this->restClient->currentCandles(
+                $instrumentId,
+                $bar,
+                null,
+                null,
+                300,
+            );
+            $cursor = $this->mergeInitialHourlyPage(
+                $instrumentId,
+                $rows,
+                null,
+                $byTimestamp,
+            );
+            $windowEnd = $this->newestConfirmedInitialHourlyTimestamp($byTimestamp);
+            $this->checkpoint = $this->checkpointStore->pinInitialHourlyWindowEnd(
+                $this->checkpoint,
+                $symbol,
+                $windowEnd,
+            );
+        } else {
+            $cursor = (string) BigInteger::of($windowEnd)->plus(1);
+        }
         for ($page = 0; $page < OkxPaperLivePolicy::MAX_INITIAL_HOURLY_HISTORY_PAGES; ++$page) {
             if ($this->confirmedInitialHourlyCount($byTimestamp)
                 >= $this->initialHourlyCandleTarget
@@ -688,6 +707,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
         if ($this->confirmedInitialHourlyCount($byTimestamp)
             < $this->initialHourlyCandleTarget
+            || !isset($byTimestamp[$windowEnd])
+            || ($byTimestamp[$windowEnd]['row'][8] ?? null) !== '1'
         ) {
             throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
         }
@@ -714,6 +735,26 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
 
         return array_column($confirmed, 'row');
+    }
+
+    /** @param array<string, array{canonical: string, row: array<array-key, mixed>}> $rows */
+    private function newestConfirmedInitialHourlyTimestamp(array $rows): string
+    {
+        $newest = null;
+        foreach ($rows as $entry) {
+            if (($entry['row'][8] ?? null) !== '1') {
+                continue;
+            }
+            $timestamp = $entry['row'][0] ?? null;
+            $newest = $newest === null || self::compareUnsigned($timestamp, $newest) > 0
+                ? $timestamp
+                : $newest;
+        }
+        if ($newest === null) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
+
+        return $newest;
     }
 
     /**
