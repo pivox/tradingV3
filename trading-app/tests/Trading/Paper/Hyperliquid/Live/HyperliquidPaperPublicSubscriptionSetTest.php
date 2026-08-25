@@ -160,7 +160,7 @@ final class HyperliquidPaperPublicSubscriptionSetTest extends TestCase
         self::assertSame(524_288, HyperliquidPaperLivePolicy::NETWORK_RESUME_BYTE_LOW_WATER);
         self::assertSame(500, HyperliquidPaperLivePolicy::MAX_BOOK_LEVELS_PER_SIDE);
         self::assertSame(1_048_576, HyperliquidPaperLivePolicy::MAX_CHECKPOINT_BYTES);
-        self::assertSame(8, HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS);
+        self::assertSame(256, HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS);
         self::assertSame(512, HyperliquidPaperLivePolicy::MAX_ACKNOWLEDGED_EVENT_IDENTITIES);
         self::assertSame(
             500,

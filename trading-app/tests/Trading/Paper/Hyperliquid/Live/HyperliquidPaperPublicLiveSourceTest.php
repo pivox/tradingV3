@@ -694,7 +694,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         $loop = new HyperliquidDeterministicLoop();
         $source = $this->source(
             new DeterministicHyperliquidTransport([
-                self::largeTradeFrame(9),
+                self::largeTradeFrame(HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS + 1),
             ]),
             loop: $loop,
         );
@@ -706,17 +706,20 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         }
         $baselineRuns = $loop->runCount();
 
-        for ($index = 0; $index < 8; ++$index) {
+        for ($index = 0; $index < HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS; ++$index) {
             self::assertSame((string) ($index + 1), $events->current()->payload['trade_id']);
             $source->acknowledge($events->current()->eventId);
-            if ($index + 1 < 8) {
+            if ($index + 1 < HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS) {
                 $events->next();
             }
         }
 
         self::assertSame($baselineRuns + 1, $loop->runCount());
         $events->next();
-        self::assertSame('9', $events->current()->payload['trade_id']);
+        self::assertSame(
+            (string) (HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS + 1),
+            $events->current()->payload['trade_id'],
+        );
         $source->acknowledge($events->current()->eventId);
         self::assertSame($baselineRuns + 2, $loop->runCount());
     }

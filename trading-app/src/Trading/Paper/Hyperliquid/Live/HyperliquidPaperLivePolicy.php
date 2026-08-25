@@ -24,7 +24,7 @@ final readonly class HyperliquidPaperLivePolicy
     public const MAX_QUEUED_BYTES = 2_097_152;
     public const MAX_BOOK_LEVELS_PER_SIDE = 500;
     public const MAX_CHECKPOINT_BYTES = 1_048_576;
-    public const MAX_PENDING_TRADE_ROWS = 8;
+    public const MAX_PENDING_TRADE_ROWS = 256;
     public const MAX_ACKNOWLEDGED_EVENT_IDENTITIES = 512;
     public const MAX_ACKNOWLEDGED_IDENTITIES_PER_STREAM = 500;
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Persist each Hyperliquid trade chunk with one crash-safe dataset commit so public capture can keep up with live traffic.
+**Goal:** Persist each Hyperliquid trade chunk of up to 256 events with one crash-safe dataset commit so public capture can keep up with live traffic.
 
 **Architecture:** A small optional source capability exposes the remaining events protected by the current durable checkpoint. The capture loop buffers only those events, atomically appends the group through a versioned recorder intent, then acknowledges the boundary event; all existing sources retain append-before-ack behavior.
 
@@ -17,7 +17,7 @@
 - Modify: `trading-app/src/Trading/Paper/Hyperliquid/Live/HyperliquidPaperPublicLiveSource.php`
 - Test: `trading-app/tests/Trading/Paper/Hyperliquid/Live/HyperliquidPaperPublicLiveSourceTest.php`
 
-- [ ] Add a failing source test asserting `pendingDurableBatchSize()` returns 8 through 1 for an eight-row trade frame and 1 for snapshot events.
+- [ ] Add a failing source test asserting `pendingDurableBatchSize()` counts down to 1 for a trade frame and returns 1 for snapshot events.
 - [ ] Run `vendor/bin/phpunit --filter testExposesCurrentDurableTradeBatchBoundary tests/Trading/Paper/Hyperliquid/Live/HyperliquidPaperPublicLiveSourceTest.php`; expect failure because the method does not exist.
 - [ ] Define `pendingDurableBatchSize(): int` and return `count($checkpoint->pendingContinuation['remaining_trade_rows']) + 1` only for a valid trade continuation; return 1 otherwise.
 - [ ] Re-run the filtered test; expect PASS.
@@ -41,7 +41,7 @@
 - Modify: `trading-app/src/Trading/Paper/Capture/PaperPublicDatasetCapture.php`
 - Test: `trading-app/tests/Trading/Paper/Capture/PaperPublicDatasetCaptureTest.php`
 
-- [ ] Add a batch-capable fake source and a failing test proving events 1–7 may be acknowledged under the same durable source checkpoint, the recorder contains all eight before event 8 is acknowledged, and observers run only after the full durable commit.
+- [ ] Add a batch-capable fake source and a failing test proving intermediate events may be acknowledged under the same durable source checkpoint, the recorder contains the full batch before its boundary is acknowledged, and observers run only after the durable commit.
 - [ ] Keep the existing ordinary-source test as the explicit regression proving per-event append-before-ack.
 - [ ] Implement a bounded buffer: acknowledge intermediate events only when `pendingDurableBatchSize() > 1`; at size 1 call `appendBatch`, acknowledge the boundary, notify observers in event order, and clear the buffer. Fail closed if the reported countdown is inconsistent.
 - [ ] Run `PaperPublicDatasetCaptureTest` and `PaperPublicCaptureRunnerTest`; expect PASS.

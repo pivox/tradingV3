@@ -4,7 +4,7 @@
 
 Keep public Paper capture ahead of bursty venue traffic without weakening its
 crash-safety or deterministic replay contract. Hyperliquid trade frames are
-already checkpointed in bounded groups of eight, but the dataset recorder still
+checkpointed in bounded groups, but the dataset recorder still
 publishes an append intent, flushes, and authenticates the complete file for
 every individual trade.
 
@@ -21,7 +21,9 @@ been reached. At the final event it appends the complete buffered group with one
 atomic recorder operation, then acknowledges the boundary event. Sources that
 do not implement the capability keep the existing append-before-ack behavior.
 
-`PaperDatasetRecorder::appendBatch()` accepts a non-empty bounded list. It
+`PaperDatasetRecorder::appendBatch()` accepts a non-empty list bounded to 256
+events. Hyperliquid uses the same bound for compact trade chunks; the resulting
+checkpoint remains below its independently enforced one-megabyte limit. It
 validates identities, ordering, gaps, manifest facts, and canonical size for the
 whole list before mutation. One versioned append intent authenticates the
 original file prefix and concatenated NDJSON suffix. The suffix is flushed once,
