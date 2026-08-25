@@ -688,7 +688,25 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $symbol,
                 $observedEnd,
             );
+            $captureEnd = $observedEnd;
         } else {
+            $currentRows = $this->restClient->currentCandles(
+                $instrumentId,
+                $bar,
+                null,
+                null,
+                300,
+            );
+            $this->mergeInitialHourlyPage(
+                $instrumentId,
+                $currentRows,
+                null,
+                $byTimestamp,
+            );
+            $captureEnd = $this->newestConfirmedInitialHourlyTimestamp($byTimestamp);
+            if (self::compareUnsigned($captureEnd, $observedEnd) < 0) {
+                throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+            }
             $cursor = (string) BigInteger::of($observedEnd)->plus(1);
         }
         $alignedWindowEnd = $this->alignedInitialHourlyWindowEnd($observedEnd);
@@ -708,9 +726,14 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
         if ($this->confirmedInitialHourlyCountThrough($byTimestamp, $alignedWindowEnd)
             < $this->initialHourlyCandleTarget
-            || !isset($byTimestamp[$observedEnd], $byTimestamp[$alignedWindowEnd])
+            || !isset(
+                $byTimestamp[$observedEnd],
+                $byTimestamp[$alignedWindowEnd],
+                $byTimestamp[$captureEnd],
+            )
             || ($byTimestamp[$observedEnd]['row'][8] ?? null) !== '1'
             || ($byTimestamp[$alignedWindowEnd]['row'][8] ?? null) !== '1'
+            || ($byTimestamp[$captureEnd]['row'][8] ?? null) !== '1'
         ) {
             throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
         }
@@ -718,7 +741,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         $confirmed = array_values(array_filter(
             $byTimestamp,
             static fn (array $entry): bool => ($entry['row'][8] ?? null) === '1'
-                && self::compareUnsigned($entry['row'][0] ?? null, $observedEnd) <= 0,
+                && self::compareUnsigned($entry['row'][0] ?? null, $captureEnd) <= 0,
         ));
         usort(
             $confirmed,

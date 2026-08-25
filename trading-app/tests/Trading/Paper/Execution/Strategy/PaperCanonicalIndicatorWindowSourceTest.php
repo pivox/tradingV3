@@ -140,9 +140,9 @@ final class PaperCanonicalIndicatorWindowSourceTest extends TestCase
         $windows = $source->windowsFor($this->cell(), $trigger, ['1m', '4h']);
 
         self::assertNotNull($windows);
-        self::assertCount(1000, $windows['1h']);
+        self::assertCount(1002, $windows['1h']);
         self::assertSame($hourly[0]->eventId, $windows['1h'][0]['source_record_id']);
-        self::assertSame($hourly[999]->eventId, $windows['1h'][999]['source_record_id']);
+        self::assertSame($hourly[1001]->eventId, $windows['1h'][1001]['source_record_id']);
         self::assertSame($trigger->eventId, $windows['1m'][249]['source_record_id']);
     }
 

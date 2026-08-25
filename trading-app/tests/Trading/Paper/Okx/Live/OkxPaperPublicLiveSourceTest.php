@@ -405,18 +405,18 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertEquals($pending->toArray(), $replayed->toArray());
         self::assertSame([], $restartRest->calls);
 
-        for ($index = 2; $index < 5; ++$index) {
+        for ($index = 2; $index < 6; ++$index) {
             $event = $resumedEvents->current();
             self::assertInstanceOf(PaperMarketEvent::class, $event);
             $actual[] = $event->exchangeTimestamp->format('Uv');
             $resumed->acknowledge($event->eventId);
-            if ($index < 4) {
+            if ($index < 5) {
                 $resumedEvents->next();
             }
         }
-        self::assertSame(array_column($originalWindow, 0), $actual);
-        self::assertCount(5, array_unique($actual));
-        self::assertNotContains(
+        self::assertSame(array_column($rows, 0), $actual);
+        self::assertCount(6, array_unique($actual));
+        self::assertContains(
             ['currentCandles', ['BTC-USDT-SWAP', '1H', null, null, 300]],
             $restartRest->calls,
         );
@@ -424,14 +424,15 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
 
     public function testProductionHourlyWarmupResumesBeyondAcknowledgedIdentityWindow(): void
     {
-        $rows = self::contiguousHourlyRows(1000);
+        $rows = self::contiguousHourlyRows(1002);
+        $initialWindow = array_slice($rows, 0, 1000);
         $store = new OkxPaperLiveCheckpointStore($this->testRoot);
         $initialRest = Task7RestClient::withInitialDataset();
-        $initialRest->candleRows['BTC-USDT-SWAP/1H'] = array_reverse(array_slice($rows, 700, 300));
+        $initialRest->candleRows['BTC-USDT-SWAP/1H'] = array_reverse(array_slice($initialWindow, 700, 300));
         $initialRest->historyCandlePages = [
-            array_reverse(array_slice($rows, 400, 300)),
-            array_reverse(array_slice($rows, 100, 300)),
-            array_reverse(array_slice($rows, 0, 100)),
+            array_reverse(array_slice($initialWindow, 400, 300)),
+            array_reverse(array_slice($initialWindow, 100, 300)),
+            array_reverse(array_slice($initialWindow, 0, 100)),
         ];
         $source = $this->source(
             $initialRest,
@@ -457,11 +458,12 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         gc_collect_cycles();
 
         $restartRest = Task7RestClient::withInitialDataset();
+        $restartRest->candleRows['BTC-USDT-SWAP/1H'] = array_reverse(array_slice($rows, 702, 300));
         $restartRest->historyCandlePages = [
-            array_reverse(array_slice($rows, 700, 300)),
-            array_reverse(array_slice($rows, 400, 300)),
-            array_reverse(array_slice($rows, 100, 300)),
-            array_reverse(array_slice($rows, 0, 100)),
+            array_reverse(array_slice($initialWindow, 700, 300)),
+            array_reverse(array_slice($initialWindow, 400, 300)),
+            array_reverse(array_slice($initialWindow, 100, 300)),
+            array_reverse(array_slice($initialWindow, 0, 100)),
         ];
         $resumed = $this->source(
             $restartRest,
@@ -475,7 +477,16 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $next = $resumedEvents->current();
         self::assertInstanceOf(PaperMarketEvent::class, $next);
         self::assertSame($rows[351][0], $next->exchangeTimestamp->format('Uv'));
-        self::assertNotContains(
+        for ($index = 351; $index < 1002; ++$index) {
+            $event = $resumedEvents->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            self::assertSame($rows[$index][0], $event->exchangeTimestamp->format('Uv'));
+            $resumed->acknowledge($event->eventId);
+            if ($index < 1001) {
+                $resumedEvents->next();
+            }
+        }
+        self::assertContains(
             ['currentCandles', ['BTC-USDT-SWAP', '1H', null, null, 300]],
             $restartRest->calls,
         );

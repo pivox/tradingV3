@@ -190,6 +190,7 @@ final class CanonicalIndicatorProjectorTest extends TestCase
     public function testProjectsNativeHourlySuffixAlongsideDerivedFourHourWindow(): void
     {
         $request = $this->request(['1h', '4h']);
+        $request['candles_by_timeframe']['1h'] = $this->records('1h', 1002);
         $result = $this->projector()->project($request)->toArray();
 
         self::assertSame(['1h', '4h'], array_keys($result['snapshots_by_timeframe']));
@@ -201,10 +202,8 @@ final class CanonicalIndicatorProjectorTest extends TestCase
             $request['evaluated_at'],
         );
         self::assertSame($nativeWindow->windowHash(), $result['snapshots_by_timeframe']['1h']['window_hash']);
-        self::assertSame('2026-02-11T15:00:00.000000Z', $result['snapshots_by_timeframe']['1h']['kline_time']);
-        self::assertSame(200.23, $result['snapshots_by_timeframe']['1h']['close']);
+        self::assertSame('2026-02-11T17:00:00.000000Z', $result['snapshots_by_timeframe']['1h']['kline_time']);
         self::assertSame('2026-02-11T12:00:00.000000Z', $result['snapshots_by_timeframe']['4h']['kline_time']);
-        self::assertSame(200.23, $result['snapshots_by_timeframe']['4h']['close']);
     }
 
     public function testUsesExactNativeSourceKeysWhenNativeAndDerivedOutputsCoexist(): void
@@ -220,8 +219,8 @@ final class CanonicalIndicatorProjectorTest extends TestCase
     {
         $request = $this->request(['4h']);
         $request['candles_by_timeframe']['1h'] = array_slice($request['candles_by_timeframe']['1h'], 0, $count);
-        if ($count === 1001) {
-            $request['candles_by_timeframe']['1h'][] = $this->records('1h', 1001)[1000];
+        if ($count === 1004) {
+            $request['candles_by_timeframe']['1h'] = $this->records('1h', 1004);
         }
 
         $this->assertProjectionFailure($request, 'canonical_indicator_four_hour_count_invalid');
@@ -232,7 +231,7 @@ final class CanonicalIndicatorProjectorTest extends TestCase
     {
         yield 'native-sized 250' => [250];
         yield 'one short 999' => [999];
-        yield 'one extra 1001' => [1001];
+        yield 'suffix too long 1004' => [1004];
     }
 
     public function testValidatesOldHourlyPrefixBeforeProjectingNativeSuffix(): void

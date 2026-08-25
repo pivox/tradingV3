@@ -46,26 +46,27 @@ Every page must:
 - agree byte-for-byte on duplicate natural identities;
 - contain a contiguous confirmed one-hour grid after deduplication.
 
-The source emits the aligned 1,000-row base followed by the zero to three newer
-confirmed rows already observed on the first page. Preserving that suffix keeps
-the recorded 1H stream contiguous when the websocket takes over. It fails
+The source emits the aligned 1,000-row base followed by every newer confirmed
+row observed on the initial page or a resumed current-page catch-up. Preserving
+that suffix keeps the recorded 1H stream contiguous when the websocket takes
+over. It fails
 closed with a stable public-response integrity reason on an empty page,
 non-progress, conflicting duplicate, malformed row, gap or exhaustion of a
 fixed four-history-page budget. No partial snapshot boundary is emitted.
 
 When a strategy requests derived 4h context, the canonical indicator-window
-consumer selects the newest aligned complete 1,000-row block and leaves any
-zero-to-three-row suffix outside that projection until the next 4h block closes.
-Native 1h-only requests continue to use their freshest 250-row suffix.
+consumer returns the newest aligned 1,000-row base plus its available suffix.
+The projector aggregates the first 1,000 rows for 4h and uses the freshest 250
+rows, including the suffix, when native 1h is requested too.
 
 ## Resume and Safety
 
 Events still use the existing pending-event acknowledgement and durable live
-checkpoint path. The pinned newest-confirmed timestamp freezes both the aligned
-base and its observed suffix. If power is lost during emission, restart fetches
-history through that timestamp without consulting the shifted current page,
-skips identities already committed through the stream frontier, and continues
-exactly. A completed warmup transition is not repeated.
+checkpoint path. The pinned newest-confirmed timestamp freezes the aligned base.
+If power is lost during emission, restart reconstructs history through that
+timestamp, fetches the current page to backfill any subsequently confirmed
+contiguous suffix, skips identities already committed through the stream
+frontier, and continues exactly. A completed warmup transition is not repeated.
 
 Only the already allowlisted public OKX REST client is used. No credential,
 account, private websocket, order endpoint or execution adapter is introduced.

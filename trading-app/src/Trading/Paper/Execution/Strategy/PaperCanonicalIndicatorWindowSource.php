@@ -135,7 +135,7 @@ final readonly class PaperCanonicalIndicatorWindowSource
         }
         for ($start = count($candidates) - $required; $start >= 0; --$start) {
             if ((int) substr($candidates[$start]->openAt, 11, 2) % 4 === 0) {
-                return array_slice($candidates, $start, $required);
+                return array_slice($candidates, $start);
             }
         }
 

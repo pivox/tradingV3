@@ -86,10 +86,11 @@ the durable recorder/source checkpoints.
 New OKX captures warm up each BTC/ETH stream with a UTC-four-hour-aligned base
 of 1,000 confirmed, contiguous one-hour candles before publishing its initial
 snapshot boundary. They also retain the zero to three newer confirmed candles
-observed with that base, so the recorded 1H stream stays contiguous when live
-websocket confirmations begin. The canonical consumer uses the latest complete
-aligned 1,000-row block for 4h derivation and holds the short suffix for the
-next complete block. This supplies the canonical 250-candle 4h context while
+observed with that base, plus any contiguous current-page catch-up after a
+resume, so the recorded 1H stream stays contiguous when live websocket
+confirmations begin. The canonical consumer passes the latest aligned base and
+suffix together; the projector uses the base for 4h and the freshest 250 rows
+for native 1h. This supplies the canonical 250-candle 4h context while
 retaining live books, trades,
 instrument metadata and funding in the same dataset. The lower timeframes
 retain their 300-row public warmup. An empty, non-progressing, conflicting or
