@@ -2005,6 +2005,278 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         );
     }
 
+    public function testQueuedWebSocketFramesShareOneBoundedDurableBatch(): void
+    {
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+            ...array_map(
+                static fn (int $offset): array => Task7Transport::tradeFrame([
+                    (string) (9100 + $offset),
+                ]),
+                range(1, 33),
+            ),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(Task7RestClient::withInitialDataset(), $public, $business);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame('9000', $sentinel->payload['trade_id'] ?? null);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($sentinel->eventId);
+        $events->next();
+
+        $tradeIds = [];
+        for ($remaining = 32; $remaining > 0; --$remaining) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $tradeIds[] = $event->payload['trade_id'] ?? null;
+            self::assertSame($remaining, $source->pendingDurableBatchSize());
+            $source->acknowledge($event->eventId);
+            if ($remaining > 1) {
+                $events->next();
+            }
+        }
+
+        $events->next();
+        $last = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $last);
+        self::assertSame('9133', $last->payload['trade_id'] ?? null);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($last->eventId);
+
+        self::assertSame(
+            array_map(static fn (int $offset): string => (string) (9100 + $offset), range(1, 32)),
+            $tradeIds,
+        );
+        self::assertNull($this->checkpointState()['pending_event']);
+    }
+
+    public function testDurableFrameBatchPreservesEachEventStream(): void
+    {
+        $eth = Task7Transport::tradeFrame(['9201']);
+        $eth['arg']['instId'] = 'ETH-USDT-SWAP';
+        $eth['data'][0]['instId'] = 'ETH-USDT-SWAP';
+        $public = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+            Task7Transport::tradeFrame(['9101']),
+            $eth,
+        ];
+        $business = new Task7Transport();
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(Task7RestClient::withInitialDataset(), $public, $business);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($sentinel->eventId);
+        $events->next();
+
+        foreach ([['BTCUSDT', 2], ['ETHUSDT', 1]] as [$symbol, $remaining]) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            self::assertSame($symbol, $event->symbol);
+            self::assertSame($remaining, $source->pendingDurableBatchSize());
+            $source->acknowledge($event->eventId);
+            if ($remaining > 1) {
+                $events->next();
+            }
+        }
+
+        $frontiers = $this->checkpointState()['stream_frontiers'];
+        self::assertIsArray($frontiers['BTCUSDT/ws/public_trade']);
+        self::assertIsArray($frontiers['ETHUSDT/ws/public_trade']);
+    }
+
+    public function testDurableFrameBatchCommitsValidPrefixBeforeLaterConflict(): void
+    {
+        $conflict = Task7Transport::tradeFrame(['9101']);
+        $conflict['data'][0]['px'] = '999';
+        $public = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+            Task7Transport::tradeFrame(['9101']),
+            $conflict,
+        ];
+        $business = new Task7Transport();
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(Task7RestClient::withInitialDataset(), $public, $business);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($sentinel->eventId);
+        $events->next();
+
+        $valid = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $valid);
+        self::assertSame('9101', $valid->payload['trade_id'] ?? null);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($valid->eventId);
+        self::assertSame(
+            $valid->eventId,
+            $this->checkpointState()['last_acknowledged_event_id'] ?? null,
+        );
+
+        $this->expectException(OkxPaperLiveIntegrityException::class);
+        $this->expectExceptionMessage('market_event_identity_conflict');
+        $events->next();
+    }
+
+    public function testDurableFrameBatchCommitsValidPrefixBeforeLaterValidationFailure(): void
+    {
+        $public = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+        ];
+        $business = new Task7Transport();
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $publicQueue = new OkxPaperPublicFrameQueue();
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            publicQueue: $publicQueue,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($sentinel->eventId);
+        foreach ([
+            Task7Transport::tradeFrame(['9101']),
+            Task7Transport::bookFrame('9001', '9001', '5'),
+        ] as $frame) {
+            $publicQueue->enqueue(json_encode($frame, \JSON_THROW_ON_ERROR));
+        }
+        $events->next();
+
+        $valid = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $valid);
+        self::assertSame('9101', $valid->payload['trade_id'] ?? null);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($valid->eventId);
+        self::assertSame(
+            $valid->eventId,
+            $this->checkpointState()['last_acknowledged_event_id'] ?? null,
+        );
+
+        $this->expectException(OkxPaperLiveIntegrityException::class);
+        $this->expectExceptionMessage('okx_paper_book_sequence_invalid');
+        $events->next();
+    }
+
+    public function testDurableFrameBatchSilencesExactBookSnapshotReplay(): void
+    {
+        $snapshot = Task7Transport::bookFrame('9002', '-1', '5');
+        $snapshot['action'] = 'snapshot';
+        $snapshot['data'][0]['asks'] = [['101', '2', '0', '1']];
+        $snapshot['data'][0]['bids'][] = ['100', '3', '0', '2'];
+        $public = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+            $snapshot,
+            $snapshot,
+            Task7Transport::tradeFrame(['9300']),
+        ];
+        $business = new Task7Transport();
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(Task7RestClient::withInitialDataset(), $public, $business);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($sentinel->eventId);
+        $events->next();
+
+        $book = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $book);
+        self::assertSame(PaperMarketDataChannel::TOP_OF_BOOK, $book->channel);
+        self::assertSame(2, $source->pendingDurableBatchSize());
+        $source->acknowledge($book->eventId);
+        $events->next();
+
+        $trade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $trade);
+        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $trade->channel);
+        self::assertSame('9300', $trade->payload['trade_id'] ?? null);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($trade->eventId);
+    }
+
+    public function testDurableFrameBatchCapsAdvertisedRowsBeforeFiltering(): void
+    {
+        $public = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+            Task7Transport::tradeFrame(array_fill(0, 100, '9101')),
+            Task7Transport::tradeFrame(array_map(
+                static fn (int $offset): string => (string) (9200 + $offset),
+                range(0, 99),
+            )),
+        ];
+        $business = new Task7Transport();
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(Task7RestClient::withInitialDataset(), $public, $business);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($sentinel->eventId);
+        $events->next();
+
+        $deduplicated = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $deduplicated);
+        self::assertSame('9101', $deduplicated->payload['trade_id'] ?? null);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($deduplicated->eventId);
+    }
+
     public function testMultiRowWebSocketExactDuplicateInSameFrameIsSilentAndUsesOneOrdinal(): void
     {
         $public = new Task7Transport();

@@ -24,6 +24,8 @@ use Symfony\Component\Clock\ClockInterface;
 final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 {
     private const MAX_WARMUP_EVENT_BATCH = 100;
+    private const MAX_DURABLE_FRAME_BATCH = 32;
+    private const MAX_DURABLE_EVENT_BATCH = 128;
 
     private readonly OkxPaperInstrumentMap $instruments;
     private readonly OkxPaperPublicSubscriptionSet $subscriptions;
@@ -99,8 +101,15 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 
     private ?string $activeQueuedSocket = null;
     private int $activeQueuedEventsRemaining = 0;
+    private int $activeQueuedFramesRemaining = 0;
 
     private ?OkxPaperLiveCheckpoint $durableEventBatchBase = null;
+    private bool $durableFrameBatchingEnabled = false;
+    private ?\Throwable $deferredQueuedFailure = null;
+    private bool $preparingQueuedFrameBatch = false;
+
+    /** @var array<string, OkxPaperStreamFrontier> */
+    private array $preparedBookFrontiers = [];
 
     private bool $healthyStopRequested = false;
     private bool $healthyStopAdmissionQuiesced = false;
@@ -414,6 +423,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 
     public function pendingDurableBatchSize(): int
     {
+        if ($this->activeQueuedSocket !== null) {
+            $this->durableFrameBatchingEnabled = true;
+        }
         if ($this->activeQueuedEventsRemaining > 1
             && !$this->durableEventBatchBase instanceof OkxPaperLiveCheckpoint
         ) {
@@ -1345,7 +1357,10 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         bool $emitExactReplacement = false,
     ): array {
         $candidateFrontier = $this->bookFrontier($instrumentId, $state);
-        $frontier = $this->checkpoint->streamFrontiers[$stream] ?? null;
+        $frontier = $this->preparingQueuedFrameBatch
+            ? ($this->preparedBookFrontiers[$stream]
+                ?? ($this->checkpoint->streamFrontiers[$stream] ?? null))
+            : ($this->checkpoint->streamFrontiers[$stream] ?? null);
         if ($frontier instanceof OkxPaperStreamFrontier
             && ($this->requiresOverlap[$stream] ?? false)
         ) {
@@ -1377,6 +1392,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             $sourceEpoch,
             $origin,
         );
+        if ($this->preparingQueuedFrameBatch) {
+            $this->preparedBookFrontiers[$stream] = $candidateFrontier;
+        }
 
         return [[
             'event' => $event,
@@ -1408,7 +1426,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         foreach ($events as $index => $accepted) {
             $event = $accepted['event'];
             $frontier = $accepted['frontier'];
-            $pendingFrontier = ['stream' => $stream, 'frontier' => $frontier->toArray()];
+            $eventStream = $transition === [] ? $this->streamForEvent($event) : $stream;
+            $pendingFrontier = [
+                'stream' => $eventStream,
+                'frontier' => $frontier->toArray(),
+            ];
             if ($this->durableEventBatchBase instanceof OkxPaperLiveCheckpoint) {
                 $this->checkpoint = $this->checkpointStore->preparePending(
                     $this->checkpoint,
@@ -4140,6 +4162,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
      */
     private function nextQueuedEvents(): array
     {
+        if ($this->deferredQueuedFailure instanceof \Throwable) {
+            $failure = $this->deferredQueuedFailure;
+            $this->deferredQueuedFailure = null;
+            $this->throwQueuedFrameFailure($failure);
+        }
         if ($this->publicQueue->count() > 0) {
             return $this->eventsFromQueuedFrame($this->publicQueue, false);
         }
@@ -4161,34 +4188,81 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         OkxPaperPublicFrameQueue $queue,
         bool $business,
     ): array {
-        $frame = $queue->peek();
-        if ($frame === null) {
+        $this->preparingQueuedFrameBatch = true;
+        $this->preparedBookFrontiers = [];
+        try {
+            return $this->prepareEventsFromQueuedFrames($queue, $business);
+        } finally {
+            $this->preparingQueuedFrameBatch = false;
+            $this->preparedBookFrontiers = [];
+        }
+    }
+
+    /**
+     * @return list<array{
+     *     event: PaperMarketEvent,
+     *     frontier: OkxPaperStreamFrontier,
+     *     ordinal_state: array<string, mixed>
+     * }>
+     */
+    private function prepareEventsFromQueuedFrames(
+        OkxPaperPublicFrameQueue $queue,
+        bool $business,
+    ): array {
+        $frames = array_slice(
+            $queue->frames(),
+            0,
+            $this->durableFrameBatchingEnabled ? self::MAX_DURABLE_FRAME_BATCH : 1,
+        );
+        if ($frames === []) {
             return [];
         }
-        $message = $business
-            ? $this->decoder->decodeBusiness($frame)
-            : $this->decoder->decodePublic($frame);
-        try {
-            $events = $this->eventsFromMessage($message, $business);
-        } catch (\RuntimeException $exception) {
-            if ($business
-                || $exception->getMessage() !== 'okx_paper_book_sequence_gap'
-                || !$this->isBookUpdate($message)
-            ) {
-                if (\in_array($exception->getMessage(), [
-                    'market_event_identity_conflict',
-                    'market_data_gap_unresolved',
-                ], true)) {
-                    $this->failTerminal($exception->getMessage(), $exception);
+        $events = [];
+        $framesConsumed = 0;
+        $advertisedRows = 0;
+        foreach ($frames as $frame) {
+            $message = null;
+            try {
+                $message = $business
+                    ? $this->decoder->decodeBusiness($frame)
+                    : $this->decoder->decodePublic($frame);
+                $messageRows = $message['data'] ?? null;
+                if ($framesConsumed > 0
+                    && \is_array($messageRows)
+                    && $advertisedRows + \count($messageRows)
+                        > self::MAX_DURABLE_EVENT_BATCH
+                ) {
+                    break;
+                }
+                if (\is_array($messageRows)) {
+                    $advertisedRows += \count($messageRows);
+                }
+                $frameEvents = $this->eventsFromMessage($message, $business);
+            } catch (\Throwable $exception) {
+                $bookGap = !$business
+                    && $exception->getMessage() === 'okx_paper_book_sequence_gap'
+                    && \is_array($message)
+                    && $this->isBookUpdate($message);
+                if ($framesConsumed > 0) {
+                    if (!$bookGap) {
+                        $this->deferredQueuedFailure = $exception;
+                    }
+
+                    break;
+                }
+                if ($bookGap) {
+                    return $this->startBookResync($message);
                 }
 
-                throw $exception;
+                $this->throwQueuedFrameFailure($exception);
             }
-
-            return $this->startBookResync($message);
+            ++$framesConsumed;
+            array_push($events, ...$frameEvents);
         }
         if ($events === []) {
-            $queue->dequeue();
+            for ($index = 0; $index < $framesConsumed; ++$index) {
+                $queue->dequeue();
+            }
             $this->persistStreamingQueues();
             $this->rescheduleHeartbeatAfterQueueDrain(
                 $business ? 'business' : 'public',
@@ -4197,9 +4271,22 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         } else {
             $this->activeQueuedSocket = $business ? 'business' : 'public';
             $this->activeQueuedEventsRemaining = \count($events);
+            $this->activeQueuedFramesRemaining = $framesConsumed;
         }
 
         return $events;
+    }
+
+    private function throwQueuedFrameFailure(\Throwable $exception): never
+    {
+        if (\in_array($exception->getMessage(), [
+            'market_event_identity_conflict',
+            'market_data_gap_unresolved',
+        ], true)) {
+            $this->failTerminal($exception->getMessage(), $exception);
+        }
+
+        throw $exception;
     }
 
     private function completeActiveQueuedFrame(): void
@@ -4211,9 +4298,12 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $queue = $socket === 'public'
             ? $this->publicQueue
             : $this->businessQueue;
-        $queue->dequeue();
+        for ($index = 0; $index < $this->activeQueuedFramesRemaining; ++$index) {
+            $queue->dequeue();
+        }
         $this->activeQueuedSocket = null;
         $this->activeQueuedEventsRemaining = 0;
+        $this->activeQueuedFramesRemaining = 0;
         $this->persistStreamingQueues();
         $this->rescheduleHeartbeatAfterQueueDrain($socket, $queue);
     }
