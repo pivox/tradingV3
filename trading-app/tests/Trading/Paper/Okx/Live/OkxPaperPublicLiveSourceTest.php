@@ -2105,6 +2105,48 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertIsArray($frontiers['ETHUSDT/ws/public_trade']);
     }
 
+    public function testDurableFrameBatchCommitsValidPrefixBeforeLaterConflict(): void
+    {
+        $conflict = Task7Transport::tradeFrame(['9101']);
+        $conflict['data'][0]['px'] = '999';
+        $public = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+            Task7Transport::tradeFrame(['9101']),
+            $conflict,
+        ];
+        $business = new Task7Transport();
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(Task7RestClient::withInitialDataset(), $public, $business);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($sentinel->eventId);
+        $events->next();
+
+        $valid = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $valid);
+        self::assertSame('9101', $valid->payload['trade_id'] ?? null);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($valid->eventId);
+        self::assertSame(
+            $valid->eventId,
+            $this->checkpointState()['last_acknowledged_event_id'] ?? null,
+        );
+
+        $this->expectException(OkxPaperLiveIntegrityException::class);
+        $this->expectExceptionMessage('market_event_identity_conflict');
+        $events->next();
+    }
+
     public function testMultiRowWebSocketExactDuplicateInSameFrameIsSilentAndUsesOneOrdinal(): void
     {
         $public = new Task7Transport();

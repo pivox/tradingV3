@@ -105,6 +105,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 
     private ?OkxPaperLiveCheckpoint $durableEventBatchBase = null;
     private bool $durableFrameBatchingEnabled = false;
+    private ?\RuntimeException $deferredQueuedFailure = null;
 
     private bool $healthyStopRequested = false;
     private bool $healthyStopAdmissionQuiesced = false;
@@ -4151,6 +4152,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
      */
     private function nextQueuedEvents(): array
     {
+        if ($this->deferredQueuedFailure instanceof \RuntimeException) {
+            $failure = $this->deferredQueuedFailure;
+            $this->deferredQueuedFailure = null;
+            $this->throwQueuedFrameFailure($failure);
+        }
         if ($this->publicQueue->count() > 0) {
             return $this->eventsFromQueuedFrame($this->publicQueue, false);
         }
@@ -4183,38 +4189,37 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $events = [];
         $framesConsumed = 0;
         foreach ($frames as $frame) {
-            $message = $business
-                ? $this->decoder->decodeBusiness($frame)
-                : $this->decoder->decodePublic($frame);
-            $messageRows = $message['data'] ?? null;
-            if ($events !== []
-                && \is_array($messageRows)
-                && \count($events) + \count($messageRows) > self::MAX_DURABLE_EVENT_BATCH
-            ) {
-                break;
-            }
+            $message = null;
             try {
+                $message = $business
+                    ? $this->decoder->decodeBusiness($frame)
+                    : $this->decoder->decodePublic($frame);
+                $messageRows = $message['data'] ?? null;
+                if ($events !== []
+                    && \is_array($messageRows)
+                    && \count($events) + \count($messageRows)
+                        > self::MAX_DURABLE_EVENT_BATCH
+                ) {
+                    break;
+                }
                 $frameEvents = $this->eventsFromMessage($message, $business);
             } catch (\RuntimeException $exception) {
-                if ($business
-                    || $exception->getMessage() !== 'okx_paper_book_sequence_gap'
-                    || !$this->isBookUpdate($message)
-                ) {
-                    if (\in_array($exception->getMessage(), [
-                        'market_event_identity_conflict',
-                        'market_data_gap_unresolved',
-                    ], true)) {
-                        $this->failTerminal($exception->getMessage(), $exception);
+                $bookGap = !$business
+                    && $exception->getMessage() === 'okx_paper_book_sequence_gap'
+                    && \is_array($message)
+                    && $this->isBookUpdate($message);
+                if ($framesConsumed > 0) {
+                    if (!$bookGap) {
+                        $this->deferredQueuedFailure = $exception;
                     }
 
-                    throw $exception;
+                    break;
                 }
-
-                if ($framesConsumed === 0) {
+                if ($bookGap) {
                     return $this->startBookResync($message);
                 }
 
-                break;
+                $this->throwQueuedFrameFailure($exception);
             }
             ++$framesConsumed;
             array_push($events, ...$frameEvents);
@@ -4235,6 +4240,18 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
 
         return $events;
+    }
+
+    private function throwQueuedFrameFailure(\RuntimeException $exception): never
+    {
+        if (\in_array($exception->getMessage(), [
+            'market_event_identity_conflict',
+            'market_data_gap_unresolved',
+        ], true)) {
+            $this->failTerminal($exception->getMessage(), $exception);
+        }
+
+        throw $exception;
     }
 
     private function completeActiveQueuedFrame(): void
