@@ -428,6 +428,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         if ($this->activeQueuedSocket !== null) {
             $this->durableFrameBatchingEnabled = true;
         }
+        if ($this->checkpoint->reconnect['attempt'] > 0) {
+            return 1;
+        }
         if ($this->activeQueuedEventsRemaining > 1
             && !$this->durableEventBatchBase instanceof OkxPaperLiveCheckpoint
         ) {
