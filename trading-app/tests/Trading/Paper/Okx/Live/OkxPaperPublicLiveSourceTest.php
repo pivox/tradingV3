@@ -23,9 +23,11 @@ use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpoint;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveIntegrityException;
 use App\Trading\Paper\Okx\Live\OkxPaperLivePolicy;
+use App\Trading\Paper\Okx\Live\OkxPaperLoopPumpInterface;
 use App\Trading\Paper\Okx\Live\OkxPaperOrderBookMaterializer;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicFrameQueue;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSource;
+use App\Trading\Paper\Okx\Live\ReactOkxPaperLoopPump;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicSubscriptionSet;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicWebSocketTransportInterface;
 use App\Trading\Paper\Okx\Live\OkxPaperRetainedTradeRow;
@@ -2059,6 +2061,53 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             $tradeIds,
         );
         self::assertNull($this->checkpointState()['pending_event']);
+    }
+
+    public function testDurableFrameCompletionPumpsTheNetworkLoopBetweenBatches(): void
+    {
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+            Task7Transport::tradeFrame(['9101']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $pump = new Task7CountingLoopPump();
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            loopPump: $pump,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $first = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $first);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($first->eventId);
+        self::assertSame(1, $pump->count);
+
+        $events->next();
+        $second = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $second);
+        $source->acknowledge($second->eventId);
+        self::assertSame(2, $pump->count);
+    }
+
+    public function testReactLoopPumpRunsExactlyOneNonBlockingTick(): void
+    {
+        $loop = new DeterministicLoop();
+
+        (new ReactOkxPaperLoopPump($loop))->pump();
+
+        self::assertSame(1, $loop->runCount);
+        self::assertTrue($loop->stopped);
     }
 
     public function testDurableFrameBatchPreservesEachEventStream(): void
@@ -10533,6 +10582,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         ?OkxPaperInstrumentMetadataClientInterface $metadataClient = null,
         ?OkxPaperFundingRateClientInterface $fundingClient = null,
         int $initialHourlyCandleTarget = 1,
+        ?OkxPaperLoopPumpInterface $loopPump = null,
     ): OkxPaperPublicLiveSource {
         $store = $checkpointStore ?? new OkxPaperLiveCheckpointStore($this->testRoot);
         $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
@@ -10558,6 +10608,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             metadataClient: $metadataClient,
             fundingClient: $fundingClient,
             initialHourlyCandleTarget: $initialHourlyCandleTarget,
+            loopPump: $loopPump,
         );
     }
 
@@ -11251,6 +11302,16 @@ final class Task7ActionLog
 {
     /** @var list<string> */
     public array $actions = [];
+}
+
+final class Task7CountingLoopPump implements OkxPaperLoopPumpInterface
+{
+    public int $count = 0;
+
+    public function pump(): void
+    {
+        ++$this->count;
+    }
 }
 
 final class Task7ScriptedLoop implements LoopInterface

@@ -132,6 +132,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         private readonly ?OkxPaperInstrumentMetadataClientInterface $metadataClient = null,
         private readonly ?OkxPaperFundingRateClientInterface $fundingClient = null,
         private readonly int $initialHourlyCandleTarget = 1,
+        private readonly ?OkxPaperLoopPumpInterface $loopPump = null,
     ) {
         if ($this->initialHourlyCandleTarget < 1
             || $this->initialHourlyCandleTarget > OkxPaperLivePolicy::INITIAL_HOURLY_CANDLE_TARGET
@@ -4311,6 +4312,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $this->activeQueuedFramesRemaining = 0;
         $this->persistStreamingQueues();
         $this->rescheduleHeartbeatAfterQueueDrain($socket, $queue);
+        $this->loopPump?->pump();
     }
 
     private function rescheduleHeartbeatAfterQueueDrain(
