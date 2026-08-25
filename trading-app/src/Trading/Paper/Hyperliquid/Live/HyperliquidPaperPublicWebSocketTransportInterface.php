@@ -20,5 +20,8 @@ interface HyperliquidPaperPublicWebSocketTransportInterface
 
     public function resumeReading(): void;
 
+    /** Stop new socket ingress while retaining buffered frames for resumeReading(). */
+    public function stopIngress(): void;
+
     public function close(): void;
 }

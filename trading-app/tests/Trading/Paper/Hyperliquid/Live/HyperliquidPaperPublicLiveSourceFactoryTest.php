@@ -214,6 +214,10 @@ final class FactoryNoopHyperliquidTransport implements
     {
     }
 
+    public function stopIngress(): void
+    {
+    }
+
     public function close(): void
     {
     }

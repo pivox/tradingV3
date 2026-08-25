@@ -179,7 +179,7 @@ final class PawlHyperliquidPaperPublicWebSocketTransport implements
     public function pauseReading(): void
     {
         $connection = $this->connection;
-        if ($connection === null || $this->readingPaused) {
+        if (($connection === null && $this->onMessage === null) || $this->readingPaused) {
             return;
         }
         $this->readingPaused = true;
@@ -188,9 +188,6 @@ final class PawlHyperliquidPaperPublicWebSocketTransport implements
     public function resumeReading(): void
     {
         $connection = $this->connection;
-        if ($connection === null) {
-            return;
-        }
         if (!$this->readingPaused) {
             return;
         }
@@ -207,6 +204,14 @@ final class PawlHyperliquidPaperPublicWebSocketTransport implements
                 return;
             }
         }
+    }
+
+    public function stopIngress(): void
+    {
+        ++$this->generation;
+        $connection = $this->connection;
+        $this->connection = null;
+        $connection?->close();
     }
 
     public function close(): void

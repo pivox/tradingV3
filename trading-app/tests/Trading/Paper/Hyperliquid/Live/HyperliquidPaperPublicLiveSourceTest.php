@@ -862,6 +862,47 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame(1, $transport->resumeCount);
     }
 
+    public function testHealthyStopDrainsFramesAlreadyBufferedByTheTransport(): void
+    {
+        $transport = new BufferedHyperliquidTransport();
+        $source = $this->source($transport);
+        $events = self::generator($source->events());
+        $events->rewind();
+        $source->acknowledge($events->current()->eventId);
+        $events->next();
+        $totalTrades = HyperliquidPaperLivePolicy::NETWORK_PUMP_FRAME_HIGH_WATER
+            + HyperliquidPaperLivePolicy::MAX_QUEUED_FRAMES;
+        for ($tradeId = 1;
+            $tradeId <= $totalTrades;
+            ++$tradeId
+        ) {
+            $transport->push(self::tradeFrameForId($tradeId));
+        }
+        self::assertSame(
+            HyperliquidPaperLivePolicy::MAX_QUEUED_FRAMES,
+            $transport->bufferedFrameCount(),
+        );
+        $source->acknowledge($events->current()->eventId);
+        $source->requestHealthyOperatorStop();
+
+        $tradeIds = [];
+        $events->next();
+        while ($events->valid()) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
+                $tradeIds[] = $event->payload['trade_id'];
+            }
+            $source->acknowledge($event->eventId);
+            $events->next();
+        }
+
+        self::assertCount($totalTrades, $tradeIds);
+        self::assertSame((string) $totalTrades, $tradeIds[$totalTrades - 1]);
+        self::assertSame(0, $transport->bufferedFrameCount());
+        self::assertTrue($source->isComplete());
+    }
+
     public function testIngressPausesBeforeQueuedBytesCanExhaustCapacity(): void
     {
         $transport = new DeterministicHyperliquidTransport([]);
@@ -1481,6 +1522,10 @@ final class AsyncAcknowledgementHyperliquidTransport implements
     {
         ++$this->resumeCount;
     }
+
+    public function stopIngress(): void
+    {
+    }
 }
 
 final class StaticHyperliquidPaperMetadataClient implements HyperliquidPaperInstrumentMetadataClientInterface
@@ -1564,6 +1609,7 @@ final class DeterministicHyperliquidTransport implements
     private $onClose = null;
     /** @var callable(\Throwable): void|null */
     private $onError = null;
+    private bool $ingressStopped = false;
 
     /**
      * @param list<string> $marketFrames
@@ -1630,8 +1676,16 @@ final class DeterministicHyperliquidTransport implements
         ++$this->resumeCount;
     }
 
+    public function stopIngress(): void
+    {
+        $this->ingressStopped = true;
+    }
+
     public function push(string $frame): void
     {
+        if ($this->ingressStopped) {
+            return;
+        }
         ($this->onMessage ?? throw new \LogicException())($frame);
     }
 
@@ -1643,6 +1697,88 @@ final class DeterministicHyperliquidTransport implements
     public function serverError(\Throwable $failure): void
     {
         ($this->onError ?? throw new \LogicException())($failure);
+    }
+}
+
+final class BufferedHyperliquidTransport implements
+    HyperliquidPaperPublicWebSocketTransportInterface
+{
+    /** @var callable(string): void|null */
+    private $onMessage = null;
+
+    /** @var list<string> */
+    private array $bufferedFrames = [];
+
+    private bool $paused = false;
+    private bool $ingressStopped = false;
+
+    public function connect(
+        callable $onOpen,
+        callable $onMessage,
+        callable $onClose,
+        callable $onError,
+    ): void {
+        $this->onMessage = $onMessage;
+        $onOpen();
+    }
+
+    public function send(array $message): void
+    {
+        if ($message === ['method' => 'ping']) {
+            return;
+        }
+        ($this->onMessage ?? throw new \LogicException())(CanonicalJson::encode([
+            'channel' => 'subscriptionResponse',
+            'data' => $message,
+        ]));
+    }
+
+    public function pauseReading(): void
+    {
+        $this->paused = true;
+    }
+
+    public function resumeReading(): void
+    {
+        $this->paused = false;
+        while (!$this->isPaused() && $this->bufferedFrames !== []) {
+            $frame = array_shift($this->bufferedFrames);
+            ($this->onMessage ?? throw new \LogicException())($frame);
+        }
+    }
+
+    public function close(): void
+    {
+        $this->onMessage = null;
+        $this->bufferedFrames = [];
+    }
+
+    public function stopIngress(): void
+    {
+        $this->ingressStopped = true;
+    }
+
+    public function push(string $frame): void
+    {
+        if ($this->ingressStopped) {
+            return;
+        }
+        if ($this->paused) {
+            $this->bufferedFrames[] = $frame;
+
+            return;
+        }
+        ($this->onMessage ?? throw new \LogicException())($frame);
+    }
+
+    public function bufferedFrameCount(): int
+    {
+        return \count($this->bufferedFrames);
+    }
+
+    private function isPaused(): bool
+    {
+        return $this->paused;
     }
 }
 

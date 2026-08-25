@@ -231,6 +231,27 @@ final class HyperliquidPaperPublicWebSocketTransportTest extends TestCase
         self::assertSame(0, $connection->resumeCount);
     }
 
+    public function testStopIngressRetainsBufferedFramesAndRejectsLaterSocketFrames(): void
+    {
+        $connection = new HyperliquidFakePawlConnection();
+        $messages = [];
+        $transport = self::connectedTransport(
+            $connection,
+            static function (string $frame) use (&$messages): void {
+                $messages[] = $frame;
+            },
+        );
+        $transport->pauseReading();
+        $connection->emit('message', 'buffered-before-stop');
+
+        $transport->stopIngress();
+        $connection->emit('message', 'received-after-stop');
+        $transport->resumeReading();
+
+        self::assertSame(['buffered-before-stop'], $messages);
+        self::assertSame(1, $connection->closeCount);
+    }
+
     public function testFactoryCreatesFreshNetworkBoundTransports(): void
     {
         $factory = new PawlHyperliquidPaperPublicWebSocketTransportFactory();

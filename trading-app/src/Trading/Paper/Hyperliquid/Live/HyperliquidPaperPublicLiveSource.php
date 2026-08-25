@@ -542,8 +542,8 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
             return;
         }
 
-        $this->transport->resumeReading();
         $this->transportReadingPaused = false;
+        $this->transport->resumeReading();
     }
 
     private function deferPreReadyFrame(#[\SensitiveParameter] string $frame): void
@@ -1077,6 +1077,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
     {
         if ($this->checkpoint->phase !== 'streaming'
             || $this->stopped
+            || $this->healthyStopRequested
             || $this->transportReadingPaused
             || $this->queue->count() > 0
             || $this->preReadyFrames !== []
@@ -1144,8 +1145,9 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
             );
         }
         $this->healthyStopRequested = true;
-        ++$this->activeGeneration;
         $this->cancelTimers();
+        $this->transport->stopIngress();
+        $this->resumeTransportReadingAfterDrain();
         $this->persistHealthyStopWhenDrained();
         $this->loop->stop();
     }
@@ -1155,6 +1157,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
         if (!$this->healthyStopRequested
             || $this->checkpoint->phase !== 'streaming'
             || $this->checkpoint->pendingEvent !== null
+            || $this->transportReadingPaused
             || $this->queue->count() !== 0
             || $this->preReadyFrames !== []
             || $this->deferredDecodedFrames !== []
