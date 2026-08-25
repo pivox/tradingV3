@@ -20,6 +20,7 @@
 - [ ] Add a failing source test asserting `pendingDurableBatchSize()` counts down to 1 for a trade frame and returns 1 for snapshot events.
 - [ ] Run `vendor/bin/phpunit --filter testExposesCurrentDurableTradeBatchBoundary tests/Trading/Paper/Hyperliquid/Live/HyperliquidPaperPublicLiveSourceTest.php`; expect failure because the method does not exist.
 - [ ] Define `pendingDurableBatchSize(): int` and return `count($checkpoint->pendingContinuation['remaining_trade_rows']) + 1` only for a valid trade continuation; return 1 otherwise.
+- [ ] Coalesce consecutive queued trade frames in FIFO order up to 256 rows, accept pongs immediately, and defer the first non-trade frame for the next loop iteration.
 - [ ] Re-run the filtered test; expect PASS.
 
 ### Task 2: Add atomic recorder batches

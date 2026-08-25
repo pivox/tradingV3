@@ -30,6 +30,12 @@ original file prefix and concatenated NDJSON suffix. The suffix is flushed once,
 verified once, and then applied to in-memory facts in event order. Existing v1
 single-event intents remain readable; new batch intents use v2.
 
+Hyperliquid coalesces consecutive queued single-trade frames, in FIFO order, up
+to the same 256-event bound before publishing the source checkpoint. Pongs are
+handled immediately and the first non-trade frame is deferred without
+reordering. This makes the durable boundary span venue frames while keeping the
+checkpoint itself as the crash-replay journal; no second raw format is needed.
+
 ## Crash behavior
 
 - Before the dataset batch is durable, the source checkpoint still points to

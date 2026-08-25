@@ -618,7 +618,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame(['42', '43'], $tradeIds);
 
         $source->requestHealthyOperatorStop();
-        self::assertSame('streaming', $this->checkpoint()->phase);
+        self::assertSame('stopping', $this->checkpoint()->phase);
         $events->next();
 
         self::assertFalse($events->valid());
@@ -650,7 +650,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         $events->next();
 
         self::assertSame('1', $events->current()->payload['trade_id']);
-        self::assertSame($baselineRuns + 2, $loop->runCount());
+        self::assertSame($baselineRuns, $loop->runCount());
     }
 
     public function testRestartResumesTheCompactRemainderOfATradeFrame(): void
@@ -786,6 +786,24 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
                 $events->next();
             }
         }
+    }
+
+    public function testCoalescesQueuedSingleTradeFramesIntoOneDurableBatch(): void
+    {
+        $transport = new DeterministicHyperliquidTransport([]);
+        $source = $this->source($transport);
+        $events = self::generator($source->events());
+        $events->rewind();
+        $source->acknowledge($events->current()->eventId);
+        $events->next();
+        for ($tradeId = 1; $tradeId <= 16; ++$tradeId) {
+            $transport->push(self::tradeFrameForId($tradeId));
+        }
+        $source->acknowledge($events->current()->eventId);
+        $events->next();
+
+        self::assertSame('1', $events->current()->payload['trade_id']);
+        self::assertSame(16, $source->pendingDurableBatchSize());
     }
 
     public function testIngressPausesAtHighWaterAndResumesAfterDrain(): void

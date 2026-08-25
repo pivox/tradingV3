@@ -38,6 +38,9 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
     private ?TimerInterface $fundingTimer = null;
     private bool $fundingRefreshDue = false;
 
+    /** @var list<array{decoded: array{kind: string, data?: mixed}, frame: string}> */
+    private array $deferredDecodedFrames = [];
+
     /** @var list<string> */
     private array $preReadyFrames = [];
     private int $preReadyFrameBytes = 0;
@@ -229,6 +232,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
             if ($this->checkpoint->phase === 'stopping'
                 && $this->queue->count() === 0
                 && $this->preReadyFrames === []
+                && $this->deferredDecodedFrames === []
             ) {
                 if ($this->checkpoint->pendingEvent !== null) {
                     throw new HyperliquidPaperLiveIntegrityException(
@@ -266,6 +270,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
             if ($received === null) {
                 continue;
             }
+            $received = $this->coalesceQueuedTradeFrames($received);
             yield from $this->processDecoded(
                 $received['decoded'],
                 $received['frame'],
@@ -403,6 +408,11 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
     /** @return array{decoded: array{kind: string, data?: mixed}, frame: string}|null */
     private function nextDecodedFrame(): ?array
     {
+        $deferred = array_shift($this->deferredDecodedFrames);
+        if ($deferred !== null) {
+            return $deferred;
+        }
+
         $frame = $this->dequeuePreReadyFrame();
         if ($frame === null) {
             if ($this->queue->count() > 0) {
@@ -418,6 +428,54 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
             'decoded' => $this->decoder->decode($frame),
             'frame' => $frame,
         ];
+    }
+
+    /**
+     * @param array{decoded: array{kind: string, data?: mixed}, frame: string} $received
+     * @return array{decoded: array{kind: string, data?: mixed}, frame: string}
+     */
+    private function coalesceQueuedTradeFrames(#[\SensitiveParameter] array $received): array
+    {
+        if ($received['decoded']['kind'] !== 'trades'
+            || !\is_array($received['decoded']['data'] ?? null)
+        ) {
+            return $received;
+        }
+
+        $rows = $received['decoded']['data'];
+        while (\count($rows) < HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS
+            && $this->queue->count() > 0
+        ) {
+            $next = $this->nextDecodedFrame();
+            if ($next === null) {
+                break;
+            }
+            if ($next['decoded']['kind'] === 'pong') {
+                $this->acceptPong();
+
+                continue;
+            }
+            if ($next['decoded']['kind'] !== 'trades'
+                || !\is_array($next['decoded']['data'] ?? null)
+            ) {
+                array_unshift($this->deferredDecodedFrames, $next);
+
+                break;
+            }
+
+            $available = HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS - \count($rows);
+            $rows = [...$rows, ...array_slice($next['decoded']['data'], 0, $available)];
+            $remaining = array_slice($next['decoded']['data'], $available);
+            if ($remaining !== []) {
+                $next['decoded']['data'] = $remaining;
+                array_unshift($this->deferredDecodedFrames, $next);
+
+                break;
+            }
+        }
+        $received['decoded']['data'] = $rows;
+
+        return $received;
     }
 
     private function nextTransportFrame(): ?string
@@ -516,6 +574,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
     {
         $this->preReadyFrames = [];
         $this->preReadyFrameBytes = 0;
+        $this->deferredDecodedFrames = [];
     }
 
     private function pendingTransportFailure(): ?\Throwable
@@ -1087,6 +1146,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
             || $this->checkpoint->pendingEvent !== null
             || $this->queue->count() !== 0
             || $this->preReadyFrames !== []
+            || $this->deferredDecodedFrames !== []
         ) {
             return;
         }
