@@ -17,6 +17,8 @@ final readonly class OkxPaperLivePolicy
     public const MAX_OVERLAP_HISTORY_PAGES = 50;
     public const LEGACY_MAX_OVERLAP_HISTORY_PAGES = 10;
     public const MAX_RETAINED_RECOVERY_ROWS = 5_500;
+    public const INITIAL_HOURLY_CANDLE_TARGET = 1_000;
+    public const MAX_INITIAL_HOURLY_HISTORY_PAGES = 4;
     public const MAX_TRADE_ACKNOWLEDGED_IDENTITIES = 500;
     public const MAX_CANDLE_ACKNOWLEDGED_IDENTITIES = 300;
     public const MAX_ACKNOWLEDGED_IDENTITIES_PER_STREAM =

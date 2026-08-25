@@ -83,6 +83,15 @@ the dataset as `incomplete`; a terminal dataset is immutable. An abrupt process
 loss may leave `recording`, in which case the exact same command resumes from
 the durable recorder/source checkpoints.
 
+New OKX captures warm up each BTC/ETH stream with exactly 1,000 confirmed,
+contiguous one-hour candles before publishing its initial snapshot boundary.
+This supplies the source window used to derive the canonical 250-candle 4h
+context while retaining live books, trades, instrument metadata and funding in
+the same dataset. The lower timeframes retain their 300-row public warmup. An
+empty, non-progressing, conflicting or gapped hourly history fails closed.
+Existing terminal datasets are immutable and are not retroactively upgraded;
+create a new dataset ID to obtain this contract.
+
 Successful output is redacted schema `paper-public-capture-result-v1` and ends
 with `certification_status=not_evaluated`. A complete capture proves neither a
 trade nor representative coverage. After both captures complete, pass their

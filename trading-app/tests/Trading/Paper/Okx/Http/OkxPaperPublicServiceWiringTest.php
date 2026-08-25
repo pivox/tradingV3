@@ -186,6 +186,7 @@ final class OkxPaperPublicServiceWiringTest extends KernelTestCase
                 self::assertSame($restClient, self::property($source, 'restClient'));
                 self::assertSame($config, self::property($source, 'config'));
                 self::assertSame($clock, self::property($source, 'clock'));
+                self::assertSame(1000, self::property($source, 'initialHourlyCandleTarget'));
 
                 foreach (array_keys($objectIdsByBoundary) as $property) {
                     $value = self::property($source, $property);

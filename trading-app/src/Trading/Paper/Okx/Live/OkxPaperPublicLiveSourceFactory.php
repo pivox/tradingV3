@@ -86,6 +86,7 @@ final readonly class OkxPaperPublicLiveSourceFactory implements PaperPublicLiveS
                 businessQueue: $businessQueue,
                 metadataClient: $this->metadataClient,
                 fundingClient: $this->fundingClient,
+                initialHourlyCandleTarget: OkxPaperLivePolicy::INITIAL_HOURLY_CANDLE_TARGET,
             );
         } finally {
             fclose($directoryPin['handle']);
