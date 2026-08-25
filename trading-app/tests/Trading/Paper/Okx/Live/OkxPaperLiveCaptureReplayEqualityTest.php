@@ -19,6 +19,7 @@ use App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperFundingRateClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
+use App\Trading\Paper\Okx\Live\OkxPaperLivePolicy;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSource;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicWebSocketTransportInterface;
 use App\Trading\Paper\Okx\OkxPaperPublicConfig;
@@ -621,13 +622,15 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
         $loop->beforeAddTimer = static function (float $interval) use (
             &$resyncTimerSchedules,
         ): void {
-            if ($interval !== 10.0 || ++$resyncTimerSchedules !== 2) {
+            if ($interval !== OkxPaperLivePolicy::RESYNC_ATTEMPT_TIMEOUT_SECONDS
+                || ++$resyncTimerSchedules !== 2
+            ) {
                 return;
             }
             throw new \RuntimeException('okx_paper_live_checkpoint_write_failed');
         };
         $rest->beforeOrderBook = static function () use ($loop): void {
-            $loop->fireTimer(10.0);
+            $loop->fireTimer(OkxPaperLivePolicy::RESYNC_ATTEMPT_TIMEOUT_SECONDS);
         };
         $runtime->publicMessage(self::bookFrame(
             'BTC-USDT-SWAP',
@@ -868,7 +871,10 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
         $persistedPagination =
             $paginationCheckpoint['overlap_pagination_by_stream']['BTCUSDT/rest/candle_1m'];
         self::assertSame(0, $persistedPagination['pages_consumed']);
-        self::assertSame(10, $persistedPagination['pages_remaining']);
+        self::assertSame(
+            OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
+            $persistedPagination['pages_remaining'],
+        );
         self::assertSame(
             $paginationCheckpoint['resync_by_symbol']['BTCUSDT']['deadline_at'],
             $persistedPagination['deadline_at'],
@@ -1285,8 +1291,8 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
         self::assertCount(2, $btcRestCandlePages);
         self::assertSame(
             [
-                [0, 10, '1784970034000'],
-                [1, 9, '1784970032000'],
+                [0, OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES, '1784970034000'],
+                [1, OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES - 1, '1784970032000'],
             ],
             array_map(
                 static fn (array $observation): array => [
@@ -1309,8 +1315,8 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
         self::assertCount(2, $btcRestTradePages);
         self::assertSame(
             [
-                [0, 10, 2, '1784970038000'],
-                [1, 9, 1, '220'],
+                [0, OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES, 2, '1784970038000'],
+                [1, OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES - 1, 1, '220'],
             ],
             array_map(
                 static fn (array $observation): array => [

@@ -245,6 +245,61 @@ final class PaperDatasetRecorderTest extends TestCase
         );
     }
 
+    public function testDeferredRecordingManifestCheckpointRestartsFromAuthenticatedEvents(): void
+    {
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            recordingManifestCheckpointInterval: 3,
+        );
+        $first = $this->event(sequence: '1');
+        $second = $this->event(sequence: '2', microseconds: 2);
+
+        $recorder->append($first);
+        $recorder->append($second);
+
+        self::assertSame(2, $recorder->manifest()->eventCount);
+        $stored = (new PaperDatasetManifestCodec())->decode(
+            (string) file_get_contents($this->datasetDirectory() . '/manifest.json'),
+        );
+        self::assertSame(0, $stored->eventCount);
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+
+        self::assertSame(2, $restarted->manifest()->eventCount);
+        self::assertSame($second->eventId, $restarted->manifest()->lastEventId);
+        $reconciled = (new PaperDatasetManifestCodec())->decode(
+            (string) file_get_contents($this->datasetDirectory() . '/manifest.json'),
+        );
+        self::assertSame(2, $reconciled->eventCount);
+        self::assertSame($second->eventId, $reconciled->lastEventId);
+    }
+
+    public function testDeferredRecordingManifestPublishesAtItsExactInterval(): void
+    {
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            recordingManifestCheckpointInterval: 2,
+        );
+
+        $recorder->append($this->event(sequence: '1'));
+        $before = (new PaperDatasetManifestCodec())->decode(
+            (string) file_get_contents($this->datasetDirectory() . '/manifest.json'),
+        );
+        self::assertSame(0, $before->eventCount);
+
+        $second = $this->event(sequence: '2', microseconds: 2);
+        $recorder->append($second);
+
+        $stored = (new PaperDatasetManifestCodec())->decode(
+            (string) file_get_contents($this->datasetDirectory() . '/manifest.json'),
+        );
+        self::assertSame(2, $stored->eventCount);
+        self::assertSame($second->eventId, $stored->lastEventId);
+    }
+
     public function testRecorderRetainsItsDurableByteOffsetAcrossAppends(): void
     {
         $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());

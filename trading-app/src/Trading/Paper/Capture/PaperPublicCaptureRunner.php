@@ -14,6 +14,8 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final readonly class PaperPublicCaptureRunner
 {
+    private const RECORDING_MANIFEST_CHECKPOINT_INTERVAL = 100;
+
     public function __construct(
         private PaperPublicLiveManifestFactory $manifests,
         private PaperPublicDatasetCapture $capture,
@@ -41,7 +43,11 @@ final readonly class PaperPublicCaptureRunner
         }
 
         $manifest = $this->manifests->create($venueIdentity, $datasetId);
-        $recorder = new PaperDatasetRecorder($this->dataRoot, $manifest);
+        $recorder = new PaperDatasetRecorder(
+            $this->dataRoot,
+            $manifest,
+            recordingManifestCheckpointInterval: self::RECORDING_MANIFEST_CHECKPOINT_INTERVAL,
+        );
         if ($recorder->manifest()->state !== PaperDatasetState::RECORDING) {
             throw new \LogicException('paper_public_capture_dataset_terminal');
         }

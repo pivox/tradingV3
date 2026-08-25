@@ -17,6 +17,7 @@ use App\Trading\Paper\Dataset\PaperLiveEventConsumerInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperFundingRateClientInterface;
+use App\Trading\Paper\Okx\Live\OkxPaperAcknowledgedIdentityEntry;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpoint;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveIntegrityException;
@@ -37,6 +38,7 @@ use Symfony\Component\Clock\ClockInterface;
 use Symfony\Component\Clock\MockClock;
 
 #[CoversClass(OkxPaperPublicLiveSource::class)]
+#[CoversClass(OkxPaperAcknowledgedIdentityEntry::class)]
 final class OkxPaperPublicLiveSourceTest extends TestCase
 {
     public function testAuthenticatedReferenceDataPrecedesWarmupMarketEvents(): void
@@ -2048,7 +2050,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame('9004', $replacement->payload['source_seq_id'] ?? null);
         self::assertSame((string) ((int) $applied->sequence + 2), $replacement->sequence);
         self::assertSame(1, $publicQueue->count());
-        self::assertSame([20.0, 20.0, 10.0], $loop->timerIntervals());
+        self::assertSame([
+            20.0,
+            20.0,
+            OkxPaperLivePolicy::RESYNC_ATTEMPT_TIMEOUT_SECONDS,
+        ], $loop->timerIntervals());
         self::assertSame(
             ['orderBook', ['BTC-USDT-SWAP', 400]],
             $rest->calls[array_key_last($rest->calls)] ?? null,
@@ -2072,7 +2078,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             $state['resync_by_symbol']['BTCUSDT']['source_sequence'] ?? null,
         );
         self::assertSame(
-            '2026-07-25T10:00:10.000000Z',
+            '2026-07-25T10:04:00.000000Z',
             $state['resync_by_symbol']['BTCUSDT']['deadline_at'] ?? null,
         );
         self::assertSame(
@@ -2227,9 +2233,10 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         ): void {
             ++$attempt;
             if ($attempt === 1) {
-                $lateAttemptOne = $loop->timerCallback(10.0);
-                $clock->sleep(10);
-                $loop->fireTimerInterval(10.0);
+                $timeout = OkxPaperLivePolicy::RESYNC_ATTEMPT_TIMEOUT_SECONDS;
+                $lateAttemptOne = $loop->timerCallback($timeout);
+                $clock->sleep($timeout);
+                $loop->fireTimerInterval($timeout);
 
                 return;
             }
@@ -2248,7 +2255,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $state = $this->checkpointState();
         self::assertSame(2, $state['resync_by_symbol']['BTCUSDT']['attempt'] ?? null);
         self::assertSame(
-            '2026-07-25T10:00:20.000000Z',
+            '2026-07-25T10:08:00.000000Z',
             $state['resync_by_symbol']['BTCUSDT']['deadline_at'] ?? null,
         );
     }
@@ -2488,7 +2495,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 }
             },
             static function () use ($business): void {
-                for ($index = 0; $index <= 256; ++$index) {
+                for ($index = 0; $index <= OkxPaperLivePolicy::MAX_QUEUED_FRAMES; ++$index) {
                     $business->message([
                         'arg' => [
                             'channel' => 'candle1m',
@@ -4281,7 +4288,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $target = $socket === 'public' ? $public : $business;
         try {
             if ($limit === 'frames') {
-                for ($index = 0; $index <= 256; ++$index) {
+                for ($index = 0; $index <= OkxPaperLivePolicy::MAX_QUEUED_FRAMES; ++$index) {
                     $target->message($socket === 'public'
                         ? Task7Transport::tradeFrame([(string) (10000 + $index)])
                         : [
@@ -4346,9 +4353,9 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
     /** @return iterable<string, array{string, string}> */
     public static function backpressureProvider(): iterable
     {
-        yield 'Public frame 257' => ['frames', 'public'];
+        yield 'Public frame above bound' => ['frames', 'public'];
         yield 'Public aggregate bytes above 2 MiB' => ['bytes', 'public'];
-        yield 'Business frame 257' => ['frames', 'business'];
+        yield 'Business frame above bound' => ['frames', 'business'];
         yield 'Business aggregate bytes above 2 MiB' => ['bytes', 'business'];
     }
 
@@ -6224,6 +6231,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $history = $this->checkpointState()['acknowledged_identity_history'][
             'BTCUSDT/public_trade'
         ] ?? [];
+        $history = array_map(OkxPaperAcknowledgedIdentityEntry::expand(...), $history);
         self::assertIsString(
             array_column($history, 2, 0)[hash(
                 'sha256',
@@ -6883,6 +6891,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $history = $this->checkpointState()['acknowledged_identity_history'][
             'BTCUSDT/public_trade'
         ] ?? [];
+        $history = array_map(OkxPaperAcknowledgedIdentityEntry::expand(...), $history);
         self::assertIsString(
             array_column($history, 2, 0)[hash(
                 'sha256',
@@ -7446,6 +7455,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $history = $state['acknowledged_identity_history']['BTCUSDT/public_trade'] ?? null;
         self::assertIsArray($history);
         self::assertCount(500, $history);
+        $history = array_map(OkxPaperAcknowledgedIdentityEntry::expand(...), $history);
         self::assertNotContains(
             hash('sha256', 'okx|BTC-USDT-SWAP|public_trade|1000'),
             array_column($history, 0),
@@ -7652,7 +7662,10 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $persisted = $this->checkpointState()['acknowledged_identity_history'][
             'BTCUSDT/public_trade'
         ][0];
-        self::assertSame($webSocketFrontier->canonicalDigest, $persisted[3]);
+        self::assertSame(
+            $webSocketFrontier->canonicalDigest,
+            OkxPaperAcknowledgedIdentityEntry::expand($persisted)[3],
+        );
         unset($source, $store);
         gc_collect_cycles();
 
@@ -9641,7 +9654,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 $stream = $symbol . '/' . $channel;
                 $window = OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($stream);
                 $state['acknowledged_identity_history'][$stream] = array_map(
-                    static fn (int $index): array => [
+                    static fn (int $index): string => OkxPaperAcknowledgedIdentityEntry::compact([
                         hash(
                             'sha256',
                             $stream . '|identity|' . $index,
@@ -9655,7 +9668,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                             $stream . '|rest|' . $index,
                         ),
                         OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST,
-                    ],
+                    ]),
                     range(1, $window),
                 );
             }
@@ -9663,6 +9676,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $encoded = CanonicalJson::encode(
             OkxPaperLiveCheckpoint::fromArray($state)->toArray(),
         ) . "\n";
+        self::assertLessThan(700_000, \strlen($encoded));
         self::assertLessThanOrEqual(OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES, \strlen($encoded));
         self::assertNotFalse(file_put_contents(
             $this->testRoot . '/checkpoints/okx-live/checkpoint.json',

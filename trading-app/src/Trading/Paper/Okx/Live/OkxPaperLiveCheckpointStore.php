@@ -940,7 +940,12 @@ final class OkxPaperLiveCheckpointStore
         $history = $state['acknowledged_identity_history'][$logicalStream] ?? [];
         $identityHash = hash('sha256', $frontier->naturalIdentity);
         $originIndex = $sourceKind === 'rest' ? 2 : 3;
-        foreach ($history as $index => $entry) {
+        foreach ($history as $index => $storedEntry) {
+            try {
+                $entry = OkxPaperAcknowledgedIdentityEntry::expand($storedEntry);
+            } catch (\InvalidArgumentException $exception) {
+                throw self::invalidCheckpoint($exception);
+            }
             if (!hash_equals($entry[0], $identityHash)) {
                 continue;
             }
@@ -954,12 +959,12 @@ final class OkxPaperLiveCheckpointStore
                 return false;
             }
             $entry[$originIndex] = $frontier->canonicalDigest;
-            $history[$index] = $entry;
+            $history[$index] = OkxPaperAcknowledgedIdentityEntry::compact($entry);
             $state['acknowledged_identity_history'][$logicalStream] = $history;
 
             return true;
         }
-        $history[] = [
+        $history[] = OkxPaperAcknowledgedIdentityEntry::compact([
             $identityHash,
             $frontier->overlapDigest,
             $sourceKind === 'rest'
@@ -968,7 +973,7 @@ final class OkxPaperLiveCheckpointStore
             $sourceKind === 'ws'
                 ? $frontier->canonicalDigest
                 : OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST,
-        ];
+        ]);
         $window = OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($logicalStream);
         if (\count($history) > $window) {
             $history = array_slice($history, -$window);
