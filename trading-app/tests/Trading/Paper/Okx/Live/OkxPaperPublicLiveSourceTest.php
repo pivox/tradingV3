@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Okx\Live;
 
 use App\Trading\Paper\MarketData\PaperLiveMarketDataSourceInterface;
+use App\Trading\Paper\MarketData\PaperDurableBatchSourceInterface;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
@@ -1952,6 +1953,56 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         }
 
         self::assertSame(['9101', '9102', '9103', '9200'], $tradeIds);
+    }
+
+    public function testMultiRowWebSocketFrameCommitsAsOneDurableBatch(): void
+    {
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9101', '9102', '9103']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(Task7RestClient::withInitialDataset(), $public, $business);
+        self::assertInstanceOf(PaperDurableBatchSourceInterface::class, $source);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $first = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $first);
+        self::assertSame('9101', $first->payload['trade_id'] ?? null);
+        self::assertSame(3, $source->pendingDurableBatchSize());
+        $durableFirst = $this->checkpointState()['pending_event'] ?? null;
+        self::assertIsArray($durableFirst);
+        self::assertSame($first->eventId, $durableFirst['event_id'] ?? null);
+
+        $source->acknowledge($first->eventId);
+        $events->next();
+        $second = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $second);
+        self::assertSame('9102', $second->payload['trade_id'] ?? null);
+        self::assertSame(2, $source->pendingDurableBatchSize());
+        self::assertSame($durableFirst, $this->checkpointState()['pending_event']);
+
+        $source->acknowledge($second->eventId);
+        $events->next();
+        $third = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $third);
+        self::assertSame('9103', $third->payload['trade_id'] ?? null);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        self::assertSame($durableFirst, $this->checkpointState()['pending_event']);
+
+        $source->acknowledge($third->eventId);
+        self::assertNull($this->checkpointState()['pending_event']);
+        self::assertSame(
+            $third->eventId,
+            $this->checkpointState()['last_acknowledged_event_id'] ?? null,
+        );
     }
 
     public function testMultiRowWebSocketExactDuplicateInSameFrameIsSilentAndUsesOneOrdinal(): void
