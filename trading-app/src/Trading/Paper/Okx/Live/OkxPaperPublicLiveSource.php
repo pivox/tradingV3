@@ -105,7 +105,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 
     private ?OkxPaperLiveCheckpoint $durableEventBatchBase = null;
     private bool $durableFrameBatchingEnabled = false;
-    private ?\RuntimeException $deferredQueuedFailure = null;
+    private ?\Throwable $deferredQueuedFailure = null;
     private bool $preparingQueuedFrameBatch = false;
 
     /** @var array<string, OkxPaperStreamFrontier> */
@@ -4162,7 +4162,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
      */
     private function nextQueuedEvents(): array
     {
-        if ($this->deferredQueuedFailure instanceof \RuntimeException) {
+        if ($this->deferredQueuedFailure instanceof \Throwable) {
             $failure = $this->deferredQueuedFailure;
             $this->deferredQueuedFailure = null;
             $this->throwQueuedFrameFailure($failure);
@@ -4238,7 +4238,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     $advertisedRows += \count($messageRows);
                 }
                 $frameEvents = $this->eventsFromMessage($message, $business);
-            } catch (\RuntimeException $exception) {
+            } catch (\Throwable $exception) {
                 $bookGap = !$business
                     && $exception->getMessage() === 'okx_paper_book_sequence_gap'
                     && \is_array($message)
@@ -4277,7 +4277,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         return $events;
     }
 
-    private function throwQueuedFrameFailure(\RuntimeException $exception): never
+    private function throwQueuedFrameFailure(\Throwable $exception): never
     {
         if (\in_array($exception->getMessage(), [
             'market_event_identity_conflict',

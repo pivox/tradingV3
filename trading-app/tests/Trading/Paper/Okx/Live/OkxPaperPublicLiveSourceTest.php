@@ -2147,6 +2147,56 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $events->next();
     }
 
+    public function testDurableFrameBatchCommitsValidPrefixBeforeLaterValidationFailure(): void
+    {
+        $public = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+        ];
+        $business = new Task7Transport();
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $publicQueue = new OkxPaperPublicFrameQueue();
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            publicQueue: $publicQueue,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($sentinel->eventId);
+        foreach ([
+            Task7Transport::tradeFrame(['9101']),
+            Task7Transport::bookFrame('9001', '9001', '5'),
+        ] as $frame) {
+            $publicQueue->enqueue(json_encode($frame, \JSON_THROW_ON_ERROR));
+        }
+        $events->next();
+
+        $valid = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $valid);
+        self::assertSame('9101', $valid->payload['trade_id'] ?? null);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($valid->eventId);
+        self::assertSame(
+            $valid->eventId,
+            $this->checkpointState()['last_acknowledged_event_id'] ?? null,
+        );
+
+        $this->expectException(OkxPaperLiveIntegrityException::class);
+        $this->expectExceptionMessage('okx_paper_book_sequence_invalid');
+        $events->next();
+    }
+
     public function testDurableFrameBatchSilencesExactBookSnapshotReplay(): void
     {
         $snapshot = Task7Transport::bookFrame('9002', '-1', '5');
