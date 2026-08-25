@@ -33,9 +33,9 @@ must retain a fresh native 1h window.
 
 ## Range and Integrity Contract
 
-The source freezes one immutable warmup end per symbol when the fresh session
-becomes ready. The end is the latest fully closed candle boundary according to
-the injected clock. The 1h end is moved backward by zero through three hours so
+The source freezes one immutable observation upper bound per symbol when the fresh
+session becomes ready. Each interval derives its latest fully closed candle from
+that bound. The 1h end is moved backward by zero through three hours so
 that its 1,000-row base begins on the UTC four-hour grid. Lower intervals use
 their latest fully closed boundary.
 
