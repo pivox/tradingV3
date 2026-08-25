@@ -223,6 +223,27 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         )));
     }
 
+    public function testWarmupRowsAreExposedInBoundedHundredRowBatches(): void
+    {
+        $source = $this->source(
+            new Task7RestClient(),
+            new Task7Transport(),
+            new Task7Transport(),
+        );
+        $rows = array_map(
+            static fn (int $index): array => [$index],
+            range(0, 250),
+        );
+
+        $batches = new \ReflectionMethod($source, 'warmupRowBatches');
+        $sizes = array_map(
+            count(...),
+            iterator_to_array($batches->invoke($source, $rows), false),
+        );
+
+        self::assertSame([100, 100, 51], $sizes);
+    }
+
     public function testWarmupAlignsTheThousandHourWindowToTheFourHourGrid(): void
     {
         $rest = Task7RestClient::withInitialDataset();
