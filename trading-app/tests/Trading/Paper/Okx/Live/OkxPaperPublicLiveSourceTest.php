@@ -7370,6 +7370,9 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             self::assertInstanceOf(PaperMarketEvent::class, $book);
             self::assertSame($symbol, $book->symbol);
             self::assertSame($sequence, $book->payload['source_seq_id'] ?? null);
+            if ($position === 0) {
+                self::assertSame(1, $source->pendingDurableBatchSize());
+            }
             $source->acknowledge($book->eventId);
             if ($position === 0) {
                 $events->next();
@@ -7485,6 +7488,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(
             '2026-07-25T10:00:01.000000Z',
             $this->checkpointState()['reconnect']['stable_since'],
+        );
+        self::assertSame(
+            1,
+            $source->pendingDurableBatchSize(),
+            'Reconnect stabilization must preserve per-event acknowledgement effects.',
         );
         $source->acknowledge($btcRetained->eventId);
         $events->next();

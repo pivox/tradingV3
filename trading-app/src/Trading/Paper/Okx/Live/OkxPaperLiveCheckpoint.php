@@ -374,6 +374,150 @@ final readonly class OkxPaperLiveCheckpoint
         }
     }
 
+    /**
+     * Build one non-durable streaming batch step from already validated state.
+     *
+     * @param array<string, mixed>|null $pendingFrontier
+     */
+    public function withPreparedPending(
+        #[\SensitiveParameter] PaperMarketEvent $event,
+        #[\SensitiveParameter] OkxPaperSourceOrdinal $ordinals,
+        #[\SensitiveParameter] ?array $pendingFrontier,
+    ): self {
+        try {
+            if (!\in_array($this->phase, ['streaming', 'stopping'], true)
+                || $this->pendingEvent !== null
+                || $this->pendingTransition !== null
+                || $event->sourceVenue->value !== 'okx'
+                || !\in_array($event->symbol, self::SYMBOLS, true)
+            ) {
+                throw new \InvalidArgumentException();
+            }
+            $validatedOrdinalState = $ordinals->snapshot();
+            self::assertOrdinalContainsPendingEvent($validatedOrdinalState, $event);
+            $validatedFrontier = self::pendingFrontier($pendingFrontier, $event);
+            if ($validatedFrontier === null
+                && !\in_array($event->channel->value, [
+                    'connection_state',
+                    'snapshot_boundary',
+                ], true)
+            ) {
+                throw new \InvalidArgumentException();
+            }
+
+            return new self(
+                schemaVersion: $this->schemaVersion,
+                datasetId: $this->datasetId,
+                configurationSha256: $this->configurationSha256,
+                phase: $this->phase,
+                failureReason: $this->failureReason,
+                pendingTransition: null,
+                remainingSymbols: $this->remainingSymbols,
+                remainingBoundaries: $this->remainingBoundaries,
+                connectionEpoch: $this->connectionEpoch,
+                sourceEpochs: $this->sourceEpochs,
+                initialHourlyWindowEnds: $this->initialHourlyWindowEnds,
+                streamFrontiers: $this->streamFrontiers,
+                ordinalState: $validatedOrdinalState,
+                lastAcknowledgedEventId: $this->lastAcknowledgedEventId,
+                pendingEvent: $event,
+                pendingFrontier: $validatedFrontier,
+                healthyStop: $this->healthyStop,
+                reconnect: $this->reconnect,
+                resyncBySymbol: $this->resyncBySymbol,
+                overlapPaginationByStream: $this->overlapPaginationByStream,
+                streamingQueues: $this->streamingQueues,
+                streamingQueueRef: $this->streamingQueueRef,
+                acknowledgedIdentityHistory: $this->acknowledgedIdentityHistory,
+                streamingQueuesExplicit: $this->streamingQueuesExplicit,
+            );
+        } catch (\Throwable $exception) {
+            if ($exception instanceof \InvalidArgumentException
+                && $exception->getMessage() === 'okx_paper_live_checkpoint_invalid'
+            ) {
+                throw $exception;
+            }
+
+            throw new \InvalidArgumentException(
+                'okx_paper_live_checkpoint_invalid',
+                0,
+                $exception,
+            );
+        }
+    }
+
+    /** @param array<string, list<array{string, string, string, string}|string>> $acknowledgedIdentityHistory */
+    public function withPreparedStreamingAcknowledgement(
+        string $eventId,
+        #[\SensitiveParameter] array $acknowledgedIdentityHistory,
+    ): self {
+        try {
+            $event = $this->pendingEvent;
+            $pendingFrontier = $this->pendingFrontier;
+            if (!\in_array($this->phase, ['streaming', 'stopping'], true)
+                || $this->pendingTransition !== null
+                || !$event instanceof PaperMarketEvent
+                || $pendingFrontier === null
+                || !hash_equals($event->eventId, $eventId)
+                || preg_match(self::SHA256_PATTERN, $eventId) !== 1
+                || (!str_starts_with($event->channel->value, 'candle_')
+                    && !\in_array($event->channel->value, [
+                        'public_trade',
+                        'top_of_book',
+                    ], true))
+            ) {
+                throw new \InvalidArgumentException();
+            }
+            $stream = $pendingFrontier['stream'];
+            $frontier = $pendingFrontier['frontier'];
+            self::assertFrontierMatchesStream($frontier, $stream);
+            if ($frontier->toArray() !== OkxPaperStreamFrontier::fromEvent($event)->toArray()) {
+                throw new \InvalidArgumentException();
+            }
+            $streamFrontiers = $this->streamFrontiers;
+            $streamFrontiers[$stream] = $frontier;
+
+            return new self(
+                schemaVersion: $this->schemaVersion,
+                datasetId: $this->datasetId,
+                configurationSha256: $this->configurationSha256,
+                phase: $this->phase,
+                failureReason: $this->failureReason,
+                pendingTransition: null,
+                remainingSymbols: $this->remainingSymbols,
+                remainingBoundaries: $this->remainingBoundaries,
+                connectionEpoch: $this->connectionEpoch,
+                sourceEpochs: $this->sourceEpochs,
+                initialHourlyWindowEnds: $this->initialHourlyWindowEnds,
+                streamFrontiers: $streamFrontiers,
+                ordinalState: $this->ordinalState,
+                lastAcknowledgedEventId: $eventId,
+                pendingEvent: null,
+                pendingFrontier: null,
+                healthyStop: $this->healthyStop,
+                reconnect: $this->reconnect,
+                resyncBySymbol: $this->resyncBySymbol,
+                overlapPaginationByStream: $this->overlapPaginationByStream,
+                streamingQueues: $this->streamingQueues,
+                streamingQueueRef: $this->streamingQueueRef,
+                acknowledgedIdentityHistory: $acknowledgedIdentityHistory,
+                streamingQueuesExplicit: $this->streamingQueuesExplicit,
+            );
+        } catch (\Throwable $exception) {
+            if ($exception instanceof \InvalidArgumentException
+                && $exception->getMessage() === 'okx_paper_live_checkpoint_invalid'
+            ) {
+                throw $exception;
+            }
+
+            throw new \InvalidArgumentException(
+                'okx_paper_live_checkpoint_invalid',
+                0,
+                $exception,
+            );
+        }
+    }
+
     /** @return array<string, mixed> */
     public function toArray(): array
     {
