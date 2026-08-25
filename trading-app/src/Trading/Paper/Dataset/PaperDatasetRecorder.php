@@ -16,6 +16,7 @@ final class PaperDatasetRecorder
 {
     private const MAX_APPEND_INTENT_BYTES = 9_000_000;
     private const MAX_MANIFEST_TRANSITION_BYTES = 200_000;
+    private const MAX_RECORDING_MANIFEST_CHECKPOINT_INTERVAL = 10_000;
     private const REGULAR_FILE_TYPE = 0100000;
     private const DIRECTORY_FILE_TYPE = 0040000;
     private const FILE_TYPE_MASK = 0170000;
@@ -74,6 +75,7 @@ final class PaperDatasetRecorder
     private ?\DateTimeImmutable $startExchangeTimestamp = null;
     private ?\DateTimeImmutable $latestExchangeTimestamp = null;
     private bool $terminalTransitionAwaitingAuthentication = false;
+    private int $recordingManifestCheckpointInterval;
 
     public function __construct(
         #[\SensitiveParameter] string $root,
@@ -81,13 +83,23 @@ final class PaperDatasetRecorder
         ?PaperDatasetManifestCodec $codec = null,
         ?PaperDatasetVerifier $verifier = null,
         ?PaperDatasetRecorderFilesystem $filesystem = null,
+        int $recordingManifestCheckpointInterval = 1,
     ) {
         PaperDatasetManifest::assertDatasetId($manifest->datasetId);
+        if ($recordingManifestCheckpointInterval < 1
+            || $recordingManifestCheckpointInterval
+                > self::MAX_RECORDING_MANIFEST_CHECKPOINT_INTERVAL
+        ) {
+            throw new \InvalidArgumentException(
+                'paper_dataset_recording_manifest_checkpoint_interval_invalid',
+            );
+        }
         $this->codec = $codec ?? new PaperDatasetManifestCodec();
         $this->verifier = $verifier ?? new PaperDatasetVerifier($this->codec);
         $this->filesystem = $filesystem ?? new PaperDatasetRecorderFilesystem();
         $this->lineReader = new PaperDatasetLineReader($this->filesystem);
         $this->identityManifest = $manifest;
+        $this->recordingManifestCheckpointInterval = $recordingManifestCheckpointInterval;
 
         if ($manifest->state !== PaperDatasetState::RECORDING
             && !$this->storedManifestOrRecoveryEvidenceExists($root, $manifest)
@@ -194,7 +206,9 @@ final class PaperDatasetRecorder
     {
         $this->recoverPendingAppendIntent();
         $this->recoverPendingManifestTransition('paper_dataset_manifest_write_failed');
-        $this->reloadDurableState();
+        $this->reloadDurableState(
+            persistReconciledManifest: $this->recordingManifestCheckpointInterval === 1,
+        );
         $this->assertPinnedDirectories();
         $this->assertRecording();
         $this->assertEventMatchesManifest($event);
@@ -265,7 +279,9 @@ final class PaperDatasetRecorder
             lastEventId: $event->eventId,
         );
 
-        $this->writeRecordingManifestAtomically($nextManifest);
+        if ($nextManifest->eventCount % $this->recordingManifestCheckpointInterval === 0) {
+            $this->writeRecordingManifestAtomically($nextManifest);
+        }
         $this->removeAppendIntent();
 
         $this->identities[$event->eventId] = [
@@ -349,7 +365,7 @@ final class PaperDatasetRecorder
         );
     }
 
-    private function reloadDurableState(): void
+    private function reloadDurableState(bool $persistReconciledManifest = true): void
     {
         $stored = $this->readStoredManifest();
         $this->assertSameDataset($this->identityManifest, $stored);
@@ -373,7 +389,9 @@ final class PaperDatasetRecorder
             lastEventId: $this->lastEventId,
         );
         if ($reconciled != $stored) {
-            $this->writeRecordingManifestAtomically($reconciled);
+            if ($persistReconciledManifest) {
+                $this->writeRecordingManifestAtomically($reconciled);
+            }
             $this->currentManifest = $reconciled;
         }
     }

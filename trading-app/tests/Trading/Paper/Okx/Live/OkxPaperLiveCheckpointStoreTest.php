@@ -9,6 +9,7 @@ use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\Okx\Live\OkxPaperAcknowledgedIdentityEntry;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpoint;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveIntegrityException;
@@ -20,6 +21,7 @@ use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
 
 #[CoversClass(OkxPaperStreamFrontier::class)]
+#[CoversClass(OkxPaperAcknowledgedIdentityEntry::class)]
 #[CoversClass(OkxPaperLiveCheckpoint::class)]
 #[CoversClass(OkxPaperLiveCheckpointStore::class)]
 final class OkxPaperLiveCheckpointStoreTest extends TestCase
@@ -581,7 +583,10 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
 
         self::assertSame($beforeBytes, filesize($path));
         $history = $checkpoint->acknowledgedIdentityHistory['BTCUSDT/public_trade'];
-        self::assertSame($webSocketFrontier->canonicalDigest, $history[0][3]);
+        self::assertSame(
+            $webSocketFrontier->canonicalDigest,
+            OkxPaperAcknowledgedIdentityEntry::expand($history[0])[3],
+        );
     }
 
     public function testLoadOrCreatePublishesCanonicalPrivateCheckpointAndStrictlyResumesIdentity(): void

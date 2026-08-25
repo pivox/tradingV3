@@ -10,16 +10,18 @@ final readonly class OkxPaperLivePolicy
     public const HEARTBEAT_IDLE_SECONDS = 20.0;
     public const PONG_TIMEOUT_SECONDS = 10.0;
     public const MAX_FRAME_BYTES = 1_048_576;
-    public const MAX_QUEUED_FRAMES = 256;
+    public const MAX_QUEUED_FRAMES = 512;
     public const MAX_QUEUED_BYTES = 2_097_152;
     public const MAX_RESYNC_ATTEMPTS = 3;
-    public const RESYNC_ATTEMPT_TIMEOUT_SECONDS = 10.0;
-    public const MAX_OVERLAP_HISTORY_PAGES = 10;
+    public const RESYNC_ATTEMPT_TIMEOUT_SECONDS = 240.0;
+    public const MAX_OVERLAP_HISTORY_PAGES = 50;
+    public const LEGACY_MAX_OVERLAP_HISTORY_PAGES = 10;
+    public const MAX_RETAINED_RECOVERY_ROWS = 5_500;
     public const MAX_TRADE_ACKNOWLEDGED_IDENTITIES = 500;
     public const MAX_CANDLE_ACKNOWLEDGED_IDENTITIES = 300;
     public const MAX_ACKNOWLEDGED_IDENTITIES_PER_STREAM =
         self::MAX_TRADE_ACKNOWLEDGED_IDENTITIES;
-    public const MAX_CHECKPOINT_BYTES = 1_048_576;
+    public const MAX_CHECKPOINT_BYTES = 2_097_152;
     public const RECONNECT_STABLE_SECONDS = 30.0;
     public const RECONNECT_STABLE_ACCEPTED_EVENTS = 12;
 

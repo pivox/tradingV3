@@ -317,11 +317,14 @@ final class OkxPaperPublicWebSocketTransportTest extends TestCase
         self::assertSame(20.0, OkxPaperLivePolicy::HEARTBEAT_IDLE_SECONDS);
         self::assertSame(10.0, OkxPaperLivePolicy::PONG_TIMEOUT_SECONDS);
         self::assertSame(1_048_576, OkxPaperLivePolicy::MAX_FRAME_BYTES);
-        self::assertSame(256, OkxPaperLivePolicy::MAX_QUEUED_FRAMES);
+        self::assertSame(512, OkxPaperLivePolicy::MAX_QUEUED_FRAMES);
         self::assertSame(2_097_152, OkxPaperLivePolicy::MAX_QUEUED_BYTES);
         self::assertSame(3, OkxPaperLivePolicy::MAX_RESYNC_ATTEMPTS);
-        self::assertSame(10.0, OkxPaperLivePolicy::RESYNC_ATTEMPT_TIMEOUT_SECONDS);
-        self::assertSame(10, OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES);
+        self::assertSame(240.0, OkxPaperLivePolicy::RESYNC_ATTEMPT_TIMEOUT_SECONDS);
+        self::assertSame(50, OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES);
+        self::assertSame(10, OkxPaperLivePolicy::LEGACY_MAX_OVERLAP_HISTORY_PAGES);
+        self::assertSame(5_500, OkxPaperLivePolicy::MAX_RETAINED_RECOVERY_ROWS);
+        self::assertSame(2_097_152, OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES);
         self::assertSame(30.0, OkxPaperLivePolicy::RECONNECT_STABLE_SECONDS);
         self::assertSame(12, OkxPaperLivePolicy::RECONNECT_STABLE_ACCEPTED_EVENTS);
     }

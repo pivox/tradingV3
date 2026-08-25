@@ -69,7 +69,7 @@ final readonly class OkxPaperLiveCheckpoint
      *     public: array{frames: int, bytes: int},
      *     business: array{frames: int, bytes: int}
      * }|null $streamingQueueRef
-     * @param array<string, list<array{string, string, string, string}>> $acknowledgedIdentityHistory
+     * @param array<string, list<array{string, string, string, string}|string>> $acknowledgedIdentityHistory
      * @param array{stream: string, frontier: OkxPaperStreamFrontier}|null $pendingFrontier
      */
     private function __construct(
@@ -453,7 +453,7 @@ final readonly class OkxPaperLiveCheckpoint
     }
 
     /**
-     * @return array<string, list<array{string, string, string, string}>>
+     * @return array<string, list<array{string, string, string, string}|string>>
      */
     private static function acknowledgedIdentityHistory(mixed $value): array
     {
@@ -474,27 +474,15 @@ final readonly class OkxPaperLiveCheckpoint
             }
             $seen = [];
             foreach ($entries as $entry) {
-                if (!\is_array($entry)
-                    || !array_is_list($entry)
-                    || \count($entry) !== 4
-                ) {
+                if (!\is_array($entry) && !\is_string($entry)) {
                     throw new \InvalidArgumentException();
                 }
-                [$identity, $overlapDigest, $restDigest, $webSocketDigest] = $entry;
-                if (!\is_string($identity)
-                    || !\is_string($overlapDigest)
-                    || preg_match(self::SHA256_PATTERN, $identity) !== 1
-                    || preg_match(self::SHA256_PATTERN, $overlapDigest) !== 1
-                    || !\is_string($restDigest)
-                    || !\is_string($webSocketDigest)
-                    || (preg_match(self::SHA256_PATTERN, $restDigest) !== 1
-                        && $restDigest !== self::MISSING_CANONICAL_DIGEST)
-                    || (preg_match(self::SHA256_PATTERN, $webSocketDigest) !== 1
-                        && $webSocketDigest !== self::MISSING_CANONICAL_DIGEST)
-                    || ($restDigest === self::MISSING_CANONICAL_DIGEST
-                        && $webSocketDigest === self::MISSING_CANONICAL_DIGEST)
-                    || isset($seen[$identity])
-                ) {
+                try {
+                    [$identity] = OkxPaperAcknowledgedIdentityEntry::expand($entry);
+                } catch (\InvalidArgumentException) {
+                    throw new \InvalidArgumentException();
+                }
+                if (isset($seen[$identity])) {
                     throw new \InvalidArgumentException();
                 }
                 $seen[$identity] = true;
@@ -1332,8 +1320,15 @@ final readonly class OkxPaperLiveCheckpoint
             || array_is_list($pagination['target_frontier'])
             || $pagination['pages_consumed'] < 0
             || $pagination['pages_consumed'] > OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES
-            || $pagination['pages_remaining'] !== OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES
-                - $pagination['pages_consumed']
+            || $pagination['pages_remaining'] < 0
+            || !\in_array(
+                $pagination['pages_consumed'] + $pagination['pages_remaining'],
+                [
+                    OkxPaperLivePolicy::LEGACY_MAX_OVERLAP_HISTORY_PAGES,
+                    OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
+                ],
+                true,
+            )
             || ($hasRetainedRows && !\is_array($pagination['retained_rows']))
         ) {
             throw new \InvalidArgumentException();
@@ -1388,7 +1383,8 @@ final readonly class OkxPaperLiveCheckpoint
         ];
         if ($hasRetainedRows) {
             if (!array_is_list($pagination['retained_rows'])
-                || \count($pagination['retained_rows']) > 3_500
+                || \count($pagination['retained_rows'])
+                    > OkxPaperLivePolicy::MAX_RETAINED_RECOVERY_ROWS
             ) {
                 throw new \InvalidArgumentException();
             }

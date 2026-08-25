@@ -1033,6 +1033,15 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         $logicalStream = str_replace(['/rest/', '/ws/'], '/', $stream);
         $identityHash = hash('sha256', $candidate->naturalIdentity);
         foreach ($this->checkpoint->acknowledgedIdentityHistory[$logicalStream] ?? [] as $entry) {
+            try {
+                $entry = OkxPaperAcknowledgedIdentityEntry::expand($entry);
+            } catch (\InvalidArgumentException $exception) {
+                throw new OkxPaperLiveIntegrityException(
+                    'okx_paper_live_checkpoint_invalid',
+                    0,
+                    $exception,
+                );
+            }
             if (hash_equals($entry[0], $identityHash)) {
                 return [
                     'overlap_digest' => $entry[1],
