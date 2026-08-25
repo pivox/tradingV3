@@ -1483,13 +1483,160 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
     /** @param list<array<array-key, mixed>> $rows */
     private function sortTradeRows(array &$rows): void
     {
-        usort($rows, static function (array $left, array $right): int {
-            $timestamp = self::compareUnsigned($left['ts'] ?? null, $right['ts'] ?? null);
+        usort($rows, self::compareTradeRows(...));
+    }
 
-            return $timestamp !== 0
-                ? $timestamp
-                : self::compareUnsigned($left['tradeId'] ?? null, $right['tradeId'] ?? null);
-        });
+    /**
+     * Merge one bounded history page into the compact chronological recovery suffix.
+     *
+     * @param list<array<array-key, mixed>> $pageRows
+     * @param list<array<array-key, mixed>|string> $retainedRows
+     * @return list<string>
+     */
+    private function mergeRetainedTradePage(array $pageRows, array $retainedRows): array
+    {
+        if (\count($pageRows) + \count($retainedRows)
+            > OkxPaperLivePolicy::MAX_RETAINED_RECOVERY_ROWS
+        ) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        $this->sortTradeRows($pageRows);
+        $merged = [];
+        $pageIndex = 0;
+        $retainedIndex = 0;
+        $retained = null;
+        $previous = null;
+        while ($pageIndex < \count($pageRows) || $retainedIndex < \count($retainedRows)) {
+            if ($retained === null && $retainedIndex < \count($retainedRows)) {
+                try {
+                    $retained = OkxPaperRetainedTradeRow::expand(
+                        $retainedRows[$retainedIndex],
+                    );
+                } catch (\InvalidArgumentException $exception) {
+                    $this->failTerminal('market_data_gap_unresolved', $exception);
+                }
+            }
+            $page = $pageRows[$pageIndex] ?? null;
+            $takePage = \is_array($page)
+                && ($retained === null || self::compareTradeRows($page, $retained) <= 0);
+            if ($takePage) {
+                $selected = $page;
+                try {
+                    $compact = OkxPaperRetainedTradeRow::compact($selected);
+                } catch (\InvalidArgumentException $exception) {
+                    $this->failTerminal('market_data_gap_unresolved', $exception);
+                }
+                ++$pageIndex;
+            } else {
+                if (!\is_array($retained)) {
+                    $this->failTerminal('market_data_gap_unresolved');
+                }
+                $selected = $retained;
+                $compact = $retainedRows[$retainedIndex];
+                if (!\is_string($compact)) {
+                    try {
+                        $compact = OkxPaperRetainedTradeRow::compact($selected);
+                    } catch (\InvalidArgumentException $exception) {
+                        $this->failTerminal('market_data_gap_unresolved', $exception);
+                    }
+                }
+                ++$retainedIndex;
+                $retained = null;
+            }
+            if (\is_array($previous) && self::compareTradeRows($previous, $selected) > 0) {
+                $this->failTerminal('market_data_gap_unresolved');
+            }
+            $merged[] = $compact;
+            $previous = $selected;
+        }
+
+        return $merged;
+    }
+
+    /**
+     * The compact suffix is expanded only once every durable overlap is present.
+     *
+     * @param list<array<array-key, mixed>|string> $rows
+     */
+    private function retainedTradeRowsContainRequiredOverlaps(string $stream, array $rows): bool
+    {
+        $frontier = $this->checkpoint->streamFrontiers[$stream] ?? null;
+        if (!$frontier instanceof OkxPaperStreamFrontier) {
+            return false;
+        }
+        $required = [[
+            'frontier' => $frontier,
+            'source_kind' => self::identitySourceKind($stream),
+        ]];
+        $sibling = $this->siblingFrontier($stream);
+        if ($sibling instanceof OkxPaperStreamFrontier) {
+            $required[] = [
+                'frontier' => $sibling,
+                'source_kind' => self::identitySourceKind(
+                    str_contains($stream, '/rest/')
+                        ? str_replace('/rest/', '/ws/', $stream)
+                        : str_replace('/ws/', '/rest/', $stream),
+                ),
+            ];
+        }
+        /** @var list<array{natural_identity: string, digest: string, uses_canonical: bool}> $expected */
+        $expected = [];
+        /** @var array<string, string> $requiredOverlapDigests */
+        $requiredOverlapDigests = [];
+        foreach ($required as $overlap) {
+            $requiredFrontier = $overlap['frontier'];
+            $existing = $requiredOverlapDigests[$requiredFrontier->naturalIdentity] ?? null;
+            if (\is_string($existing)
+                && !hash_equals($existing, $requiredFrontier->overlapDigest)
+            ) {
+                throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
+            }
+            $requiredOverlapDigests[$requiredFrontier->naturalIdentity] =
+                $requiredFrontier->overlapDigest;
+            $digest = $overlap['source_kind'] === 'rest'
+                ? $requiredFrontier->canonicalDigest
+                : $requiredFrontier->overlapDigest;
+            $expected[] = [
+                'natural_identity' => $requiredFrontier->naturalIdentity,
+                'digest' => $digest,
+                'uses_canonical' => $overlap['source_kind'] === 'rest',
+            ];
+        }
+        $found = [];
+        foreach ($rows as $row) {
+            try {
+                $candidate = $this->tradeFrontier(OkxPaperRetainedTradeRow::expand($row));
+            } catch (\InvalidArgumentException $exception) {
+                $this->failTerminal('market_data_gap_unresolved', $exception);
+            }
+            foreach ($expected as $index => $overlap) {
+                if (!hash_equals($overlap['natural_identity'], $candidate->naturalIdentity)) {
+                    continue;
+                }
+                $candidateDigest = $overlap['uses_canonical']
+                    ? $candidate->canonicalDigest
+                    : $candidate->overlapDigest;
+                if (!hash_equals($overlap['digest'], $candidateDigest)) {
+                    throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
+                }
+                $found[$index] = true;
+            }
+        }
+
+        return \count($found) === \count($expected);
+    }
+
+    /**
+     * @param array<array-key, mixed> $left
+     * @param array<array-key, mixed> $right
+     */
+    private static function compareTradeRows(array $left, array $right): int
+    {
+        $timestamp = self::compareUnsigned($left['ts'] ?? null, $right['ts'] ?? null);
+
+        return $timestamp !== 0
+            ? $timestamp
+            : self::compareUnsigned($left['tradeId'] ?? null, $right['tradeId'] ?? null);
     }
 
     private static function compareUnsigned(mixed $left, mixed $right): int
@@ -2693,15 +2840,20 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             ) {
                 $this->failTerminal('market_data_gap_unresolved');
             }
-            $rows = $this->expandedRetainedTradeRows(
-                $pagination['retained_rows'],
-            );
             unset($this->observedFrontiers[$stream]);
-            try {
-                return $this->acceptedRecoveryTradeEvents($stream, $rows);
-            } catch (OkxPaperLiveIntegrityException $exception) {
-                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
-                    throw $exception;
+            if ($this->retainedTradeRowsContainRequiredOverlaps(
+                $stream,
+                $pagination['retained_rows'],
+            )) {
+                try {
+                    return $this->acceptedRecoveryTradeEvents(
+                        $stream,
+                        $this->expandedRetainedTradeRows($pagination['retained_rows']),
+                    );
+                } catch (OkxPaperLiveIntegrityException $exception) {
+                    if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
+                        throw $exception;
+                    }
                 }
             }
 
@@ -2709,7 +2861,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $symbol,
                 $stream,
                 $instrumentId,
-                $rows,
+                [],
             );
         }
         if (($transition['stage'] ?? null) === 'current_candles') {
@@ -3207,18 +3359,17 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $pagination['pagination_type'],
                 $pagination['next_cursor'],
             );
-            $newerRows = [
-                ...$rows,
-                ...$this->expandedRetainedTradeRows($pagination['retained_rows']),
-            ];
-            $this->sortTradeRows($newerRows);
+            $retainedRows = $this->mergeRetainedTradePage(
+                $rows,
+                $pagination['retained_rows'],
+            );
             $state = $this->checkpoint->toArray();
             $next = $state['overlap_pagination_by_stream'][$stream];
             ++$next['pages_consumed'];
             --$next['pages_remaining'];
             $next['pagination_type'] = 1;
             $next['next_cursor'] = $oldestTradeId;
-            $next['retained_rows'] = $this->compactRetainedTradeRows($newerRows);
+            $next['retained_rows'] = $retainedRows;
             $state['overlap_pagination_by_stream'][$stream] = $next;
             $this->checkpoint = $this->checkpointStore->saveTransition(
                 $this->recoveryCheckpointWithinBudget($state),
@@ -3226,11 +3377,16 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $historyTransition,
             );
             unset($this->observedFrontiers[$stream]);
-            try {
-                return $this->acceptedRecoveryTradeEvents($stream, $newerRows);
-            } catch (OkxPaperLiveIntegrityException $exception) {
-                if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
-                    throw $exception;
+            if ($this->retainedTradeRowsContainRequiredOverlaps($stream, $retainedRows)) {
+                try {
+                    return $this->acceptedRecoveryTradeEvents(
+                        $stream,
+                        $this->expandedRetainedTradeRows($retainedRows),
+                    );
+                } catch (OkxPaperLiveIntegrityException $exception) {
+                    if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
+                        throw $exception;
+                    }
                 }
             }
         }
