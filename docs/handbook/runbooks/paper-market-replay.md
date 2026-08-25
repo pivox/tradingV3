@@ -98,6 +98,16 @@ gapped hourly history fails closed.
 Existing terminal datasets are immutable and are not retroactively upgraded;
 create a new dataset ID to obtain this contract.
 
+New Hyperliquid captures use the credential-free public `candleSnapshot` API
+before their initial snapshot boundaries. For BTC and ETH they require 250
+contiguous closed candles for 1m, 5m and 15m, plus a UTC-four-hour-aligned base
+of 1,000 closed 1h candles in two bounded 500-row pages. The source durably
+pins its observation upper bound and reconstructs the same windows after an
+interruption; already acknowledged candle identities are not emitted twice.
+Empty, gapped, duplicated, conflicting or out-of-range pages fail closed as
+`hyperliquid_paper_public_candle_warmup_invalid`. This path is public/read-only
+and does not introduce credentials or exchange execution writes.
+
 Successful output is redacted schema `paper-public-capture-result-v1` and ends
 with `certification_status=not_evaluated`. A complete capture proves neither a
 trade nor representative coverage. After both captures complete, pass their

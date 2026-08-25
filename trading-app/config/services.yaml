@@ -580,6 +580,7 @@ services:
         arguments:
             $metadataClient: '@App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface'
             $fundingClient: '@App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface'
+            $restClient: '@App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface'
         public: true
 
     App\Runtime\Safety\ExchangeCallGuardHttpClient:

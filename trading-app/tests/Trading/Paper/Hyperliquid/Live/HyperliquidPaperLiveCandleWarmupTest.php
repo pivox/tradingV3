@@ -63,6 +63,25 @@ final class HyperliquidPaperLiveCandleWarmupTest extends TestCase
         $warmup->candles(['BTC' => '1785297600000', 'ETH' => '1785297600000']);
     }
 
+    public function testBackfillsClosedSuffixAfterPinnedObservation(): void
+    {
+        $client = new RecordingWarmupRestClient();
+        $warmup = new HyperliquidPaperLiveCandleWarmup($client);
+
+        $candles = $warmup->candles(
+            ['BTC' => '1785297600000', 'ETH' => '1785297600000'],
+            1785304800000,
+        );
+
+        $btcMinutes = array_values(array_filter(
+            $candles,
+            static fn ($candle): bool => $candle->coin === 'BTC'
+                && $candle->interval === '1m',
+        ));
+        self::assertCount(370, $btcMinutes);
+        self::assertSame(1785304740000, $btcMinutes[array_key_last($btcMinutes)]->startTime);
+    }
+
     /** @return iterable<string, array{string}> */
     public static function invalidPages(): iterable
     {

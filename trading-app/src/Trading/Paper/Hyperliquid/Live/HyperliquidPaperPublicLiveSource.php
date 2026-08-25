@@ -7,6 +7,7 @@ namespace App\Trading\Paper\Hyperliquid\Live;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperMarketEventNormalizer;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
@@ -52,6 +53,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         ?HyperliquidPaperPublicFrameQueue $queue = null,
         private readonly ?HyperliquidPaperInstrumentMetadataClientInterface $metadataClient = null,
         private readonly ?HyperliquidPaperFundingRateClientInterface $fundingClient = null,
+        private readonly ?HyperliquidPaperPublicRestClientInterface $restClient = null,
     ) {
         if ($config->network !== $checkpoint->network) {
             throw new \InvalidArgumentException('hyperliquid_paper_live_checkpoint_mismatch');
@@ -138,7 +140,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         }
         if (\in_array(
             $this->checkpoint->phase,
-            ['fresh', 'connecting', 'subscribing'],
+            ['fresh', 'connecting', 'subscribing', 'warming'],
             true,
         )) {
             if ($this->checkpoint->phase !== 'fresh') {
@@ -149,25 +151,62 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             $this->connectAndSubscribe();
             $this->awaitSubscriptions();
             $this->throwPendingTransportFailure();
-            $this->checkpoint = $this->checkpointStore->save(
-                $this->checkpoint->withPhase('streaming'),
-            );
-            $this->scheduleHeartbeat();
-            $this->scheduleFundingRefresh();
-            yield from $this->yieldCandidates([
-                ...($this->metadataClient === null ? [] : $this->metadataEvents()),
-                ...($this->fundingClient === null ? [] : $this->fundingEvents()),
-                $this->normalizer->snapshotBoundary(
-                    'BTC',
-                    'initial',
-                    $this->checkpoint->sourceEpoch,
-                ),
-                $this->normalizer->snapshotBoundary(
-                    'ETH',
-                    'initial',
-                    $this->checkpoint->sourceEpoch,
-                ),
-            ]);
+            if ($this->restClient instanceof HyperliquidPaperPublicRestClientInterface) {
+                if ($this->checkpoint->initialCandleWindowEnds === [
+                    'BTC' => null,
+                    'ETH' => null,
+                ]) {
+                    $upperBound = $this->nowMilliseconds();
+                    $this->checkpoint = $this->checkpointStore->save(
+                        $this->checkpoint->withInitialCandleWindowEnds([
+                            'BTC' => (string) $upperBound,
+                            'ETH' => (string) $upperBound,
+                        ])->withPhase('warming'),
+                    );
+                } else {
+                    $this->checkpoint = $this->checkpointStore->save(
+                        $this->checkpoint->withPhase('warming'),
+                    );
+                }
+                $warmup = new HyperliquidPaperLiveCandleWarmup($this->restClient);
+                foreach ($warmup->candles(
+                    $this->checkpoint->initialCandleWindowEnds,
+                    $this->nowMilliseconds(),
+                ) as $candle) {
+                    yield from $this->yieldWarmupCandle($candle);
+                }
+                yield from $this->yieldCandidates([
+                    ...($this->metadataClient === null ? [] : $this->metadataEvents()),
+                    ...($this->fundingClient === null ? [] : $this->fundingEvents()),
+                    $this->normalizer->snapshotBoundary('BTC', 'initial', $this->checkpoint->sourceEpoch),
+                    $this->normalizer->snapshotBoundary('ETH', 'initial', $this->checkpoint->sourceEpoch),
+                ]);
+                $this->checkpoint = $this->checkpointStore->save(
+                    $this->checkpoint->withPhase('streaming'),
+                );
+                $this->scheduleHeartbeat();
+                $this->scheduleFundingRefresh();
+            } else {
+                $this->checkpoint = $this->checkpointStore->save(
+                    $this->checkpoint->withPhase('streaming'),
+                );
+                $this->scheduleHeartbeat();
+                $this->scheduleFundingRefresh();
+                yield from $this->yieldCandidates([
+                    ...($this->metadataClient === null ? [] : $this->metadataEvents()),
+                    ...($this->fundingClient === null ? [] : $this->fundingEvents()),
+                    $this->normalizer->snapshotBoundary(
+                        'BTC',
+                        'initial',
+                        $this->checkpoint->sourceEpoch,
+                    ),
+                    $this->normalizer->snapshotBoundary(
+                        'ETH',
+                        'initial',
+                        $this->checkpoint->sourceEpoch,
+                    ),
+                ]);
+            }
         } elseif ($this->checkpoint->phase === 'streaming') {
             $this->beginReconnect('hyperliquid_public_trade_gap_unrecoverable');
         } elseif ($this->checkpoint->phase === 'reconnecting') {
@@ -221,6 +260,46 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 $received['frame'],
             );
         }
+    }
+
+    private function nowMilliseconds(): int
+    {
+        $now = $this->clock->now();
+        $seconds = (int) $now->format('U');
+        $milliseconds = (int) $now->format('v');
+        if ($seconds < 0 || $seconds > intdiv(\PHP_INT_MAX - $milliseconds, 1_000)) {
+            throw new HyperliquidPaperLiveIntegrityException(
+                'hyperliquid_paper_public_candle_warmup_invalid',
+            );
+        }
+
+        return $seconds * 1_000 + $milliseconds;
+    }
+
+    /** @return \Generator<int, PaperMarketEvent> */
+    private function yieldWarmupCandle(HyperliquidCandle $candle): \Generator
+    {
+        $stream = $candle->coin . '/' . $candle->interval;
+        if (($this->checkpoint->finalizedCandleFrontiers[$stream] ?? -1)
+            >= $candle->startTime
+        ) {
+            return;
+        }
+        $event = $this->normalizer->candle($candle);
+        $this->checkpoint = $this->checkpointStore->save(
+            $this->checkpoint
+                ->withOrdinalState($this->ordinals->snapshot())
+                ->withPending($event, [
+                    'remaining_events' => [],
+                    'after_ack' => [
+                        'finalize_candle' => [
+                            'stream' => $stream,
+                            'start_time' => $candle->startTime,
+                        ],
+                    ],
+                ]),
+        );
+        yield from $this->resumePendingEvents();
     }
 
     private function connectAndSubscribe(): void
