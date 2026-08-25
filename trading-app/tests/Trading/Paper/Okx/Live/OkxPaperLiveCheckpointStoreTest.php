@@ -65,6 +65,24 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/D', $restFrontier->canonicalDigest);
     }
 
+    public function testCandleOverlapIgnoresInsignificantCrossOriginDecimalZeros(): void
+    {
+        $rest = OkxPaperStreamFrontier::fromEvent($this->candleEvent(
+            'rest_recovery',
+            '2026-07-22T10:00:01.000000Z',
+            volumeQuote: '1167537.48657',
+        ));
+        $webSocket = OkxPaperStreamFrontier::fromEvent($this->candleEvent(
+            'ws_candle',
+            '2026-07-22T10:00:02.000000Z',
+            volumeQuote: '1167537.48657000',
+        ));
+
+        self::assertSame($rest->naturalIdentity, $webSocket->naturalIdentity);
+        self::assertNotSame($rest->canonicalDigest, $webSocket->canonicalDigest);
+        self::assertSame($rest->overlapDigest, $webSocket->overlapDigest);
+    }
+
     public function testFrontierIsClosedAndEveryIdentityIsBounded(): void
     {
         $valid = [
@@ -232,7 +250,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame('43', $acknowledged->streamFrontiers[$stream]?->sourceIdentity);
     }
 
-    public function testFreshCheckpointHasTheCompleteClosedVersionEightSchema(): void
+    public function testFreshCheckpointHasTheCompleteClosedVersionNineSchema(): void
     {
         $checkpoint = OkxPaperLiveCheckpoint::fresh(self::DATASET_ID, self::CONFIGURATION_SHA256);
         $state = $checkpoint->toArray();
@@ -259,7 +277,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_epochs',
             'stream_frontiers',
         ], array_keys($state));
-        self::assertSame(8, $state['schema_version']);
+        self::assertSame(9, $state['schema_version']);
         self::assertSame(self::DATASET_ID, $state['dataset_id']);
         self::assertSame(self::CONFIGURATION_SHA256, $state['configuration_sha256']);
         self::assertSame('warming', $state['phase']);
@@ -284,7 +302,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
 
     public function testEarlierCheckpointVersionsAreRejectedInsteadOfReusingOldDigestSemantics(): void
     {
-        foreach ([3, 4, 5, 6, 7] as $schemaVersion) {
+        foreach ([3, 4, 5, 6, 7, 8] as $schemaVersion) {
             $state = OkxPaperLiveCheckpoint::fresh(
                 self::DATASET_ID,
                 self::CONFIGURATION_SHA256,
@@ -6827,6 +6845,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         string $symbol = 'BTCUSDT',
         string $exchangeTimestamp = '2026-07-22T10:00:00.000000Z',
         string $sequence = '1',
+        string $volumeQuote = '6505.0',
     ): PaperMarketEvent
     {
         $channel = match ($bar) {
@@ -6855,7 +6874,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
                 'close' => '65050.0',
                 'volume_contracts' => '10',
                 'volume_base' => '0.1',
-                'volume_quote' => '6505.0',
+                'volume_quote' => $volumeQuote,
                 'confirmed' => true,
                 'origin' => $origin,
             ],
