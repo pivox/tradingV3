@@ -106,6 +106,10 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     private ?OkxPaperLiveCheckpoint $durableEventBatchBase = null;
     private bool $durableFrameBatchingEnabled = false;
     private ?\RuntimeException $deferredQueuedFailure = null;
+    private bool $preparingQueuedFrameBatch = false;
+
+    /** @var array<string, OkxPaperStreamFrontier> */
+    private array $preparedBookFrontiers = [];
 
     private bool $healthyStopRequested = false;
     private bool $healthyStopAdmissionQuiesced = false;
@@ -1353,7 +1357,10 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         bool $emitExactReplacement = false,
     ): array {
         $candidateFrontier = $this->bookFrontier($instrumentId, $state);
-        $frontier = $this->checkpoint->streamFrontiers[$stream] ?? null;
+        $frontier = $this->preparingQueuedFrameBatch
+            ? ($this->preparedBookFrontiers[$stream]
+                ?? ($this->checkpoint->streamFrontiers[$stream] ?? null))
+            : ($this->checkpoint->streamFrontiers[$stream] ?? null);
         if ($frontier instanceof OkxPaperStreamFrontier
             && ($this->requiresOverlap[$stream] ?? false)
         ) {
@@ -1385,6 +1392,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             $sourceEpoch,
             $origin,
         );
+        if ($this->preparingQueuedFrameBatch) {
+            $this->preparedBookFrontiers[$stream] = $candidateFrontier;
+        }
 
         return [[
             'event' => $event,
@@ -4175,6 +4185,27 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
      * }>
      */
     private function eventsFromQueuedFrame(
+        OkxPaperPublicFrameQueue $queue,
+        bool $business,
+    ): array {
+        $this->preparingQueuedFrameBatch = true;
+        $this->preparedBookFrontiers = [];
+        try {
+            return $this->prepareEventsFromQueuedFrames($queue, $business);
+        } finally {
+            $this->preparingQueuedFrameBatch = false;
+            $this->preparedBookFrontiers = [];
+        }
+    }
+
+    /**
+     * @return list<array{
+     *     event: PaperMarketEvent,
+     *     frontier: OkxPaperStreamFrontier,
+     *     ordinal_state: array<string, mixed>
+     * }>
+     */
+    private function prepareEventsFromQueuedFrames(
         OkxPaperPublicFrameQueue $queue,
         bool $business,
     ): array {
