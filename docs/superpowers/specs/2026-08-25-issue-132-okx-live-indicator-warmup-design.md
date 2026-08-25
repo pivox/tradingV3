@@ -53,6 +53,11 @@ closed with a stable public-response integrity reason on an empty page,
 non-progress, conflicting duplicate, malformed row, gap or exhaustion of a
 fixed four-history-page budget. No partial snapshot boundary is emitted.
 
+When a strategy requests derived 4h context, the canonical indicator-window
+consumer selects the newest aligned complete 1,000-row block and leaves any
+zero-to-three-row suffix outside that projection until the next 4h block closes.
+Native 1h-only requests continue to use their freshest 250-row suffix.
+
 ## Resume and Safety
 
 Events still use the existing pending-event acknowledgement and durable live

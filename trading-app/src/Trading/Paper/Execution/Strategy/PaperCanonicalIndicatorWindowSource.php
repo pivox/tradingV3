@@ -102,7 +102,7 @@ final readonly class PaperCanonicalIndicatorWindowSource
             if (count($candidates) < $required) {
                 return null;
             }
-            $window = array_slice($candidates, -$required);
+            $window = $this->latestCanonicalWindow($candidates, $required);
             if (!$this->isContiguous($window)
                 || ($required === 1000 && (int) substr($window[0]->openAt, 11, 2) % 4 !== 0)
             ) {
@@ -122,6 +122,24 @@ final readonly class PaperCanonicalIndicatorWindowSource
         }
 
         return $triggerBound ? $windows : null;
+    }
+
+    /**
+     * @param list<NormalizedBacktestCandle> $candidates
+     * @return list<NormalizedBacktestCandle>
+     */
+    private function latestCanonicalWindow(array $candidates, int $required): array
+    {
+        if ($required !== 1000) {
+            return array_slice($candidates, -$required);
+        }
+        for ($start = count($candidates) - $required; $start >= 0; --$start) {
+            if ((int) substr($candidates[$start]->openAt, 11, 2) % 4 === 0) {
+                return array_slice($candidates, $start, $required);
+            }
+        }
+
+        throw new \LogicException('paper_canonical_strategy_indicator_window_invalid');
     }
 
     /** @param list<NormalizedBacktestCandle> $window */
