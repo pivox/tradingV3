@@ -30,6 +30,19 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(HyperliquidPaperPublicLiveSource::class)]
 final class HyperliquidPaperPublicLiveSourceTest extends TestCase
 {
+    public function testRejectsWarmupRestClientFromAnotherNetwork(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('hyperliquid_paper_live_rest_client_network_mismatch');
+
+        $this->source(
+            new DeterministicHyperliquidTransport([]),
+            restClient: new LiveSourceWarmupRestClient(
+                PaperMarketDataNetwork::TESTNET,
+            ),
+        );
+    }
+
     public function testWarmupPinsObservationAndResumesAfterAcknowledgedCandle(): void
     {
         $rest = new LiveSourceWarmupRestClient();
@@ -1040,9 +1053,14 @@ final class LiveSourceWarmupRestClient implements HyperliquidPaperPublicRestClie
     /** @var list<array{string, string, int, int}> */
     public array $requests = [];
 
+    public function __construct(
+        private readonly PaperMarketDataNetwork $network = PaperMarketDataNetwork::MAINNET,
+    ) {
+    }
+
     public function network(): PaperMarketDataNetwork
     {
-        return PaperMarketDataNetwork::MAINNET;
+        return $this->network;
     }
 
     public function candleSnapshot(

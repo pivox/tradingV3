@@ -58,6 +58,13 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         if ($config->network !== $checkpoint->network) {
             throw new \InvalidArgumentException('hyperliquid_paper_live_checkpoint_mismatch');
         }
+        if ($this->restClient instanceof HyperliquidPaperPublicRestClientInterface
+            && $this->restClient->network() !== $config->network
+        ) {
+            throw new \InvalidArgumentException(
+                'hyperliquid_paper_live_rest_client_network_mismatch',
+            );
+        }
         $this->subscriptions = $subscriptions ?? new HyperliquidPaperPublicSubscriptionSet();
         $this->decoder = $decoder ?? new HyperliquidPaperPublicFrameDecoder(
             $this->subscriptions,
