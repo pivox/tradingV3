@@ -8,10 +8,11 @@ use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
+use Brick\Math\BigInteger;
 
 final readonly class OkxPaperLiveCheckpoint
 {
-    public const SCHEMA_VERSION = 7;
+    public const SCHEMA_VERSION = 8;
     public const MISSING_CANONICAL_DIGEST = '----------------------------------------------------------------';
 
     /** @var list<string> */
@@ -57,6 +58,7 @@ final readonly class OkxPaperLiveCheckpoint
      * @param list<string>                               $remainingSymbols
      * @param list<array{symbol: string, reason: string}> $remainingBoundaries
      * @param array<string, int>                         $sourceEpochs
+     * @param array{BTCUSDT: string|null, ETHUSDT: string|null} $initialHourlyWindowEnds
      * @param array{liveness_proven: bool, remaining_symbols: list<string>, requested: bool} $healthyStop
      * @param array<string, mixed>                       $reconnect
      * @param array<string, mixed>                       $resyncBySymbol
@@ -83,6 +85,7 @@ final readonly class OkxPaperLiveCheckpoint
         public array $remainingBoundaries,
         public int $connectionEpoch,
         public array $sourceEpochs,
+        public array $initialHourlyWindowEnds,
         public array $streamFrontiers,
         public array $ordinalState,
         public ?string $lastAcknowledgedEventId,
@@ -114,6 +117,7 @@ final readonly class OkxPaperLiveCheckpoint
                 'remaining_symbols' => [],
                 'requested' => false,
             ],
+            'initial_hourly_window_ends' => ['BTCUSDT' => null, 'ETHUSDT' => null],
             'last_acknowledged_event_id' => null,
             'ordinal_state' => ['schema_version' => 1, 'scopes' => []],
             'overlap_pagination_by_stream' => $pagination,
@@ -160,6 +164,7 @@ final readonly class OkxPaperLiveCheckpoint
                 'pending_event',
                 'pending_frontier',
                 'healthy_stop',
+                'initial_hourly_window_ends',
                 'reconnect',
                 'resync_by_symbol',
                 'overlap_pagination_by_stream',
@@ -184,6 +189,7 @@ final readonly class OkxPaperLiveCheckpoint
                 || !\is_int($state['connection_epoch'])
                 || $state['connection_epoch'] < 1
                 || !\is_array($state['source_epochs'])
+                || !\is_array($state['initial_hourly_window_ends'])
                 || !\is_array($state['stream_frontiers'])
                 || !\is_array($state['ordinal_state'])
                 || ($state['last_acknowledged_event_id'] !== null
@@ -200,6 +206,9 @@ final readonly class OkxPaperLiveCheckpoint
             self::assertExactMapKeys($state['stream_frontiers'], self::streamKeys());
             self::assertExactMapKeys($state['overlap_pagination_by_stream'], self::paginationStreamKeys());
             self::assertExactMapKeys($state['source_epochs'], self::SYMBOLS);
+            $initialHourlyWindowEnds = self::initialHourlyWindowEnds(
+                $state['initial_hourly_window_ends'],
+            );
             self::assertExactMapKeys($state['resync_by_symbol'], self::SYMBOLS);
 
             self::assertPhaseAndFailure($state['phase'], $state['failure_reason']);
@@ -339,6 +348,7 @@ final readonly class OkxPaperLiveCheckpoint
                 remainingBoundaries: $remainingBoundaries,
                 connectionEpoch: $state['connection_epoch'],
                 sourceEpochs: $state['source_epochs'],
+                initialHourlyWindowEnds: $initialHourlyWindowEnds,
                 streamFrontiers: $frontiers,
                 ordinalState: $ordinalState,
                 lastAcknowledgedEventId: $state['last_acknowledged_event_id'],
@@ -373,6 +383,7 @@ final readonly class OkxPaperLiveCheckpoint
             'dataset_id' => $this->datasetId,
             'failure_reason' => $this->failureReason,
             'healthy_stop' => $this->healthyStop,
+            'initial_hourly_window_ends' => $this->initialHourlyWindowEnds,
             'last_acknowledged_event_id' => $this->lastAcknowledgedEventId,
             'ordinal_state' => $this->ordinalState,
             'overlap_pagination_by_stream' => array_map(
@@ -450,6 +461,30 @@ final readonly class OkxPaperLiveCheckpoint
         }
 
         return $state;
+    }
+
+    /** @return array{BTCUSDT: string|null, ETHUSDT: string|null} */
+    private static function initialHourlyWindowEnds(mixed $value): array
+    {
+        if (!\is_array($value) || array_is_list($value)) {
+            throw new \InvalidArgumentException();
+        }
+        self::assertExactMapKeys($value, self::SYMBOLS);
+        foreach (self::SYMBOLS as $symbol) {
+            $timestamp = $value[$symbol];
+            if ($timestamp === null) {
+                continue;
+            }
+            if (!\is_string($timestamp)
+                || preg_match('/\A(?:0|[1-9][0-9]{0,18})\z/D', $timestamp) !== 1
+                || !BigInteger::of($timestamp)->mod(3_600_000)->isZero()
+            ) {
+                throw new \InvalidArgumentException();
+            }
+        }
+
+        /** @var array{BTCUSDT: string|null, ETHUSDT: string|null} $value */
+        return $value;
     }
 
     /**

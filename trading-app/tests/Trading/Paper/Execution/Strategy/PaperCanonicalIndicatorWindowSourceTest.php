@@ -120,6 +120,32 @@ final class PaperCanonicalIndicatorWindowSourceTest extends TestCase
         self::assertSame($events[999]->eventId, $windows['1h'][999]['source_record_id']);
     }
 
+    public function testFourHourProjectionUsesLatestAlignedBaseBehindHourlySuffix(): void
+    {
+        $hourly = $this->candles(
+            1002,
+            PaperMarketDataChannel::CANDLE_1H,
+            '1h',
+            '2026-06-01T00:00:00.000000Z',
+        );
+        $minutes = $this->candles(250);
+        $trigger = $minutes[249];
+        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        $market->restore([...$hourly, ...$minutes]);
+        $source = new PaperCanonicalIndicatorWindowSource(
+            $market,
+            new PaperReplayClock($trigger->receivedTimestamp),
+        );
+
+        $windows = $source->windowsFor($this->cell(), $trigger, ['1m', '4h']);
+
+        self::assertNotNull($windows);
+        self::assertCount(1002, $windows['1h']);
+        self::assertSame($hourly[0]->eventId, $windows['1h'][0]['source_record_id']);
+        self::assertSame($hourly[1001]->eventId, $windows['1h'][1001]['source_record_id']);
+        self::assertSame($trigger->eventId, $windows['1m'][249]['source_record_id']);
+    }
+
     public function testRejectsAnOlderTriggerAgainstANewerProjectedPrefix(): void
     {
         $events = $this->candles(251);
@@ -169,6 +195,7 @@ final class PaperCanonicalIndicatorWindowSourceTest extends TestCase
         int $count,
         PaperMarketDataChannel $channel = PaperMarketDataChannel::CANDLE_1M,
         string $timeframe = '1m',
+        string $startAt = '2026-08-01T00:00:00.000000Z',
     ): array {
         $duration = match ($timeframe) {
             '1m' => 60,
@@ -176,7 +203,7 @@ final class PaperCanonicalIndicatorWindowSourceTest extends TestCase
             default => throw new \LogicException('Unsupported test timeframe.'),
         };
         $events = [];
-        $start = new \DateTimeImmutable('2026-08-01T00:00:00.000000Z');
+        $start = new \DateTimeImmutable($startAt);
         for ($index = 0; $index < $count; ++$index) {
             $open = $start->modify('+' . ($index * $duration) . ' seconds');
             $events[] = PaperMarketEvent::create(

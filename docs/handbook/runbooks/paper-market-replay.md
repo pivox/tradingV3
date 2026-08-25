@@ -83,6 +83,21 @@ the dataset as `incomplete`; a terminal dataset is immutable. An abrupt process
 loss may leave `recording`, in which case the exact same command resumes from
 the durable recorder/source checkpoints.
 
+New OKX captures warm up each BTC/ETH stream with a UTC-four-hour-aligned base
+of 1,000 confirmed, contiguous one-hour candles before publishing its initial
+snapshot boundary. They also retain the zero to three newer confirmed candles
+observed with that base, plus any contiguous current-page catch-up after a
+resume, so the recorded 1H stream stays contiguous when live websocket
+confirmations begin. The canonical consumer passes the latest aligned base and
+suffix together; the projector uses the base for 4h and the freshest 250 rows
+for native 1h. This supplies the canonical 250-candle 4h context while
+retaining live books, trades,
+instrument metadata and funding in the same dataset. The lower timeframes
+retain their 300-row public warmup. An empty, non-progressing, conflicting or
+gapped hourly history fails closed.
+Existing terminal datasets are immutable and are not retroactively upgraded;
+create a new dataset ID to obtain this contract.
+
 Successful output is redacted schema `paper-public-capture-result-v1` and ends
 with `certification_status=not_evaluated`. A complete capture proves neither a
 trade nor representative coverage. After both captures complete, pass their

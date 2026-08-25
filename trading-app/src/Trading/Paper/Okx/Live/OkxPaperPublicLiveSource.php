@@ -16,6 +16,7 @@ use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
 use App\Trading\Paper\Okx\OkxPaperInstrumentMap;
 use App\Trading\Paper\Okx\OkxPaperPublicConfig;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use Brick\Math\BigInteger;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\TimerInterface;
 use Symfony\Component\Clock\ClockInterface;
@@ -117,7 +118,13 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         ?OkxPaperPublicFrameQueue $businessQueue = null,
         private readonly ?OkxPaperInstrumentMetadataClientInterface $metadataClient = null,
         private readonly ?OkxPaperFundingRateClientInterface $fundingClient = null,
+        private readonly int $initialHourlyCandleTarget = 1,
     ) {
+        if ($this->initialHourlyCandleTarget < 1
+            || $this->initialHourlyCandleTarget > OkxPaperLivePolicy::INITIAL_HOURLY_CANDLE_TARGET
+        ) {
+            throw new \InvalidArgumentException('okx_paper_live_hourly_warmup_target_invalid');
+        }
         $this->instruments = $instruments ?? new OkxPaperInstrumentMap();
         $this->subscriptions = $subscriptions ?? new OkxPaperPublicSubscriptionSet($this->instruments);
         $this->decoder = $decoder ?? new OkxPaperPublicFrameDecoder($this->subscriptions);
@@ -544,12 +551,9 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     continue;
                 }
                 $this->ensureTransition('warming', $transition);
-                $rows = $this->restClient->currentCandles(
+                $rows = $this->initialCandleRows(
                     $instrumentId,
                     $bar,
-                    null,
-                    null,
-                    300,
                 );
                 $this->sortCandleRows($rows);
                 $events = $this->acceptedEvents(
@@ -645,6 +649,225 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
             $this->assertPendingWasAcknowledged();
         }
+    }
+
+    /** @return list<array<array-key, mixed>> */
+    private function initialCandleRows(string $instrumentId, string $bar): array
+    {
+        if ($bar !== '1H' || $this->initialHourlyCandleTarget === 1) {
+            return $this->restClient->currentCandles(
+                $instrumentId,
+                $bar,
+                null,
+                null,
+                300,
+            );
+        }
+
+        $symbol = $this->instruments->normalizedSymbol($instrumentId);
+        $observedEnd = $this->checkpoint->initialHourlyWindowEnds[$symbol];
+        /** @var array<string, array{canonical: string, row: array<array-key, mixed>}> $byTimestamp */
+        $byTimestamp = [];
+        if ($observedEnd === null) {
+            $rows = $this->restClient->currentCandles(
+                $instrumentId,
+                $bar,
+                null,
+                null,
+                300,
+            );
+            $cursor = $this->mergeInitialHourlyPage(
+                $instrumentId,
+                $rows,
+                null,
+                $byTimestamp,
+            );
+            $observedEnd = $this->newestConfirmedInitialHourlyTimestamp($byTimestamp);
+            $this->checkpoint = $this->checkpointStore->pinInitialHourlyWindowEnd(
+                $this->checkpoint,
+                $symbol,
+                $observedEnd,
+            );
+            $captureEnd = $observedEnd;
+        } else {
+            $currentRows = $this->restClient->currentCandles(
+                $instrumentId,
+                $bar,
+                null,
+                null,
+                300,
+            );
+            $this->mergeInitialHourlyPage(
+                $instrumentId,
+                $currentRows,
+                null,
+                $byTimestamp,
+            );
+            $captureEnd = $this->newestConfirmedInitialHourlyTimestamp($byTimestamp);
+            if (self::compareUnsigned($captureEnd, $observedEnd) < 0) {
+                throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+            }
+            $cursor = (string) BigInteger::of($observedEnd)->plus(1);
+        }
+        $alignedWindowEnd = $this->alignedInitialHourlyWindowEnd($observedEnd);
+        for ($page = 0; $page < OkxPaperLivePolicy::MAX_INITIAL_HOURLY_HISTORY_PAGES; ++$page) {
+            if ($this->confirmedInitialHourlyCountThrough($byTimestamp, $alignedWindowEnd)
+                >= $this->initialHourlyCandleTarget
+            ) {
+                break;
+            }
+            $older = $this->restClient->historyCandles($instrumentId, $bar, $cursor, 300);
+            $cursor = $this->mergeInitialHourlyPage(
+                $instrumentId,
+                $older,
+                $cursor,
+                $byTimestamp,
+            );
+        }
+        if ($this->confirmedInitialHourlyCountThrough($byTimestamp, $alignedWindowEnd)
+            < $this->initialHourlyCandleTarget
+            || !isset(
+                $byTimestamp[$observedEnd],
+                $byTimestamp[$alignedWindowEnd],
+                $byTimestamp[$captureEnd],
+            )
+            || ($byTimestamp[$observedEnd]['row'][8] ?? null) !== '1'
+            || ($byTimestamp[$alignedWindowEnd]['row'][8] ?? null) !== '1'
+            || ($byTimestamp[$captureEnd]['row'][8] ?? null) !== '1'
+        ) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
+
+        $confirmed = array_values(array_filter(
+            $byTimestamp,
+            static fn (array $entry): bool => ($entry['row'][8] ?? null) === '1'
+                && self::compareUnsigned($entry['row'][0] ?? null, $captureEnd) <= 0,
+        ));
+        usort(
+            $confirmed,
+            static fn (array $left, array $right): int => self::compareUnsigned(
+                $left['row'][0] ?? null,
+                $right['row'][0] ?? null,
+            ),
+        );
+        $alignedPosition = null;
+        foreach ($confirmed as $position => $entry) {
+            if (hash_equals($alignedWindowEnd, $entry['row'][0])) {
+                $alignedPosition = $position;
+                break;
+            }
+        }
+        if (!\is_int($alignedPosition)
+            || $alignedPosition < $this->initialHourlyCandleTarget - 1
+        ) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
+        $confirmed = array_slice(
+            $confirmed,
+            $alignedPosition - $this->initialHourlyCandleTarget + 1,
+        );
+        $previous = null;
+        foreach ($confirmed as $entry) {
+            $timestamp = $entry['row'][0];
+            if ($previous !== null && (int) $timestamp - (int) $previous !== 3_600_000) {
+                throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+            }
+            $previous = $timestamp;
+        }
+
+        return array_column($confirmed, 'row');
+    }
+
+    /** @param array<string, array{canonical: string, row: array<array-key, mixed>}> $rows */
+    private function newestConfirmedInitialHourlyTimestamp(array $rows): string
+    {
+        $newest = null;
+        foreach ($rows as $entry) {
+            if (($entry['row'][8] ?? null) !== '1') {
+                continue;
+            }
+            $timestamp = $entry['row'][0] ?? null;
+            $newest = $newest === null || self::compareUnsigned($timestamp, $newest) > 0
+                ? $timestamp
+                : $newest;
+        }
+        if ($newest === null) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
+
+        return $newest;
+    }
+
+    private function alignedInitialHourlyWindowEnd(string $observedEnd): string
+    {
+        if ($this->initialHourlyCandleTarget !== OkxPaperLivePolicy::INITIAL_HOURLY_CANDLE_TARGET) {
+            return $observedEnd;
+        }
+        $observed = BigInteger::of($observedEnd);
+        $baseStart = $observed->minus(
+            ($this->initialHourlyCandleTarget - 1) * 3_600_000,
+        );
+        if ($baseStart->isNegative()) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
+
+        return (string) $observed->minus($baseStart->mod(4 * 3_600_000));
+    }
+
+    /** @param array<string, array{canonical: string, row: array<array-key, mixed>}> $rows */
+    private function confirmedInitialHourlyCountThrough(array $rows, string $windowEnd): int
+    {
+        return \count(array_filter(
+            $rows,
+            static fn (array $entry): bool => ($entry['row'][8] ?? null) === '1'
+                && self::compareUnsigned($entry['row'][0] ?? null, $windowEnd) <= 0,
+        ));
+    }
+
+    /**
+     * @param list<array<array-key, mixed>> $rows
+     * @param array<string, array{canonical: string, row: array<array-key, mixed>}> $byTimestamp
+     */
+    private function mergeInitialHourlyPage(
+        string $instrumentId,
+        array $rows,
+        ?string $cursor,
+        array &$byTimestamp,
+    ): string {
+        if ($rows === [] || \count($rows) > 300) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
+        $previous = null;
+        $oldestNew = null;
+        foreach ($rows as $row) {
+            $this->candleFrontier($instrumentId, '1H', $row);
+            $timestamp = $row[0];
+            if ($previous !== null && self::compareUnsigned($timestamp, $previous) >= 0) {
+                throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+            }
+            $previous = $timestamp;
+            $canonical = CanonicalJson::encode($row);
+            $known = $byTimestamp[$timestamp] ?? null;
+            if ($known !== null) {
+                if (!hash_equals($known['canonical'], $canonical)) {
+                    throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+                }
+                continue;
+            }
+            if ($cursor !== null && self::compareUnsigned($timestamp, $cursor) >= 0) {
+                throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+            }
+            $byTimestamp[$timestamp] = ['canonical' => $canonical, 'row' => $row];
+            $oldestNew = $oldestNew === null
+                || self::compareUnsigned($timestamp, $oldestNew) < 0
+                ? $timestamp
+                : $oldestNew;
+        }
+        if ($oldestNew === null) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
+
+        return $oldestNew;
     }
 
     /** @return array{kind: string, symbol: string, stream: string, stage: string} */

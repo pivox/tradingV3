@@ -232,7 +232,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame('43', $acknowledged->streamFrontiers[$stream]?->sourceIdentity);
     }
 
-    public function testFreshCheckpointHasTheCompleteClosedVersionSevenSchema(): void
+    public function testFreshCheckpointHasTheCompleteClosedVersionEightSchema(): void
     {
         $checkpoint = OkxPaperLiveCheckpoint::fresh(self::DATASET_ID, self::CONFIGURATION_SHA256);
         $state = $checkpoint->toArray();
@@ -243,6 +243,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'dataset_id',
             'failure_reason',
             'healthy_stop',
+            'initial_hourly_window_ends',
             'last_acknowledged_event_id',
             'ordinal_state',
             'overlap_pagination_by_stream',
@@ -258,7 +259,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_epochs',
             'stream_frontiers',
         ], array_keys($state));
-        self::assertSame(7, $state['schema_version']);
+        self::assertSame(8, $state['schema_version']);
         self::assertSame(self::DATASET_ID, $state['dataset_id']);
         self::assertSame(self::CONFIGURATION_SHA256, $state['configuration_sha256']);
         self::assertSame('warming', $state['phase']);
@@ -269,6 +270,10 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         ], $state['remaining_boundaries']);
         self::assertCount(32, $state['stream_frontiers']);
         self::assertCount(20, $state['overlap_pagination_by_stream']);
+        self::assertSame(
+            ['BTCUSDT' => null, 'ETHUSDT' => null],
+            $state['initial_hourly_window_ends'],
+        );
         self::assertSame($state, OkxPaperLiveCheckpoint::fromArray($state)->toArray());
 
         $state['unexpected'] = true;
@@ -279,7 +284,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
 
     public function testEarlierCheckpointVersionsAreRejectedInsteadOfReusingOldDigestSemantics(): void
     {
-        foreach ([3, 4, 5, 6] as $schemaVersion) {
+        foreach ([3, 4, 5, 6, 7] as $schemaVersion) {
             $state = OkxPaperLiveCheckpoint::fresh(
                 self::DATASET_ID,
                 self::CONFIGURATION_SHA256,
@@ -289,6 +294,70 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             try {
                 OkxPaperLiveCheckpoint::fromArray($state);
                 self::fail('An earlier digest contract must not be reinterpreted.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
+            }
+        }
+    }
+
+    public function testInitialHourlyWindowEndIsPinnedDurablyAndCannotMove(): void
+    {
+        $directory = $this->datasetDirectory('initial-hourly-window-end');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $checkpoint = $this->acknowledgeInitialWarmupRestPrefix(
+            $store,
+            $checkpoint,
+            'BTCUSDT',
+            3,
+        );
+        $checkpoint = $store->saveTransition($checkpoint, 'warming', [
+            'kind' => 'rest_fetch',
+            'symbol' => 'BTCUSDT',
+            'stream' => 'BTCUSDT/rest/candle_1H',
+            'stage' => 'current_candles',
+        ]);
+        $checkpoint = $store->pinInitialHourlyWindowEnd(
+            $checkpoint,
+            'BTCUSDT',
+            '1764000000000',
+        );
+
+        self::assertSame('1764000000000', $checkpoint->initialHourlyWindowEnds['BTCUSDT']);
+        self::assertSame(
+            $checkpoint,
+            $store->pinInitialHourlyWindowEnd($checkpoint, 'BTCUSDT', '1764000000000'),
+        );
+        unset($store);
+
+        $resumedStore = new OkxPaperLiveCheckpointStore($directory);
+        $resumed = $resumedStore->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        self::assertSame('1764000000000', $resumed->initialHourlyWindowEnds['BTCUSDT']);
+        try {
+            $resumedStore->pinInitialHourlyWindowEnd($resumed, 'BTCUSDT', '1764003600000');
+            self::fail('A pinned hourly window must not move.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
+        }
+    }
+
+    public function testInitialHourlyWindowEndSchemaRejectsMalformedOrUnalignedValues(): void
+    {
+        foreach ([
+            ['BTCUSDT' => null],
+            ['BTCUSDT' => 1764000000000, 'ETHUSDT' => null],
+            ['BTCUSDT' => '1764000000001', 'ETHUSDT' => null],
+            ['BTCUSDT' => '10000000000000000000', 'ETHUSDT' => null],
+        ] as $invalidWindowEnds) {
+            $state = OkxPaperLiveCheckpoint::fresh(
+                self::DATASET_ID,
+                self::CONFIGURATION_SHA256,
+            )->toArray();
+            $state['initial_hourly_window_ends'] = $invalidWindowEnds;
+
+            try {
+                OkxPaperLiveCheckpoint::fromArray($state);
+                self::fail('Malformed hourly window anchors must fail closed.');
             } catch (\InvalidArgumentException $exception) {
                 self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
             }

@@ -173,6 +173,46 @@ final class OkxPaperLiveCheckpointStore
         return $this->streamingQueuesFromCheckpoint($checkpoint);
     }
 
+    public function pinInitialHourlyWindowEnd(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+        string $symbol,
+        string $timestampMilliseconds,
+    ): OkxPaperLiveCheckpoint {
+        $this->assertCurrent($checkpoint);
+        if (!\in_array($symbol, ['BTCUSDT', 'ETHUSDT'], true)
+            || preg_match('/\A(?:0|[1-9][0-9]{0,18})\z/D', $timestampMilliseconds) !== 1
+            || !BigInteger::of($timestampMilliseconds)->mod(3_600_000)->isZero()
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $current = $checkpoint->initialHourlyWindowEnds[$symbol];
+        if ($current !== null) {
+            if (!hash_equals($current, $timestampMilliseconds)) {
+                throw self::invalidCheckpoint();
+            }
+
+            return $checkpoint;
+        }
+        if ($checkpoint->phase !== 'warming'
+            || $checkpoint->pendingEvent !== null
+            || $checkpoint->pendingTransition !== [
+                'kind' => 'rest_fetch',
+                'symbol' => $symbol,
+                'stream' => $symbol . '/rest/candle_1H',
+                'stage' => 'current_candles',
+            ]
+        ) {
+            throw self::invalidCheckpoint();
+        }
+
+        $state = $checkpoint->toArray();
+        $state['initial_hourly_window_ends'][$symbol] = $timestampMilliseconds;
+        $next = $this->validatedCheckpoint($state);
+        $this->persist($next);
+
+        return $next;
+    }
+
     public function save(#[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint): void
     {
         $this->assertCurrent($checkpoint);

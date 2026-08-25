@@ -112,7 +112,12 @@ final readonly class CanonicalIndicatorProjector implements CanonicalIndicatorPr
             }
             /** @var list<array<string, mixed>> $hourlyRecords */
             $fourHourWindow = $this->fourHourAggregator->aggregate(
-                $hourlyRecords,
+                $this->fourHourSourceRecords(
+                    $hourlyRecords,
+                    $sourceBinding,
+                    $symbol,
+                    $evaluatedAt,
+                ),
                 $sourceBinding,
                 $symbol,
                 $evaluatedAt,
@@ -172,6 +177,38 @@ final readonly class CanonicalIndicatorProjector implements CanonicalIndicatorPr
         ];
 
         return CanonicalIndicatorProjection::fromValidatedRequest($normalizedRequest, $snapshots);
+    }
+
+    /**
+     * @param list<array<string, mixed>> $hourlyRecords
+     * @param array<string, mixed>       $sourceBinding
+     * @return list<array<string, mixed>>
+     */
+    private function fourHourSourceRecords(
+        array $hourlyRecords,
+        array $sourceBinding,
+        string $symbol,
+        string $evaluatedAt,
+    ): array {
+        if (!array_is_list($hourlyRecords)
+            || \count($hourlyRecords) < 1000
+            || \count($hourlyRecords) > 1003
+        ) {
+            throw new CanonicalIndicatorProjectionException(
+                'canonical_indicator_four_hour_count_invalid',
+            );
+        }
+        if (\count($hourlyRecords) > 1000) {
+            new CanonicalIndicatorWindow(
+                array_slice($hourlyRecords, -250),
+                $sourceBinding,
+                $symbol,
+                '1h',
+                $evaluatedAt,
+            );
+        }
+
+        return array_slice($hourlyRecords, 0, 1000);
     }
 
     /** @return array{dataset_id:string,dataset_checksum:string,candles_checksum:string,quality_report_checksum:string,source_checksum:string,source_network:string,market_data_venue:string,market_type:string} */
