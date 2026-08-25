@@ -27,6 +27,7 @@ use App\Trading\Paper\Okx\Live\OkxPaperPublicFrameQueue;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSource;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicSubscriptionSet;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicWebSocketTransportInterface;
+use App\Trading\Paper\Okx\Live\OkxPaperRetainedTradeRow;
 use App\Trading\Paper\Okx\OkxPaperInstrumentMap;
 use App\Trading\Paper\Okx\OkxPaperPublicConfig;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -6455,6 +6456,37 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 'BTCUSDT/rest/public_trade'
             ],
         );
+    }
+
+    public function testHistoryTradePageMergesWithoutMaterializingExpandedSuffix(): void
+    {
+        $source = $this->source(
+            new Task7RestClient(),
+            new Task7Transport(),
+            new Task7Transport(),
+        );
+        $retained = [];
+        for ($tradeId = 101; $tradeId <= 5_100; ++$tradeId) {
+            $retained[] = OkxPaperRetainedTradeRow::compact(self::restTrade(
+                (string) $tradeId,
+                (string) (1784970100000 + $tradeId),
+            ));
+        }
+        $olderPage = [];
+        for ($tradeId = 100; $tradeId >= 1; --$tradeId) {
+            $olderPage[] = self::restTrade(
+                (string) $tradeId,
+                (string) (1784970100000 + $tradeId),
+            );
+        }
+
+        $merge = new \ReflectionMethod($source, 'mergeRetainedTradePage');
+        $merged = $merge->invoke($source, $olderPage, $retained);
+
+        self::assertCount(5_100, $merged);
+        self::assertContainsOnly('string', $merged);
+        self::assertSame('1', OkxPaperRetainedTradeRow::expand($merged[0])['tradeId']);
+        self::assertSame('5100', OkxPaperRetainedTradeRow::expand($merged[5_099])['tradeId']);
     }
 
     public function testHistoryTradePaginationRestartCallsSavedCursorAndEmitsDurableSuffix(): void
