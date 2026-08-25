@@ -100,6 +100,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     private array $nextEventTransition = [];
 
     private ?string $activeQueuedSocket = null;
+    private ?string $lastCompletedQueuedSocket = null;
     private int $activeQueuedEventsRemaining = 0;
     private int $activeQueuedFramesRemaining = 0;
 
@@ -4173,6 +4174,18 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             $this->deferredQueuedFailure = null;
             $this->throwQueuedFrameFailure($failure);
         }
+        if ($this->loopPump !== null
+            && $this->lastCompletedQueuedSocket === 'public'
+            && $this->businessQueue->count() > 0
+        ) {
+            return $this->eventsFromQueuedFrame($this->businessQueue, true);
+        }
+        if ($this->loopPump !== null
+            && $this->lastCompletedQueuedSocket === 'business'
+            && $this->publicQueue->count() > 0
+        ) {
+            return $this->eventsFromQueuedFrame($this->publicQueue, false);
+        }
         if ($this->publicQueue->count() > 0) {
             return $this->eventsFromQueuedFrame($this->publicQueue, false);
         }
@@ -4308,6 +4321,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             $queue->dequeue();
         }
         $this->activeQueuedSocket = null;
+        $this->lastCompletedQueuedSocket = $socket;
         $this->activeQueuedEventsRemaining = 0;
         $this->activeQueuedFramesRemaining = 0;
         $this->persistStreamingQueues();
