@@ -763,6 +763,28 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertCount(8, $checkpoint->tradeIdentityHistory);
     }
 
+    public function testExposesCurrentDurableTradeBatchBoundary(): void
+    {
+        $source = $this->source(new DeterministicHyperliquidTransport([
+            self::largeTradeFrame(8),
+        ]));
+        $events = self::generator($source->events());
+        $events->rewind();
+        for ($index = 0; $index < 2; ++$index) {
+            self::assertSame(1, $source->pendingDurableBatchSize());
+            $source->acknowledge($events->current()->eventId);
+            $events->next();
+        }
+
+        for ($remaining = 8; $remaining >= 1; --$remaining) {
+            self::assertSame($remaining, $source->pendingDurableBatchSize());
+            $source->acknowledge($events->current()->eventId);
+            if ($remaining > 1) {
+                $events->next();
+            }
+        }
+    }
+
     public function testIngressPausesAtHighWaterAndResumesAfterDrain(): void
     {
         $loop = new HyperliquidDeterministicLoop();

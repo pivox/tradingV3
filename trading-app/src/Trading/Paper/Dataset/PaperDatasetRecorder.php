@@ -15,6 +15,7 @@ use Brick\Math\BigInteger;
 final class PaperDatasetRecorder
 {
     private const MAX_APPEND_INTENT_BYTES = 9_000_000;
+    private const MAX_APPEND_BATCH_EVENTS = 256;
     private const MAX_MANIFEST_TRANSITION_BYTES = 200_000;
     private const MAX_RECORDING_MANIFEST_CHECKPOINT_INTERVAL = 10_000;
     private const REGULAR_FILE_TYPE = 0100000;
@@ -200,6 +201,174 @@ final class PaperDatasetRecorder
         $this->assertUsable();
 
         return $this->withDatasetLock(fn (): PaperDatasetAppendResult => $this->appendUnderLock($event));
+    }
+
+    /**
+     * @param list<PaperMarketEvent> $events
+     * @return list<PaperDatasetAppendResult>
+     */
+    public function appendBatch(#[\SensitiveParameter] array $events): array
+    {
+        $this->assertUsable();
+        if ($events === []
+            || !array_is_list($events)
+            || \count($events) > self::MAX_APPEND_BATCH_EVENTS
+        ) {
+            throw new \InvalidArgumentException('paper_dataset_append_batch_invalid');
+        }
+        foreach ($events as $event) {
+            if (!$event instanceof PaperMarketEvent) {
+                throw new \InvalidArgumentException('paper_dataset_append_batch_invalid');
+            }
+        }
+
+        return $this->withDatasetLock(fn (): array => $this->appendBatchUnderLock($events));
+    }
+
+    /**
+     * @param list<PaperMarketEvent> $events
+     * @return list<PaperDatasetAppendResult>
+     */
+    private function appendBatchUnderLock(#[\SensitiveParameter] array $events): array
+    {
+        $this->recoverPendingAppendIntent();
+        $this->recoverPendingManifestTransition('paper_dataset_manifest_write_failed');
+        $this->reloadDurableState(
+            persistReconciledManifest: $this->recordingManifestCheckpointInterval === 1,
+        );
+        $this->assertPinnedDirectories();
+        $this->assertRecording();
+
+        $durableIdentities = $this->identities;
+        $nextIdentities = $this->identities;
+        $nextSequences = $this->lastSequences;
+        $nextChannels = $this->channels;
+        $nextGaps = $this->sequenceGaps;
+        $nextStart = $this->startExchangeTimestamp;
+        $nextLatest = $this->latestExchangeTimestamp;
+        $nextEventCount = $this->eventCount;
+        $nextLastEventId = $this->lastEventId;
+        $nextLastDurableEvent = $this->lastDurableEvent;
+        $newEventsStarted = false;
+        $newEvents = [];
+        $newLines = [];
+        $results = [];
+
+        foreach ($events as $event) {
+            $this->assertEventMatchesManifest($event);
+            $canonicalEvent = CanonicalJson::encode($event->toArray());
+            $eventHash = hash('sha256', $canonicalEvent);
+            if (isset($durableIdentities[$event->eventId])) {
+                $identity = $durableIdentities[$event->eventId];
+                if ($newEventsStarted
+                    || !hash_equals($identity['payload_hash'], $event->payloadHash)
+                    || !hash_equals($identity['event_hash'], $eventHash)
+                ) {
+                    throw new \RuntimeException('market_event_identity_conflict');
+                }
+                $results[] = PaperDatasetAppendResult::REPLAYED;
+
+                continue;
+            }
+            if (isset($nextIdentities[$event->eventId])) {
+                throw new \RuntimeException('market_event_identity_conflict');
+            }
+
+            $newEventsStarted = true;
+            $sequenceKey = $this->sequenceKey($event);
+            $nextSequence = $event->sequence === null ? null : BigInteger::of($event->sequence);
+            $gap = false;
+            if ($nextSequence !== null && isset($nextSequences[$sequenceKey])) {
+                $lastSequence = $nextSequences[$sequenceKey];
+                if ($nextSequence->isLessThanOrEqualTo($lastSequence)) {
+                    throw new \RuntimeException('market_event_out_of_order');
+                }
+                $gap = $nextSequence->isGreaterThan($lastSequence->plus(1));
+            }
+
+            $line = $canonicalEvent . "\n";
+            if (\strlen($line) > PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES) {
+                throw new \RuntimeException('paper_dataset_append_intent_invalid');
+            }
+            $newEvents[] = $event;
+            $newLines[] = $line;
+            $results[] = PaperDatasetAppendResult::APPENDED;
+            $nextIdentities[$event->eventId] = [
+                'payload_hash' => $event->payloadHash,
+                'event_hash' => $eventHash,
+            ];
+            if ($nextSequence !== null) {
+                $nextSequences[$sequenceKey] = $nextSequence;
+            }
+            $nextChannels[] = $event->channel->value;
+            $nextChannels = array_values(array_unique($nextChannels));
+            sort($nextChannels, SORT_STRING);
+            if ($gap) {
+                $nextGaps[$sequenceKey] = ($nextGaps[$sequenceKey] ?? 0) + 1;
+                ksort($nextGaps, SORT_STRING);
+            }
+            $nextStart = $this->minimumTimestamp($nextStart, $event->exchangeTimestamp);
+            $nextLatest = $this->maximumTimestamp($nextLatest, $event->exchangeTimestamp);
+            ++$nextEventCount;
+            $nextLastEventId = $event->eventId;
+            $nextLastDurableEvent = $event;
+        }
+
+        if ($newEvents === []) {
+            return $results;
+        }
+
+        $suffix = implode('', $newLines);
+        $this->writeBatchAppendIntent($newEvents, $suffix);
+        try {
+            $durableAppend = $this->appendDurably($suffix);
+        } catch (\Throwable $failure) {
+            if ($failure instanceof \RuntimeException
+                && $failure->getMessage() === 'paper_dataset_events_rollback_failed'
+            ) {
+                throw $failure;
+            }
+            try {
+                $this->removeAppendIntent();
+            } catch (\Throwable $cleanupFailure) {
+                $this->usable = false;
+
+                throw new \RuntimeException('paper_dataset_append_intent_cleanup_failed', 0, $cleanupFailure);
+            }
+
+            throw $failure;
+        }
+        $this->assertPinnedDirectories();
+
+        $nextManifest = $this->currentManifest->withRecordingFacts(
+            startExchangeTimestamp: $nextStart,
+            channels: $nextChannels,
+            eventCount: $nextEventCount,
+            sequenceGaps: $nextGaps,
+            lastEventId: $nextLastEventId,
+        );
+        if (intdiv($this->eventCount, $this->recordingManifestCheckpointInterval)
+            !== intdiv($nextEventCount, $this->recordingManifestCheckpointInterval)
+        ) {
+            $this->writeRecordingManifestAtomically($nextManifest);
+        }
+        $this->removeAppendIntent();
+
+        $this->identities = $nextIdentities;
+        $this->lastSequences = $nextSequences;
+        $this->channels = $nextChannels;
+        $this->sequenceGaps = $nextGaps;
+        $this->eventCount = $nextEventCount;
+        $this->scannedBytes = $durableAppend['size'];
+        $this->scannedPrefixSha256 = $durableAppend['sha256'];
+        $this->scannedFileIdentity = $durableAppend['identity'];
+        $this->lastEventId = $nextLastEventId;
+        $this->lastDurableEvent = $nextLastDurableEvent;
+        $this->startExchangeTimestamp = $nextStart;
+        $this->latestExchangeTimestamp = $nextLatest;
+        $this->currentManifest = $nextManifest;
+
+        return $results;
     }
 
     private function appendUnderLock(#[\SensitiveParameter] PaperMarketEvent $event): PaperDatasetAppendResult
@@ -445,6 +614,44 @@ final class PaperDatasetRecorder
         );
     }
 
+    /** @param list<PaperMarketEvent> $events */
+    private function writeBatchAppendIntent(
+        #[\SensitiveParameter] array $events,
+        #[\SensitiveParameter] string $canonicalSuffix,
+    ): void {
+        if ($events === []
+            || \count($events) > self::MAX_APPEND_BATCH_EVENTS
+            || $this->scannedPrefixSha256 === null
+        ) {
+            throw new \RuntimeException('paper_dataset_append_intent_invalid');
+        }
+
+        $contents = $this->encodeAppendIntent([
+            'version' => 2,
+            'dataset_id' => $this->identityManifest->datasetId,
+            'event_ids' => array_map(
+                static fn (PaperMarketEvent $event): string => $event->eventId,
+                $events,
+            ),
+            'original_events_bytes' => $this->scannedBytes,
+            'original_events_sha256' => $this->scannedPrefixSha256,
+            'canonical_suffix_base64' => base64_encode($canonicalSuffix),
+            'canonical_suffix_sha256' => hash('sha256', $canonicalSuffix),
+        ]);
+        if (\strlen($contents) > self::MAX_APPEND_INTENT_BYTES) {
+            throw new \RuntimeException('paper_dataset_append_intent_invalid');
+        }
+
+        $this->createFixedMarker(
+            $this->appendIntentPath,
+            $this->appendIntentStagingPath,
+            $contents,
+            'paper_dataset_append_intent_flush_failed',
+            'paper_dataset_append_intent_directory_sync_failed',
+            'paper_dataset_append_intent_publish',
+        );
+    }
+
     private function recoverPendingAppendIntent(): void
     {
         $this->recoverFixedArtifactStaging(
@@ -495,14 +702,10 @@ final class PaperDatasetRecorder
     /**
      * @param resource $handle
      * @param array{
-     *   version: int,
-     *   dataset_id: string,
-     *   event_id: string,
      *   original_events_bytes: int,
      *   original_events_sha256: string,
-     *   canonical_line_base64: string,
-     *   canonical_line_sha256: string,
-     *   canonical_line: string
+     *   canonical_line: string,
+     *   ...
      * } $intent
      */
     private function recoverStagedAppendUnderLock($handle, #[\SensitiveParameter] array $intent): void
@@ -667,17 +870,7 @@ final class PaperDatasetRecorder
         );
     }
 
-    /**
-     * @param array{
-     *   version: int,
-     *   dataset_id: string,
-     *   event_id: string,
-     *   original_events_bytes: int,
-     *   original_events_sha256: string,
-     *   canonical_line_base64: string,
-     *   canonical_line_sha256: string
-     * } $intent
-     */
+    /** @param array<string, mixed> $intent */
     private function encodeAppendIntent(#[\SensitiveParameter] array $intent): string
     {
         try {
@@ -692,14 +885,10 @@ final class PaperDatasetRecorder
 
     /**
      * @return array{
-     *   version: int,
-     *   dataset_id: string,
-     *   event_id: string,
      *   original_events_bytes: int,
      *   original_events_sha256: string,
-     *   canonical_line_base64: string,
-     *   canonical_line_sha256: string,
-     *   canonical_line: string
+     *   canonical_line: string,
+     *   ...
      * }
      */
     private function decodeAppendIntent(#[\SensitiveParameter] string $contents): array
@@ -714,6 +903,13 @@ final class PaperDatasetRecorder
         } catch (\JsonException $failure) {
             throw new \RuntimeException('paper_dataset_append_intent_invalid', 0, $failure);
         }
+        if (\is_array($decoded)
+            && !array_is_list($decoded)
+            && ($decoded['version'] ?? null) === 2
+        ) {
+            return $this->decodeBatchAppendIntent($decoded, $contents);
+        }
+
         $expectedKeys = [
             'version',
             'dataset_id',
@@ -783,6 +979,109 @@ final class PaperDatasetRecorder
         }
 
         return $decoded + ['canonical_line' => $line];
+    }
+
+    /**
+     * @param array<string, mixed> $decoded
+     * @return array{
+     *   version: int,
+     *   dataset_id: string,
+     *   event_ids: list<string>,
+     *   original_events_bytes: int,
+     *   original_events_sha256: string,
+     *   canonical_suffix_base64: string,
+     *   canonical_suffix_sha256: string,
+     *   canonical_line: string
+     * }
+     */
+    private function decodeBatchAppendIntent(
+        #[\SensitiveParameter] array $decoded,
+        #[\SensitiveParameter] string $contents,
+    ): array {
+        $expectedKeys = [
+            'version',
+            'dataset_id',
+            'event_ids',
+            'original_events_bytes',
+            'original_events_sha256',
+            'canonical_suffix_base64',
+            'canonical_suffix_sha256',
+        ];
+        if (array_keys($decoded) !== $expectedKeys
+            || !\is_string($decoded['dataset_id'] ?? null)
+            || !hash_equals($this->identityManifest->datasetId, $decoded['dataset_id'])
+            || !\is_array($decoded['event_ids'] ?? null)
+            || !array_is_list($decoded['event_ids'])
+            || $decoded['event_ids'] === []
+            || \count($decoded['event_ids']) > self::MAX_APPEND_BATCH_EVENTS
+            || !\is_int($decoded['original_events_bytes'] ?? null)
+            || $decoded['original_events_bytes'] < 0
+            || !\is_string($decoded['original_events_sha256'] ?? null)
+            || preg_match('/\A[0-9a-f]{64}\z/D', $decoded['original_events_sha256']) !== 1
+            || !\is_string($decoded['canonical_suffix_base64'] ?? null)
+            || !\is_string($decoded['canonical_suffix_sha256'] ?? null)
+            || preg_match('/\A[0-9a-f]{64}\z/D', $decoded['canonical_suffix_sha256']) !== 1
+            || !hash_equals($this->encodeAppendIntent($decoded), $contents)
+        ) {
+            throw new \RuntimeException('paper_dataset_append_intent_invalid');
+        }
+        foreach ($decoded['event_ids'] as $eventId) {
+            if (!\is_string($eventId) || preg_match('/\A[0-9a-f]{64}\z/D', $eventId) !== 1) {
+                throw new \RuntimeException('paper_dataset_append_intent_invalid');
+            }
+        }
+
+        $suffix = base64_decode($decoded['canonical_suffix_base64'], true);
+        if ($suffix === false
+            || $suffix === ''
+            || !str_ends_with($suffix, "\n")
+            || !hash_equals($decoded['canonical_suffix_sha256'], hash('sha256', $suffix))
+        ) {
+            throw new \RuntimeException('paper_dataset_append_intent_invalid');
+        }
+        $lines = explode("\n", substr($suffix, 0, -1));
+        if (\count($lines) !== \count($decoded['event_ids'])) {
+            throw new \RuntimeException('paper_dataset_append_intent_invalid');
+        }
+        foreach ($lines as $index => $canonicalEvent) {
+            if ($canonicalEvent === ''
+                || \strlen($canonicalEvent) + 1 > PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES
+            ) {
+                throw new \RuntimeException('paper_dataset_append_intent_invalid');
+            }
+            try {
+                $eventData = json_decode(
+                    $canonicalEvent,
+                    true,
+                    512,
+                    JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING,
+                );
+                if (!\is_array($eventData) || array_is_list($eventData)) {
+                    throw new \InvalidArgumentException();
+                }
+                /** @var array<string, mixed> $eventData */
+                $event = PaperMarketEvent::fromArray($eventData);
+            } catch (\Throwable $failure) {
+                throw new \RuntimeException('paper_dataset_append_intent_invalid', 0, $failure);
+            }
+            if (!hash_equals($decoded['event_ids'][$index], $event->eventId)
+                || !hash_equals(CanonicalJson::encode($event->toArray()), $canonicalEvent)
+            ) {
+                throw new \RuntimeException('paper_dataset_append_intent_invalid');
+            }
+        }
+
+        /** @var array{
+         *   version: int,
+         *   dataset_id: string,
+         *   event_ids: list<string>,
+         *   original_events_bytes: int,
+         *   original_events_sha256: string,
+         *   canonical_suffix_base64: string,
+         *   canonical_suffix_sha256: string
+         * } $decoded
+         */
+        return $decoded + ['canonical_line' => $suffix];
     }
 
     private function terminalManifestMatchesDurableFacts(PaperDatasetManifest $manifest): bool

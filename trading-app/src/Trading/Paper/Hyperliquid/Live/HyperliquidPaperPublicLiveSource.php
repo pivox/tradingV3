@@ -11,14 +11,14 @@ use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperMarketEventNormalizer;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
-use App\Trading\Paper\MarketData\PaperLiveMarketDataSourceInterface;
+use App\Trading\Paper\MarketData\PaperDurableBatchSourceInterface;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\TimerInterface;
 use Symfony\Component\Clock\ClockInterface;
 
-final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourceInterface
+final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 {
     private readonly HyperliquidPaperPublicSubscriptionSet $subscriptions;
     private readonly HyperliquidPaperPublicFrameDecoder $decoder;
@@ -844,6 +844,19 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 );
             }
         }
+    }
+
+    public function pendingDurableBatchSize(): int
+    {
+        $remainingTradeRows = $this->checkpoint->pendingContinuation['remaining_trade_rows'] ?? null;
+        if ($remainingTradeRows === null) {
+            return 1;
+        }
+        if (!\is_array($remainingTradeRows) || !array_is_list($remainingTradeRows)) {
+            throw new \LogicException();
+        }
+
+        return \count($remainingTradeRows) + 1;
     }
 
     public function acknowledge(string $eventId): void
