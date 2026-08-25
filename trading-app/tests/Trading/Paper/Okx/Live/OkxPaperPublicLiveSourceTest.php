@@ -23,9 +23,11 @@ use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpoint;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveIntegrityException;
 use App\Trading\Paper\Okx\Live\OkxPaperLivePolicy;
+use App\Trading\Paper\Okx\Live\OkxPaperLoopPumpInterface;
 use App\Trading\Paper\Okx\Live\OkxPaperOrderBookMaterializer;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicFrameQueue;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSource;
+use App\Trading\Paper\Okx\Live\ReactOkxPaperLoopPump;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicSubscriptionSet;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicWebSocketTransportInterface;
 use App\Trading\Paper\Okx\Live\OkxPaperRetainedTradeRow;
@@ -2059,6 +2061,190 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             $tradeIds,
         );
         self::assertNull($this->checkpointState()['pending_event']);
+    }
+
+    public function testDurableFrameCompletionPumpsTheNetworkLoopBetweenBatches(): void
+    {
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+            Task7Transport::tradeFrame(['9101']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $pump = new Task7CountingLoopPump();
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            loopPump: $pump,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $first = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $first);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($first->eventId);
+        self::assertSame(1, $pump->count);
+
+        $events->next();
+        $second = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $second);
+        $source->acknowledge($second->eventId);
+        self::assertSame(2, $pump->count);
+    }
+
+    public function testReactLoopPumpRunsExactlyOneNonBlockingTick(): void
+    {
+        $loop = new DeterministicLoop();
+
+        (new ReactOkxPaperLoopPump($loop))->pump();
+
+        self::assertSame(1, $loop->runCount);
+        self::assertTrue($loop->stopped);
+    }
+
+    public function testReactLoopPumpPollsAReadableStreamBeforeReturning(): void
+    {
+        $loop = new StreamSelectLoop();
+        $streams = stream_socket_pair(\STREAM_PF_UNIX, \STREAM_SOCK_STREAM, 0);
+        self::assertIsArray($streams);
+        self::assertTrue(stream_set_blocking($streams[0], false));
+        $received = null;
+        $loop->addReadStream($streams[0], static function ($stream) use (
+            &$received,
+            $loop,
+        ): void {
+            $received = fread($stream, 8192);
+            $loop->removeReadStream($stream);
+        });
+
+        try {
+            self::assertSame(6, fwrite($streams[1], 'polled'));
+
+            (new ReactOkxPaperLoopPump($loop))->pump();
+
+            self::assertSame('polled', $received);
+        } finally {
+            fclose($streams[0]);
+            fclose($streams[1]);
+        }
+    }
+
+    public function testNetworkPumpCannotStarveTheBusinessQueue(): void
+    {
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $publicQueue = new OkxPaperPublicFrameQueue();
+        $businessQueue = new OkxPaperPublicFrameQueue();
+        $pump = new Task7CountingLoopPump(static function () use ($publicQueue): void {
+            $publicQueue->enqueue(json_encode(
+                Task7Transport::tradeFrame(['9200']),
+                \JSON_THROW_ON_ERROR,
+            ));
+        });
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            publicQueue: $publicQueue,
+            businessQueue: $businessQueue,
+            loopPump: $pump,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $businessQueue->enqueue(json_encode([
+            'arg' => ['channel' => 'candle1m', 'instId' => 'BTC-USDT-SWAP'],
+            'data' => [[
+                '1784970520000', '101', '102', '100', '101.5', '11', '1', '1100', '1',
+            ]],
+        ], \JSON_THROW_ON_ERROR));
+        $source->acknowledge($sentinel->eventId);
+
+        $events->next();
+        $businessEvent = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $businessEvent);
+        self::assertSame(PaperMarketDataChannel::CANDLE_1M, $businessEvent->channel);
+        self::assertSame(1, $publicQueue->count());
+    }
+
+    public function testFilteredFrameBatchStillPumpsAndUpdatesSocketFairness(): void
+    {
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $publicQueue = new OkxPaperPublicFrameQueue();
+        $businessQueue = new OkxPaperPublicFrameQueue();
+        $pump = new Task7CountingLoopPump();
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            publicQueue: $publicQueue,
+            businessQueue: $businessQueue,
+            loopPump: $pump,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $businessQueue->enqueue(json_encode([
+            'arg' => ['channel' => 'candle1m', 'instId' => 'BTC-USDT-SWAP'],
+            'data' => [[
+                '1784970520000', '101', '102', '100', '101.5', '11', '1', '1100', '1',
+            ]],
+        ], \JSON_THROW_ON_ERROR));
+        $source->acknowledge($sentinel->eventId);
+
+        $events->next();
+        $firstBusiness = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $firstBusiness);
+        self::assertSame(PaperMarketDataChannel::CANDLE_1M, $firstBusiness->channel);
+        $source->acknowledge($firstBusiness->eventId);
+        self::assertSame(2, $pump->count);
+
+        $publicQueue->enqueue('pong');
+        $businessQueue->enqueue(json_encode([
+            'arg' => ['channel' => 'candle1m', 'instId' => 'BTC-USDT-SWAP'],
+            'data' => [[
+                '1784970580000', '101.5', '102', '101', '101.8', '12', '1', '1200', '1',
+            ]],
+        ], \JSON_THROW_ON_ERROR));
+        $events->next();
+
+        $secondBusiness = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $secondBusiness);
+        self::assertSame(PaperMarketDataChannel::CANDLE_1M, $secondBusiness->channel);
+        self::assertSame(3, $pump->count);
     }
 
     public function testDurableFrameBatchPreservesEachEventStream(): void
@@ -10533,6 +10719,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         ?OkxPaperInstrumentMetadataClientInterface $metadataClient = null,
         ?OkxPaperFundingRateClientInterface $fundingClient = null,
         int $initialHourlyCandleTarget = 1,
+        ?OkxPaperLoopPumpInterface $loopPump = null,
     ): OkxPaperPublicLiveSource {
         $store = $checkpointStore ?? new OkxPaperLiveCheckpointStore($this->testRoot);
         $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
@@ -10558,6 +10745,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             metadataClient: $metadataClient,
             fundingClient: $fundingClient,
             initialHourlyCandleTarget: $initialHourlyCandleTarget,
+            loopPump: $loopPump,
         );
     }
 
@@ -11251,6 +11439,22 @@ final class Task7ActionLog
 {
     /** @var list<string> */
     public array $actions = [];
+}
+
+final class Task7CountingLoopPump implements OkxPaperLoopPumpInterface
+{
+    public int $count = 0;
+
+    public function __construct(private readonly ?\Closure $callback = null)
+    {
+    }
+
+    public function pump(): void
+    {
+        ++$this->count;
+        ($this->callback ?? static function (): void {
+        })();
+    }
 }
 
 final class Task7ScriptedLoop implements LoopInterface

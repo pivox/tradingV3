@@ -87,6 +87,7 @@ final readonly class OkxPaperPublicLiveSourceFactory implements PaperPublicLiveS
                 metadataClient: $this->metadataClient,
                 fundingClient: $this->fundingClient,
                 initialHourlyCandleTarget: OkxPaperLivePolicy::INITIAL_HOURLY_CANDLE_TARGET,
+                loopPump: new ReactOkxPaperLoopPump($sessionLoop),
             );
         } finally {
             fclose($directoryPin['handle']);
