@@ -2110,6 +2110,33 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertTrue($loop->stopped);
     }
 
+    public function testReactLoopPumpPollsAReadableStreamBeforeReturning(): void
+    {
+        $loop = new StreamSelectLoop();
+        $streams = stream_socket_pair(\STREAM_PF_UNIX, \STREAM_SOCK_STREAM, 0);
+        self::assertIsArray($streams);
+        self::assertTrue(stream_set_blocking($streams[0], false));
+        $received = null;
+        $loop->addReadStream($streams[0], static function ($stream) use (
+            &$received,
+            $loop,
+        ): void {
+            $received = fread($stream, 8192);
+            $loop->removeReadStream($stream);
+        });
+
+        try {
+            self::assertSame(6, fwrite($streams[1], 'polled'));
+
+            (new ReactOkxPaperLoopPump($loop))->pump();
+
+            self::assertSame('polled', $received);
+        } finally {
+            fclose($streams[0]);
+            fclose($streams[1]);
+        }
+    }
+
     public function testNetworkPumpCannotStarveTheBusinessQueue(): void
     {
         $public = new Task7Transport();
