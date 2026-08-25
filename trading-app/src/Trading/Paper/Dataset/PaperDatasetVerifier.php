@@ -1186,6 +1186,7 @@ final class PaperDatasetVerifier
                 && $event->channel !== PaperMarketDataChannel::CONNECTION_STATE
                 && $event->channel !== PaperMarketDataChannel::INSTRUMENT_METADATA
                 && $event->channel !== PaperMarketDataChannel::FUNDING_RATE
+                && ($event->payload['origin'] ?? null) !== 'rest_candle_snapshot'
                 && !isset($snapshotEpochs[$event->symbol])
             ) {
                 throw new \InvalidArgumentException();
@@ -1362,9 +1363,13 @@ final class PaperDatasetVerifier
         array $snapshotEpochs,
         array &$candleFrontiers,
     ): string {
+        $origin = $payload['origin'] ?? null;
         if (($payload['confirmed'] ?? null) !== true
-            || ($payload['origin'] ?? null) !== 'ws_candle'
-            || !isset($snapshotEpochs[$event->symbol])
+            || !\in_array($origin, ['rest_candle_snapshot', 'ws_candle'], true)
+            || ($origin === 'rest_candle_snapshot'
+                && isset($snapshotEpochs[$event->symbol]))
+            || ($origin === 'ws_candle'
+                && !isset($snapshotEpochs[$event->symbol]))
         ) {
             throw new \InvalidArgumentException();
         }
@@ -1383,7 +1388,7 @@ final class PaperDatasetVerifier
         $candleFrontiers[$stream] = (int) $start;
 
         return implode('|', [
-            $event->sourceNetwork->value,
+            ...($origin === 'ws_candle' ? [$event->sourceNetwork->value] : []),
             $coin,
             $interval,
             $start,
