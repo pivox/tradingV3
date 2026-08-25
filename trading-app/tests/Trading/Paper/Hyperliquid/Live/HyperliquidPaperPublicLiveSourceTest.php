@@ -987,6 +987,47 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame($runsBeforeAcknowledgement + 1, $loop->runCount());
     }
 
+    public function testBufferedIngressIsDrainedBeforeAnotherNetworkPump(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $source = $this->source(
+            new DeterministicHyperliquidTransport([self::tradeFrame()]),
+            loop: $loop,
+        );
+        $events = self::generator($source->events());
+        $events->rewind();
+        for ($index = 0; $index < 2; ++$index) {
+            $source->acknowledge($events->current()->eventId);
+            if ($index === 0) {
+                $events->next();
+            }
+        }
+        $runsAfterDurableBoundary = $loop->runCount();
+
+        $events->next();
+
+        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $events->current()->channel);
+        self::assertSame($runsAfterDurableBoundary, $loop->runCount());
+    }
+
+    public function testDurableAcknowledgementDoesNotPumpWhileIngressIsBuffered(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $source = $this->source(
+            new DeterministicHyperliquidTransport([self::tradeFrame()]),
+            loop: $loop,
+        );
+        $events = self::generator($source->events());
+        $events->rewind();
+        $source->acknowledge($events->current()->eventId);
+        $events->next();
+        $runsBeforeDurableBoundary = $loop->runCount();
+
+        $source->acknowledge($events->current()->eventId);
+
+        self::assertSame($runsBeforeDurableBoundary, $loop->runCount());
+    }
+
     public function testPongTimeoutPersistsContinuityLossBeforeReconnectDelay(): void
     {
         $loop = new HyperliquidDeterministicLoop();

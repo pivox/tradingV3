@@ -423,9 +423,6 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
 
         $frame = $this->dequeuePreReadyFrame();
         if ($frame === null) {
-            if ($this->queue->count() > 0) {
-                $this->pumpNetworkLoop();
-            }
             $frame = $this->nextTransportFrame();
         }
         if ($frame === null) {
@@ -1078,7 +1075,13 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
 
     private function pumpNetworkLoop(): void
     {
-        if ($this->checkpoint->phase !== 'streaming' || $this->stopped) {
+        if ($this->checkpoint->phase !== 'streaming'
+            || $this->stopped
+            || $this->transportReadingPaused
+            || $this->queue->count() > 0
+            || $this->preReadyFrames !== []
+            || $this->deferredDecodedFrames !== []
+        ) {
             return;
         }
 
