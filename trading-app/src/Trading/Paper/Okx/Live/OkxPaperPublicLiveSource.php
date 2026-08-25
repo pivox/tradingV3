@@ -4279,14 +4279,17 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             array_push($events, ...$frameEvents);
         }
         if ($events === []) {
+            $socket = $business ? 'business' : 'public';
             for ($index = 0; $index < $framesConsumed; ++$index) {
                 $queue->dequeue();
             }
+            $this->lastCompletedQueuedSocket = $socket;
             $this->persistStreamingQueues();
             $this->rescheduleHeartbeatAfterQueueDrain(
-                $business ? 'business' : 'public',
+                $socket,
                 $queue,
             );
+            $this->loopPump?->pump();
         } else {
             $this->activeQueuedSocket = $business ? 'business' : 'public';
             $this->activeQueuedEventsRemaining = \count($events);

@@ -2187,6 +2187,66 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(1, $publicQueue->count());
     }
 
+    public function testFilteredFrameBatchStillPumpsAndUpdatesSocketFairness(): void
+    {
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $publicQueue = new OkxPaperPublicFrameQueue();
+        $businessQueue = new OkxPaperPublicFrameQueue();
+        $pump = new Task7CountingLoopPump();
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            publicQueue: $publicQueue,
+            businessQueue: $businessQueue,
+            loopPump: $pump,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $businessQueue->enqueue(json_encode([
+            'arg' => ['channel' => 'candle1m', 'instId' => 'BTC-USDT-SWAP'],
+            'data' => [[
+                '1784970520000', '101', '102', '100', '101.5', '11', '1', '1100', '1',
+            ]],
+        ], \JSON_THROW_ON_ERROR));
+        $source->acknowledge($sentinel->eventId);
+
+        $events->next();
+        $firstBusiness = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $firstBusiness);
+        self::assertSame(PaperMarketDataChannel::CANDLE_1M, $firstBusiness->channel);
+        $source->acknowledge($firstBusiness->eventId);
+        self::assertSame(2, $pump->count);
+
+        $publicQueue->enqueue('pong');
+        $businessQueue->enqueue(json_encode([
+            'arg' => ['channel' => 'candle1m', 'instId' => 'BTC-USDT-SWAP'],
+            'data' => [[
+                '1784970580000', '101.5', '102', '101', '101.8', '12', '1', '1200', '1',
+            ]],
+        ], \JSON_THROW_ON_ERROR));
+        $events->next();
+
+        $secondBusiness = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $secondBusiness);
+        self::assertSame(PaperMarketDataChannel::CANDLE_1M, $secondBusiness->channel);
+        self::assertSame(3, $pump->count);
+    }
+
     public function testDurableFrameBatchPreservesEachEventStream(): void
     {
         $eth = Task7Transport::tradeFrame(['9201']);
