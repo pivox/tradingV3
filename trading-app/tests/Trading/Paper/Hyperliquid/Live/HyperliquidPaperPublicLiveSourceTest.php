@@ -1004,6 +1004,28 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame([5.0], $loop->intervals());
     }
 
+    public function testHealthyStopAcceptsAnExpectedPongAlreadyInIngress(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport([]);
+        $source = $this->source($transport, loop: $loop);
+        $events = self::generator($source->events());
+        $events->rewind();
+        $source->acknowledge($events->current()->eventId);
+        $events->next();
+        $source->acknowledge($events->current()->eventId);
+        $loop->fire(HyperliquidPaperLivePolicy::HEARTBEAT_IDLE_SECONDS);
+        $transport->push(CanonicalJson::encode(['channel' => 'pong']));
+
+        $source->requestHealthyOperatorStop();
+        $events->next();
+
+        self::assertFalse($events->valid());
+        self::assertTrue($source->isComplete());
+        self::assertNull($source->failureReason());
+        self::assertNull($this->checkpoint()->heartbeat['pong_deadline_at']);
+    }
+
     public function testDurableAcknowledgementCooperativelyPumpsTheNetworkLoop(): void
     {
         $loop = new HyperliquidDeterministicLoop();

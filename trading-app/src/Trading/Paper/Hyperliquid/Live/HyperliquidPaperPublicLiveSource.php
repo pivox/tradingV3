@@ -1277,14 +1277,17 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
 
     private function acceptPong(): void
     {
-        if (!$this->pongTimer instanceof TimerInterface
-            || $this->checkpoint->heartbeat['pong_deadline_at'] === null
+        if ($this->checkpoint->heartbeat['pong_deadline_at'] === null
+            || (!$this->pongTimer instanceof TimerInterface
+                && !$this->healthyStopRequested)
         ) {
             throw new HyperliquidPaperLiveIntegrityException(
                 'hyperliquid_paper_public_message_invalid',
             );
         }
-        $this->loop->cancelTimer($this->pongTimer);
+        if ($this->pongTimer instanceof TimerInterface) {
+            $this->loop->cancelTimer($this->pongTimer);
+        }
         $this->pongTimer = null;
         $this->checkpoint = $this->checkpointStore->save(
             $this->checkpoint->withHeartbeat(
@@ -1293,7 +1296,9 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
                 null,
             ),
         );
-        $this->scheduleHeartbeat();
+        if (!$this->healthyStopRequested) {
+            $this->scheduleHeartbeat();
+        }
     }
 
     private function beginReconnect(string $reason): void
