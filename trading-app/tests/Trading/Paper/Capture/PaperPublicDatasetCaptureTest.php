@@ -8,6 +8,7 @@ use App\Trading\Paper\Capture\PaperPublicDatasetCapture;
 use App\Trading\Paper\Capture\PaperPublicLiveManifestFactory;
 use App\Trading\Paper\Dataset\PaperDatasetRecorder;
 use App\Trading\Paper\Dataset\PaperDatasetState;
+use App\Trading\Paper\MarketData\PaperDurableBatchSourceInterface;
 use App\Trading\Paper\MarketData\PaperLiveMarketDataSourceInterface;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
@@ -97,6 +98,33 @@ final class PaperPublicDatasetCaptureTest extends TestCase
         );
 
         self::assertSame([$events[0]->eventId, $events[1]->eventId], $observed);
+    }
+
+    public function testCommitsOneDurableSourceBatchBeforeItsBoundaryAcknowledgement(): void
+    {
+        $recorder = $this->recorder('durable-batch-mainnet');
+        $events = [$this->event('1', 1), $this->event('2', 2)];
+        $countsAtAcknowledge = [];
+        $source = new BatchDatasetOnlyCaptureSource(
+            $events,
+            static function () use ($recorder, &$countsAtAcknowledge): void {
+                $countsAtAcknowledge[] = $recorder->manifest()->eventCount;
+            },
+        );
+        $observed = [];
+
+        $manifest = (new PaperPublicDatasetCapture())->run(
+            $recorder,
+            $source,
+            static function (PaperMarketEvent $event) use ($recorder, &$observed): void {
+                self::assertSame(2, $recorder->manifest()->eventCount);
+                $observed[] = $event->eventId;
+            },
+        );
+
+        self::assertSame([0, 2], $countsAtAcknowledge);
+        self::assertSame([$events[0]->eventId, $events[1]->eventId], $observed);
+        self::assertSame(PaperDatasetState::COMPLETE, $manifest->state);
     }
 
     public function testPersistsIncompleteAndRethrowsAStableSourceFailure(): void
@@ -197,5 +225,59 @@ final class DatasetOnlyCaptureSource implements PaperLiveMarketDataSourceInterfa
     public function failureReason(): ?string
     {
         return $this->failure?->getMessage();
+    }
+}
+
+final class BatchDatasetOnlyCaptureSource implements PaperDurableBatchSourceInterface
+{
+    private int $position = 0;
+
+    /**
+     * @param list<PaperMarketEvent> $events
+     * @param \Closure(): void $onAcknowledge
+     */
+    public function __construct(
+        private readonly array $events,
+        private readonly \Closure $onAcknowledge,
+    ) {
+    }
+
+    public function venue(): PaperMarketDataVenue
+    {
+        return PaperMarketDataVenue::OKX;
+    }
+
+    public function events(): iterable
+    {
+        yield from $this->events;
+    }
+
+    public function pendingDurableBatchSize(): int
+    {
+        return \count($this->events) - $this->position;
+    }
+
+    public function acknowledge(string $eventId): void
+    {
+        ($this->onAcknowledge)();
+        ++$this->position;
+    }
+
+    public function stop(): void
+    {
+    }
+
+    public function isComplete(): bool
+    {
+        return true;
+    }
+
+    public function requestHealthyOperatorStop(): void
+    {
+    }
+
+    public function failureReason(): ?string
+    {
+        return null;
     }
 }

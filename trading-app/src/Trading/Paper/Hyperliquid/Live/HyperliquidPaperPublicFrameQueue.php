@@ -22,7 +22,13 @@ final class HyperliquidPaperPublicFrameQueue
             );
         }
 
-        $this->frames[] = $frame;
+        // A heartbeat response must not expire behind a burst of market frames.
+        // Market frames themselves retain their original FIFO order.
+        if ($this->isPong($frame)) {
+            array_unshift($this->frames, $frame);
+        } else {
+            $this->frames[] = $frame;
+        }
         $this->bytes += $frameBytes;
     }
 
@@ -57,5 +63,20 @@ final class HyperliquidPaperPublicFrameQueue
     {
         $this->frames = [];
         $this->bytes = 0;
+    }
+
+    private function isPong(string $frame): bool
+    {
+        if (!str_contains($frame, 'pong')) {
+            return false;
+        }
+
+        try {
+            return json_decode($frame, true, 512, \JSON_THROW_ON_ERROR) === [
+                'channel' => 'pong',
+            ];
+        } catch (\JsonException) {
+            return false;
+        }
     }
 }

@@ -16,5 +16,12 @@ interface HyperliquidPaperPublicWebSocketTransportInterface
     /** @param array<string, mixed> $message */
     public function send(array $message): void;
 
+    public function pauseReading(): void;
+
+    public function resumeReading(): void;
+
+    /** Stop new socket ingress while retaining buffered frames for resumeReading(). */
+    public function stopIngress(): void;
+
     public function close(): void;
 }

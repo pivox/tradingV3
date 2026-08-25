@@ -11,14 +11,14 @@ use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperMarketEventNormalizer;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
-use App\Trading\Paper\MarketData\PaperLiveMarketDataSourceInterface;
+use App\Trading\Paper\MarketData\PaperDurableBatchSourceInterface;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\TimerInterface;
 use Symfony\Component\Clock\ClockInterface;
 
-final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourceInterface
+final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 {
     private readonly HyperliquidPaperPublicSubscriptionSet $subscriptions;
     private readonly HyperliquidPaperPublicFrameDecoder $decoder;
@@ -29,6 +29,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
     private ?\Throwable $transportFailure = null;
     private bool $stopped = false;
     private int $activeGeneration = 0;
+    private bool $transportReadingPaused = false;
 
     private bool $healthyStopRequested = false;
     private ?TimerInterface $heartbeatTimer = null;
@@ -36,6 +37,9 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
     private ?TimerInterface $reconnectTimer = null;
     private ?TimerInterface $fundingTimer = null;
     private bool $fundingRefreshDue = false;
+
+    /** @var list<array{decoded: array{kind: string, data?: mixed}, frame: string}> */
+    private array $deferredDecodedFrames = [];
 
     /** @var list<string> */
     private array $preReadyFrames = [];
@@ -155,9 +159,6 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                     $this->checkpoint->withPhase('fresh'),
                 );
             }
-            $this->connectAndSubscribe();
-            $this->awaitSubscriptions();
-            $this->throwPendingTransportFailure();
             if ($this->restClient instanceof HyperliquidPaperPublicRestClientInterface) {
                 if ($this->checkpoint->initialCandleWindowEnds === [
                     'BTC' => null,
@@ -182,6 +183,9 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 ) as $candle) {
                     yield from $this->yieldWarmupCandle($candle);
                 }
+                $this->connectAndSubscribe();
+                $this->awaitSubscriptions();
+                $this->throwPendingTransportFailure();
                 yield from $this->yieldCandidates([
                     ...($this->metadataClient === null ? [] : $this->metadataEvents()),
                     ...($this->fundingClient === null ? [] : $this->fundingEvents()),
@@ -194,6 +198,9 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 $this->scheduleHeartbeat();
                 $this->scheduleFundingRefresh();
             } else {
+                $this->connectAndSubscribe();
+                $this->awaitSubscriptions();
+                $this->throwPendingTransportFailure();
                 $this->checkpoint = $this->checkpointStore->save(
                     $this->checkpoint->withPhase('streaming'),
                 );
@@ -225,6 +232,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             if ($this->checkpoint->phase === 'stopping'
                 && $this->queue->count() === 0
                 && $this->preReadyFrames === []
+                && $this->deferredDecodedFrames === []
             ) {
                 if ($this->checkpoint->pendingEvent !== null) {
                     throw new HyperliquidPaperLiveIntegrityException(
@@ -262,6 +270,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             if ($received === null) {
                 continue;
             }
+            $received = $this->coalesceQueuedTradeFrames($received);
             yield from $this->processDecoded(
                 $received['decoded'],
                 $received['frame'],
@@ -340,6 +349,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 }
                 try {
                     $this->queue->enqueue($frame);
+                    $this->pauseTransportReadingAtHighWater();
                 } catch (\Throwable $failure) {
                     $this->transportFailure = $failure;
                     $this->transport->close();
@@ -361,6 +371,14 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             },
             function (\Throwable $failure) use ($generation): void {
                 if ($generation !== $this->activeGeneration || $this->stopped) {
+                    return;
+                }
+                if ($failure instanceof HyperliquidPaperLiveIntegrityException
+                    && $failure->getMessage() === 'market_data_backpressure_exhausted'
+                ) {
+                    $this->transportFailure = $failure;
+                    $this->loop->stop();
+
                     return;
                 }
                 if (\in_array($this->checkpoint->phase, ['streaming', 'reconnecting'], true)) {
@@ -398,7 +416,15 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
     /** @return array{decoded: array{kind: string, data?: mixed}, frame: string}|null */
     private function nextDecodedFrame(): ?array
     {
-        $frame = $this->dequeuePreReadyFrame() ?? $this->nextTransportFrame();
+        $deferred = array_shift($this->deferredDecodedFrames);
+        if ($deferred !== null) {
+            return $deferred;
+        }
+
+        $frame = $this->dequeuePreReadyFrame();
+        if ($frame === null) {
+            $frame = $this->nextTransportFrame();
+        }
         if ($frame === null) {
             return null;
         }
@@ -407,6 +433,54 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             'decoded' => $this->decoder->decode($frame),
             'frame' => $frame,
         ];
+    }
+
+    /**
+     * @param array{decoded: array{kind: string, data?: mixed}, frame: string} $received
+     * @return array{decoded: array{kind: string, data?: mixed}, frame: string}
+     */
+    private function coalesceQueuedTradeFrames(#[\SensitiveParameter] array $received): array
+    {
+        if ($received['decoded']['kind'] !== 'trades'
+            || !\is_array($received['decoded']['data'] ?? null)
+        ) {
+            return $received;
+        }
+
+        $rows = $received['decoded']['data'];
+        while (\count($rows) < HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS
+            && $this->queue->count() > 0
+        ) {
+            $next = $this->nextDecodedFrame();
+            if ($next === null) {
+                break;
+            }
+            if ($next['decoded']['kind'] === 'pong') {
+                $this->acceptPong();
+
+                continue;
+            }
+            if ($next['decoded']['kind'] !== 'trades'
+                || !\is_array($next['decoded']['data'] ?? null)
+            ) {
+                array_unshift($this->deferredDecodedFrames, $next);
+
+                break;
+            }
+
+            $available = HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS - \count($rows);
+            $rows = [...$rows, ...array_slice($next['decoded']['data'], 0, $available)];
+            $remaining = array_slice($next['decoded']['data'], $available);
+            if ($remaining !== []) {
+                $next['decoded']['data'] = $remaining;
+                array_unshift($this->deferredDecodedFrames, $next);
+
+                break;
+            }
+        }
+        $received['decoded']['data'] = $rows;
+
+        return $received;
     }
 
     private function nextTransportFrame(): ?string
@@ -441,8 +515,35 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         if ($frame === null) {
             return null;
         }
+        $this->resumeTransportReadingAfterDrain();
 
         return $frame;
+    }
+
+    private function pauseTransportReadingAtHighWater(): void
+    {
+        if ($this->transportReadingPaused
+            || ($this->queue->count() < HyperliquidPaperLivePolicy::NETWORK_PUMP_FRAME_HIGH_WATER
+                && $this->queue->bytes() < HyperliquidPaperLivePolicy::NETWORK_PUMP_BYTE_HIGH_WATER)
+        ) {
+            return;
+        }
+
+        $this->transport->pauseReading();
+        $this->transportReadingPaused = true;
+    }
+
+    private function resumeTransportReadingAfterDrain(): void
+    {
+        if (!$this->transportReadingPaused
+            || $this->queue->count() > HyperliquidPaperLivePolicy::NETWORK_RESUME_FRAME_LOW_WATER
+            || $this->queue->bytes() > HyperliquidPaperLivePolicy::NETWORK_RESUME_BYTE_LOW_WATER
+        ) {
+            return;
+        }
+
+        $this->transportReadingPaused = false;
+        $this->transport->resumeReading();
     }
 
     private function deferPreReadyFrame(#[\SensitiveParameter] string $frame): void
@@ -478,6 +579,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
     {
         $this->preReadyFrames = [];
         $this->preReadyFrameBytes = 0;
+        $this->deferredDecodedFrames = [];
     }
 
     private function pendingTransportFailure(): ?\Throwable
@@ -534,7 +636,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             foreach ($this->checkpoint->tradeIdentityHistory as $entry) {
                 $known[$entry['identity_hash']] = $entry['assignment_digest'];
             }
-            $candidates = [];
+            $candidateRows = [];
             foreach ($decoded['data'] as $row) {
                 if (!\is_array($row)) {
                     throw new \LogicException();
@@ -555,13 +657,9 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 }
                 $known[$fingerprint['identity_hash']]
                     = $fingerprint['assignment_digest'];
-                $candidates[] = [
-                    'event' => $this->normalizer->liveTrade($row),
-                    'identity_hash' => $fingerprint['identity_hash'],
-                    'assignment_digest' => $fingerprint['assignment_digest'],
-                ];
+                $candidateRows[] = $row;
             }
-            yield from $this->yieldTradeCandidates($candidates);
+            yield from $this->yieldTradeRows($candidateRows);
 
             return;
         }
@@ -746,42 +844,47 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
     }
 
     /**
-     * @param list<array{
-     *     event: PaperMarketEvent,
-     *     identity_hash: string,
-     *     assignment_digest: string
-     * }> $candidates
+     * @param list<array<string, mixed>> $rows
      * @return \Generator<int, PaperMarketEvent>
      */
-    private function yieldTradeCandidates(array $candidates): \Generator
+    private function yieldTradeRows(array $rows): \Generator
     {
-        if ($candidates === []) {
+        if ($rows === []) {
             return;
         }
-        $first = array_shift($candidates);
+        $chunks = array_chunk(
+            $rows,
+            HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS,
+        );
+        foreach ($chunks as $chunk) {
+            yield from $this->yieldTradeChunk($chunk);
+        }
+    }
+
+    /**
+     * @param non-empty-list<array<string, mixed>> $rows
+     * @return \Generator<int, PaperMarketEvent>
+     */
+    private function yieldTradeChunk(array $rows): \Generator
+    {
+        $first = array_shift($rows);
         if (!\is_array($first)) {
             throw new \LogicException();
         }
+        $fingerprint = $this->normalizer->liveTradeFingerprint($first);
+        $event = $this->normalizer->liveTrade($first);
         $this->checkpoint = $this->checkpointStore->save(
             $this->checkpoint
                 ->withOrdinalState($this->ordinals->snapshot())
-                ->withPending($first['event'], [
-                    'remaining_events' => array_map(
-                        static fn (array $candidate): array => [
-                            'event' => $candidate['event']->toArray(),
-                            'after_ack' => [
-                                'remember_trade_identity' => [
-                                    'identity_hash' => $candidate['identity_hash'],
-                                    'assignment_digest' => $candidate['assignment_digest'],
-                                ],
-                            ],
-                        ],
-                        $candidates,
+                ->withPending($event, [
+                    'remaining_trade_rows' => array_map(
+                        self::compactTradeRow(...),
+                        $rows,
                     ),
                     'after_ack' => [
                         'remember_trade_identity' => [
-                            'identity_hash' => $first['identity_hash'],
-                            'assignment_digest' => $first['assignment_digest'],
+                            'identity_hash' => $fingerprint['identity_hash'],
+                            'assignment_digest' => $fingerprint['assignment_digest'],
                         ],
                     ],
                 ]),
@@ -805,6 +908,19 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 );
             }
         }
+    }
+
+    public function pendingDurableBatchSize(): int
+    {
+        $remainingTradeRows = $this->checkpoint->pendingContinuation['remaining_trade_rows'] ?? null;
+        if ($remainingTradeRows === null) {
+            return 1;
+        }
+        if (!\is_array($remainingTradeRows) || !array_is_list($remainingTradeRows)) {
+            throw new \LogicException();
+        }
+
+        return \count($remainingTradeRows) + 1;
     }
 
     public function acknowledge(string $eventId): void
@@ -845,6 +961,43 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 $identity['assignment_digest'],
             );
         }
+        $remainingTradeRows = $continuation['remaining_trade_rows'] ?? null;
+        if ($remainingTradeRows !== null) {
+            if (!\is_array($remainingTradeRows)
+                || !array_is_list($remainingTradeRows)
+            ) {
+                throw new \LogicException();
+            }
+            $nextRow = array_shift($remainingTradeRows);
+            if ($nextRow !== null) {
+                if (!\is_array($nextRow) || !array_is_list($nextRow)) {
+                    throw new \LogicException();
+                }
+                $nextRow = self::expandTradeRow($nextRow);
+                $fingerprint = $this->normalizer->liveTradeFingerprint($nextRow);
+                $nextEvent = $this->normalizer->liveTrade($nextRow);
+                $next = $next
+                    ->withOrdinalState($this->ordinals->snapshot())
+                    ->withPending($nextEvent, [
+                        'remaining_trade_rows' => $remainingTradeRows,
+                        'after_ack' => [
+                            'remember_trade_identity' => [
+                                'identity_hash' => $fingerprint['identity_hash'],
+                                'assignment_digest' => $fingerprint['assignment_digest'],
+                            ],
+                        ],
+                    ]);
+            }
+            $this->checkpoint = $nextRow === null
+                ? $this->checkpointStore->save($next)
+                : $next;
+            if ($nextRow === null) {
+                $this->pumpNetworkLoop();
+            }
+
+            return;
+        }
+
         $remaining = $continuation['remaining_events'] ?? null;
         if (!\is_array($remaining) || !array_is_list($remaining)) {
             throw new \LogicException();
@@ -875,6 +1028,76 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             );
         }
         $this->checkpoint = $this->checkpointStore->save($next);
+        if ($nextEventState === null) {
+            $this->pumpNetworkLoop();
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return list<mixed>
+     */
+    private static function compactTradeRow(array $row): array
+    {
+        return [
+            $row['coin'] ?? null,
+            $row['side'] ?? null,
+            $row['px'] ?? null,
+            $row['sz'] ?? null,
+            $row['hash'] ?? null,
+            $row['time'] ?? null,
+            $row['tid'] ?? null,
+            $row['users'] ?? null,
+        ];
+    }
+
+    /**
+     * @param list<mixed> $row
+     * @return array<string, mixed>
+     */
+    private static function expandTradeRow(array $row): array
+    {
+        if (\count($row) !== 8) {
+            throw new \LogicException();
+        }
+
+        return [
+            'coin' => $row[0],
+            'side' => $row[1],
+            'px' => $row[2],
+            'sz' => $row[3],
+            'hash' => $row[4],
+            'time' => $row[5],
+            'tid' => $row[6],
+            'users' => $row[7],
+        ];
+    }
+
+    private function pumpNetworkLoop(): void
+    {
+        if ($this->checkpoint->phase !== 'streaming'
+            || $this->stopped
+            || $this->healthyStopRequested
+            || $this->transportReadingPaused
+            || $this->queue->count() > 0
+            || $this->preReadyFrames !== []
+            || $this->deferredDecodedFrames !== []
+        ) {
+            return;
+        }
+
+        $sliceTimer = $this->loop->addTimer(
+            HyperliquidPaperLivePolicy::NETWORK_PUMP_SECONDS,
+            function (): void {
+                $this->loop->stop();
+            },
+        );
+
+        try {
+            $this->loop->run();
+        } finally {
+            $this->loop->cancelTimer($sliceTimer);
+        }
     }
 
     public function stop(): void
@@ -895,6 +1118,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         ++$this->activeGeneration;
         $this->cancelTimers();
         $this->transport->close();
+        $this->transportReadingPaused = false;
         $this->queue->clear();
         $this->clearPreReadyFrames();
         $this->loop->stop();
@@ -921,8 +1145,9 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             );
         }
         $this->healthyStopRequested = true;
-        ++$this->activeGeneration;
         $this->cancelTimers();
+        $this->transport->stopIngress();
+        $this->resumeTransportReadingAfterDrain();
         $this->persistHealthyStopWhenDrained();
         $this->loop->stop();
     }
@@ -932,8 +1157,10 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         if (!$this->healthyStopRequested
             || $this->checkpoint->phase !== 'streaming'
             || $this->checkpoint->pendingEvent !== null
+            || $this->transportReadingPaused
             || $this->queue->count() !== 0
             || $this->preReadyFrames !== []
+            || $this->deferredDecodedFrames !== []
         ) {
             return;
         }
@@ -994,7 +1221,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                     );
                     $this->schedulePongTimeout($generation);
                 } catch (\Throwable $failure) {
-                    $this->transportFailure = new HyperliquidPaperLiveIntegrityException(
+                    $this->transportFailure ??= new HyperliquidPaperLiveIntegrityException(
                         'hyperliquid_paper_public_protocol_error',
                     );
                     $this->loop->stop();
@@ -1050,14 +1277,17 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
 
     private function acceptPong(): void
     {
-        if (!$this->pongTimer instanceof TimerInterface
-            || $this->checkpoint->heartbeat['pong_deadline_at'] === null
+        if ($this->checkpoint->heartbeat['pong_deadline_at'] === null
+            || (!$this->pongTimer instanceof TimerInterface
+                && !$this->healthyStopRequested)
         ) {
             throw new HyperliquidPaperLiveIntegrityException(
                 'hyperliquid_paper_public_message_invalid',
             );
         }
-        $this->loop->cancelTimer($this->pongTimer);
+        if ($this->pongTimer instanceof TimerInterface) {
+            $this->loop->cancelTimer($this->pongTimer);
+        }
         $this->pongTimer = null;
         $this->checkpoint = $this->checkpointStore->save(
             $this->checkpoint->withHeartbeat(
@@ -1066,7 +1296,9 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 null,
             ),
         );
-        $this->scheduleHeartbeat();
+        if (!$this->healthyStopRequested) {
+            $this->scheduleHeartbeat();
+        }
     }
 
     private function beginReconnect(string $reason): void
@@ -1074,6 +1306,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         $this->cancelTimers();
         ++$this->activeGeneration;
         $this->transport->close();
+        $this->transportReadingPaused = false;
         $this->queue->clear();
         $this->clearPreReadyFrames();
         $this->transportFailure = null;
@@ -1134,6 +1367,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         try {
             $this->cancelTimers();
             $this->transport->close();
+            $this->transportReadingPaused = false;
             $this->queue->clear();
             $this->clearPreReadyFrames();
             $this->loop->stop();

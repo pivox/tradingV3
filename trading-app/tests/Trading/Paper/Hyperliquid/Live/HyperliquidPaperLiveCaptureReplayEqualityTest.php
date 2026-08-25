@@ -117,6 +117,23 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         );
     }
 
+    public function testRestWarmupCandlesBeforeInitialSnapshotCertify(): void
+    {
+        [$directory, $events] = $this->completeDataset(
+            PaperMarketDataNetwork::MAINNET,
+            restWarmup: true,
+        );
+
+        self::assertSame(
+            PaperDatasetState::COMPLETE,
+            (new PaperDatasetVerifier())->verifyForBaseline($directory)->state,
+        );
+        self::assertSame(
+            'rest_candle_snapshot',
+            $events[0]->payload['origin'] ?? null,
+        );
+    }
+
     public function testMissingTerminalCheckpointIsRejectedForLiveBaseline(): void
     {
         [$directory] = $this->completeDataset(PaperMarketDataNetwork::MAINNET);
@@ -230,6 +247,7 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         bool $periodicFunding = false,
         int $periodicFundingEpoch = 1,
         bool $multipleCandleFrontiers = false,
+        bool $restWarmup = false,
     ): array
     {
         $datasetId = 'paper-hyperliquid-equality-' . $network->value;
@@ -297,6 +315,20 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
             $ordinals,
             new MockClock('2026-07-29T10:02:00Z'),
         );
+        $warmupEvents = $restWarmup ? [
+            $normalizer->candle(HyperliquidCandle::fromApiRow([
+                'T' => $baseMilliseconds - 1,
+                'c' => '2',
+                'h' => '3',
+                'i' => '1m',
+                'l' => '0.5',
+                'n' => 5,
+                'o' => '1',
+                's' => 'BTC',
+                't' => $baseMilliseconds - 60_000,
+                'v' => '4',
+            ], 'BTC', '1m')),
+        ] : [];
         $btcMetadata = $normalizer->instrumentMetadata([
             'coin' => 'BTC', 'asset_id' => 0, 'sz_decimals' => 5, 'max_leverage' => 50,
         ], 1);
@@ -312,8 +344,8 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         $btcSnapshot = $btcSnapshotNormalizer->snapshotBoundary('BTC', 'initial', 1);
         $ethSnapshot = $ethSnapshotNormalizer->snapshotBoundary('ETH', 'initial', 1);
         $events = $omitSnapshots ? [] : ($metadataAfterSnapshots
-            ? [$btcSnapshot, $ethSnapshot, $btcMetadata, $btcFunding, $ethMetadata, $ethFunding]
-            : [$btcMetadata, $btcFunding, $btcSnapshot, $ethMetadata, $ethFunding, $ethSnapshot]);
+            ? [...$warmupEvents, $btcSnapshot, $ethSnapshot, $btcMetadata, $btcFunding, $ethMetadata, $ethFunding]
+            : [...$warmupEvents, $btcMetadata, $btcFunding, $btcSnapshot, $ethMetadata, $ethFunding, $ethSnapshot]);
         $events[] = $marketNormalizer->liveTrade([
                 'coin' => 'BTC',
                 'side' => 'B',

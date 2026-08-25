@@ -206,6 +206,18 @@ final class FactoryNoopHyperliquidTransport implements
     {
     }
 
+    public function pauseReading(): void
+    {
+    }
+
+    public function resumeReading(): void
+    {
+    }
+
+    public function stopIngress(): void
+    {
+    }
+
     public function close(): void
     {
     }

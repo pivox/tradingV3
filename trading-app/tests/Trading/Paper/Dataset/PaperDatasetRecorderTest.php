@@ -76,6 +76,110 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame(1, $recorder->manifest()->eventCount);
     }
 
+    public function testAppendBatchPublishesOrderedEventsWithOneDurableAppend(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $events = [
+            $this->event(sequence: '1'),
+            $this->event(sequence: '2', microseconds: 2),
+        ];
+
+        self::assertSame(
+            [PaperDatasetAppendResult::APPENDED, PaperDatasetAppendResult::APPENDED],
+            $recorder->appendBatch($events),
+        );
+
+        $expected = implode('', array_map(
+            static fn (PaperMarketEvent $event): string => CanonicalJson::encode($event->toArray()) . "\n",
+            $events,
+        ));
+        self::assertSame($expected, file_get_contents($this->datasetDirectory() . '/events.ndjson'));
+        self::assertSame(2, $recorder->manifest()->eventCount);
+        self::assertSame($events[1]->eventId, $recorder->manifest()->lastEventId);
+        self::assertSame(1, $filesystem->eventSyncs);
+        self::assertLessThanOrEqual(3, $filesystem->eventSnapshotSeeks);
+        self::assertSame([
+            'version' => 2,
+            'dataset_id' => $manifest->datasetId,
+            'event_ids' => [$events[0]->eventId, $events[1]->eventId],
+            'original_events_bytes' => 0,
+            'original_events_sha256' => hash('sha256', ''),
+            'canonical_suffix_base64' => base64_encode($expected),
+            'canonical_suffix_sha256' => hash('sha256', $expected),
+        ], $filesystem->observedAppendIntent);
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        self::assertSame(
+            [PaperDatasetAppendResult::REPLAYED, PaperDatasetAppendResult::REPLAYED],
+            $restarted->appendBatch($events),
+        );
+    }
+
+    public function testRestartTruncatesAPartialDurableBatchSuffix(): void
+    {
+        $manifest = $this->manifest();
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $events = [
+            $this->event(sequence: '1'),
+            $this->event(sequence: '2', microseconds: 2),
+        ];
+        $suffix = implode('', array_map(
+            static fn (PaperMarketEvent $event): string => CanonicalJson::encode($event->toArray()) . "\n",
+            $events,
+        ));
+        $this->stageBatchAppendIntent($manifest, $events, '', $suffix);
+        $partial = substr($suffix, 0, -17);
+        self::assertSame(
+            \strlen($partial),
+            file_put_contents($this->datasetDirectory() . '/events.ndjson', $partial, FILE_APPEND),
+        );
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+
+        self::assertSame('', file_get_contents($this->datasetDirectory() . '/events.ndjson'));
+        self::assertFileDoesNotExist($this->appendIntentPath());
+        self::assertSame(0, $restarted->manifest()->eventCount);
+        self::assertSame(
+            [PaperDatasetAppendResult::APPENDED, PaperDatasetAppendResult::APPENDED],
+            $restarted->appendBatch($events),
+        );
+    }
+
+    public function testRestartPreservesACompleteDurableBatchSuffix(): void
+    {
+        $manifest = $this->manifest();
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $events = [
+            $this->event(sequence: '1'),
+            $this->event(sequence: '2', microseconds: 2),
+        ];
+        $suffix = implode('', array_map(
+            static fn (PaperMarketEvent $event): string => CanonicalJson::encode($event->toArray()) . "\n",
+            $events,
+        ));
+        $this->stageBatchAppendIntent($manifest, $events, '', $suffix);
+        self::assertSame(
+            \strlen($suffix),
+            file_put_contents($this->datasetDirectory() . '/events.ndjson', $suffix, FILE_APPEND),
+        );
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+
+        self::assertSame($suffix, file_get_contents($this->datasetDirectory() . '/events.ndjson'));
+        self::assertFileDoesNotExist($this->appendIntentPath());
+        self::assertSame(2, $restarted->manifest()->eventCount);
+        self::assertSame(
+            [PaperDatasetAppendResult::REPLAYED, PaperDatasetAppendResult::REPLAYED],
+            $restarted->appendBatch($events),
+        );
+    }
+
     public function testDatasetUsesAnEmptyPrivateDurableTransactionLock(): void
     {
         new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
@@ -3939,6 +4043,29 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertTrue(chmod($this->appendIntentPath(), 0600));
     }
 
+    /** @param list<PaperMarketEvent> $events */
+    private function stageBatchAppendIntent(
+        PaperDatasetManifest $manifest,
+        array $events,
+        #[\SensitiveParameter] string $committed,
+        #[\SensitiveParameter] string $canonicalSuffix,
+    ): void {
+        $marker = json_encode([
+            'version' => 2,
+            'dataset_id' => $manifest->datasetId,
+            'event_ids' => array_map(
+                static fn (PaperMarketEvent $event): string => $event->eventId,
+                $events,
+            ),
+            'original_events_bytes' => \strlen($committed),
+            'original_events_sha256' => hash('sha256', $committed),
+            'canonical_suffix_base64' => base64_encode($canonicalSuffix),
+            'canonical_suffix_sha256' => hash('sha256', $canonicalSuffix),
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+        self::assertSame(\strlen($marker), file_put_contents($this->appendIntentPath(), $marker));
+        self::assertTrue(chmod($this->appendIntentPath(), 0600));
+    }
+
     private function leaveAuthenticTerminalTransition(
         PaperDatasetManifest $manifest,
         PaperDatasetState $terminalState = PaperDatasetState::COMPLETE,
@@ -4076,6 +4203,7 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public int $manifestDirectorySyncs = 0;
     public int $manifestPublications = 0;
     public int $eventSyncs = 0;
+    public int $eventSnapshotSeeks = 0;
     public int $appendIntentSyncs = 0;
     public int $appendIntentDirectorySyncs = 0;
     public int $appendIntentReads = 0;
@@ -4765,6 +4893,9 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     /** @param resource $handle */
     public function seek($handle, int $offset, int $whence, string $operation): bool
     {
+        if ($operation === 'paper_dataset_events_snapshot_validation') {
+            ++$this->eventSnapshotSeeks;
+        }
         if ($this->publicationMutationTrigger === 'append'
             && $this->publicationAppendWriteObserved
             && $operation === 'paper_dataset_events_read_failed'
