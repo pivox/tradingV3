@@ -24,6 +24,8 @@ use Symfony\Component\Clock\ClockInterface;
 final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 {
     private const MAX_WARMUP_EVENT_BATCH = 100;
+    private const MAX_DURABLE_FRAME_BATCH = 32;
+    private const MAX_DURABLE_EVENT_BATCH = 128;
 
     private readonly OkxPaperInstrumentMap $instruments;
     private readonly OkxPaperPublicSubscriptionSet $subscriptions;
@@ -99,8 +101,10 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 
     private ?string $activeQueuedSocket = null;
     private int $activeQueuedEventsRemaining = 0;
+    private int $activeQueuedFramesRemaining = 0;
 
     private ?OkxPaperLiveCheckpoint $durableEventBatchBase = null;
+    private bool $durableFrameBatchingEnabled = false;
 
     private bool $healthyStopRequested = false;
     private bool $healthyStopAdmissionQuiesced = false;
@@ -414,6 +418,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 
     public function pendingDurableBatchSize(): int
     {
+        if ($this->activeQueuedSocket !== null) {
+            $this->durableFrameBatchingEnabled = true;
+        }
         if ($this->activeQueuedEventsRemaining > 1
             && !$this->durableEventBatchBase instanceof OkxPaperLiveCheckpoint
         ) {
@@ -1408,7 +1415,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         foreach ($events as $index => $accepted) {
             $event = $accepted['event'];
             $frontier = $accepted['frontier'];
-            $pendingFrontier = ['stream' => $stream, 'frontier' => $frontier->toArray()];
+            $eventStream = $transition === [] ? $this->streamForEvent($event) : $stream;
+            $pendingFrontier = [
+                'stream' => $eventStream,
+                'frontier' => $frontier->toArray(),
+            ];
             if ($this->durableEventBatchBase instanceof OkxPaperLiveCheckpoint) {
                 $this->checkpoint = $this->checkpointStore->preparePending(
                     $this->checkpoint,
@@ -4161,34 +4172,57 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         OkxPaperPublicFrameQueue $queue,
         bool $business,
     ): array {
-        $frame = $queue->peek();
-        if ($frame === null) {
+        $frames = array_slice(
+            $queue->frames(),
+            0,
+            $this->durableFrameBatchingEnabled ? self::MAX_DURABLE_FRAME_BATCH : 1,
+        );
+        if ($frames === []) {
             return [];
         }
-        $message = $business
-            ? $this->decoder->decodeBusiness($frame)
-            : $this->decoder->decodePublic($frame);
-        try {
-            $events = $this->eventsFromMessage($message, $business);
-        } catch (\RuntimeException $exception) {
-            if ($business
-                || $exception->getMessage() !== 'okx_paper_book_sequence_gap'
-                || !$this->isBookUpdate($message)
+        $events = [];
+        $framesConsumed = 0;
+        foreach ($frames as $frame) {
+            $message = $business
+                ? $this->decoder->decodeBusiness($frame)
+                : $this->decoder->decodePublic($frame);
+            $messageRows = $message['data'] ?? null;
+            if ($events !== []
+                && \is_array($messageRows)
+                && \count($events) + \count($messageRows) > self::MAX_DURABLE_EVENT_BATCH
             ) {
-                if (\in_array($exception->getMessage(), [
-                    'market_event_identity_conflict',
-                    'market_data_gap_unresolved',
-                ], true)) {
-                    $this->failTerminal($exception->getMessage(), $exception);
+                break;
+            }
+            try {
+                $frameEvents = $this->eventsFromMessage($message, $business);
+            } catch (\RuntimeException $exception) {
+                if ($business
+                    || $exception->getMessage() !== 'okx_paper_book_sequence_gap'
+                    || !$this->isBookUpdate($message)
+                ) {
+                    if (\in_array($exception->getMessage(), [
+                        'market_event_identity_conflict',
+                        'market_data_gap_unresolved',
+                    ], true)) {
+                        $this->failTerminal($exception->getMessage(), $exception);
+                    }
+
+                    throw $exception;
                 }
 
-                throw $exception;
-            }
+                if ($framesConsumed === 0) {
+                    return $this->startBookResync($message);
+                }
 
-            return $this->startBookResync($message);
+                break;
+            }
+            ++$framesConsumed;
+            array_push($events, ...$frameEvents);
         }
         if ($events === []) {
-            $queue->dequeue();
+            for ($index = 0; $index < $framesConsumed; ++$index) {
+                $queue->dequeue();
+            }
             $this->persistStreamingQueues();
             $this->rescheduleHeartbeatAfterQueueDrain(
                 $business ? 'business' : 'public',
@@ -4197,6 +4231,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         } else {
             $this->activeQueuedSocket = $business ? 'business' : 'public';
             $this->activeQueuedEventsRemaining = \count($events);
+            $this->activeQueuedFramesRemaining = $framesConsumed;
         }
 
         return $events;
@@ -4211,9 +4246,12 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $queue = $socket === 'public'
             ? $this->publicQueue
             : $this->businessQueue;
-        $queue->dequeue();
+        for ($index = 0; $index < $this->activeQueuedFramesRemaining; ++$index) {
+            $queue->dequeue();
+        }
         $this->activeQueuedSocket = null;
         $this->activeQueuedEventsRemaining = 0;
+        $this->activeQueuedFramesRemaining = 0;
         $this->persistStreamingQueues();
         $this->rescheduleHeartbeatAfterQueueDrain($socket, $queue);
     }
