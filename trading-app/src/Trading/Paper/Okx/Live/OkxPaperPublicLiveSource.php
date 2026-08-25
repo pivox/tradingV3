@@ -1401,17 +1401,29 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         callable $frontierForRow,
         bool $requireInitialEvent = false,
     ): \Generator {
+        if ($rows === []) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
         if ($this->requiresOverlap[$stream] ?? false) {
             $required = $this->checkpoint->streamFrontiers[$stream] ?? null;
             if (!$required instanceof OkxPaperStreamFrontier) {
                 throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
             }
             $overlap = null;
+            /** @var array<string, OkxPaperStreamFrontier> $prefixFrontiers */
+            $prefixFrontiers = [];
             foreach ($rows as $index => $row) {
                 $candidate = $frontierForRow($row);
                 if (!$candidate instanceof OkxPaperStreamFrontier
                     || !hash_equals($required->naturalIdentity, $candidate->naturalIdentity)
                 ) {
+                    if ($candidate instanceof OkxPaperStreamFrontier) {
+                        $this->assertWarmupPrefixIdentity(
+                            $stream,
+                            $candidate,
+                            $prefixFrontiers,
+                        );
+                    }
                     continue;
                 }
                 if (!hash_equals($required->canonicalDigest, $candidate->canonicalDigest)) {
@@ -1461,6 +1473,50 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             && ($this->checkpoint->streamFrontiers[$stream] ?? null) === null
         ) {
             throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
+        }
+    }
+
+    /**
+     * @param array<string, OkxPaperStreamFrontier> $prefixFrontiers
+     */
+    private function assertWarmupPrefixIdentity(
+        string $stream,
+        OkxPaperStreamFrontier $candidate,
+        array &$prefixFrontiers,
+    ): void {
+        $sourceKind = self::identitySourceKind($stream);
+        $observedKey = $sourceKind . '/' . $candidate->sourceIdentity;
+        $observed = $prefixFrontiers[$observedKey] ?? null;
+        if ($observed instanceof OkxPaperStreamFrontier
+            && !hash_equals($observed->canonicalDigest, $candidate->canonicalDigest)
+        ) {
+            throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
+        }
+        $prefixFrontiers[$observedKey] = $candidate;
+
+        $acknowledged = $this->acknowledgedIdentity($stream, $candidate);
+        if ($acknowledged === null) {
+            return;
+        }
+        $originCanonicalDigest = $sourceKind === 'rest'
+            ? $acknowledged['rest_canonical_digest']
+            : $acknowledged['ws_canonical_digest'];
+        if (!hash_equals(
+            $originCanonicalDigest ?? $acknowledged['overlap_digest'],
+            $originCanonicalDigest !== null
+                ? $candidate->canonicalDigest
+                : $candidate->overlapDigest,
+        )) {
+            throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
+        }
+        if ($originCanonicalDigest === null) {
+            $this->checkpoint = $this->checkpointStore
+                ->rememberAcknowledgedIdentityObservation(
+                    $this->checkpoint,
+                    $stream,
+                    $candidate,
+                    $sourceKind,
+                );
         }
     }
 
