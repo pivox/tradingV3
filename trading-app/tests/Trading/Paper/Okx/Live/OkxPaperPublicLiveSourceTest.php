@@ -222,6 +222,45 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         )));
     }
 
+    public function testWarmupAlignsTheThousandHourWindowToTheFourHourGrid(): void
+    {
+        $rest = Task7RestClient::withInitialDataset();
+        $hourlyRows = self::contiguousHourlyRows(1002);
+        $expectedWindow = array_slice($hourlyRows, 0, 1000);
+        $rest->candleRows['BTC-USDT-SWAP/1H'] = array_reverse(array_slice($hourlyRows, 702, 300));
+        $rest->historyCandlePages = [
+            array_reverse(array_slice($hourlyRows, 402, 300)),
+            array_reverse(array_slice($hourlyRows, 102, 300)),
+            array_reverse(array_slice($hourlyRows, 0, 102)),
+        ];
+        $source = $this->source(
+            $rest,
+            new Task7Transport(),
+            new Task7Transport(),
+            initialHourlyCandleTarget: 1000,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmupEvents($source, $events, 3);
+
+        $hourlyTimestamps = [];
+        for ($index = 0; $index < 1000; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $hourlyTimestamps[] = $event->exchangeTimestamp->format('Uv');
+            $source->acknowledge($event->eventId);
+            if ($index < 999) {
+                $events->next();
+            }
+        }
+
+        self::assertSame(array_column($expectedWindow, 0), $hourlyTimestamps);
+        self::assertSame(
+            '00',
+            $events->current()->exchangeTimestamp->modify('-999 hours')->format('H'),
+        );
+    }
+
     #[DataProvider('invalidInitialHourlyPaginationProvider')]
     public function testWarmupHourlyPaginationFailsClosedOnInvalidHistory(
         array $currentRows,

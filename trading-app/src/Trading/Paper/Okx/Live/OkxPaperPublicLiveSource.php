@@ -692,7 +692,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $cursor = (string) BigInteger::of($windowEnd)->plus(1);
         }
         for ($page = 0; $page < OkxPaperLivePolicy::MAX_INITIAL_HOURLY_HISTORY_PAGES; ++$page) {
-            if ($this->confirmedInitialHourlyCount($byTimestamp)
+            if ($this->confirmedInitialHourlyCountThrough($byTimestamp, $windowEnd)
                 >= $this->initialHourlyCandleTarget
             ) {
                 break;
@@ -705,7 +705,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $byTimestamp,
             );
         }
-        if ($this->confirmedInitialHourlyCount($byTimestamp)
+        if ($this->confirmedInitialHourlyCountThrough($byTimestamp, $windowEnd)
             < $this->initialHourlyCandleTarget
             || !isset($byTimestamp[$windowEnd])
             || ($byTimestamp[$windowEnd]['row'][8] ?? null) !== '1'
@@ -715,7 +715,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
         $confirmed = array_values(array_filter(
             $byTimestamp,
-            static fn (array $entry): bool => ($entry['row'][8] ?? null) === '1',
+            static fn (array $entry): bool => ($entry['row'][8] ?? null) === '1'
+                && self::compareUnsigned($entry['row'][0] ?? null, $windowEnd) <= 0,
         ));
         usort(
             $confirmed,
@@ -746,6 +747,14 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 continue;
             }
             $timestamp = $entry['row'][0] ?? null;
+            if ($this->initialHourlyCandleTarget === OkxPaperLivePolicy::INITIAL_HOURLY_CANDLE_TARGET
+                && !BigInteger::of($timestamp)
+                    ->minus(($this->initialHourlyCandleTarget - 1) * 3_600_000)
+                    ->mod(4 * 3_600_000)
+                    ->isZero()
+            ) {
+                continue;
+            }
             $newest = $newest === null || self::compareUnsigned($timestamp, $newest) > 0
                 ? $timestamp
                 : $newest;
@@ -755,6 +764,16 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
 
         return $newest;
+    }
+
+    /** @param array<string, array{canonical: string, row: array<array-key, mixed>}> $rows */
+    private function confirmedInitialHourlyCountThrough(array $rows, string $windowEnd): int
+    {
+        return \count(array_filter(
+            $rows,
+            static fn (array $entry): bool => ($entry['row'][8] ?? null) === '1'
+                && self::compareUnsigned($entry['row'][0] ?? null, $windowEnd) <= 0,
+        ));
     }
 
     /**
@@ -801,15 +820,6 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
 
         return $oldestNew;
-    }
-
-    /** @param array<string, array{canonical: string, row: array<array-key, mixed>}> $rows */
-    private function confirmedInitialHourlyCount(array $rows): int
-    {
-        return \count(array_filter(
-            $rows,
-            static fn (array $entry): bool => ($entry['row'][8] ?? null) === '1',
-        ));
     }
 
     /** @return array{kind: string, symbol: string, stream: string, stage: string} */
