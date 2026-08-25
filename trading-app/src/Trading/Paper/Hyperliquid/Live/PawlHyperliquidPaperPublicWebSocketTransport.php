@@ -18,6 +18,15 @@ final class PawlHyperliquidPaperPublicWebSocketTransport implements
 
     private ?object $connection = null;
     private int $generation = 0;
+    private bool $readingPaused = false;
+
+    /** @var list<string> */
+    private array $pausedFrames = [];
+
+    private int $pausedFrameBytes = 0;
+
+    /** @var null|\Closure(string): void */
+    private ?\Closure $onMessage = null;
 
     /** @param null|\Closure(string): PromiseInterface<object> $connector */
     public function __construct(
@@ -42,6 +51,7 @@ final class PawlHyperliquidPaperPublicWebSocketTransport implements
         $generation = ++$this->generation;
         $previous = $this->connection;
         $this->connection = null;
+        $this->resetInboundState();
         $previous?->close();
 
         ($this->connector)($this->config->webSocketUri)->then(
@@ -59,6 +69,7 @@ final class PawlHyperliquidPaperPublicWebSocketTransport implements
                 }
 
                 $this->connection = $connection;
+                $this->onMessage = $onMessage(...);
                 $connection->on(
                     'message',
                     function (mixed $message) use (
@@ -83,6 +94,32 @@ final class PawlHyperliquidPaperPublicWebSocketTransport implements
                             return;
                         }
 
+                        if ($this->readingPaused) {
+                            if (self::isPong($frame)) {
+                                $onMessage($frame);
+
+                                return;
+                            }
+                            $frameBytes = \strlen($frame);
+                            if (\count($this->pausedFrames)
+                                    >= HyperliquidPaperLivePolicy::MAX_QUEUED_FRAMES
+                                || $frameBytes
+                                    > HyperliquidPaperLivePolicy::MAX_QUEUED_BYTES
+                                        - $this->pausedFrameBytes
+                            ) {
+                                $this->close();
+                                $onError(new HyperliquidPaperLiveIntegrityException(
+                                    'market_data_backpressure_exhausted',
+                                ));
+
+                                return;
+                            }
+                            $this->pausedFrames[] = $frame;
+                            $this->pausedFrameBytes += $frameBytes;
+
+                            return;
+                        }
+
                         $onMessage($frame);
                     },
                 );
@@ -100,6 +137,7 @@ final class PawlHyperliquidPaperPublicWebSocketTransport implements
                         }
 
                         $this->connection = null;
+                        $this->resetInboundState();
                         $onClose(\is_int($code) ? $code : null);
                     },
                 );
@@ -138,11 +176,73 @@ final class PawlHyperliquidPaperPublicWebSocketTransport implements
         $this->connection->send(CanonicalJson::encode($message));
     }
 
+    public function pauseReading(): void
+    {
+        $connection = $this->connection;
+        if ($connection === null || $this->readingPaused) {
+            return;
+        }
+        $this->readingPaused = true;
+    }
+
+    public function resumeReading(): void
+    {
+        $connection = $this->connection;
+        if ($connection === null) {
+            return;
+        }
+        if (!$this->readingPaused) {
+            return;
+        }
+
+        $this->readingPaused = false;
+        while (!$this->isReadingPaused() && $this->pausedFrames !== []) {
+            $frame = array_shift($this->pausedFrames);
+            $this->pausedFrameBytes -= \strlen($frame);
+            $onMessage = $this->onMessage ?? throw new \LogicException(
+                'hyperliquid_paper_public_ws_not_connected',
+            );
+            $onMessage($frame);
+            if ($connection !== $this->connection) {
+                return;
+            }
+        }
+    }
+
     public function close(): void
     {
         ++$this->generation;
         $connection = $this->connection;
         $this->connection = null;
+        $this->resetInboundState();
         $connection?->close();
+    }
+
+    private function resetInboundState(): void
+    {
+        $this->readingPaused = false;
+        $this->pausedFrames = [];
+        $this->pausedFrameBytes = 0;
+        $this->onMessage = null;
+    }
+
+    private function isReadingPaused(): bool
+    {
+        return $this->readingPaused;
+    }
+
+    private static function isPong(string $frame): bool
+    {
+        if (!str_contains($frame, 'pong')) {
+            return false;
+        }
+
+        try {
+            return json_decode($frame, true, 512, \JSON_THROW_ON_ERROR) === [
+                'channel' => 'pong',
+            ];
+        } catch (\JsonException) {
+            return false;
+        }
     }
 }

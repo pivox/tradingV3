@@ -14,10 +14,12 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 final readonly class HyperliquidPaperLiveCheckpoint
 {
     public const SCHEMA_VERSION = 3;
-    public const POLICY_VERSION = 3;
+    public const POLICY_VERSION = 4;
     public const MAXIMUM_BYTES = 1_048_576;
-    public const MAXIMUM_ACKNOWLEDGED_IDENTITIES = 4_096;
-    public const MAXIMUM_TRADE_IDENTITIES = 4_096;
+    public const MAXIMUM_ACKNOWLEDGED_IDENTITIES =
+        HyperliquidPaperLivePolicy::MAX_ACKNOWLEDGED_EVENT_IDENTITIES;
+    public const MAXIMUM_TRADE_IDENTITIES =
+        2 * HyperliquidPaperLivePolicy::MAX_ACKNOWLEDGED_IDENTITIES_PER_STREAM;
 
     /** @var list<string> */
     private const PHASES = [

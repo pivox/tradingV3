@@ -6,6 +6,7 @@ namespace App\Tests\Trading\Paper\Hyperliquid\Live;
 
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpoint;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpointStore;
+use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLivePolicy;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperMarketEventNormalizer;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
@@ -51,7 +52,7 @@ final class HyperliquidPaperLiveCheckpointStoreTest extends TestCase
     {
         $checkpoint = self::fresh();
 
-        self::assertSame(3, $checkpoint->policyVersion);
+        self::assertSame(4, $checkpoint->policyVersion);
         self::assertSame([
             'schema_version', 'policy_version', 'dataset_id', 'network',
             'configuration_sha256', 'phase', 'failure_reason', 'continuity',
@@ -167,6 +168,45 @@ final class HyperliquidPaperLiveCheckpointStoreTest extends TestCase
         $checkpoint->rememberTradeIdentity(
             $identity,
             hash('sha256', 'conflicting-trade'),
+        );
+    }
+
+    public function testConfiguredIdentityWindowsFitTogetherInTheCheckpointBound(): void
+    {
+        self::assertSame(
+            512,
+            HyperliquidPaperLiveCheckpoint::MAXIMUM_ACKNOWLEDGED_IDENTITIES,
+        );
+        self::assertSame(
+            2 * HyperliquidPaperLivePolicy::MAX_ACKNOWLEDGED_IDENTITIES_PER_STREAM,
+            HyperliquidPaperLiveCheckpoint::MAXIMUM_TRADE_IDENTITIES,
+        );
+        $state = self::fresh()->toArray();
+        $state['acknowledged_identities'] = array_map(
+            static fn (int $index): string => hash('sha256', 'ack-' . $index),
+            range(1, HyperliquidPaperLiveCheckpoint::MAXIMUM_ACKNOWLEDGED_IDENTITIES),
+        );
+        $state['trade_identity_history'] = array_map(
+            static fn (int $index): array => [
+                'identity_hash' => hash('sha256', 'identity-' . $index),
+                'assignment_digest' => hash('sha256', 'assignment-' . $index),
+            ],
+            range(1, HyperliquidPaperLiveCheckpoint::MAXIMUM_TRADE_IDENTITIES),
+        );
+
+        $checkpoint = HyperliquidPaperLiveCheckpoint::fromArray($state);
+
+        self::assertCount(
+            HyperliquidPaperLiveCheckpoint::MAXIMUM_ACKNOWLEDGED_IDENTITIES,
+            $checkpoint->acknowledgedIdentities,
+        );
+        self::assertCount(
+            HyperliquidPaperLiveCheckpoint::MAXIMUM_TRADE_IDENTITIES,
+            $checkpoint->tradeIdentityHistory,
+        );
+        self::assertLessThanOrEqual(
+            250_000,
+            strlen(CanonicalJson::encode($checkpoint->toArray())),
         );
     }
 

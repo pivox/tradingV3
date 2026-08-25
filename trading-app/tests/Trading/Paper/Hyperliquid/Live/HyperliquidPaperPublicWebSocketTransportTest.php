@@ -138,6 +138,99 @@ final class HyperliquidPaperPublicWebSocketTransportTest extends TestCase
         self::assertSame([$failure], $errors);
     }
 
+    public function testGatesDeliveryWithoutPausingTheActivePublicSocket(): void
+    {
+        $connection = new HyperliquidFakePawlConnection();
+        $transport = self::connectedTransport($connection);
+
+        $transport->pauseReading();
+        $transport->resumeReading();
+        $transport->close();
+        $transport->pauseReading();
+        $transport->resumeReading();
+
+        self::assertSame(0, $connection->pauseCount);
+        self::assertSame(0, $connection->resumeCount);
+    }
+
+    public function testRetainsFramesDecodedAfterPauseUntilReadingResumes(): void
+    {
+        $connection = new HyperliquidFakePawlConnection();
+        $messages = [];
+        $transport = self::connectedTransport(
+            $connection,
+            static function (string $frame) use (&$messages): void {
+                $messages[] = $frame;
+            },
+        );
+        $transport->pauseReading();
+
+        $connection->emit('message', '{"channel":"trades","data":[]}');
+        $connection->emit('message', '{"channel":"pong"}');
+
+        self::assertSame(['{"channel":"pong"}'], $messages);
+        $transport->resumeReading();
+        self::assertSame([
+            '{"channel":"pong"}',
+            '{"channel":"trades","data":[]}',
+        ], $messages);
+    }
+
+    public function testResumeStopsReleasingBufferedFramesWhenConsumerPausesAgain(): void
+    {
+        $connection = new HyperliquidFakePawlConnection();
+        $messages = [];
+        $transport = null;
+        $transport = self::connectedTransport(
+            $connection,
+            static function (string $frame) use (&$messages, &$transport): void {
+                $messages[] = $frame;
+                if (\count($messages) === 1) {
+                    $transport?->pauseReading();
+                }
+            },
+        );
+        $transport->pauseReading();
+        $connection->emit('message', 'first');
+        $connection->emit('message', 'second');
+
+        $transport->resumeReading();
+        self::assertSame(['first'], $messages);
+        self::assertSame(0, $connection->resumeCount);
+
+        $transport->resumeReading();
+        self::assertSame(['first', 'second'], $messages);
+        self::assertSame(0, $connection->resumeCount);
+    }
+
+    public function testHeartbeatPulseDeliversPongWithoutReleasingBufferedMarketFrames(): void
+    {
+        $connection = new HyperliquidFakePawlConnection();
+        $messages = [];
+        $transport = self::connectedTransport(
+            $connection,
+            static function (string $frame) use (&$messages): void {
+                $messages[] = $frame;
+            },
+        );
+        $transport->pauseReading();
+
+        $transport->send(['method' => 'ping']);
+        $connection->emit('message', '{"channel":"trades","data":[]}');
+        $connection->emit('message', '{"channel":"pong"}');
+
+        self::assertSame(['{"channel":"pong"}'], $messages);
+        self::assertSame(0, $connection->pauseCount);
+        self::assertSame(0, $connection->resumeCount);
+
+        $transport->resumeReading();
+        self::assertSame([
+            '{"channel":"pong"}',
+            '{"channel":"trades","data":[]}',
+        ], $messages);
+        self::assertSame(0, $connection->resumeCount);
+    }
+
     public function testFactoryCreatesFreshNetworkBoundTransports(): void
     {
         $factory = new PawlHyperliquidPaperPublicWebSocketTransportFactory();
@@ -205,6 +298,8 @@ final class HyperliquidFakePawlConnection
     public array $sent = [];
 
     public int $closeCount = 0;
+    public int $pauseCount = 0;
+    public int $resumeCount = 0;
 
     public function on(string $event, callable $listener): void
     {
@@ -230,5 +325,15 @@ final class HyperliquidFakePawlConnection
     public function close(): void
     {
         ++$this->closeCount;
+    }
+
+    public function pause(): void
+    {
+        ++$this->pauseCount;
+    }
+
+    public function resume(): void
+    {
+        ++$this->resumeCount;
     }
 }

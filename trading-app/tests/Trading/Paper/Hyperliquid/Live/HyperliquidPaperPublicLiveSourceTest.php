@@ -9,8 +9,11 @@ use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface;
+use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpoint;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpointStore;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveIntegrityException;
+use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLivePolicy;
+use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicFrameQueue;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSource;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicWebSocketTransportInterface;
 use App\Trading\Paper\MarketData\CanonicalJson;
@@ -81,6 +84,20 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
             $resumedEvents->current()->payload['start_time'],
         ]);
         self::assertSame(24, count($rest->requests));
+    }
+
+    public function testRestWarmupStartsBeforeTheWebSocketConnection(): void
+    {
+        $transport = new DeterministicHyperliquidTransport([]);
+        $source = $this->source(
+            $transport,
+            restClient: new LiveSourceWarmupRestClient(),
+        );
+
+        self::generator($source->events())->rewind();
+
+        self::assertSame(0, $transport->connectCount);
+        self::assertSame('warming', $this->checkpoint()->phase);
     }
 
     public function testAuthenticatedMetadataAndFundingPrecedeInitialSnapshotBoundaries(): void
@@ -229,6 +246,54 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertTrue($source->isComplete());
         self::assertNull($source->failureReason());
         self::assertTrue($transport->closed);
+    }
+
+    public function testLargeTradeFrameFitsAfterCheckpointHistoryReachesItsWindow(): void
+    {
+        $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
+        $checkpoint = $store->loadOrCreate(
+            'paper-hyperliquid-live-mainnet',
+            PaperMarketDataNetwork::MAINNET,
+            str_repeat('a', 64),
+        );
+        $state = $checkpoint->toArray();
+        $state['acknowledged_identities'] = array_map(
+            static fn (int $index): string => hash('sha256', 'ack-' . $index),
+            range(1, HyperliquidPaperLiveCheckpoint::MAXIMUM_ACKNOWLEDGED_IDENTITIES),
+        );
+        $state['trade_identity_history'] = array_map(
+            static fn (int $index): array => [
+                'identity_hash' => hash('sha256', 'identity-' . $index),
+                'assignment_digest' => hash('sha256', 'assignment-' . $index),
+            ],
+            range(1, HyperliquidPaperLiveCheckpoint::MAXIMUM_TRADE_IDENTITIES),
+        );
+        $store->save(HyperliquidPaperLiveCheckpoint::fromArray($state));
+
+        $source = $this->source(new DeterministicHyperliquidTransport([
+            self::largeTradeFrame(),
+        ]));
+        $events = self::generator($source->events());
+        $events->rewind();
+        for ($index = 0; $index < 2; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $event->channel);
+            $source->acknowledge($event->eventId);
+            $events->next();
+        }
+
+        self::assertInstanceOf(PaperMarketEvent::class, $events->current());
+        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $events->current()->channel);
+        self::assertCount(
+            HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS - 1,
+            $this->checkpoint()->pendingContinuation['remaining_trade_rows'] ?? [],
+        );
+        self::assertLessThanOrEqual(
+            HyperliquidPaperLiveCheckpoint::MAXIMUM_BYTES,
+            strlen(CanonicalJson::encode($this->checkpoint()->toArray())),
+        );
+        $source->stop();
     }
 
     public function testOpenKeepsTheLoopRunningUntilAsyncSubscriptionAcknowledgement(): void
@@ -560,6 +625,192 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertTrue($source->isComplete());
     }
 
+    public function testBufferedDuplicateFramesCannotStarveTheNetworkLoop(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $trade = self::tradeFrame();
+        $source = $this->source(
+            new DeterministicHyperliquidTransport([
+                $trade,
+                $trade,
+                self::largeTradeFrame(1),
+            ]),
+            loop: $loop,
+        );
+        $events = self::generator($source->events());
+        $events->rewind();
+        for ($index = 0; $index < 2; ++$index) {
+            $source->acknowledge($events->current()->eventId);
+            $events->next();
+        }
+        self::assertSame('42', $events->current()->payload['trade_id']);
+        $source->acknowledge($events->current()->eventId);
+        $baselineRuns = $loop->runCount();
+
+        $events->next();
+
+        self::assertSame('1', $events->current()->payload['trade_id']);
+        self::assertSame($baselineRuns + 2, $loop->runCount());
+    }
+
+    public function testRestartResumesTheCompactRemainderOfATradeFrame(): void
+    {
+        $firstSource = $this->source(new DeterministicHyperliquidTransport([
+            self::tradeFrame(twoRows: true),
+        ]));
+        $firstEvents = self::generator($firstSource->events());
+        $firstEvents->rewind();
+        for ($index = 0; $index < 2; ++$index) {
+            $boundary = $firstEvents->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $boundary);
+            $firstSource->acknowledge($boundary->eventId);
+            $firstEvents->next();
+        }
+        $pending = $firstEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $pending);
+        self::assertSame('42', $pending->payload['trade_id']);
+
+        $resumedTransport = new DeterministicHyperliquidTransport([]);
+        $resumed = $this->source($resumedTransport);
+        $resumedEvents = self::generator($resumed->events());
+        $resumedEvents->rewind();
+
+        self::assertSame(
+            CanonicalJson::encode($pending->toArray()),
+            CanonicalJson::encode($resumedEvents->current()->toArray()),
+        );
+        self::assertSame(0, $resumedTransport->connectCount);
+        $resumed->acknowledge($pending->eventId);
+        $resumedEvents->next();
+
+        $second = $resumedEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $second);
+        self::assertSame('43', $second->payload['trade_id']);
+        self::assertSame(0, $resumedTransport->connectCount);
+    }
+
+    public function testLargeTradeFramePumpsTheNetworkAfterEveryDurableChunk(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $source = $this->source(
+            new DeterministicHyperliquidTransport([
+                self::largeTradeFrame(9),
+            ]),
+            loop: $loop,
+        );
+        $events = self::generator($source->events());
+        $events->rewind();
+        for ($index = 0; $index < 2; ++$index) {
+            $source->acknowledge($events->current()->eventId);
+            $events->next();
+        }
+        $baselineRuns = $loop->runCount();
+
+        for ($index = 0; $index < 8; ++$index) {
+            self::assertSame((string) ($index + 1), $events->current()->payload['trade_id']);
+            $source->acknowledge($events->current()->eventId);
+            if ($index + 1 < 8) {
+                $events->next();
+            }
+        }
+
+        self::assertSame($baselineRuns + 1, $loop->runCount());
+        $events->next();
+        self::assertSame('9', $events->current()->payload['trade_id']);
+        $source->acknowledge($events->current()->eventId);
+        self::assertSame($baselineRuns + 2, $loop->runCount());
+    }
+
+    public function testTradeCheckpointIsCommittedOnlyAtDurableChunkBoundaries(): void
+    {
+        $source = $this->source(new DeterministicHyperliquidTransport([
+            self::largeTradeFrame(8),
+        ]));
+        $events = self::generator($source->events());
+        $events->rewind();
+        for ($index = 0; $index < 2; ++$index) {
+            $source->acknowledge($events->current()->eventId);
+            $events->next();
+        }
+
+        self::assertSame('1', $events->current()->payload['trade_id']);
+        $durablePendingEvent = $this->checkpoint()->pendingEvent;
+        self::assertInstanceOf(PaperMarketEvent::class, $durablePendingEvent);
+        self::assertSame('1', $durablePendingEvent->payload['trade_id']);
+
+        $source->acknowledge($events->current()->eventId);
+        $events->next();
+
+        self::assertSame('2', $events->current()->payload['trade_id']);
+        $durablePendingEvent = $this->checkpoint()->pendingEvent;
+        self::assertInstanceOf(PaperMarketEvent::class, $durablePendingEvent);
+        self::assertSame(
+            '1',
+            $durablePendingEvent->payload['trade_id'],
+            'The durable checkpoint must remain at the start of the in-flight trade chunk.',
+        );
+
+        for ($tradeId = 2; $tradeId <= 8; ++$tradeId) {
+            self::assertSame((string) $tradeId, $events->current()->payload['trade_id']);
+            $source->acknowledge($events->current()->eventId);
+            if ($tradeId < 8) {
+                $events->next();
+            }
+        }
+
+        $checkpoint = $this->checkpoint();
+        self::assertNull($checkpoint->pendingEvent);
+        self::assertCount(8, $checkpoint->tradeIdentityHistory);
+    }
+
+    public function testIngressPausesAtHighWaterAndResumesAfterDrain(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport([]);
+        $source = $this->source(
+            $transport,
+            loop: $loop,
+        );
+        $events = self::generator($source->events());
+        $events->rewind();
+        $source->acknowledge($events->current()->eventId);
+        $events->next();
+        for ($index = 0; $index < HyperliquidPaperLivePolicy::NETWORK_PUMP_FRAME_HIGH_WATER; ++$index) {
+            $transport->push(self::tradeFrameForId($index + 1));
+        }
+
+        self::assertSame(1, $transport->pauseCount);
+        self::assertSame(0, $transport->resumeCount);
+
+        $source->acknowledge($events->current()->eventId);
+        for ($index = 0; $index < 64; ++$index) {
+            $events->next();
+            $source->acknowledge($events->current()->eventId);
+        }
+
+        self::assertSame(1, $transport->pauseCount);
+        self::assertSame(1, $transport->resumeCount);
+    }
+
+    public function testIngressPausesBeforeQueuedBytesCanExhaustCapacity(): void
+    {
+        $transport = new DeterministicHyperliquidTransport([]);
+        $source = $this->source($transport);
+        $events = self::generator($source->events());
+        $events->rewind();
+        $source->acknowledge($events->current()->eventId);
+        $events->next();
+        $halfOfMaximumFrame = str_repeat(
+            'x',
+            intdiv(HyperliquidPaperLivePolicy::MAX_FRAME_BYTES, 2),
+        );
+
+        $transport->push($halfOfMaximumFrame);
+        $transport->push($halfOfMaximumFrame);
+
+        self::assertSame(1, $transport->pauseCount);
+    }
+
     public function testUnhealthyStopAfterStreamingPersistsContinuityLoss(): void
     {
         $source = $this->source(new DeterministicHyperliquidTransport([]));
@@ -593,8 +844,8 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         $events = self::generator($source->events());
         $events->rewind();
 
-        self::assertSame([45.0], $loop->intervals());
-        self::assertSame(45.0, $loop->fire(45.0));
+        self::assertSame([5.0], $loop->intervals());
+        self::assertSame(5.0, $loop->fire(5.0));
         self::assertSame(['method' => 'ping'], $transport->sent[12]);
         self::assertSame([10.0], $loop->intervals());
 
@@ -610,7 +861,60 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         $events->next();
 
         self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $events->current()->channel);
-        self::assertSame([45.0], $loop->intervals());
+        self::assertSame([5.0], $loop->intervals());
+    }
+
+    public function testHeartbeatPongOvertakesBufferedMarketFrames(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport([]);
+        $source = $this->source($transport, loop: $loop);
+        $events = self::generator($source->events());
+        $events->rewind();
+
+        self::assertSame(5.0, $loop->fire(5.0));
+        self::assertSame(['method' => 'ping'], $transport->sent[12]);
+        self::assertSame([10.0], $loop->intervals());
+
+        $transport->push(self::tradeFrame());
+        $transport->push(CanonicalJson::encode(['channel' => 'pong']));
+
+        for ($index = 0; $index < 2; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            $events->next();
+        }
+
+        $trade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $trade);
+        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $trade->channel);
+        self::assertSame('42', $trade->payload['trade_id']);
+        self::assertSame([5.0], $loop->intervals());
+    }
+
+    public function testDurableAcknowledgementCooperativelyPumpsTheNetworkLoop(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $source = $this->source(
+            new DeterministicHyperliquidTransport([]),
+            loop: $loop,
+        );
+        $events = self::generator($source->events());
+        $events->rewind();
+        $runsBeforeAcknowledgement = $loop->runCount();
+
+        $event = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $event);
+        $source->acknowledge($event->eventId);
+        self::assertSame($runsBeforeAcknowledgement, $loop->runCount());
+
+        $events->next();
+        $event = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $event);
+        $source->acknowledge($event->eventId);
+
+        self::assertSame($runsBeforeAcknowledgement + 1, $loop->runCount());
     }
 
     public function testPongTimeoutPersistsContinuityLossBeforeReconnectDelay(): void
@@ -623,7 +927,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         );
         self::generator($source->events())->rewind();
 
-        $loop->fire(45.0);
+        $loop->fire(5.0);
         $loop->fire(10.0);
         $transport->push(CanonicalJson::encode(['channel' => 'pong']));
         $transport->push(self::tradeFrame());
@@ -709,7 +1013,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         $transport = new DeterministicHyperliquidTransport([]);
         $source = $this->source($transport, loop: $loop);
         self::generator($source->events())->rewind();
-        $loop->fire(45.0);
+        $loop->fire(5.0);
         $loop->fire(10.0);
 
         foreach ([1.0, 2.0, 4.0, 8.0, 15.0, 30.0] as $delay) {
@@ -746,7 +1050,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
             }
         }
 
-        $loop->fire(45.0);
+        $loop->fire(5.0);
         $loop->fire(10.0);
         $loop->fire(1.0);
         $transport->push(CanonicalJson::encode([
@@ -861,6 +1165,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         ?HyperliquidPaperFundingRateClientInterface $fundingClient = null,
         ?MockClock $clock = null,
         ?HyperliquidPaperPublicRestClientInterface $restClient = null,
+        ?HyperliquidPaperPublicFrameQueue $queue = null,
     ): HyperliquidPaperPublicLiveSource {
         $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
         $checkpoint = $store->loadOrCreate(
@@ -883,6 +1188,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
             $store,
             $checkpoint,
             $loop ?? new StreamSelectLoop(),
+            queue: $queue,
             metadataClient: $metadataClient,
             fundingClient: $fundingClient,
             restClient: $restClient,
@@ -948,6 +1254,38 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         return CanonicalJson::encode(['channel' => 'trades', 'data' => $rows]);
     }
 
+    private static function tradeFrameForId(int $tradeId): string
+    {
+        $decoded = json_decode(self::tradeFrame(), true, 512, \JSON_THROW_ON_ERROR);
+        $decoded['data'][0]['hash'] = '0x' . hash('sha256', 'queued-trade-' . $tradeId);
+        $decoded['data'][0]['time'] = 1_000 + $tradeId;
+        $decoded['data'][0]['tid'] = $tradeId;
+
+        return CanonicalJson::encode($decoded);
+    }
+
+    private static function largeTradeFrame(int $rowCount = 1_000): string
+    {
+        $rows = [];
+        for ($index = 1; $index <= $rowCount; ++$index) {
+            $rows[] = [
+                'coin' => $index % 2 === 0 ? 'BTC' : 'ETH',
+                'side' => $index % 2 === 0 ? 'B' : 'A',
+                'px' => $index % 2 === 0 ? '65000' : '2500',
+                'sz' => '0.01',
+                'hash' => '0x' . hash('sha256', 'trade-' . $index),
+                'time' => 1_000 + $index,
+                'tid' => $index,
+                'users' => [
+                    '0x' . hash('sha256', 'maker-' . $index),
+                    '0x' . hash('sha256', 'taker-' . $index),
+                ],
+            ];
+        }
+
+        return CanonicalJson::encode(['channel' => 'trades', 'data' => $rows]);
+    }
+
     private static function candleFrame(int $start, string $close): string
     {
         return CanonicalJson::encode([
@@ -982,6 +1320,8 @@ final class AsyncAcknowledgementHyperliquidTransport implements
     /** @var list<array<string, mixed>> */
     public array $sent = [];
     public bool $closed = false;
+    public int $pauseCount = 0;
+    public int $resumeCount = 0;
 
     /** @var callable(string): void|null */
     private $onMessage = null;
@@ -1019,6 +1359,16 @@ final class AsyncAcknowledgementHyperliquidTransport implements
     public function close(): void
     {
         $this->closed = true;
+    }
+
+    public function pauseReading(): void
+    {
+        ++$this->pauseCount;
+    }
+
+    public function resumeReading(): void
+    {
+        ++$this->resumeCount;
     }
 }
 
@@ -1094,6 +1444,8 @@ final class DeterministicHyperliquidTransport implements
     public array $sent = [];
     public int $connectCount = 0;
     public bool $closed = false;
+    public int $pauseCount = 0;
+    public int $resumeCount = 0;
 
     /** @var callable(string): void|null */
     private $onMessage = null;
@@ -1154,6 +1506,16 @@ final class DeterministicHyperliquidTransport implements
         $this->closed = true;
     }
 
+    public function pauseReading(): void
+    {
+        ++$this->pauseCount;
+    }
+
+    public function resumeReading(): void
+    {
+        ++$this->resumeCount;
+    }
+
     public function push(string $frame): void
     {
         ($this->onMessage ?? throw new \LogicException())($frame);
@@ -1174,6 +1536,7 @@ final class HyperliquidDeterministicLoop implements LoopInterface
     private array $onNextRuns = [];
 
     private int $stopGeneration = 0;
+    private int $runCount = 0;
 
     public function addReadStream($stream, $listener): void
     {
@@ -1230,6 +1593,7 @@ final class HyperliquidDeterministicLoop implements LoopInterface
 
     public function run(): void
     {
+        ++$this->runCount;
         $stopGeneration = $this->stopGeneration;
         while ($this->onNextRuns !== []) {
             $callback = array_shift($this->onNextRuns);
@@ -1262,6 +1626,11 @@ final class HyperliquidDeterministicLoop implements LoopInterface
             static fn (TimerInterface $timer): float => $timer->getInterval(),
             $this->timers,
         );
+    }
+
+    public function runCount(): int
+    {
+        return $this->runCount;
     }
 
     public function fire(float $interval): float

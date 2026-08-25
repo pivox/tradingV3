@@ -16,5 +16,9 @@ interface HyperliquidPaperPublicWebSocketTransportInterface
     /** @param array<string, mixed> $message */
     public function send(array $message): void;
 
+    public function pauseReading(): void;
+
+    public function resumeReading(): void;
+
     public function close(): void;
 }
