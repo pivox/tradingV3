@@ -27,7 +27,9 @@ checkpoint remains below its independently enforced one-megabyte limit. It
 validates identities, ordering, gaps, manifest facts, and canonical size for the
 whole list before mutation. One versioned append intent authenticates the
 original file prefix and concatenated NDJSON suffix. The suffix is flushed once,
-verified once, and then applied to in-memory facts in event order. Existing v1
+verified once, and then applied to in-memory facts in event order. The batch path
+uses two complete hash passes—authenticated prefix before mutation and final
+file after `fsync`—instead of the redundant unit-append revalidations. Existing v1
 single-event intents remain readable; new batch intents use v2.
 
 Hyperliquid coalesces consecutive queued single-trade frames, in FIFO order, up
@@ -66,3 +68,6 @@ window, partial-intent recovery, ordering and identity conflicts, and observer
 ordering. The final gate is the complete Hyperliquid suite, targeted PHPStan,
 and a five-minute credential-free mainnet smoke with one source epoch, healthy
 pongs, no sequence gaps, and a complete authenticated manifest.
+Transport backpressure errors retain their explicit stable reason instead of
+being collapsed into a generic reconnect gap, so a failed smoke identifies the
+actual remaining bottleneck.

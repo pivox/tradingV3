@@ -460,6 +460,33 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         }
     }
 
+    public function testTransportBackpressureFailureRemainsObservable(): void
+    {
+        $transport = new DeterministicHyperliquidTransport([
+            self::tradeFrame(),
+        ]);
+        $source = $this->source($transport);
+        $events = self::generator($source->events());
+        $events->rewind();
+        for ($index = 0; $index < 2; ++$index) {
+            $source->acknowledge($events->current()->eventId);
+            $events->next();
+        }
+        $source->acknowledge($events->current()->eventId);
+        $transport->serverError(new HyperliquidPaperLiveIntegrityException(
+            'market_data_backpressure_exhausted',
+        ));
+
+        try {
+            $events->next();
+            self::fail('The transport backpressure reason must stop capture.');
+        } catch (HyperliquidPaperLiveIntegrityException $exception) {
+            self::assertSame('market_data_backpressure_exhausted', $exception->getMessage());
+        }
+        self::assertSame('failed', $this->checkpoint()->phase);
+        self::assertSame('market_data_backpressure_exhausted', $this->checkpoint()->failureReason);
+    }
+
     public function testGeneratorCannotAdvanceWithoutAcknowledgement(): void
     {
         $source = $this->source(new DeterministicHyperliquidTransport([]));
@@ -1494,6 +1521,8 @@ final class DeterministicHyperliquidTransport implements
     private $onMessage = null;
     /** @var callable(?int): void|null */
     private $onClose = null;
+    /** @var callable(\Throwable): void|null */
+    private $onError = null;
 
     /**
      * @param list<string> $marketFrames
@@ -1514,6 +1543,7 @@ final class DeterministicHyperliquidTransport implements
         ++$this->connectCount;
         $this->onMessage = $onMessage;
         $this->onClose = $onClose;
+        $this->onError = $onError;
         $onOpen();
     }
 
@@ -1567,6 +1597,11 @@ final class DeterministicHyperliquidTransport implements
     public function serverClose(): void
     {
         ($this->onClose ?? throw new \LogicException())(1006);
+    }
+
+    public function serverError(\Throwable $failure): void
+    {
+        ($this->onError ?? throw new \LogicException())($failure);
     }
 }
 

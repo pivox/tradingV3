@@ -103,6 +103,7 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame(2, $recorder->manifest()->eventCount);
         self::assertSame($events[1]->eventId, $recorder->manifest()->lastEventId);
         self::assertSame(1, $filesystem->eventSyncs);
+        self::assertLessThanOrEqual(3, $filesystem->eventSnapshotSeeks);
         self::assertSame([
             'version' => 2,
             'dataset_id' => $manifest->datasetId,
@@ -4202,6 +4203,7 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public int $manifestDirectorySyncs = 0;
     public int $manifestPublications = 0;
     public int $eventSyncs = 0;
+    public int $eventSnapshotSeeks = 0;
     public int $appendIntentSyncs = 0;
     public int $appendIntentDirectorySyncs = 0;
     public int $appendIntentReads = 0;
@@ -4891,6 +4893,9 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     /** @param resource $handle */
     public function seek($handle, int $offset, int $whence, string $operation): bool
     {
+        if ($operation === 'paper_dataset_events_snapshot_validation') {
+            ++$this->eventSnapshotSeeks;
+        }
         if ($this->publicationMutationTrigger === 'append'
             && $this->publicationAppendWriteObserved
             && $operation === 'paper_dataset_events_read_failed'

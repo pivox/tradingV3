@@ -34,6 +34,7 @@
 - [ ] Run the new recorder tests; expect method-not-found failures.
 - [ ] Implement `appendBatch(array $events): array`: reject empty/oversized/non-event lists, recover and reload once under the dataset lock, validate identities and sequence state in order, accept only a replayed prefix followed by a new suffix, write one v2 intent and one durable concatenated suffix, then update manifest and in-memory facts event by event.
 - [ ] Extend intent decoding and recovery to accept v1 unchanged and v2 `{event_ids, canonical_suffix_base64, canonical_suffix_sha256}`; parse every bounded NDJSON line canonically before trusting the intent.
+- [ ] Authenticate a batch with one prefix hash before writing and one final hash after `fsync`; retain rollback and inode/path validation.
 - [ ] Re-run the new tests and the complete `PaperDatasetRecorderTest`; expect PASS.
 
 ### Task 3: Batch the capture loop without weakening acknowledgements

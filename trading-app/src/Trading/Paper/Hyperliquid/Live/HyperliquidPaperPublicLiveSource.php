@@ -373,6 +373,14 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
                 if ($generation !== $this->activeGeneration || $this->stopped) {
                     return;
                 }
+                if ($failure instanceof HyperliquidPaperLiveIntegrityException
+                    && $failure->getMessage() === 'market_data_backpressure_exhausted'
+                ) {
+                    $this->transportFailure = $failure;
+                    $this->loop->stop();
+
+                    return;
+                }
                 if (\in_array($this->checkpoint->phase, ['streaming', 'reconnecting'], true)) {
                     $this->beginReconnect('hyperliquid_public_trade_gap_unrecoverable');
                 } else {
