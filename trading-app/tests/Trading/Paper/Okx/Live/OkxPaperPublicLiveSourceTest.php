@@ -422,6 +422,66 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         );
     }
 
+    public function testProductionHourlyWarmupDerivesItsAlignedWindowAfterRestart(): void
+    {
+        $rows = self::contiguousHourlyRows(1000);
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $initialRest = Task7RestClient::withInitialDataset();
+        $initialRest->candleRows['BTC-USDT-SWAP/1H'] = array_reverse(array_slice($rows, 700, 300));
+        $initialRest->historyCandlePages = [
+            array_reverse(array_slice($rows, 400, 300)),
+            array_reverse(array_slice($rows, 100, 300)),
+            array_reverse(array_slice($rows, 0, 100)),
+        ];
+        $source = $this->source(
+            $initialRest,
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+            initialHourlyCandleTarget: 1000,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmupEvents($source, $events, 3);
+        $pending = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $pending);
+        self::assertSame($rows[0][0], $pending->exchangeTimestamp->format('Uv'));
+
+        unset($events, $source);
+        gc_collect_cycles();
+
+        $restartRest = Task7RestClient::withInitialDataset();
+        $restartRest->historyCandlePages = [
+            array_reverse(array_slice($rows, 700, 300)),
+            array_reverse(array_slice($rows, 400, 300)),
+            array_reverse(array_slice($rows, 100, 300)),
+            array_reverse(array_slice($rows, 0, 100)),
+        ];
+        $resumed = $this->source(
+            $restartRest,
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+            initialHourlyCandleTarget: 1000,
+        );
+        $resumedEvents = $resumed->events();
+        self::assertInstanceOf(\Generator::class, $resumedEvents);
+        $replayed = $resumedEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $replayed);
+        self::assertEquals($pending->toArray(), $replayed->toArray());
+        self::assertSame([], $restartRest->calls);
+
+        $resumed->acknowledge($replayed->eventId);
+        $resumedEvents->next();
+        $next = $resumedEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $next);
+        self::assertSame($rows[1][0], $next->exchangeTimestamp->format('Uv'));
+        self::assertNotContains(
+            ['currentCandles', ['BTC-USDT-SWAP', '1H', null, null, 300]],
+            $restartRest->calls,
+        );
+    }
+
     public function testWarmupHourlyPaginationAppliesTheTargetToBothSymbols(): void
     {
         $rows = self::contiguousHourlyRows(5);

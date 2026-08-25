@@ -691,7 +691,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         } else {
             $cursor = (string) BigInteger::of($observedEnd)->plus(1);
         }
-        $alignedWindowEnd = $this->alignedInitialHourlyWindowEnd($byTimestamp, $observedEnd);
+        $alignedWindowEnd = $this->alignedInitialHourlyWindowEnd($observedEnd);
         for ($page = 0; $page < OkxPaperLivePolicy::MAX_INITIAL_HOURLY_HISTORY_PAGES; ++$page) {
             if ($this->confirmedInitialHourlyCountThrough($byTimestamp, $alignedWindowEnd)
                 >= $this->initialHourlyCandleTarget
@@ -775,35 +775,20 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         return $newest;
     }
 
-    /** @param array<string, array{canonical: string, row: array<array-key, mixed>}> $rows */
-    private function alignedInitialHourlyWindowEnd(array $rows, string $observedEnd): string
+    private function alignedInitialHourlyWindowEnd(string $observedEnd): string
     {
         if ($this->initialHourlyCandleTarget !== OkxPaperLivePolicy::INITIAL_HOURLY_CANDLE_TARGET) {
             return $observedEnd;
         }
-        $aligned = null;
-        foreach ($rows as $entry) {
-            if (($entry['row'][8] ?? null) !== '1') {
-                continue;
-            }
-            $timestamp = $entry['row'][0] ?? null;
-            if (self::compareUnsigned($timestamp, $observedEnd) > 0
-                || !BigInteger::of($timestamp)
-                    ->minus(($this->initialHourlyCandleTarget - 1) * 3_600_000)
-                    ->mod(4 * 3_600_000)
-                    ->isZero()
-            ) {
-                continue;
-            }
-            $aligned = $aligned === null || self::compareUnsigned($timestamp, $aligned) > 0
-                ? $timestamp
-                : $aligned;
-        }
-        if ($aligned === null) {
+        $observed = BigInteger::of($observedEnd);
+        $baseStart = $observed->minus(
+            ($this->initialHourlyCandleTarget - 1) * 3_600_000,
+        );
+        if ($baseStart->isNegative()) {
             throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
         }
 
-        return $aligned;
+        return (string) $observed->minus($baseStart->mod(4 * 3_600_000));
     }
 
     /** @param array<string, array{canonical: string, row: array<array-key, mixed>}> $rows */
