@@ -64,7 +64,7 @@ final readonly class PaperCanonicalIndicatorWindowSource
             return null;
         }
         $latest = null;
-        $events = [];
+        $eventsByTimeframe = [];
         foreach ($this->market->events() as $event) {
             if ($event->sourceNetwork !== $cell->network
                 || $event->sourceVenue !== $cell->marketDataVenue
@@ -78,7 +78,7 @@ final readonly class PaperCanonicalIndicatorWindowSource
                 && $eventTimeframe !== null
                 && in_array($eventTimeframe, $requestedNativeTimeframes, true)
             ) {
-                $events[] = $event;
+                $eventsByTimeframe[$eventTimeframe][] = $event;
             }
         }
         if (!$latest instanceof PaperMarketEvent
@@ -90,16 +90,7 @@ final readonly class PaperCanonicalIndicatorWindowSource
         ) {
             throw new \LogicException('paper_canonical_strategy_trigger_not_current');
         }
-        $candles = $this->adapter->adaptCandleEvents($events);
         $availableThrough = $now->format('Y-m-d\TH:i:s.u\Z');
-        $byTimeframe = [];
-        foreach ($candles as $candle) {
-            if ($candle->availableAt > $availableThrough) {
-                continue;
-            }
-            $byTimeframe[$candle->timeframe][] = $candle;
-        }
-
         $windows = [];
         $triggerTimeframe = $this->timeframe($trigger->channel);
         $triggerBound = false;
@@ -110,7 +101,14 @@ final readonly class PaperCanonicalIndicatorWindowSource
                 continue;
             }
             $required = $derivedHourlySourceRequired ? 1000 : 250;
-            $candidates = $byTimeframe[$timeframe] ?? [];
+            $timeframeEvents = $eventsByTimeframe[$timeframe] ?? [];
+            if ($timeframeEvents === []) {
+                return null;
+            }
+            $candidates = array_values(array_filter(
+                $this->adapter->adaptCandleEvents($timeframeEvents),
+                static fn (NormalizedBacktestCandle $candle): bool => $candle->availableAt <= $availableThrough,
+            ));
             if (count($candidates) < $required) {
                 return null;
             }
