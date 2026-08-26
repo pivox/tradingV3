@@ -223,6 +223,90 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $source->stop();
     }
 
+    public function testInitialCandleBridgePaginatesUntilTheAcknowledgedFrontier(): void
+    {
+        $rest = Task7RestClient::withInitialDataset();
+        $template = $rest->candleRows['BTC-USDT-SWAP/1m'][0];
+        $rows = [];
+        for ($index = 0; $index < 602; ++$index) {
+            $row = $template;
+            $row[0] = (string) ((int) $template[0] + ($index * 60_000));
+            $rows[] = $row;
+        }
+        $rest->candleResponsePages['BTC-USDT-SWAP/1m'] = [
+            [$rows[0]],
+            array_reverse(array_slice($rows, 302, 300)),
+        ];
+        $rest->historyCandlePages = [
+            array_reverse(array_slice($rows, 2, 300)),
+            [$rows[1], $rows[0]],
+        ];
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = Task7Transport::acknowledgements(self::publicArguments(), 'public');
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source($rest, $public, $business);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+
+        $this->acknowledgeWarmupEvents($source, $events, 14);
+        $bridged = $events->current();
+
+        self::assertInstanceOf(PaperMarketEvent::class, $bridged);
+        self::assertSame((string) $rows[1][0], $bridged->exchangeTimestamp->format('Uv'));
+        self::assertSame(
+            [
+                ['historyCandles', ['BTC-USDT-SWAP', '1m', $rows[302][0], 300]],
+                ['historyCandles', ['BTC-USDT-SWAP', '1m', $rows[2][0], 300]],
+            ],
+            array_values(array_filter(
+                $rest->calls,
+                static fn (array $call): bool => $call[0] === 'historyCandles',
+            )),
+        );
+        $source->stop();
+    }
+
+    public function testInitialCandleBridgePumpsBetweenDurableBatches(): void
+    {
+        $rest = Task7RestClient::withInitialDataset();
+        $initial = $rest->candleRows['BTC-USDT-SWAP/1m'];
+        $rows = $initial;
+        for ($index = 1; $index <= 101; ++$index) {
+            $row = $initial[0];
+            $row[0] = (string) ((int) $initial[0][0] + ($index * 60_000));
+            $rows[] = $row;
+        }
+        $rest->candleResponsePages['BTC-USDT-SWAP/1m'] = [$initial, array_reverse($rows)];
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = Task7Transport::acknowledgements(self::publicArguments(), 'public');
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $pump = new Task7CountingLoopPump();
+        $source = $this->source($rest, $public, $business, loopPump: $pump);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmupEvents($source, $events, 14);
+        $afterFetch = $pump->count;
+
+        for ($index = 0; $index < 100; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            $events->next();
+        }
+
+        self::assertGreaterThan($afterFetch, $pump->count);
+        self::assertSame((string) $rows[101][0], $events->current()?->exchangeTimestamp->format('Uv'));
+        $source->stop();
+    }
+
     public function testWarmupPaginatesExactlyOneThousandConfirmedHourlyCandles(): void
     {
         $rest = Task7RestClient::withInitialDataset();
@@ -1235,8 +1319,9 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             self::businessArguments(),
             'business',
         );
+        $resumedRest = Task7RestClient::withInitialDataset();
         $resumed = $this->source(
-            new Task7RestClient(),
+            $resumedRest,
             $public,
             $business,
             checkpointStore: $store,
@@ -1261,6 +1346,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             $business->sent,
         );
         self::assertSame('streaming', $this->checkpointState()['phase']);
+        self::assertSame(Task7RestClient::expectedInitialCandleBridgeCalls(), $resumedRest->calls);
     }
 
     #[DataProvider('duplicateReadinessAcknowledgementProvider')]
@@ -1707,7 +1793,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         gc_collect_cycles();
 
         $restartLog = new Task7ActionLog();
-        $resumedRest = new Task7RestClient();
+        $resumedRest = Task7RestClient::withInitialDataset();
         $resumedPublic = new Task7Transport('public', $restartLog);
         $resumedBusiness = new Task7Transport('business', $restartLog);
         $resumedPublic->responses = [
@@ -1746,7 +1832,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             [['op' => 'subscribe', 'args' => self::businessArguments()]],
             $resumedBusiness->sent,
         );
-        self::assertSame([], $resumedRest->calls);
+        self::assertSame(Task7RestClient::expectedInitialCandleBridgeCalls(), $resumedRest->calls);
         $afterRestart = $this->checkpointState();
         self::assertSame('streaming', $afterRestart['phase']);
         self::assertNotNull($afterRestart['pending_event']);
@@ -10357,8 +10443,9 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             self::businessArguments(),
             'restartBusiness',
         );
+        $restartRest = Task7RestClient::withInitialDataset();
         $resumed = $this->source(
-            new Task7RestClient(),
+            $restartRest,
             $restartPublic,
             $restartBusiness,
             checkpointStore: $restartStore,
@@ -10368,6 +10455,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $replayed = $resumedEvents->current();
         self::assertInstanceOf(PaperMarketEvent::class, $replayed);
         self::assertSame('9971', $replayed->payload['trade_id'] ?? null);
+        self::assertSame(Task7RestClient::expectedInitialCandleBridgeCalls(), $restartRest->calls);
     }
 
     public function testResyncQueueMirrorWriteFaultLeavesOneUnchangedDurableTruth(): void

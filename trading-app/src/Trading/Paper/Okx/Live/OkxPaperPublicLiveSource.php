@@ -253,7 +253,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     /** @return iterable<PaperMarketEvent> */
     private function eventFlow(): iterable
     {
-        $initialCandleBridgeRequired = $this->checkpoint->phase === 'warming';
+        $initialCandleBridgeRequired = \in_array(
+            $this->checkpoint->phase,
+            ['warming', 'connecting', 'subscribing'],
+            true,
+        );
         if (!$this->config->acquisitionEnabled) {
             throw new OkxPaperLiveIntegrityException('okx_paper_public_acquisition_disabled');
         }
@@ -718,18 +722,10 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             $instrumentId = $this->instruments->nativeInstrumentId($symbol);
             foreach (['1m', '5m', '15m', '1H'] as $bar) {
                 $stream = $symbol . '/rest/candle_' . $bar;
-                $rows = $this->restClient->currentCandles(
-                    $instrumentId,
-                    $bar,
-                    null,
-                    null,
-                    300,
-                );
-                $this->loopPump?->pump();
-                if ($this->checkpoint->phase !== 'streaming') {
+                $rows = $this->initialCandleBridgeRows($stream, $instrumentId, $bar);
+                if ($rows === null) {
                     return;
                 }
-                $this->sortCandleRows($rows);
                 $this->requiresOverlap[$stream] = true;
                 yield from $this->yieldWarmupRowEvents(
                     $stream,
@@ -744,8 +740,87 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     ),
                     streamWithoutTransition: true,
                 );
+                if ($this->checkpoint->phase !== 'streaming') {
+                    return;
+                }
             }
         }
+    }
+
+    /** @return list<array<array-key, mixed>>|null */
+    private function initialCandleBridgeRows(
+        string $stream,
+        string $instrumentId,
+        string $bar,
+    ): ?array {
+        $rows = $this->restClient->currentCandles($instrumentId, $bar, null, null, 300);
+        $this->loopPump?->pump();
+        if ($this->checkpoint->phase !== 'streaming') {
+            return null;
+        }
+        if ($rows === [] || \count($rows) > 300) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        $cursor = $this->validatedOldestCandleTimestamp(
+            $rows,
+            $instrumentId,
+            $bar,
+            null,
+        );
+        for ($page = 0; !$this->bridgeRowsContainRequiredFrontier(
+            $stream,
+            $instrumentId,
+            $bar,
+            $rows,
+        ); ++$page) {
+            if ($page >= OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES) {
+                $this->failTerminal('market_data_gap_unresolved');
+            }
+            $older = $this->restClient->historyCandles($instrumentId, $bar, $cursor, 300);
+            $this->loopPump?->pump();
+            if ($this->checkpoint->phase !== 'streaming') {
+                return null;
+            }
+            if ($older === [] || \count($older) > 300) {
+                $this->failTerminal('market_data_gap_unresolved');
+            }
+            $cursor = $this->validatedOldestCandleTimestamp(
+                $older,
+                $instrumentId,
+                $bar,
+                $cursor,
+            );
+            $rows = [...$older, ...$rows];
+        }
+        $this->sortCandleRows($rows);
+
+        return $rows;
+    }
+
+    /** @param list<array<array-key, mixed>> $rows */
+    private function bridgeRowsContainRequiredFrontier(
+        string $stream,
+        string $instrumentId,
+        string $bar,
+        array $rows,
+    ): bool {
+        $required = $this->checkpoint->streamFrontiers[$stream] ?? null;
+        if (!$required instanceof OkxPaperStreamFrontier) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        foreach ($rows as $row) {
+            $candidate = $this->candleFrontier($instrumentId, $bar, $row);
+            if (!hash_equals($required->naturalIdentity, $candidate->naturalIdentity)) {
+                continue;
+            }
+            if (!hash_equals($required->canonicalDigest, $candidate->canonicalDigest)) {
+                throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     /** @return list<array<array-key, mixed>> */
@@ -1584,6 +1659,12 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     !$streamWithoutTransition,
                     $streamWithoutTransition ? $stream : null,
                 );
+                if ($streamWithoutTransition) {
+                    $this->loopPump?->pump();
+                    if ($this->checkpoint->phase !== 'streaming') {
+                        return;
+                    }
+                }
             }
             $pendingEvents = $events;
         }
@@ -1594,6 +1675,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $streamWithoutTransition ? [] : $transition,
                 eventStreamOverride: $streamWithoutTransition ? $stream : null,
             );
+            if ($streamWithoutTransition) {
+                $this->loopPump?->pump();
+            }
         }
         if ($requireInitialEvent
             && !$acceptedAny
