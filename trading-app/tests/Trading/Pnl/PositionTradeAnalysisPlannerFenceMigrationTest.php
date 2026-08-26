@@ -29,11 +29,11 @@ final class PositionTradeAnalysisPlannerFenceMigrationTest extends TestCase
         self::assertStringContainsString("'old_source.'", $migration);
         self::assertStringNotContainsString('old_1', $migration);
         self::assertStringContainsString(
-            "format('(%s).%I AS %I'",
+            'original_definition:',
             $migration,
         );
         self::assertStringContainsString(
-            "CREATE OR REPLACE VIEW position_trade_analysis_v2_legacy_source AS SELECT",
+            'COMMENT ON VIEW position_trade_analysis_v2_legacy_source IS NULL',
             $migration,
         );
     }

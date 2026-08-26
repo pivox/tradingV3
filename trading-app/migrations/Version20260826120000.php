@@ -85,9 +85,14 @@ DECLARE
     source_alias text;
     record_expression text;
     tail_position integer;
+    previous_comment text;
 BEGIN
     SELECT pg_get_viewdef('position_trade_analysis_v2_legacy_source'::regclass, true)
       INTO definition;
+    SELECT obj_description(
+        'position_trade_analysis_v2_legacy_source'::regclass,
+        'pg_class'
+    ) INTO previous_comment;
     source_alias := (regexp_match(
         definition,
         'FROM position_trade_analysis_v2_pre_ledger ([a-zA-Z_][a-zA-Z0-9_]*)'
@@ -98,6 +103,7 @@ BEGIN
     );
     IF source_alias IS NULL
         OR tail_position = 0
+        OR previous_comment IS NOT NULL
         OR strpos(definition, 'jsonb_populate_record') = 0
         OR strpos(definition, 'composed AS MATERIALIZED') > 0
     THEN
@@ -121,6 +127,10 @@ BEGIN
         || ') SELECT (composed.legacy_record).*, '
         || {$composedLiteral}
         || ' FROM composed';
+    EXECUTE format(
+        'COMMENT ON VIEW position_trade_analysis_v2_legacy_source IS %L',
+        'trading_v3:Version20260826120000:original_definition:' || definition
+    );
 END
 \$position_trade_analysis_composite_once\$
 SQL;
@@ -129,63 +139,34 @@ SQL;
         return <<<SQL
 DO \$position_trade_analysis_composite_restore\$
 DECLARE
-    definition text;
-    source_tail text;
-    source_alias text;
-    record_expression text;
-    tail_position integer;
-    tail_end_position integer;
-    expanded_columns text;
+    rollback_comment text;
+    original_definition text;
 BEGIN
-    SELECT pg_get_viewdef('position_trade_analysis_v2_legacy_source'::regclass, true)
-      INTO definition;
-    source_alias := (regexp_match(
-        definition,
-        'FROM position_trade_analysis_v2_pre_ledger ([a-zA-Z_][a-zA-Z0-9_]*)'
-    ))[1];
-    tail_position := strpos(
-        definition,
-        'FROM position_trade_analysis_v2_pre_ledger ' || source_alias
-    );
-    tail_end_position := strpos(
-        definition,
-        'SELECT (composed.legacy_record).entry_event_id'
-    );
-    IF source_alias IS NULL
-        OR tail_position = 0
-        OR tail_end_position <= tail_position
-        OR strpos(definition, 'composed AS MATERIALIZED') = 0
+    SELECT obj_description(
+        'position_trade_analysis_v2_legacy_source'::regclass,
+        'pg_class'
+    ) INTO rollback_comment;
+    IF rollback_comment IS NULL
+        OR NOT starts_with(
+            rollback_comment,
+            'trading_v3:Version20260826120000:original_definition:'
+        )
     THEN
         RAISE EXCEPTION 'position_trade_analysis_v2_composite_restore_source_invalid';
     END IF;
-    source_tail := rtrim(substring(
-        definition
-        FROM tail_position
-        FOR tail_end_position - tail_position
-    ), E' \\n\\t)');
-    record_expression := replace(
-        {$recordLiteral},
-        'old_source.',
-        source_alias || '.'
+    original_definition := substring(
+        rollback_comment
+        FROM length('trading_v3:Version20260826120000:original_definition:') + 1
     );
-
-    SELECT string_agg(
-        format('(%s).%I AS %I', record_expression, attribute.attname, attribute.attname),
-        ', ' ORDER BY attribute.attnum
-    )
-      INTO expanded_columns
-      FROM pg_attribute attribute
-     WHERE attribute.attrelid = 'position_trade_analysis_v2_pre_ledger'::regclass
-       AND attribute.attnum > 0
-       AND NOT attribute.attisdropped;
-    IF expanded_columns IS NULL THEN
-        RAISE EXCEPTION 'position_trade_analysis_v2_composite_restore_columns_invalid';
+    IF strpos(original_definition, 'jsonb_populate_record') = 0
+        OR strpos(original_definition, 'composed AS MATERIALIZED') > 0
+    THEN
+        RAISE EXCEPTION 'position_trade_analysis_v2_composite_restore_definition_invalid';
     END IF;
 
-    EXECUTE 'CREATE OR REPLACE VIEW position_trade_analysis_v2_legacy_source AS SELECT '
-        || expanded_columns || ', '
-        || {$ledgerLiteral} || ' '
-        || source_tail;
+    EXECUTE 'CREATE OR REPLACE VIEW position_trade_analysis_v2_legacy_source AS '
+        || original_definition;
+    COMMENT ON VIEW position_trade_analysis_v2_legacy_source IS NULL;
 END
 \$position_trade_analysis_composite_restore\$
 SQL;
