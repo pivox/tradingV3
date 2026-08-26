@@ -105,6 +105,10 @@ final readonly class PaperCanonicalIndicatorWindowSource
             if ($timeframeEvents === []) {
                 return null;
             }
+            $timeframeEvents = $this->latestCandleEvents(
+                $timeframeEvents,
+                $required === 1000 ? 1003 : $required,
+            );
             $candidates = array_values(array_filter(
                 $this->adapter->adaptCandleEvents($timeframeEvents),
                 static fn (NormalizedBacktestCandle $candle): bool => $candle->availableAt <= $availableThrough,
@@ -132,6 +136,21 @@ final readonly class PaperCanonicalIndicatorWindowSource
         }
 
         return $triggerBound ? $windows : null;
+    }
+
+    /**
+     * @param list<PaperMarketEvent> $events
+     * @return list<PaperMarketEvent>
+     */
+    private function latestCandleEvents(array $events, int $limit): array
+    {
+        usort($events, static function (PaperMarketEvent $left, PaperMarketEvent $right): int {
+            $comparison = $left->exchangeTimestamp <=> $right->exchangeTimestamp;
+
+            return $comparison !== 0 ? $comparison : $left->eventId <=> $right->eventId;
+        });
+
+        return array_slice($events, -$limit);
     }
 
     /**
