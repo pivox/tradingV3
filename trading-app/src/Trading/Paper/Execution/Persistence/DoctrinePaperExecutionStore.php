@@ -254,7 +254,7 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
             if ($position > $expected) {
                 throw new \LogicException('paper_execution_source_gap');
             }
-            if ($this->hasPendingEffects($cell->id)) {
+            if ($expected > 0 && $this->hasPendingEffectsAt($cell->id, $expected - 1)) {
                 throw new \LogicException('paper_execution_effect_pending');
             }
             if ($this->databaseBoolean($checkpoint['killed'] ?? false)) {
@@ -789,12 +789,14 @@ SQL, [$checkpoint['cell_id'], $ordinal, $eventType, $sourcePosition, $sourceEven
         return CanonicalJson::encode($this->decodeJsonMap($json));
     }
 
-    private function hasPendingEffects(string $cellId): bool
+    private function hasPendingEffectsAt(string $cellId, int $sourcePosition): bool
     {
         return (bool) $this->connection->fetchOne(<<<'SQL'
 SELECT EXISTS (
     SELECT 1 FROM paper_execution_event requested
-    WHERE requested.cell_id = ? AND requested.event_type = 'effect_requested'
+    WHERE requested.cell_id = ?
+      AND requested.source_position = ?
+      AND requested.event_type = 'effect_requested'
       AND NOT EXISTS (
           SELECT 1 FROM paper_execution_event acknowledged
           WHERE acknowledged.cell_id = requested.cell_id
@@ -802,7 +804,7 @@ SELECT EXISTS (
             AND acknowledged.event_type = 'effect_acknowledged'
       )
 )
-SQL, [$cellId]);
+SQL, [$cellId, $sourcePosition]);
     }
 
     private function assertEffectKey(string $effectKey): void
