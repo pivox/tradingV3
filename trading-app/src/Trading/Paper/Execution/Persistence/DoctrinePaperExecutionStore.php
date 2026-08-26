@@ -453,24 +453,28 @@ SQL, [$cell->id]);
     public function acknowledgedSources(PaperExecutionCell $cell): array
     {
         $rows = $this->connection->iterateColumn(<<<'SQL'
+WITH unresolved_positions AS MATERIALIZED (
+    SELECT requested.source_position
+    FROM paper_execution_event requested
+    WHERE requested.cell_id = ?
+      AND requested.event_type = 'effect_requested'
+      AND NOT EXISTS (
+          SELECT 1 FROM paper_execution_event acknowledged
+          WHERE acknowledged.cell_id = requested.cell_id
+            AND acknowledged.effect_key = requested.effect_key
+            AND acknowledged.event_type = 'effect_acknowledged'
+      )
+)
 SELECT claimed.payload::text
 FROM paper_execution_event claimed
 WHERE claimed.cell_id = ?
   AND claimed.event_type = 'source_claimed'
   AND NOT EXISTS (
-      SELECT 1 FROM paper_execution_event requested
-      WHERE requested.cell_id = claimed.cell_id
-        AND requested.source_position = claimed.source_position
-        AND requested.event_type = 'effect_requested'
-        AND NOT EXISTS (
-            SELECT 1 FROM paper_execution_event acknowledged
-            WHERE acknowledged.cell_id = requested.cell_id
-              AND acknowledged.effect_key = requested.effect_key
-              AND acknowledged.event_type = 'effect_acknowledged'
-        )
+      SELECT 1 FROM unresolved_positions unresolved
+      WHERE unresolved.source_position = claimed.source_position
   )
 ORDER BY claimed.source_position
-SQL, [$cell->id]);
+SQL, [$cell->id, $cell->id]);
 
         $events = [];
         foreach ($rows as $payload) {
