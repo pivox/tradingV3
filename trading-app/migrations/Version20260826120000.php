@@ -11,7 +11,7 @@ final class Version20260826120000 extends AbstractMigration
 {
     public function getDescription(): string
     {
-        return 'Evaluate the legacy PnL composite once to bound PostgreSQL planner memory';
+        return 'Evaluate the legacy PnL composite once per filtered row to bound PostgreSQL planner memory';
     }
 
     public function up(Schema $schema): void
@@ -71,10 +71,8 @@ ledger.exit_vwap,
 ledger.remaining_qty,
 ledger.quantity_status
 SQL;
-        $composedColumns = str_replace('ledger.', 'composed.', $ledgerColumns);
         $recordLiteral = $this->sqlLiteral($recordExpression);
         $ledgerLiteral = $this->sqlLiteral($ledgerColumns);
-        $composedLiteral = $this->sqlLiteral($composedColumns);
 
         if ($optimized) {
             return <<<SQL
@@ -105,7 +103,7 @@ BEGIN
         OR tail_position = 0
         OR previous_comment IS NOT NULL
         OR strpos(definition, 'jsonb_populate_record') = 0
-        OR strpos(definition, 'composed AS MATERIALIZED') > 0
+        OR strpos(definition, 'LATERAL jsonb_populate_record') > 0
     THEN
         RAISE EXCEPTION 'position_trade_analysis_v2_composite_source_invalid';
     END IF;
@@ -120,13 +118,12 @@ BEGIN
     );
 
     EXECUTE 'CREATE OR REPLACE VIEW position_trade_analysis_v2_legacy_source AS '
-        || 'WITH composed AS MATERIALIZED (SELECT '
-        || record_expression || ' AS legacy_record, '
+        || 'SELECT populated.*, '
         || {$ledgerLiteral} || ' '
         || source_tail
-        || ') SELECT (composed.legacy_record).*, '
-        || {$composedLiteral}
-        || ' FROM composed';
+        || ' CROSS JOIN LATERAL '
+        || record_expression
+        || ' populated';
     EXECUTE format(
         'COMMENT ON VIEW position_trade_analysis_v2_legacy_source IS %L',
         'trading_v3:Version20260826120000:original_definition:' || definition
@@ -159,7 +156,7 @@ BEGIN
         FROM length('trading_v3:Version20260826120000:original_definition:') + 1
     );
     IF strpos(original_definition, 'jsonb_populate_record') = 0
-        OR strpos(original_definition, 'composed AS MATERIALIZED') > 0
+        OR strpos(original_definition, 'LATERAL jsonb_populate_record') > 0
     THEN
         RAISE EXCEPTION 'position_trade_analysis_v2_composite_restore_definition_invalid';
     END IF;

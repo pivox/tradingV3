@@ -178,15 +178,18 @@ final class PositionTradeAnalysisViewTest extends TestCase
 
         self::assertIsString($definition);
         self::assertStringContainsString(
-            'composed AS MATERIALIZED',
+            'LATERAL jsonb_populate_record',
             $definition,
         );
+        self::assertStringNotContainsString('AS MATERIALIZED', $definition);
         self::assertSame(1, substr_count($definition, 'jsonb_populate_record'));
-        self::assertNotSame(
-            [],
-            $this->conn->fetchFirstColumn(
-                'EXPLAIN SELECT * FROM position_trade_analysis_v2 LIMIT 1',
-            ),
+        $plan = $this->conn->fetchFirstColumn(
+            'EXPLAIN SELECT * FROM position_trade_analysis_v2 WHERE entry_event_id = -1 LIMIT 1',
+        );
+        self::assertNotSame([], $plan);
+        self::assertStringNotContainsString(
+            'CTE Scan on composed',
+            implode("\n", $plan),
         );
     }
 
@@ -205,7 +208,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
             "SELECT pg_get_viewdef('position_trade_analysis_v2_legacy_source'::regclass, true)",
         );
         self::assertIsString($restored);
-        self::assertStringNotContainsString('composed AS MATERIALIZED', $restored);
+        self::assertStringNotContainsString('LATERAL jsonb_populate_record', $restored);
         self::assertGreaterThan(1, substr_count($restored, 'jsonb_populate_record'));
 
         $migration = new Version20260826120000($this->conn, new NullLogger());
@@ -221,7 +224,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
             "SELECT pg_get_viewdef('position_trade_analysis_v2_legacy_source'::regclass, true)",
         );
         self::assertIsString($optimized);
-        self::assertStringContainsString('composed AS MATERIALIZED', $optimized);
+        self::assertStringContainsString('LATERAL jsonb_populate_record', $optimized);
         self::assertSame(1, substr_count($optimized, 'jsonb_populate_record'));
     }
 

@@ -18,7 +18,7 @@ final class PositionTradeAnalysisPlannerFenceMigrationTest extends TestCase
         $migration = file_get_contents($path);
         self::assertIsString($migration);
         self::assertStringContainsString(
-            'WITH composed AS MATERIALIZED',
+            'CROSS JOIN LATERAL',
             $migration,
         );
         self::assertStringContainsString(
@@ -28,6 +28,7 @@ final class PositionTradeAnalysisPlannerFenceMigrationTest extends TestCase
         self::assertStringContainsString('regexp_match(', $migration);
         self::assertStringContainsString("'old_source.'", $migration);
         self::assertStringNotContainsString('old_1', $migration);
+        self::assertStringNotContainsString('AS MATERIALIZED', $migration);
         self::assertStringContainsString(
             'original_definition:',
             $migration,
