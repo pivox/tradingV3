@@ -188,6 +188,14 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
 
     public function pendingEffects(PaperExecutionCell $cell): array { return array_values($this->pending); }
 
+    public function pendingEffectsAt(PaperExecutionCell $cell, int $sourcePosition): array
+    {
+        return array_values(array_filter(
+            $this->pending,
+            static fn (PaperPendingEffect $effect): bool => $effect->sourcePosition === $sourcePosition,
+        ));
+    }
+
     public function acknowledge(PaperExecutionCell $cell, int $position, string $effectKey, array $payload, int $fakeEventCursor): void
     {
         if (!isset($this->pending[$effectKey])) {

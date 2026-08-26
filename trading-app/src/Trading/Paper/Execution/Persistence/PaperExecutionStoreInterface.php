@@ -44,6 +44,9 @@ interface PaperExecutionStoreInterface
     /** @return list<PaperPendingEffect> */
     public function pendingEffects(PaperExecutionCell $cell): array;
 
+    /** @return list<PaperPendingEffect> */
+    public function pendingEffectsAt(PaperExecutionCell $cell, int $sourcePosition): array;
+
     /** @param array<string, mixed> $payload */
     public function acknowledge(PaperExecutionCell $cell, int $position, string $effectKey, array $payload, int $fakeEventCursor): void;
 

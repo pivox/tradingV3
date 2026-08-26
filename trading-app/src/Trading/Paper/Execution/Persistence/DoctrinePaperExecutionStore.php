@@ -376,6 +376,34 @@ SQL, [$cell->id]);
         ), $rows);
     }
 
+    public function pendingEffectsAt(PaperExecutionCell $cell, int $sourcePosition): array
+    {
+        if ($sourcePosition < 0) {
+            throw new \InvalidArgumentException('paper_execution_source_position_invalid');
+        }
+        $rows = $this->connection->fetchAllAssociative(<<<'SQL'
+SELECT requested.source_position, requested.effect_key, requested.payload::text AS payload, requested.journal_ordinal
+FROM paper_execution_event requested
+WHERE requested.cell_id = ?
+  AND requested.source_position = ?
+  AND requested.event_type = 'effect_requested'
+  AND NOT EXISTS (
+      SELECT 1 FROM paper_execution_event acknowledged
+      WHERE acknowledged.cell_id = requested.cell_id
+        AND acknowledged.effect_key = requested.effect_key
+        AND acknowledged.event_type = 'effect_acknowledged'
+  )
+ORDER BY requested.journal_ordinal
+SQL, [$cell->id, $sourcePosition]);
+
+        return array_map(fn (array $row): PaperPendingEffect => new PaperPendingEffect(
+            sourcePosition: (int) $row['source_position'],
+            effectKey: (string) $row['effect_key'],
+            payload: $this->decodeJsonMap($row['payload'] ?? null),
+            journalOrdinal: (int) $row['journal_ordinal'],
+        ), $rows);
+    }
+
     public function acknowledge(PaperExecutionCell $cell, int $position, string $effectKey, array $payload, int $fakeEventCursor): void
     {
         $this->assertEffectKey($effectKey);

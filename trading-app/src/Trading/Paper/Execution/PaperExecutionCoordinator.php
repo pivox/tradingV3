@@ -95,7 +95,9 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         $this->assertInput($cell, $eligibility, $datasetId, $event);
         $runtime = $this->runtimeFactory->forCell($cell);
 
-        $this->reconcilePending($cell, $runtime);
+        if ($this->restoredCellId !== $cell->id) {
+            $this->reconcilePending($cell, $runtime);
+        }
         $this->restoreAcknowledgedMarket($cell);
 
         $checkpoint = $this->store->checkpoint($cell);
@@ -242,7 +244,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
             throw new \LogicException('paper_canonical_order_intent_reservation_missing');
         }
 
-        $this->reconcilePending($cell, $runtime, false);
+        $this->reconcilePending($cell, $runtime, false, $sourcePosition);
         $this->market->apply($event, !$cell->isModern());
     }
 
@@ -251,9 +253,17 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         return PaperExecutionCounters::fromJournal($this->store->journalEventCounts($cell));
     }
 
-    private function reconcilePending(PaperExecutionCell $cell, PaperFakeRuntime $runtime, bool $retry = true): void
+    private function reconcilePending(
+        PaperExecutionCell $cell,
+        PaperFakeRuntime $runtime,
+        bool $retry = true,
+        ?int $sourcePosition = null,
+    ): void
     {
-        foreach ($this->store->pendingEffects($cell) as $pending) {
+        $pendingEffects = $sourcePosition === null
+            ? $this->store->pendingEffects($cell)
+            : $this->store->pendingEffectsAt($cell, $sourcePosition);
+        foreach ($pendingEffects as $pending) {
             if ($this->marketCodec->supports($pending->payload)) {
                 $cursor = $this->store->checkpoint($cell)->fakeEventCursor;
                 $event = $this->marketCodec->decode($pending->payload);

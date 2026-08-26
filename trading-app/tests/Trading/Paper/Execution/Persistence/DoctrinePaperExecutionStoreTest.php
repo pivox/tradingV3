@@ -407,6 +407,14 @@ JSON,
 
         $pending = $this->store->pendingEffects($this->cell);
         self::assertCount(2, $pending);
+        self::assertSame(
+            [$key1, $key2],
+            array_map(
+                static fn (PaperPendingEffect $effect): string => $effect->effectKey,
+                $this->store->pendingEffectsAt($this->cell, 0),
+            ),
+        );
+        self::assertSame([], $this->store->pendingEffectsAt($this->cell, 1));
         self::assertSame([], $this->store->acknowledgedSources($this->cell));
         self::assertContainsOnlyInstancesOf(PaperPendingEffect::class, $pending);
         self::assertSame([$key1, $key2], array_map(static fn (PaperPendingEffect $effect): string => $effect->effectKey, $pending));
