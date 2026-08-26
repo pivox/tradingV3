@@ -810,7 +810,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
         foreach ($rows as $row) {
             $candidate = $this->candleFrontier($instrumentId, $bar, $row);
-            if (!hash_equals($required->naturalIdentity, $candidate->naturalIdentity)) {
+            if (!$candidate instanceof OkxPaperStreamFrontier
+                || !hash_equals($required->naturalIdentity, $candidate->naturalIdentity)
+            ) {
                 continue;
             }
             if (!hash_equals($required->canonicalDigest, $candidate->canonicalDigest)) {

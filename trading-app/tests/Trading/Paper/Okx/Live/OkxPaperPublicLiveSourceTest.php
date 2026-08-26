@@ -270,6 +270,38 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $source->stop();
     }
 
+    public function testInitialCandleBridgeSkipsUnconfirmedRowsWhileLocatingTheFrontier(): void
+    {
+        $rest = Task7RestClient::withInitialDataset();
+        $initial = $rest->candleRows['BTC-USDT-SWAP/1m'];
+        $next = $initial[0];
+        $next[0] = (string) ((int) $next[0] + 60_000);
+        $unconfirmed = $next;
+        $unconfirmed[0] = (string) ((int) $unconfirmed[0] + 60_000);
+        $unconfirmed[8] = '0';
+        $rest->candleResponsePages['BTC-USDT-SWAP/1m'] = [
+            $initial,
+            [$unconfirmed, $next, $initial[0]],
+        ];
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = Task7Transport::acknowledgements(self::publicArguments(), 'public');
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source($rest, $public, $business);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+
+        $this->acknowledgeWarmupEvents($source, $events, 14);
+        $bridged = $events->current();
+
+        self::assertInstanceOf(PaperMarketEvent::class, $bridged);
+        self::assertSame((string) $next[0], $bridged->exchangeTimestamp->format('Uv'));
+        $source->stop();
+    }
+
     public function testInitialCandleBridgePumpsBetweenDurableBatches(): void
     {
         $rest = Task7RestClient::withInitialDataset();
