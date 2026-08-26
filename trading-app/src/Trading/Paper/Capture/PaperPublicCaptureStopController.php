@@ -6,6 +6,7 @@ namespace App\Trading\Paper\Capture;
 
 use App\Trading\Paper\MarketData\PaperLiveMarketDataSourceInterface;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\TimerInterface;
@@ -26,6 +27,8 @@ final class PaperPublicCaptureStopController
 
     private ?string $completionSnapshotSymbol = null;
 
+    private bool $awaitingPostSnapshotLiveEvent = false;
+
     public function __construct(
         private readonly LoopInterface $loop,
         private readonly PaperLiveMarketDataSourceInterface $source,
@@ -40,9 +43,10 @@ final class PaperPublicCaptureStopController
     }
 
     /**
-     * The sources emit durable initial boundaries in canonical symbol order. The final
-     * symbol is therefore the warmup completion sentinel; accepting its reconnect
-     * boundary also preserves a restart between two already durable boundaries.
+     * The sources emit durable initial boundaries in canonical symbol order. Hyperliquid
+     * completes warmup at the final boundary. OKX still performs its REST-to-WebSocket
+     * candle bridge afterwards, so its duration begins at the first durable WebSocket
+     * event following the final initial or reconnect boundary.
      *
      * @param list<string> $symbols
      */
@@ -66,9 +70,26 @@ final class PaperPublicCaptureStopController
 
     public function observe(PaperMarketEvent $event): void
     {
-        if ($this->stopRequested
-            || $this->deferredDurationSeconds === null
-            || $event->channel !== PaperMarketDataChannel::SNAPSHOT_BOUNDARY
+        if ($this->stopRequested || $this->deferredDurationSeconds === null) {
+            return;
+        }
+        if ($this->source->venue() === PaperMarketDataVenue::OKX) {
+            if ($event->channel === PaperMarketDataChannel::SNAPSHOT_BOUNDARY
+                && in_array($event->payload['reason'] ?? null, ['initial', 'reconnect'], true)
+                && $event->symbol === $this->completionSnapshotSymbol
+            ) {
+                $this->awaitingPostSnapshotLiveEvent = true;
+
+                return;
+            }
+            $origin = $event->payload['origin'] ?? null;
+            if (!$this->awaitingPostSnapshotLiveEvent
+                || !\is_string($origin)
+                || !str_starts_with($origin, 'ws_')
+            ) {
+                return;
+            }
+        } elseif ($event->channel !== PaperMarketDataChannel::SNAPSHOT_BOUNDARY
             || !in_array($event->payload['reason'] ?? null, ['initial', 'reconnect'], true)
             || $event->symbol !== $this->completionSnapshotSymbol
         ) {
@@ -77,6 +98,7 @@ final class PaperPublicCaptureStopController
 
         $durationSeconds = $this->deferredDurationSeconds;
         $this->deferredDurationSeconds = null;
+        $this->awaitingPostSnapshotLiveEvent = false;
         $this->scheduleTimer($durationSeconds);
     }
 
@@ -92,6 +114,7 @@ final class PaperPublicCaptureStopController
         $this->signalListeners = [];
         $this->deferredDurationSeconds = null;
         $this->completionSnapshotSymbol = null;
+        $this->awaitingPostSnapshotLiveEvent = false;
     }
 
     private function assertCanStart(int $durationSeconds): void

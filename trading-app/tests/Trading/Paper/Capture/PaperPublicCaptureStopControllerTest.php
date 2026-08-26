@@ -62,7 +62,7 @@ final class PaperPublicCaptureStopControllerTest extends TestCase
         self::assertSame(1, $source->stopCalls);
     }
 
-    public function testDeferredDurationStartsOnlyAfterTheFinalInitialSnapshotIsDurable(): void
+    public function testOkxDeferredDurationStartsOnlyAfterPostBridgeWebSocketDataIsDurable(): void
     {
         $loop = new CaptureStopLoop();
         $source = new CaptureStopSource();
@@ -93,6 +93,18 @@ final class PaperPublicCaptureStopControllerTest extends TestCase
             'ETHUSDT',
             ['native_symbol' => 'ETH-USDT-SWAP', 'reason' => 'initial', 'source_epoch' => 1, 'source_seq_id' => '11'],
         ));
+        $controller->observe($this->event(
+            PaperMarketDataChannel::CANDLE_1M,
+            'BTCUSDT',
+            ['origin' => 'rest_warmup'],
+        ));
+
+        self::assertSame([], $loop->timers);
+        $controller->observe($this->event(
+            PaperMarketDataChannel::PUBLIC_TRADE,
+            'BTCUSDT',
+            ['origin' => 'ws_trades'],
+        ));
 
         self::assertCount(1, $loop->timers);
         $timer = $loop->firstTimer() ?? self::fail('The live-duration timer was not scheduled.');
@@ -101,7 +113,7 @@ final class PaperPublicCaptureStopControllerTest extends TestCase
         self::assertSame(1, $source->healthyStopCalls);
     }
 
-    public function testDeferredDurationResumesFromTheFinalReconnectBoundaryAlone(): void
+    public function testOkxDeferredDurationResumesAfterPostReconnectWebSocketData(): void
     {
         $loop = new CaptureStopLoop();
         $controller = new PaperPublicCaptureStopController($loop, new CaptureStopSource());
@@ -113,8 +125,34 @@ final class PaperPublicCaptureStopControllerTest extends TestCase
             ['native_symbol' => 'ETH-USDT-SWAP', 'reason' => 'reconnect', 'source_epoch' => 2, 'source_seq_id' => '12'],
         ));
 
+        self::assertSame([], $loop->timers);
+        $controller->observe($this->event(
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            'ETHUSDT',
+            ['origin' => 'ws_books'],
+        ));
+
         self::assertCount(1, $loop->timers);
         self::assertSame(300.0, ($loop->firstTimer() ?? self::fail('Missing resumed timer.'))->getInterval());
+    }
+
+    public function testHyperliquidDeferredDurationStillStartsAtTheFinalBoundary(): void
+    {
+        $loop = new CaptureStopLoop();
+        $controller = new PaperPublicCaptureStopController(
+            $loop,
+            new CaptureStopSource(venue: PaperMarketDataVenue::HYPERLIQUID),
+        );
+        $controller->startAfterInitialSnapshots(300, ['ETHUSDT', 'BTCUSDT']);
+
+        $controller->observe($this->event(
+            PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
+            'ETHUSDT',
+            ['native_symbol' => 'ETH', 'reason' => 'initial', 'source_epoch' => 1, 'source_seq_id' => '12'],
+            PaperMarketDataVenue::HYPERLIQUID,
+        ));
+
+        self::assertCount(1, $loop->timers);
     }
 
     #[DataProvider('invalidDurations')]
@@ -136,11 +174,15 @@ final class PaperPublicCaptureStopControllerTest extends TestCase
     }
 
     /** @param array<string, mixed> $payload */
-    private function event(PaperMarketDataChannel $channel, string $symbol, array $payload): PaperMarketEvent
-    {
+    private function event(
+        PaperMarketDataChannel $channel,
+        string $symbol,
+        array $payload,
+        PaperMarketDataVenue $venue = PaperMarketDataVenue::OKX,
+    ): PaperMarketEvent {
         return PaperMarketEvent::create(
             PaperMarketDataNetwork::MAINNET,
-            PaperMarketDataVenue::OKX,
+            $venue,
             $symbol,
             $channel,
             new \DateTimeImmutable('2026-08-24T10:00:00Z'),
@@ -156,13 +198,16 @@ final class CaptureStopSource implements PaperLiveMarketDataSourceInterface
     public int $healthyStopCalls = 0;
     public int $stopCalls = 0;
 
-    public function __construct(private readonly ?\Throwable $healthyStopFailure = null)
+    public function __construct(
+        private readonly ?\Throwable $healthyStopFailure = null,
+        private readonly PaperMarketDataVenue $venue = PaperMarketDataVenue::OKX,
+    )
     {
     }
 
     public function venue(): PaperMarketDataVenue
     {
-        return PaperMarketDataVenue::OKX;
+        return $this->venue;
     }
 
     public function events(): iterable
