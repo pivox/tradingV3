@@ -8,7 +8,7 @@ use Ratchet\Client\Connector;
 use React\EventLoop\LoopInterface;
 use React\Promise\PromiseInterface;
 
-final class PawlOkxPaperPublicWebSocketTransport implements OkxPaperPublicWebSocketTransportInterface
+final class PawlOkxPaperPublicWebSocketTransport implements OkxPaperPausableWebSocketTransportInterface
 {
     /** @var \Closure(string): PromiseInterface<object> */
     private readonly \Closure $connector;
@@ -116,5 +116,15 @@ final class PawlOkxPaperPublicWebSocketTransport implements OkxPaperPublicWebSoc
         $connection = $this->connection;
         $this->connection = null;
         $connection?->close();
+    }
+
+    public function pause(): void
+    {
+        $this->connection?->pause();
+    }
+
+    public function resume(): void
+    {
+        $this->connection?->resume();
     }
 }

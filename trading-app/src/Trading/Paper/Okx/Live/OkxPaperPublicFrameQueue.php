@@ -67,6 +67,18 @@ final class OkxPaperPublicFrameQueue
         return $this->bytes;
     }
 
+    public function shouldPauseAdmissions(): bool
+    {
+        return count($this->frames) >= OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES
+            || $this->bytes >= OkxPaperLivePolicy::PAUSE_QUEUED_BYTES;
+    }
+
+    public function canResumeAdmissions(): bool
+    {
+        return count($this->frames) <= OkxPaperLivePolicy::RESUME_QUEUED_FRAMES
+            && $this->bytes <= OkxPaperLivePolicy::RESUME_QUEUED_BYTES;
+    }
+
     public function clear(): void
     {
         $this->frames = [];

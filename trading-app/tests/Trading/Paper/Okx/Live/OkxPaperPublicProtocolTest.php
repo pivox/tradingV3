@@ -467,6 +467,24 @@ final class OkxPaperPublicProtocolTest extends TestCase
         }
     }
 
+    public function testQueueFlowControlUsesSeparateHighAndLowWatermarks(): void
+    {
+        $queue = new OkxPaperPublicFrameQueue();
+        for ($index = 0; $index < OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES; ++$index) {
+            $queue->enqueue('x');
+        }
+
+        self::assertTrue($queue->shouldPauseAdmissions());
+        self::assertFalse($queue->canResumeAdmissions());
+
+        while ($queue->count() > OkxPaperLivePolicy::RESUME_QUEUED_FRAMES) {
+            self::assertSame('x', $queue->dequeue());
+        }
+
+        self::assertFalse($queue->shouldPauseAdmissions());
+        self::assertTrue($queue->canResumeAdmissions());
+    }
+
     private static function subscriptions(): OkxPaperPublicSubscriptionSet
     {
         return new OkxPaperPublicSubscriptionSet(new OkxPaperInstrumentMap());
