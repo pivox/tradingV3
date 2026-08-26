@@ -253,6 +253,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     /** @return iterable<PaperMarketEvent> */
     private function eventFlow(): iterable
     {
+        $initialCandleBridgeRequired = $this->checkpoint->phase === 'warming';
         if (!$this->config->acquisitionEnabled) {
             throw new OkxPaperLiveIntegrityException('okx_paper_public_acquisition_disabled');
         }
@@ -332,6 +333,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 'streaming',
                 null,
             );
+        }
+        if ($initialCandleBridgeRequired && $this->checkpoint->phase === 'streaming') {
+            yield from $this->bridgeInitialCandles();
         }
         if ($this->checkpoint->phase === 'streaming') {
             $this->startHeartbeatTimers();
@@ -704,6 +708,43 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             yield $this->checkpoint->pendingEvent
                 ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
             $this->assertPendingWasAcknowledged();
+        }
+    }
+
+    /** @return \Generator<int, PaperMarketEvent> */
+    private function bridgeInitialCandles(): \Generator
+    {
+        foreach (['BTCUSDT', 'ETHUSDT'] as $symbol) {
+            $instrumentId = $this->instruments->nativeInstrumentId($symbol);
+            foreach (['1m', '5m', '15m', '1H'] as $bar) {
+                $stream = $symbol . '/rest/candle_' . $bar;
+                $rows = $this->restClient->currentCandles(
+                    $instrumentId,
+                    $bar,
+                    null,
+                    null,
+                    300,
+                );
+                $this->loopPump?->pump();
+                if ($this->checkpoint->phase !== 'streaming') {
+                    return;
+                }
+                $this->sortCandleRows($rows);
+                $this->requiresOverlap[$stream] = true;
+                yield from $this->yieldWarmupRowEvents(
+                    $stream,
+                    [],
+                    $rows,
+                    fn (array $row, OkxPaperMarketEventNormalizer $normalizer): ?PaperMarketEvent => $normalizer
+                        ->warmupCandle($instrumentId, $bar, $row),
+                    fn (array $row): ?OkxPaperStreamFrontier => $this->candleFrontier(
+                        $instrumentId,
+                        $bar,
+                        $row,
+                    ),
+                    streamWithoutTransition: true,
+                );
+            }
         }
     }
 
@@ -1427,6 +1468,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         string $stream,
         array $transition,
         bool $continueTransitionAfterBatch = false,
+        ?string $eventStreamOverride = null,
     ): \Generator
     {
         if ($events === []) {
@@ -1436,7 +1478,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         foreach ($events as $index => $accepted) {
             $event = $accepted['event'];
             $frontier = $accepted['frontier'];
-            $eventStream = $transition === [] ? $this->streamForEvent($event) : $stream;
+            $eventStream = $transition === []
+                ? ($eventStreamOverride ?? $this->streamForEvent($event))
+                : $stream;
             $pendingFrontier = [
                 'stream' => $eventStream,
                 'frontier' => $frontier->toArray(),
@@ -1480,6 +1524,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         callable $normalize,
         callable $frontierForRow,
         bool $requireInitialEvent = false,
+        bool $streamWithoutTransition = false,
     ): \Generator {
         if ($rows === []) {
             throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
@@ -1535,8 +1580,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 yield from $this->yieldMarketEvents(
                     $pendingEvents,
                     $stream,
-                    $transition,
-                    true,
+                    $streamWithoutTransition ? [] : $transition,
+                    !$streamWithoutTransition,
+                    $streamWithoutTransition ? $stream : null,
                 );
             }
             $pendingEvents = $events;
@@ -1545,7 +1591,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             yield from $this->yieldMarketEvents(
                 $pendingEvents,
                 $stream,
-                $transition,
+                $streamWithoutTransition ? [] : $transition,
+                eventStreamOverride: $streamWithoutTransition ? $stream : null,
             );
         }
         if ($requireInitialEvent

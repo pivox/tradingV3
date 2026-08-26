@@ -179,6 +179,50 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(Task7RestClient::expectedInitialCalls(), $rest->calls);
     }
 
+    public function testInitialCandleBridgeSubscribesBeforeClosingTheWarmupGap(): void
+    {
+        $rest = Task7RestClient::withInitialDataset();
+        $initial = $rest->candleRows['BTC-USDT-SWAP/1m'];
+        $next = $initial[0];
+        $next[0] = (string) ((int) $next[0] + 60_000);
+        $rest->candleResponsePages['BTC-USDT-SWAP/1m'] = [
+            $initial,
+            [$next, $initial[0]],
+        ];
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['101']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $rest->beforeCurrentCandles = static function (
+            string $instrumentId,
+            string $bar,
+            int $call,
+        ) use ($public, $business): void {
+            if ($instrumentId === 'BTC-USDT-SWAP' && $bar === '1m' && $call === 2) {
+                self::assertNotSame([], $public->connections);
+                self::assertNotSame([], $business->connections);
+            }
+        };
+        $source = $this->source($rest, $public, $business);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+
+        $this->acknowledgeWarmupEvents($source, $events, 14);
+        $bridged = $events->current();
+
+        self::assertInstanceOf(PaperMarketEvent::class, $bridged);
+        self::assertSame(PaperMarketDataChannel::CANDLE_1M, $bridged->channel);
+        self::assertSame('BTCUSDT', $bridged->symbol);
+        self::assertSame((string) $next[0], $bridged->exchangeTimestamp->format('Uv'));
+        $source->stop();
+    }
+
     public function testWarmupPaginatesExactlyOneThousandConfirmedHourlyCandles(): void
     {
         $rest = Task7RestClient::withInitialDataset();
@@ -2087,18 +2131,19 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $events = $source->events();
         self::assertInstanceOf(\Generator::class, $events);
         $this->acknowledgeWarmup($source, $events);
+        $bridgePumpCount = $pump->count;
 
         $first = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $first);
         self::assertSame(1, $source->pendingDurableBatchSize());
         $source->acknowledge($first->eventId);
-        self::assertSame(1, $pump->count);
+        self::assertSame($bridgePumpCount + 1, $pump->count);
 
         $events->next();
         $second = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $second);
         $source->acknowledge($second->eventId);
-        self::assertSame(2, $pump->count);
+        self::assertSame($bridgePumpCount + 2, $pump->count);
     }
 
     public function testReactLoopPumpRunsExactlyOneNonBlockingTick(): void
@@ -2152,12 +2197,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         );
         $publicQueue = new OkxPaperPublicFrameQueue();
         $businessQueue = new OkxPaperPublicFrameQueue();
-        $pump = new Task7CountingLoopPump(static function () use ($publicQueue): void {
-            $publicQueue->enqueue(json_encode(
-                Task7Transport::tradeFrame(['9200']),
-                \JSON_THROW_ON_ERROR,
-            ));
-        });
+        $pump = new Task7CountingLoopPump();
         $source = $this->source(
             Task7RestClient::withInitialDataset(),
             $public,
@@ -2169,6 +2209,12 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $events = $source->events();
         self::assertInstanceOf(\Generator::class, $events);
         $this->acknowledgeWarmup($source, $events);
+        $pump->onPump(static function () use ($publicQueue): void {
+            $publicQueue->enqueue(json_encode(
+                Task7Transport::tradeFrame(['9200']),
+                \JSON_THROW_ON_ERROR,
+            ));
+        });
 
         $sentinel = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
@@ -2272,6 +2318,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $events = $source->events();
         self::assertInstanceOf(\Generator::class, $events);
         $this->acknowledgeWarmup($source, $events);
+        $bridgePumpCount = $pump->count;
 
         $sentinel = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
@@ -2289,7 +2336,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(PaperMarketEvent::class, $firstBusiness);
         self::assertSame(PaperMarketDataChannel::CANDLE_1M, $firstBusiness->channel);
         $source->acknowledge($firstBusiness->eventId);
-        self::assertSame(2, $pump->count);
+        self::assertSame($bridgePumpCount + 2, $pump->count);
 
         $publicQueue->enqueue('pong');
         $businessQueue->enqueue(json_encode([
@@ -2303,7 +2350,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $secondBusiness = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $secondBusiness);
         self::assertSame(PaperMarketDataChannel::CANDLE_1M, $secondBusiness->channel);
-        self::assertSame(3, $pump->count);
+        self::assertSame($bridgePumpCount + 3, $pump->count);
     }
 
     public function testDurableFrameBatchPreservesEachEventStream(): void
@@ -7718,6 +7765,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(
             [
                 ...Task7RestClient::expectedInitialCalls(),
+                ...Task7RestClient::expectedInitialCandleBridgeCalls(),
                 ...Task7RestClient::expectedReconnectCalls(),
             ],
             $rest->calls,
@@ -11081,6 +11129,11 @@ final class Task7RestClient implements OkxPaperPublicRestClientInterface
     /** @var array<string, list<array<array-key, mixed>>> */
     public array $candleRows = [];
 
+    /** @var array<string, list<list<array<array-key, mixed>>>> */
+    public array $candleResponsePages = [];
+
+    public ?\Closure $beforeCurrentCandles = null;
+
     /** @var array<string, list<array<array-key, mixed>>> */
     public array $tradeRows = [];
 
@@ -11158,6 +11211,19 @@ final class Task7RestClient implements OkxPaperPublicRestClientInterface
         return $calls;
     }
 
+    /** @return list<array{string, list<mixed>}> */
+    public static function expectedInitialCandleBridgeCalls(): array
+    {
+        $calls = [];
+        foreach (['BTC-USDT-SWAP', 'ETH-USDT-SWAP'] as $instrumentId) {
+            foreach (['1m', '5m', '15m', '1H'] as $bar) {
+                $calls[] = ['currentCandles', [$instrumentId, $bar, null, null, 300]];
+            }
+        }
+
+        return $calls;
+    }
+
     public function historyCandles(
         string $instrumentId,
         string $bar,
@@ -11178,7 +11244,20 @@ final class Task7RestClient implements OkxPaperPublicRestClientInterface
     ): array {
         $this->calls[] = ['currentCandles', func_get_args()];
 
-        return $this->candleRows[$instrumentId . '/' . $bar] ?? [];
+        $key = $instrumentId . '/' . $bar;
+        $call = count(array_filter(
+            $this->calls,
+            static fn (array $entry): bool => $entry[0] === 'currentCandles'
+                && ($entry[1][0] ?? null) === $instrumentId
+                && ($entry[1][1] ?? null) === $bar,
+        ));
+        ($this->beforeCurrentCandles ?? static function (): void {
+        })($instrumentId, $bar, $call);
+        if (($this->candleResponsePages[$key] ?? []) !== []) {
+            return array_shift($this->candleResponsePages[$key]);
+        }
+
+        return $this->candleRows[$key] ?? [];
     }
 
     public function historyTrades(
@@ -11518,8 +11597,13 @@ final class Task7CountingLoopPump implements OkxPaperLoopPumpInterface
 {
     public int $count = 0;
 
-    public function __construct(private readonly ?\Closure $callback = null)
+    public function __construct(private ?\Closure $callback = null)
     {
+    }
+
+    public function onPump(?\Closure $callback): void
+    {
+        $this->callback = $callback;
     }
 
     public function pump(): void
