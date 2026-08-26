@@ -193,11 +193,16 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
                 foreach ($warmup->catchupCandles(
                     $this->checkpoint->finalizedCandleFrontiers,
                     $this->nowMilliseconds(),
+                    function (): void {
+                        $this->assertCatchupConnectionActive();
+                        $this->pumpNetworkLoop();
+                        $this->assertCatchupConnectionActive();
+                    },
                 ) as $candle) {
                     yield from $this->yieldWarmupCandle($candle);
-                    $this->throwPendingTransportFailure();
+                    $this->assertCatchupConnectionActive();
                 }
-                $this->throwPendingTransportFailure();
+                $this->assertCatchupConnectionActive();
                 $this->checkpoint = $this->checkpointStore->save(
                     $this->checkpoint->withPhase('streaming'),
                 );
@@ -1130,6 +1135,16 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
             throw new \LogicException();
         }
         $this->acceptPong();
+    }
+
+    private function assertCatchupConnectionActive(): void
+    {
+        $this->throwPendingTransportFailure();
+        if ($this->checkpoint->phase !== 'catching_up') {
+            throw new HyperliquidPaperLiveIntegrityException(
+                'hyperliquid_public_trade_gap_unrecoverable',
+            );
+        }
     }
 
     public function stop(): void

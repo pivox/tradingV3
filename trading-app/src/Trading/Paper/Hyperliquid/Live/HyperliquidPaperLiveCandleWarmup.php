@@ -92,9 +92,16 @@ final readonly class HyperliquidPaperLiveCandleWarmup
      * @param array<string, int> $frontiers
      * @return list<HyperliquidCandle>
      */
-    public function catchupCandles(array $frontiers, int $currentUpperBound): array
+    public function catchupCandles(
+        array $frontiers,
+        int $currentUpperBound,
+        ?callable $serviceNetwork = null,
+    ): array
     {
         try {
+            $networkService = $serviceNetwork === null
+                ? null
+                : \Closure::fromCallable($serviceNetwork);
             if ($currentUpperBound < 0) {
                 throw new \InvalidArgumentException();
             }
@@ -134,6 +141,7 @@ final readonly class HyperliquidPaperLiveCandleWarmup
                         $end,
                         $step,
                         self::MAXIMUM_CATCHUP_PAGES,
+                        $networkService,
                     ));
                 }
             }
@@ -144,9 +152,7 @@ final readonly class HyperliquidPaperLiveCandleWarmup
 
             return $candles;
         } catch (\Throwable $exception) {
-            if ($exception instanceof HyperliquidPaperLiveIntegrityException
-                && $exception->getMessage() === self::FAILURE
-            ) {
+            if ($exception instanceof HyperliquidPaperLiveIntegrityException) {
                 throw $exception;
             }
             throw new HyperliquidPaperLiveIntegrityException(self::FAILURE, 0, $exception);
@@ -161,6 +167,7 @@ final readonly class HyperliquidPaperLiveCandleWarmup
         int $end,
         int $step,
         int $maximumPages,
+        ?\Closure $serviceNetwork = null,
     ): array {
         $candles = [];
         $pages = 0;
@@ -169,6 +176,7 @@ final readonly class HyperliquidPaperLiveCandleWarmup
                 throw new \InvalidArgumentException();
             }
             $pageEnd = min($end, $pageStart + ((self::PAGE_SIZE - 1) * $step));
+            $serviceNetwork?->__invoke();
             $rows = $this->restClient->candleSnapshot(
                 $coin, $interval, $pageStart, $pageEnd,
             );
@@ -184,6 +192,7 @@ final readonly class HyperliquidPaperLiveCandleWarmup
             if ($rows === [] || $expected !== $pageEnd + $step) {
                 throw new \InvalidArgumentException();
             }
+            $serviceNetwork?->__invoke();
             $pageStart = $expected;
         }
 

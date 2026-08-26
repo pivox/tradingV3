@@ -87,6 +87,7 @@ final class HyperliquidPaperLiveCandleWarmupTest extends TestCase
         $client = new RecordingWarmupRestClient();
         $warmup = new HyperliquidPaperLiveCandleWarmup($client);
 
+        $networkServices = 0;
         $candles = $warmup->catchupCandles([
             'BTC/1h' => 1785294000000,
             'BTC/1m' => 1785301140000,
@@ -96,7 +97,9 @@ final class HyperliquidPaperLiveCandleWarmupTest extends TestCase
             'ETH/1m' => 1785301140000,
             'ETH/5m' => 1785300900000,
             'ETH/15m' => 1785300300000,
-        ], 1785301380000);
+        ], 1785301380000, static function () use (&$networkServices): void {
+            ++$networkServices;
+        });
 
         self::assertSame([
             ['BTC', '1m', 1785301200000, 1785301320000],
@@ -105,6 +108,7 @@ final class HyperliquidPaperLiveCandleWarmupTest extends TestCase
             ['ETH', '1h', 1785297600000, 1785297600000],
         ], $client->requests);
         self::assertCount(8, $candles);
+        self::assertSame(8, $networkServices);
         self::assertSame(1785297600000, $candles[0]->startTime);
         self::assertSame(1785301320000, $candles[array_key_last($candles)]->startTime);
     }

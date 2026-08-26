@@ -109,29 +109,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
             self::candleFrame(1785319380000, '2.1'),
             self::candleFrame(1785319440000, '2.2'),
         ]);
-        $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
-        $checkpoint = $store->loadOrCreate(
-            'paper-hyperliquid-live-mainnet',
-            PaperMarketDataNetwork::MAINNET,
-            str_repeat('a', 64),
-        );
-        $state = $checkpoint->toArray();
-        $state['phase'] = 'warming';
-        $state['initial_candle_window_ends'] = [
-            'BTC' => '1785319200000',
-            'ETH' => '1785319200000',
-        ];
-        $state['finalized_candle_frontiers'] = [
-            'BTC/15m' => 1785318300000,
-            'BTC/1h' => 1785315600000,
-            'BTC/1m' => 1785319140000,
-            'BTC/5m' => 1785318900000,
-            'ETH/15m' => 1785318300000,
-            'ETH/1h' => 1785315600000,
-            'ETH/1m' => 1785319140000,
-            'ETH/5m' => 1785318900000,
-        ];
-        $store->save(HyperliquidPaperLiveCheckpoint::fromArray($state));
+        $this->seedWarmupCheckpoint();
         $rest = new BridgeAwareWarmupRestClient($clock, $transport);
         $source = $this->source(
             $transport,
@@ -177,6 +155,37 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
                 && $candidate->channel === PaperMarketDataChannel::CANDLE_1M
                 && ($candidate->payload['start_time'] ?? null) === '1785319260000',
         ));
+    }
+
+    public function testHeartbeatTimeoutCannotBeOverwrittenByCatchupCompletion(): void
+    {
+        $clock = new MockClock('2026-07-29T10:00:00Z');
+        $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport([]);
+        $this->seedWarmupCheckpoint();
+        $loop->onNextRun(static function () use ($loop): void {
+            $loop->fire(HyperliquidPaperLivePolicy::HEARTBEAT_IDLE_SECONDS);
+            $loop->fire(HyperliquidPaperLivePolicy::PONG_TIMEOUT_SECONDS);
+        });
+        $source = $this->source(
+            $transport,
+            loop: $loop,
+            clock: $clock,
+            restClient: new BridgeAwareWarmupRestClient($clock, $transport),
+        );
+
+        try {
+            self::generator($source->events())->rewind();
+            self::fail('A catch-up heartbeat timeout must abort the capture.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('hyperliquid_public_trade_gap_unrecoverable', $exception->getMessage());
+        }
+
+        self::assertSame('failed', $this->checkpoint()->phase);
+        self::assertSame(
+            'hyperliquid_public_trade_gap_unrecoverable',
+            $this->checkpoint()->failureReason,
+        );
     }
 
     public function testAuthenticatedMetadataAndFundingPrecedeInitialSnapshotBoundaries(): void
@@ -1456,6 +1465,33 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
                 PaperMarketDataNetwork::MAINNET,
                 str_repeat('a', 64),
             );
+    }
+
+    private function seedWarmupCheckpoint(): void
+    {
+        $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
+        $checkpoint = $store->loadOrCreate(
+            'paper-hyperliquid-live-mainnet',
+            PaperMarketDataNetwork::MAINNET,
+            str_repeat('a', 64),
+        );
+        $state = $checkpoint->toArray();
+        $state['phase'] = 'warming';
+        $state['initial_candle_window_ends'] = [
+            'BTC' => '1785319200000',
+            'ETH' => '1785319200000',
+        ];
+        $state['finalized_candle_frontiers'] = [
+            'BTC/15m' => 1785318300000,
+            'BTC/1h' => 1785315600000,
+            'BTC/1m' => 1785319140000,
+            'BTC/5m' => 1785318900000,
+            'ETH/15m' => 1785318300000,
+            'ETH/1h' => 1785315600000,
+            'ETH/1m' => 1785319140000,
+            'ETH/5m' => 1785318900000,
+        ];
+        $store->save(HyperliquidPaperLiveCheckpoint::fromArray($state));
     }
 
     /** @return list<string> */
