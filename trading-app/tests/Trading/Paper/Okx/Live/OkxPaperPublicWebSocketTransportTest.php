@@ -86,6 +86,8 @@ final class OkxPaperPublicWebSocketTransportTest extends TestCase
 
     public function testPausesAndResumesTheActivePawlConnection(): void
     {
+        self::assertTrue(method_exists(\Ratchet\Client\WebSocket::class, 'pause'));
+        self::assertTrue(method_exists(\Ratchet\Client\WebSocket::class, 'resume'));
         $connection = new FakePawlPublicConnection();
         $transport = new PawlOkxPaperPublicWebSocketTransport(
             loop: new DeterministicLoop(),
@@ -342,9 +344,9 @@ final class OkxPaperPublicWebSocketTransportTest extends TestCase
         self::assertSame(512, OkxPaperLivePolicy::MAX_QUEUED_FRAMES);
         self::assertSame(2_097_152, OkxPaperLivePolicy::MAX_QUEUED_BYTES);
         self::assertSame(384, OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES);
-        self::assertSame(1_572_864, OkxPaperLivePolicy::PAUSE_QUEUED_BYTES);
+        self::assertSame(1_048_576, OkxPaperLivePolicy::PAUSE_QUEUED_BYTES);
         self::assertSame(256, OkxPaperLivePolicy::RESUME_QUEUED_FRAMES);
-        self::assertSame(1_048_576, OkxPaperLivePolicy::RESUME_QUEUED_BYTES);
+        self::assertSame(524_288, OkxPaperLivePolicy::RESUME_QUEUED_BYTES);
         self::assertSame(3, OkxPaperLivePolicy::MAX_RESYNC_ATTEMPTS);
         self::assertSame(240.0, OkxPaperLivePolicy::RESYNC_ATTEMPT_TIMEOUT_SECONDS);
         self::assertSame(50, OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES);

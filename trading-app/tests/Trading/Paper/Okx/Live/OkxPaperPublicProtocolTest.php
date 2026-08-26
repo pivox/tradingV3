@@ -485,6 +485,18 @@ final class OkxPaperPublicProtocolTest extends TestCase
         self::assertTrue($queue->canResumeAdmissions());
     }
 
+    public function testPauseByteWatermarkReservesOneMaximumValidFrame(): void
+    {
+        $queue = new OkxPaperPublicFrameQueue();
+        $queue->enqueue(str_repeat('x', OkxPaperLivePolicy::PAUSE_QUEUED_BYTES - 1));
+
+        self::assertFalse($queue->shouldPauseAdmissions());
+        $queue->enqueue(str_repeat('y', OkxPaperLivePolicy::MAX_FRAME_BYTES));
+
+        self::assertSame(OkxPaperLivePolicy::MAX_QUEUED_BYTES - 1, $queue->bytes());
+        self::assertTrue($queue->shouldPauseAdmissions());
+    }
+
     private static function subscriptions(): OkxPaperPublicSubscriptionSet
     {
         return new OkxPaperPublicSubscriptionSet(new OkxPaperInstrumentMap());
