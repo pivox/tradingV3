@@ -82,6 +82,33 @@ final class HyperliquidPaperLiveCandleWarmupTest extends TestCase
         self::assertSame(1785304740000, $btcMinutes[array_key_last($btcMinutes)]->startTime);
     }
 
+    public function testCatchupFetchesOnlyTheClosedSuffixAfterDurableFrontiers(): void
+    {
+        $client = new RecordingWarmupRestClient();
+        $warmup = new HyperliquidPaperLiveCandleWarmup($client);
+
+        $candles = $warmup->catchupCandles([
+            'BTC/1h' => 1785294000000,
+            'BTC/1m' => 1785301140000,
+            'BTC/5m' => 1785300900000,
+            'BTC/15m' => 1785300300000,
+            'ETH/1h' => 1785294000000,
+            'ETH/1m' => 1785301140000,
+            'ETH/5m' => 1785300900000,
+            'ETH/15m' => 1785300300000,
+        ], 1785301380000);
+
+        self::assertSame([
+            ['BTC', '1m', 1785301200000, 1785301320000],
+            ['BTC', '1h', 1785297600000, 1785297600000],
+            ['ETH', '1m', 1785301200000, 1785301320000],
+            ['ETH', '1h', 1785297600000, 1785297600000],
+        ], $client->requests);
+        self::assertCount(8, $candles);
+        self::assertSame(1785297600000, $candles[0]->startTime);
+        self::assertSame(1785301320000, $candles[array_key_last($candles)]->startTime);
+    }
+
     /** @return iterable<string, array{string}> */
     public static function invalidPages(): iterable
     {

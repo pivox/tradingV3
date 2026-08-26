@@ -186,6 +186,13 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
                 $this->connectAndSubscribe();
                 $this->awaitSubscriptions();
                 $this->throwPendingTransportFailure();
+                foreach ($warmup->catchupCandles(
+                    $this->checkpoint->finalizedCandleFrontiers,
+                    $this->nowMilliseconds(),
+                ) as $candle) {
+                    yield from $this->yieldWarmupCandle($candle);
+                }
+                $this->throwPendingTransportFailure();
                 yield from $this->yieldCandidates([
                     ...($this->metadataClient === null ? [] : $this->metadataEvents()),
                     ...($this->fundingClient === null ? [] : $this->fundingEvents()),

@@ -100,6 +100,52 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame('warming', $this->checkpoint()->phase);
     }
 
+    public function testRestCatchupBridgesFromDurableFrontiersAfterWebSocketSubscription(): void
+    {
+        $clock = new MockClock('2026-07-29T10:00:00Z');
+        $transport = new DeterministicHyperliquidTransport([]);
+        $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
+        $checkpoint = $store->loadOrCreate(
+            'paper-hyperliquid-live-mainnet',
+            PaperMarketDataNetwork::MAINNET,
+            str_repeat('a', 64),
+        );
+        $state = $checkpoint->toArray();
+        $state['phase'] = 'warming';
+        $state['initial_candle_window_ends'] = [
+            'BTC' => '1785319200000',
+            'ETH' => '1785319200000',
+        ];
+        $state['finalized_candle_frontiers'] = [
+            'BTC/15m' => 1785318300000,
+            'BTC/1h' => 1785315600000,
+            'BTC/1m' => 1785319140000,
+            'BTC/5m' => 1785318900000,
+            'ETH/15m' => 1785318300000,
+            'ETH/1h' => 1785315600000,
+            'ETH/1m' => 1785319140000,
+            'ETH/5m' => 1785318900000,
+        ];
+        $store->save(HyperliquidPaperLiveCheckpoint::fromArray($state));
+        $rest = new BridgeAwareWarmupRestClient($clock, $transport);
+        $source = $this->source(
+            $transport,
+            clock: $clock,
+            restClient: $rest,
+        );
+
+        $events = self::generator($source->events());
+        $events->rewind();
+        $event = $events->current();
+
+        self::assertInstanceOf(PaperMarketEvent::class, $event);
+        self::assertSame(PaperMarketDataChannel::CANDLE_1M, $event->channel);
+        self::assertSame('1785319200000', $event->payload['start_time']);
+        self::assertSame(1, $transport->connectCount);
+        self::assertCount(14, $rest->requests);
+        self::assertSame([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1], $rest->connectCounts);
+    }
+
     public function testAuthenticatedMetadataAndFundingPrecedeInitialSnapshotBoundaries(): void
     {
         $source = $this->source(
@@ -1600,6 +1646,53 @@ final class LiveSourceWarmupRestClient implements HyperliquidPaperPublicRestClie
         int $maximumRetries = 5,
     ): array {
         $this->requests[] = [$coin, $interval, $startTime, $endTime];
+        $step = ['1m' => 60_000, '5m' => 300_000, '15m' => 900_000, '1h' => 3_600_000][$interval];
+        $rows = [];
+        for ($start = $startTime; $start <= $endTime; $start += $step) {
+            $rows[] = [
+                'T' => $start + $step - 1,
+                'c' => '100', 'h' => '101', 'i' => $interval,
+                'l' => '99', 'n' => 1, 'o' => '100', 's' => $coin,
+                't' => $start, 'v' => '10',
+            ];
+        }
+
+        return $rows;
+    }
+}
+
+final class BridgeAwareWarmupRestClient implements HyperliquidPaperPublicRestClientInterface
+{
+    /** @var list<array{string, string, int, int}> */
+    public array $requests = [];
+
+    /** @var list<int> */
+    public array $connectCounts = [];
+
+    public function __construct(
+        private readonly MockClock $clock,
+        private readonly DeterministicHyperliquidTransport $transport,
+    ) {
+    }
+
+    public function network(): PaperMarketDataNetwork
+    {
+        return PaperMarketDataNetwork::MAINNET;
+    }
+
+    public function candleSnapshot(
+        string $coin,
+        string $interval,
+        int $startTime,
+        int $endTime,
+        int $maximumResponseBytes = 1_048_576,
+        int $maximumRetries = 5,
+    ): array {
+        $this->requests[] = [$coin, $interval, $startTime, $endTime];
+        $this->connectCounts[] = $this->transport->connectCount;
+        if (\count($this->requests) === 1) {
+            $this->clock->sleep(180.0);
+        }
         $step = ['1m' => 60_000, '5m' => 300_000, '15m' => 900_000, '1h' => 3_600_000][$interval];
         $rows = [];
         for ($start = $startTime; $start <= $endTime; $start += $step) {
