@@ -10,11 +10,23 @@ use React\Promise\PromiseInterface;
 
 final class PawlOkxPaperPublicWebSocketTransport implements OkxPaperPausableWebSocketTransportInterface
 {
+    private const MAX_DEFERRED_FRAMES = 16_384;
+    private const MAX_DEFERRED_BYTES = OkxPaperLivePolicy::MAX_FRAME_BYTES;
+
     /** @var \Closure(string): PromiseInterface<object> */
     private readonly \Closure $connector;
 
     private ?object $connection = null;
     private int $generation = 0;
+    private bool $paused = false;
+
+    /** @var list<string> */
+    private array $deferredFrames = [];
+
+    private int $deferredBytes = 0;
+
+    /** @var null|\Closure(string): void */
+    private ?\Closure $onMessage = null;
 
     /** @param null|\Closure(string): PromiseInterface<object> $connector */
     public function __construct(LoopInterface $loop, ?\Closure $connector = null)
@@ -37,6 +49,10 @@ final class PawlOkxPaperPublicWebSocketTransport implements OkxPaperPausableWebS
         $generation = ++$this->generation;
         $previous = $this->connection;
         $this->connection = null;
+        $this->paused = false;
+        $this->deferredFrames = [];
+        $this->deferredBytes = 0;
+        $this->onMessage = null;
         $previous?->close();
 
         ($this->connector)($uri)->then(
@@ -48,9 +64,10 @@ final class PawlOkxPaperPublicWebSocketTransport implements OkxPaperPausableWebS
                 }
 
                 $this->connection = $connection;
+                $this->onMessage = \Closure::fromCallable($onMessage);
                 $connection->on(
                     'message',
-                    function (mixed $message) use ($connection, $generation, $onMessage, $onError): void {
+                    function (mixed $message) use ($connection, $generation, $onError): void {
                         if ($generation !== $this->generation || $connection !== $this->connection) {
                             return;
                         }
@@ -65,7 +82,26 @@ final class PawlOkxPaperPublicWebSocketTransport implements OkxPaperPausableWebS
                             return;
                         }
 
-                        $onMessage($frame);
+                        if ($this->paused) {
+                            if (count($this->deferredFrames) >= self::MAX_DEFERRED_FRAMES
+                                || strlen($frame) > self::MAX_DEFERRED_BYTES - $this->deferredBytes
+                            ) {
+                                $this->close();
+                                $onError(new OkxPaperLiveIntegrityException(
+                                    'market_data_backpressure_exhausted',
+                                ));
+
+                                return;
+                            }
+                            $this->deferredFrames[] = $frame;
+                            $this->deferredBytes += strlen($frame);
+
+                            return;
+                        }
+
+                        ($this->onMessage ?? throw new \LogicException(
+                            'okx_paper_public_ws_not_connected',
+                        ))($frame);
                     },
                 );
                 $connection->on(
@@ -115,16 +151,44 @@ final class PawlOkxPaperPublicWebSocketTransport implements OkxPaperPausableWebS
         ++$this->generation;
         $connection = $this->connection;
         $this->connection = null;
+        $this->paused = false;
+        $this->deferredFrames = [];
+        $this->deferredBytes = 0;
+        $this->onMessage = null;
         $connection?->close();
     }
 
     public function pause(): void
     {
-        $this->connection?->pause();
+        if ($this->connection === null || $this->paused) {
+            return;
+        }
+        $this->paused = true;
+        $this->connection->pause();
     }
 
     public function resume(): void
     {
-        $this->connection?->resume();
+        if ($this->connection === null || !$this->paused) {
+            return;
+        }
+        $this->paused = false;
+        while ($this->deferredFrames !== []) {
+            $frame = array_shift($this->deferredFrames);
+            assert(is_string($frame));
+            $this->deferredBytes -= strlen($frame);
+            ($this->onMessage ?? throw new \LogicException(
+                'okx_paper_public_ws_not_connected',
+            ))($frame);
+            if ($this->admissionsArePaused()) {
+                return;
+            }
+        }
+        $this->connection->resume();
+    }
+
+    private function admissionsArePaused(): bool
+    {
+        return $this->paused;
     }
 }
