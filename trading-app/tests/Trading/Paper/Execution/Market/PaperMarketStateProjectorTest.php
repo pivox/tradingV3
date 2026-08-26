@@ -169,6 +169,31 @@ final class PaperMarketStateProjectorTest extends TestCase
         self::assertSame(array_slice($events, 1), $projector->events());
     }
 
+    public function testMicroProjectionRetainsEveryBookInsideTheSixtySecondWindow(): void
+    {
+        $events = [];
+        $start = new \DateTimeImmutable('2026-08-01T10:00:00.000000Z');
+        for ($index = 0; $index < 2050; ++$index) {
+            $timestamp = $start->modify('+' . $index . ' milliseconds');
+            $events[] = PaperMarketEvent::create(
+                PaperMarketDataNetwork::MAINNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                'BTCUSDT',
+                PaperMarketDataChannel::TOP_OF_BOOK,
+                $timestamp,
+                $timestamp,
+                (string) ($index + 1),
+                ['bid_price' => '99.5', 'ask_price' => '100.5'],
+            );
+        }
+        $projector = new PaperMarketStateProjector(new PaperKlineProvider());
+
+        $projector->restore($events, false, 'micro_scalping');
+
+        self::assertCount(2050, $projector->events());
+        self::assertSame(2050, (fn (): int => count($this->appliedEvents))->call($projector));
+    }
+
     public function testTopOfBookUpdatesAndCrossedBookFailsClosed(): void
     {
         $projector = new PaperMarketStateProjector(new PaperKlineProvider());

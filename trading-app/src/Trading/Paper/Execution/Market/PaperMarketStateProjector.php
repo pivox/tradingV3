@@ -78,7 +78,10 @@ final class PaperMarketStateProjector
             $limit = $this->modernRetentionLimit($modernModeId, $event->channel);
             if (!$compacted
                 && !($modernModeId === 'micro_scalping'
-                    && $event->channel === PaperMarketDataChannel::PUBLIC_TRADE)
+                    && in_array($event->channel, [
+                        PaperMarketDataChannel::TOP_OF_BOOK,
+                        PaperMarketDataChannel::PUBLIC_TRADE,
+                    ], true))
                 && $this->eventLogCounts[$retentionKey] > $limit + 32
             ) {
                 $this->compactModern($modernModeId);
@@ -159,7 +162,7 @@ final class PaperMarketStateProjector
         if ($through === null && $this->eventLog !== []) {
             $through = $this->eventLog[array_key_last($this->eventLog)]->receivedTimestamp;
         }
-        $microTradeWindowStart = $modeId === 'micro_scalping' && $through !== null
+        $microstructureWindowStart = $modeId === 'micro_scalping' && $through !== null
             ? $through->modify('-' . self::MICROSTRUCTURE_WINDOW_SECONDS . ' seconds')
             : null;
         $counts = [];
@@ -167,10 +170,13 @@ final class PaperMarketStateProjector
         for ($index = count($this->eventLog) - 1; $index >= 0; --$index) {
             $event = $this->eventLog[$index];
             $key = $event->symbol . '/' . $event->channel->value;
-            if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE
-                && $microTradeWindowStart instanceof \DateTimeImmutable
+            if (in_array($event->channel, [
+                PaperMarketDataChannel::TOP_OF_BOOK,
+                PaperMarketDataChannel::PUBLIC_TRADE,
+            ], true)
+                && $microstructureWindowStart instanceof \DateTimeImmutable
             ) {
-                if ($event->exchangeTimestamp >= $microTradeWindowStart) {
+                if ($event->exchangeTimestamp >= $microstructureWindowStart) {
                     $retained[] = $event;
                 }
 
