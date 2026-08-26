@@ -22,11 +22,19 @@ final class PaperMarketStateProjector
     /** @var list<PaperMarketEvent> */
     private array $eventLog = [];
 
+    /** @var array<string, int> */
+    private array $eventLogCounts = [];
+
     public function __construct(private readonly PaperKlineProvider $klines)
     {
     }
 
-    public function apply(PaperMarketEvent $event, bool $projectLegacyKlines = true): void
+    public function apply(
+        PaperMarketEvent $event,
+        bool $projectLegacyKlines = true,
+        ?string $modernModeId = null,
+        bool $compactModern = true,
+    ): void
     {
         $existingHash = $this->appliedEvents[$event->eventId] ?? null;
         if ($existingHash !== null) {
@@ -46,17 +54,33 @@ final class PaperMarketStateProjector
 
         $this->appliedEvents[$event->eventId] = $event->payloadHash;
         $this->eventLog[] = $event;
+        $retentionKey = $event->symbol . '/' . $event->channel->value;
+        $this->eventLogCounts[$retentionKey] = ($this->eventLogCounts[$retentionKey] ?? 0) + 1;
+        if ($modernModeId !== null && $compactModern) {
+            $limit = $this->modernRetentionLimit($modernModeId, $event->channel);
+            if ($this->eventLogCounts[$retentionKey] > $limit + 32) {
+                $this->compactModern($modernModeId);
+            }
+        }
     }
 
     /** @param iterable<PaperMarketEvent> $events */
-    public function restore(iterable $events, bool $projectLegacyKlines = true): void
+    public function restore(
+        iterable $events,
+        bool $projectLegacyKlines = true,
+        ?string $modernModeId = null,
+    ): void
     {
         $this->klines->clear();
         $this->books = [];
         $this->appliedEvents = [];
         $this->eventLog = [];
+        $this->eventLogCounts = [];
         foreach ($events as $event) {
-            $this->apply($event, $projectLegacyKlines);
+            $this->apply($event, $projectLegacyKlines, $modernModeId);
+        }
+        if ($modernModeId !== null) {
+            $this->compactModern($modernModeId);
         }
     }
 
@@ -73,6 +97,8 @@ final class PaperMarketStateProjector
 
         array_pop($this->eventLog);
         unset($this->appliedEvents[$event->eventId]);
+        $retentionKey = $event->symbol . '/' . $event->channel->value;
+        $this->eventLogCounts[$retentionKey] = ($this->eventLogCounts[$retentionKey] ?? 1) - 1;
         if ($event->channel !== PaperMarketDataChannel::TOP_OF_BOOK) {
             return;
         }
@@ -100,6 +126,49 @@ final class PaperMarketStateProjector
     public function topOfBook(string $symbol): ?array
     {
         return $this->books[$symbol] ?? null;
+    }
+
+    private function compactModern(string $modeId): void
+    {
+        if (!in_array($modeId, ['day_trading', 'scalping', 'micro_scalping'], true)) {
+            throw new \LogicException('paper_market_modern_mode_invalid');
+        }
+        $counts = [];
+        $retained = [];
+        for ($index = count($this->eventLog) - 1; $index >= 0; --$index) {
+            $event = $this->eventLog[$index];
+            $key = $event->symbol . '/' . $event->channel->value;
+            $limit = $this->modernRetentionLimit($modeId, $event->channel);
+            $counts[$key] = ($counts[$key] ?? 0) + 1;
+            if ($counts[$key] <= $limit) {
+                $retained[] = $event;
+            }
+        }
+        $this->eventLog = array_reverse($retained);
+        $this->eventLogCounts = [];
+        foreach ($this->eventLog as $event) {
+            $key = $event->symbol . '/' . $event->channel->value;
+            $this->eventLogCounts[$key] = ($this->eventLogCounts[$key] ?? 0) + 1;
+        }
+    }
+
+    private function modernRetentionLimit(string $modeId, PaperMarketDataChannel $channel): int
+    {
+        if ($channel === PaperMarketDataChannel::CANDLE_1H) {
+            return $modeId === 'day_trading' ? 1003 : ($modeId === 'scalping' ? 250 : 1);
+        }
+        if (in_array($channel, [
+            PaperMarketDataChannel::CANDLE_1M,
+            PaperMarketDataChannel::CANDLE_5M,
+            PaperMarketDataChannel::CANDLE_15M,
+        ], true)) {
+            return $modeId === 'micro_scalping' && $channel === PaperMarketDataChannel::CANDLE_15M ? 1 : 250;
+        }
+        if (in_array($channel, [PaperMarketDataChannel::TOP_OF_BOOK, PaperMarketDataChannel::PUBLIC_TRADE], true)) {
+            return $modeId === 'micro_scalping' ? 2048 : 1;
+        }
+
+        return 8;
     }
 
     private function applyCandle(PaperMarketEvent $event, Timeframe $timeframe, bool $projectLegacyKlines): void

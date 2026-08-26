@@ -101,6 +101,27 @@ final class PaperMarketStateProjectorTest extends TestCase
         self::assertSame(['bid' => '99.5', 'ask' => '100.5'], $projector->topOfBook('BTCUSDT'));
     }
 
+    public function testScalpingProjectionRetainsOnlyTheRequiredCandleWindow(): void
+    {
+        $events = [];
+        for ($index = 0; $index < 300; ++$index) {
+            $events[] = $this->candle(
+                PaperMarketDataVenue::HYPERLIQUID,
+                PaperMarketDataNetwork::TESTNET,
+                $this->payload('1h', (string) ((1785362400 + $index * 3600) * 1000)),
+                (string) ($index + 1),
+                PaperMarketDataChannel::CANDLE_1H,
+            );
+        }
+        $projector = new PaperMarketStateProjector(new PaperKlineProvider());
+
+        $projector->restore($events, false, 'scalping');
+
+        self::assertSame(array_slice($events, -250), $projector->events());
+        $projector->apply($events[0], false, 'scalping');
+        self::assertSame(array_slice($events, -250), $projector->events());
+    }
+
     public function testTopOfBookUpdatesAndCrossedBookFailsClosed(): void
     {
         $projector = new PaperMarketStateProjector(new PaperKlineProvider());

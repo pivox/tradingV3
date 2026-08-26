@@ -111,6 +111,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         }
 
         $modern = $cell->isModern();
+        $modernModeId = $cell->modernIdentity?->modeId;
         $snapshot = $modern ? null : $this->market->events();
         $eventCountBefore = count($this->market->events());
         $tentativeApplied = false;
@@ -118,7 +119,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         $canonicalDecision = null;
         $canonicalPreparation = null;
         try {
-            $this->market->apply($event, !$modern);
+            $this->market->apply($event, !$modern, $modernModeId, false);
             $tentativeApplied = count($this->market->events()) === $eventCountBefore + 1;
             if ($modern) {
                 $datasetIdentity = $this->store->datasetIdentity($cell);
@@ -245,7 +246,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         }
 
         $this->reconcilePending($cell, $runtime, false, $sourcePosition);
-        $this->market->apply($event, !$cell->isModern());
+        $this->market->apply($event, !$cell->isModern(), $cell->modernIdentity?->modeId);
     }
 
     public function counters(PaperExecutionCell $cell): PaperExecutionCounters
@@ -425,7 +426,11 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         if (!$force && $this->restoredCellId === $cell->id) {
             return;
         }
-        $this->market->restore($this->store->acknowledgedSources($cell), !$cell->isModern());
+        $this->market->restore(
+            $this->store->acknowledgedSources($cell),
+            !$cell->isModern(),
+            $cell->modernIdentity?->modeId,
+        );
         $this->restoredCellId = $cell->id;
     }
 
