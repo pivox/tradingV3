@@ -100,6 +100,94 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame('warming', $this->checkpoint()->phase);
     }
 
+    public function testRestCatchupBridgesFromDurableFrontiersAfterWebSocketSubscription(): void
+    {
+        $clock = new MockClock('2026-07-29T10:00:00Z');
+        $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport([
+            self::candleFrame(1785319260000, '2'),
+            self::candleFrame(1785319380000, '2.1'),
+            self::candleFrame(1785319440000, '2.2'),
+        ]);
+        $this->seedWarmupCheckpoint();
+        $rest = new BridgeAwareWarmupRestClient($clock, $transport);
+        $source = $this->source(
+            $transport,
+            loop: $loop,
+            clock: $clock,
+            restClient: $rest,
+        );
+
+        $events = self::generator($source->events());
+        $events->rewind();
+        $event = $events->current();
+
+        self::assertInstanceOf(PaperMarketEvent::class, $event);
+        self::assertSame(PaperMarketDataChannel::CANDLE_1M, $event->channel);
+        self::assertSame('1785319200000', $event->payload['start_time']);
+        self::assertSame(1, $transport->connectCount);
+        self::assertCount(14, $rest->requests);
+        self::assertSame([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1], $rest->connectCounts);
+
+        $captured = [];
+        $runsBeforeCatchupAcknowledgement = $loop->runCount();
+        while (\count($captured) < 9) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $captured[] = $event;
+            $source->acknowledge($event->eventId);
+            if (\count($captured) === 1) {
+                self::assertSame(
+                    $runsBeforeCatchupAcknowledgement + 1,
+                    $loop->runCount(),
+                );
+            }
+            if (\count($captured) < 9) {
+                $events->next();
+            }
+        }
+        self::assertSame(PaperMarketDataChannel::CANDLE_1M, $captured[8]->channel);
+        self::assertSame('1785319380000', $captured[8]->payload['start_time']);
+        self::assertCount(1, array_filter(
+            $captured,
+            static fn (PaperMarketEvent $candidate): bool =>
+                $candidate->symbol === 'BTCUSDT'
+                && $candidate->channel === PaperMarketDataChannel::CANDLE_1M
+                && ($candidate->payload['start_time'] ?? null) === '1785319260000',
+        ));
+    }
+
+    public function testHeartbeatTimeoutCannotBeOverwrittenByCatchupCompletion(): void
+    {
+        $clock = new MockClock('2026-07-29T10:00:00Z');
+        $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport([]);
+        $this->seedWarmupCheckpoint();
+        $loop->onNextRun(static function () use ($loop): void {
+            $loop->fire(HyperliquidPaperLivePolicy::HEARTBEAT_IDLE_SECONDS);
+            $loop->fire(HyperliquidPaperLivePolicy::PONG_TIMEOUT_SECONDS);
+        });
+        $source = $this->source(
+            $transport,
+            loop: $loop,
+            clock: $clock,
+            restClient: new BridgeAwareWarmupRestClient($clock, $transport),
+        );
+
+        try {
+            self::generator($source->events())->rewind();
+            self::fail('A catch-up heartbeat timeout must abort the capture.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('hyperliquid_public_trade_gap_unrecoverable', $exception->getMessage());
+        }
+
+        self::assertSame('failed', $this->checkpoint()->phase);
+        self::assertSame(
+            'hyperliquid_public_trade_gap_unrecoverable',
+            $this->checkpoint()->failureReason,
+        );
+    }
+
     public function testAuthenticatedMetadataAndFundingPrecedeInitialSnapshotBoundaries(): void
     {
         $source = $this->source(
@@ -1379,6 +1467,33 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
             );
     }
 
+    private function seedWarmupCheckpoint(): void
+    {
+        $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
+        $checkpoint = $store->loadOrCreate(
+            'paper-hyperliquid-live-mainnet',
+            PaperMarketDataNetwork::MAINNET,
+            str_repeat('a', 64),
+        );
+        $state = $checkpoint->toArray();
+        $state['phase'] = 'warming';
+        $state['initial_candle_window_ends'] = [
+            'BTC' => '1785319200000',
+            'ETH' => '1785319200000',
+        ];
+        $state['finalized_candle_frontiers'] = [
+            'BTC/15m' => 1785318300000,
+            'BTC/1h' => 1785315600000,
+            'BTC/1m' => 1785319140000,
+            'BTC/5m' => 1785318900000,
+            'ETH/15m' => 1785318300000,
+            'ETH/1h' => 1785315600000,
+            'ETH/1m' => 1785319140000,
+            'ETH/5m' => 1785318900000,
+        ];
+        $store->save(HyperliquidPaperLiveCheckpoint::fromArray($state));
+    }
+
     /** @return list<string> */
     private static function marketFrames(): array
     {
@@ -1600,6 +1715,55 @@ final class LiveSourceWarmupRestClient implements HyperliquidPaperPublicRestClie
         int $maximumRetries = 5,
     ): array {
         $this->requests[] = [$coin, $interval, $startTime, $endTime];
+        $step = ['1m' => 60_000, '5m' => 300_000, '15m' => 900_000, '1h' => 3_600_000][$interval];
+        $rows = [];
+        for ($start = $startTime; $start <= $endTime; $start += $step) {
+            $rows[] = [
+                'T' => $start + $step - 1,
+                'c' => '100', 'h' => '101', 'i' => $interval,
+                'l' => '99', 'n' => 1, 'o' => '100', 's' => $coin,
+                't' => $start, 'v' => '10',
+            ];
+        }
+
+        return $rows;
+    }
+}
+
+final class BridgeAwareWarmupRestClient implements HyperliquidPaperPublicRestClientInterface
+{
+    /** @var list<array{string, string, int, int}> */
+    public array $requests = [];
+
+    /** @var list<int> */
+    public array $connectCounts = [];
+
+    public function __construct(
+        private readonly MockClock $clock,
+        private readonly DeterministicHyperliquidTransport $transport,
+    ) {
+    }
+
+    public function network(): PaperMarketDataNetwork
+    {
+        return PaperMarketDataNetwork::MAINNET;
+    }
+
+    public function candleSnapshot(
+        string $coin,
+        string $interval,
+        int $startTime,
+        int $endTime,
+        int $maximumResponseBytes = 1_048_576,
+        int $maximumRetries = 5,
+    ): array {
+        $this->requests[] = [$coin, $interval, $startTime, $endTime];
+        $this->connectCounts[] = $this->transport->connectCount;
+        if (\count($this->requests) === 1) {
+            $this->clock->sleep(180.0);
+        } elseif (\count($this->requests) === 14) {
+            $this->clock->sleep(120.0);
+        }
         $step = ['1m' => 60_000, '5m' => 300_000, '15m' => 900_000, '1h' => 3_600_000][$interval];
         $rows = [];
         for ($start = $startTime; $start <= $endTime; $start += $step) {

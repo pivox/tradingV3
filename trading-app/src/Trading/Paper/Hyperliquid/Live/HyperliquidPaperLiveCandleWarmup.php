@@ -88,6 +88,77 @@ final readonly class HyperliquidPaperLiveCandleWarmup
         }
     }
 
+    /**
+     * @param array<string, int> $frontiers
+     * @return list<HyperliquidCandle>
+     */
+    public function catchupCandles(
+        array $frontiers,
+        int $currentUpperBound,
+        ?callable $serviceNetwork = null,
+    ): array
+    {
+        try {
+            $networkService = $serviceNetwork === null
+                ? null
+                : \Closure::fromCallable($serviceNetwork);
+            if ($currentUpperBound < 0) {
+                throw new \InvalidArgumentException();
+            }
+            $expectedStreams = [];
+            foreach (['BTC', 'ETH'] as $coin) {
+                foreach (['1m', '5m', '15m', '1h'] as $interval) {
+                    $expectedStreams[] = $coin . '/' . $interval;
+                }
+            }
+            $actualStreams = array_keys($frontiers);
+            sort($actualStreams, \SORT_STRING);
+            sort($expectedStreams, \SORT_STRING);
+            if ($actualStreams !== $expectedStreams) {
+                throw new \InvalidArgumentException();
+            }
+
+            $instruments = new HyperliquidPaperInstrumentMap();
+            $candles = [];
+            foreach (['BTC', 'ETH'] as $coin) {
+                foreach (['1m', '5m', '15m', '1h'] as $interval) {
+                    $step = $instruments->intervalMilliseconds($interval);
+                    $frontier = $frontiers[$coin . '/' . $interval] ?? null;
+                    if (!\is_int($frontier) || $frontier < 0 || $frontier % $step !== 0) {
+                        throw new \InvalidArgumentException();
+                    }
+                    $end = intdiv($currentUpperBound, $step) * $step - $step;
+                    if ($frontier > $end) {
+                        throw new \InvalidArgumentException();
+                    }
+                    if ($frontier === $end) {
+                        continue;
+                    }
+                    array_push($candles, ...$this->fetchRange(
+                        $coin,
+                        $interval,
+                        $frontier + $step,
+                        $end,
+                        $step,
+                        self::MAXIMUM_CATCHUP_PAGES,
+                        $networkService,
+                    ));
+                }
+            }
+            usort($candles, static function (HyperliquidCandle $left, HyperliquidCandle $right) use ($instruments): int {
+                return [$left->closeTime, $instruments->normalizedSymbol($left->coin), $instruments->intervalMilliseconds($left->interval)]
+                    <=> [$right->closeTime, $instruments->normalizedSymbol($right->coin), $instruments->intervalMilliseconds($right->interval)];
+            });
+
+            return $candles;
+        } catch (\Throwable $exception) {
+            if ($exception instanceof HyperliquidPaperLiveIntegrityException) {
+                throw $exception;
+            }
+            throw new HyperliquidPaperLiveIntegrityException(self::FAILURE, 0, $exception);
+        }
+    }
+
     /** @return list<HyperliquidCandle> */
     private function fetchRange(
         string $coin,
@@ -96,6 +167,7 @@ final readonly class HyperliquidPaperLiveCandleWarmup
         int $end,
         int $step,
         int $maximumPages,
+        ?\Closure $serviceNetwork = null,
     ): array {
         $candles = [];
         $pages = 0;
@@ -104,6 +176,7 @@ final readonly class HyperliquidPaperLiveCandleWarmup
                 throw new \InvalidArgumentException();
             }
             $pageEnd = min($end, $pageStart + ((self::PAGE_SIZE - 1) * $step));
+            $serviceNetwork?->__invoke();
             $rows = $this->restClient->candleSnapshot(
                 $coin, $interval, $pageStart, $pageEnd,
             );
@@ -119,6 +192,7 @@ final readonly class HyperliquidPaperLiveCandleWarmup
             if ($rows === [] || $expected !== $pageEnd + $step) {
                 throw new \InvalidArgumentException();
             }
+            $serviceNetwork?->__invoke();
             $pageStart = $expected;
         }
 

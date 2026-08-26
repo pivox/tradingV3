@@ -27,6 +27,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
         'connecting',
         'subscribing',
         'warming',
+        'catching_up',
         'streaming',
         'reconnecting',
         'stopping',
