@@ -44,6 +44,9 @@ interface PaperExecutionStoreInterface
     /** @return list<PaperPendingEffect> */
     public function pendingEffects(PaperExecutionCell $cell): array;
 
+    /** @return list<PaperPendingEffect> */
+    public function pendingEffectsAt(PaperExecutionCell $cell, int $sourcePosition): array;
+
     /** @param array<string, mixed> $payload */
     public function acknowledge(PaperExecutionCell $cell, int $position, string $effectKey, array $payload, int $fakeEventCursor): void;
 
@@ -53,8 +56,8 @@ interface PaperExecutionStoreInterface
 
     public function checkpoint(PaperExecutionCell $cell): PaperExecutionCheckpoint;
 
-    /** @return list<PaperMarketEvent> */
-    public function acknowledgedSources(PaperExecutionCell $cell): array;
+    /** @return iterable<PaperMarketEvent> */
+    public function acknowledgedSources(PaperExecutionCell $cell): iterable;
 
     /** @return array<string, int> */
     public function journalEventCounts(PaperExecutionCell $cell): array;

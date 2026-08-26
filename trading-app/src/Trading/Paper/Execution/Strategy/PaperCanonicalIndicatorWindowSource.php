@@ -52,19 +52,35 @@ final readonly class PaperCanonicalIndicatorWindowSource
         if ($requestedTimeframes === [] || $requestedTimeframes !== $expectedRequested) {
             throw new \LogicException('paper_canonical_strategy_indicator_timeframes_invalid');
         }
+        $requestedNativeTimeframes = array_values(array_intersect(self::NATIVE_TIMEFRAMES, $requestedTimeframes));
+        if (in_array('4h', $requestedTimeframes, true)
+            && !in_array('1h', $requestedNativeTimeframes, true)
+        ) {
+            $requestedNativeTimeframes[] = '1h';
+        }
 
         $now = $this->clock->now();
         if ($trigger->receivedTimestamp > $now) {
             return null;
         }
-        $projectedEvents = array_values(array_filter(
-            $this->market->events(),
-            static fn (PaperMarketEvent $event): bool =>
-                $event->sourceNetwork === $cell->network
-                && $event->sourceVenue === $cell->marketDataVenue
-                && $event->symbol === $trigger->symbol,
-        ));
-        $latest = $projectedEvents === [] ? null : $projectedEvents[array_key_last($projectedEvents)];
+        $latest = null;
+        $eventsByTimeframe = [];
+        foreach ($this->market->events() as $event) {
+            if ($event->sourceNetwork !== $cell->network
+                || $event->sourceVenue !== $cell->marketDataVenue
+                || $event->symbol !== $trigger->symbol
+            ) {
+                continue;
+            }
+            $latest = $event;
+            $eventTimeframe = $this->timeframe($event->channel);
+            if ($event->receivedTimestamp <= $now
+                && $eventTimeframe !== null
+                && in_array($eventTimeframe, $requestedNativeTimeframes, true)
+            ) {
+                $eventsByTimeframe[$eventTimeframe][] = $event;
+            }
+        }
         if (!$latest instanceof PaperMarketEvent
             || !hash_equals($latest->eventId, $trigger->eventId)
             || !hash_equals(
@@ -74,20 +90,7 @@ final readonly class PaperCanonicalIndicatorWindowSource
         ) {
             throw new \LogicException('paper_canonical_strategy_trigger_not_current');
         }
-        $events = array_values(array_filter(
-            $projectedEvents,
-            static fn (PaperMarketEvent $event): bool => $event->receivedTimestamp <= $now,
-        ));
-        $candles = $this->adapter->adaptCandleEvents($events);
         $availableThrough = $now->format('Y-m-d\TH:i:s.u\Z');
-        $byTimeframe = [];
-        foreach ($candles as $candle) {
-            if ($candle->availableAt > $availableThrough) {
-                continue;
-            }
-            $byTimeframe[$candle->timeframe][] = $candle;
-        }
-
         $windows = [];
         $triggerTimeframe = $this->timeframe($trigger->channel);
         $triggerBound = false;
@@ -98,7 +101,18 @@ final readonly class PaperCanonicalIndicatorWindowSource
                 continue;
             }
             $required = $derivedHourlySourceRequired ? 1000 : 250;
-            $candidates = $byTimeframe[$timeframe] ?? [];
+            $timeframeEvents = $eventsByTimeframe[$timeframe] ?? [];
+            if ($timeframeEvents === []) {
+                return null;
+            }
+            $timeframeEvents = $this->latestCandleEvents(
+                $timeframeEvents,
+                $required === 1000 ? 1003 : $required,
+            );
+            $candidates = array_values(array_filter(
+                $this->adapter->adaptCandleEvents($timeframeEvents),
+                static fn (NormalizedBacktestCandle $candle): bool => $candle->availableAt <= $availableThrough,
+            ));
             if (count($candidates) < $required) {
                 return null;
             }
@@ -122,6 +136,21 @@ final readonly class PaperCanonicalIndicatorWindowSource
         }
 
         return $triggerBound ? $windows : null;
+    }
+
+    /**
+     * @param list<PaperMarketEvent> $events
+     * @return list<PaperMarketEvent>
+     */
+    private function latestCandleEvents(array $events, int $limit): array
+    {
+        usort($events, static function (PaperMarketEvent $left, PaperMarketEvent $right): int {
+            $comparison = $left->exchangeTimestamp <=> $right->exchangeTimestamp;
+
+            return $comparison !== 0 ? $comparison : $left->eventId <=> $right->eventId;
+        });
+
+        return array_slice($events, -$limit);
     }
 
     /**

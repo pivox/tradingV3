@@ -95,12 +95,16 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         $this->assertInput($cell, $eligibility, $datasetId, $event);
         $runtime = $this->runtimeFactory->forCell($cell);
 
-        $this->reconcilePending($cell, $runtime);
+        if ($this->restoredCellId !== $cell->id) {
+            $this->reconcilePending($cell, $runtime);
+        }
         $this->restoreAcknowledgedMarket($cell);
 
         $checkpoint = $this->store->checkpoint($cell);
         if ($sourcePosition < $checkpoint->nextSourcePosition) {
             $this->store->claimSource($cell, $sourcePosition, $event);
+            $this->reconcilePending($cell, $runtime, true, $sourcePosition);
+            $this->restoreAcknowledgedMarket($cell, true);
 
             return;
         }
@@ -108,13 +112,18 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
             throw new \LogicException('paper_execution_cell_killed');
         }
 
-        $snapshot = $this->market->events();
+        $modern = $cell->isModern();
+        $modernModeId = $cell->modernIdentity?->modeId;
+        $snapshot = $modern ? null : $this->market->events();
+        $eventCountBefore = count($this->market->events());
+        $tentativeApplied = false;
         $prepared = null;
         $canonicalDecision = null;
         $canonicalPreparation = null;
         try {
-            $this->market->apply($event);
-            if ($cell->isModern()) {
+            $this->market->apply($event, !$modern, $modernModeId, false);
+            $tentativeApplied = count($this->market->events()) === $eventCountBefore + 1;
+            if ($modern) {
                 $datasetIdentity = $this->store->datasetIdentity($cell);
                 if ($datasetIdentity['dataset_id'] !== $datasetId) {
                     throw new \LogicException('paper_canonical_strategy_dataset_mismatch');
@@ -138,7 +147,13 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
                 }
             }
         } finally {
-            $this->market->restore($snapshot);
+            if ($modern) {
+                if ($tentativeApplied) {
+                    $this->market->rollbackLastModern($event);
+                }
+            } else {
+                $this->market->restore($snapshot ?? []);
+            }
         }
 
         $provenance = $cell->provenance($eligibility);
@@ -232,8 +247,8 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
             throw new \LogicException('paper_canonical_order_intent_reservation_missing');
         }
 
-        $this->reconcilePending($cell, $runtime, false);
-        $this->market->apply($event);
+        $this->reconcilePending($cell, $runtime, false, $sourcePosition);
+        $this->market->apply($event, !$cell->isModern(), $cell->modernIdentity?->modeId);
     }
 
     public function counters(PaperExecutionCell $cell): PaperExecutionCounters
@@ -241,9 +256,17 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         return PaperExecutionCounters::fromJournal($this->store->journalEventCounts($cell));
     }
 
-    private function reconcilePending(PaperExecutionCell $cell, PaperFakeRuntime $runtime, bool $retry = true): void
+    private function reconcilePending(
+        PaperExecutionCell $cell,
+        PaperFakeRuntime $runtime,
+        bool $retry = true,
+        ?int $sourcePosition = null,
+    ): void
     {
-        foreach ($this->store->pendingEffects($cell) as $pending) {
+        $pendingEffects = $sourcePosition === null
+            ? $this->store->pendingEffects($cell)
+            : $this->store->pendingEffectsAt($cell, $sourcePosition);
+        foreach ($pendingEffects as $pending) {
             if ($this->marketCodec->supports($pending->payload)) {
                 $cursor = $this->store->checkpoint($cell)->fakeEventCursor;
                 $event = $this->marketCodec->decode($pending->payload);
@@ -405,7 +428,11 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         if (!$force && $this->restoredCellId === $cell->id) {
             return;
         }
-        $this->market->restore($this->store->acknowledgedSources($cell));
+        $this->market->restore(
+            $this->store->acknowledgedSources($cell),
+            !$cell->isModern(),
+            $cell->modernIdentity?->modeId,
+        );
         $this->restoredCellId = $cell->id;
     }
 

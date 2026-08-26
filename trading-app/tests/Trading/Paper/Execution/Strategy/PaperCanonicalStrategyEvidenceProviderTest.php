@@ -10,6 +10,7 @@ use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceInputs;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceProvider;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceSourceInterface;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceUnavailable;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
@@ -87,6 +88,31 @@ final class PaperCanonicalStrategyEvidenceProviderTest extends TestCase
             new EffectiveTradingConfigResolver(),
             $source,
         ))->evidenceFor($cell, $this->event(), self::DATASET, self::CHECKSUM, self::BUILD));
+    }
+
+    public function testNonExecutionEventReturnsMissingIndicatorEvidenceWithoutCollectingWindows(): void
+    {
+        [$cell, $config] = $this->cell();
+        $collector = new RecordingCanonicalStrategyEvidenceSource($cell, $config);
+        $event = PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::OKX,
+            'BTCUSDT',
+            PaperMarketDataChannel::PUBLIC_TRADE,
+            new \DateTimeImmutable('2026-08-10T12:00:00Z'),
+            new \DateTimeImmutable('2026-08-10T12:00:00.100000Z'),
+            '2',
+            ['origin' => 'ws_trades'],
+        );
+
+        try {
+            (new PaperCanonicalStrategyEvidenceProvider(new EffectiveTradingConfigResolver(), $collector))
+                ->evidenceFor($cell, $event, self::DATASET, self::CHECKSUM, self::BUILD);
+            self::fail('A public trade must not build indicator windows for a 15m execution setup.');
+        } catch (PaperCanonicalStrategyEvidenceUnavailable $exception) {
+            self::assertSame('paper_indicator_projection_unavailable', $exception->reasonCode);
+        }
+        self::assertNull($collector->cell);
     }
 
     public function testRejectsDurableConfigHashDriftBeforeReadingSources(): void

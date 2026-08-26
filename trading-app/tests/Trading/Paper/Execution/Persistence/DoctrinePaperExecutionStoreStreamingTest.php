@@ -41,10 +41,10 @@ final class DoctrinePaperExecutionStoreStreamingTest extends TestCase
                 yield from [];
             })());
 
-        self::assertSame(
-            [],
-            (new DoctrinePaperExecutionStore($connection))->acknowledgedSources($this->cell()),
-        );
+        $events = (new DoctrinePaperExecutionStore($connection))->acknowledgedSources($this->cell());
+
+        self::assertInstanceOf(\Traversable::class, $events);
+        self::assertSame([], iterator_to_array($events, false));
     }
 
     private function cell(): PaperExecutionCell

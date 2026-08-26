@@ -65,6 +65,135 @@ final class PaperMarketStateProjectorTest extends TestCase
         self::assertEquals($provider->getKlines('BTCUSDT', Timeframe::TF_5M), $restoredProvider->getKlines('BTCUSDT', Timeframe::TF_5M));
     }
 
+    public function testModernProjectionRetainsCanonicalEventsWithoutBuildingLegacyKlines(): void
+    {
+        $provider = new PaperKlineProvider();
+        $projector = new PaperMarketStateProjector($provider);
+        $event = $this->candle(
+            PaperMarketDataVenue::HYPERLIQUID,
+            PaperMarketDataNetwork::TESTNET,
+            $this->payload('1m', '1785578400000'),
+            '1',
+        );
+
+        $projector->apply($event, false);
+
+        self::assertSame([$event], $projector->events());
+        self::assertSame([], $provider->getKlines('BTCUSDT', Timeframe::TF_1M));
+
+        $projector->restore([$event], false);
+
+        self::assertSame([$event], $projector->events());
+        self::assertSame([], $provider->getKlines('BTCUSDT', Timeframe::TF_1M));
+    }
+
+    public function testModernRollbackRemovesOnlyTheTentativeEventAndRestoresThePreviousBook(): void
+    {
+        $projector = new PaperMarketStateProjector(new PaperKlineProvider());
+        $previous = $this->book('99.5', '100.5', '10');
+        $tentative = $this->book('100', '101', '11');
+        $projector->apply($previous, false);
+        $projector->apply($tentative, false);
+
+        $projector->rollbackLastModern($tentative);
+
+        self::assertSame([$previous], $projector->events());
+        self::assertSame(['bid' => '99.5', 'ask' => '100.5'], $projector->topOfBook('BTCUSDT'));
+    }
+
+    public function testScalpingProjectionRetainsOnlyTheRequiredCandleWindow(): void
+    {
+        $events = [];
+        for ($index = 0; $index < 300; ++$index) {
+            $events[] = $this->candle(
+                PaperMarketDataVenue::HYPERLIQUID,
+                PaperMarketDataNetwork::TESTNET,
+                $this->payload('1h', (string) ((1785362400 + $index * 3600) * 1000)),
+                (string) ($index + 1),
+                PaperMarketDataChannel::CANDLE_1H,
+            );
+        }
+        $projector = new PaperMarketStateProjector(new PaperKlineProvider());
+
+        $projector->restore($events, false, 'scalping');
+
+        self::assertSame(array_slice($events, -250), $projector->events());
+        self::assertSame(250, (fn (): int => count($this->appliedEvents))->call($projector));
+    }
+
+    public function testMicroProjectionRetainsEveryTradeInsideTheSixtySecondWindow(): void
+    {
+        $events = [];
+        $start = new \DateTimeImmutable('2026-08-01T10:00:00.000000Z');
+        for ($index = 0; $index < 2050; ++$index) {
+            $timestamp = $start->modify('+' . $index . ' milliseconds');
+            $events[] = PaperMarketEvent::create(
+                PaperMarketDataNetwork::MAINNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                'BTCUSDT',
+                PaperMarketDataChannel::PUBLIC_TRADE,
+                $timestamp,
+                $timestamp,
+                (string) ($index + 1),
+                ['trade_id' => (string) ($index + 1), 'price' => '100', 'quantity' => '1', 'aggressor_side' => 'buy'],
+            );
+        }
+        $projector = new PaperMarketStateProjector(new PaperKlineProvider());
+
+        $projector->restore($events, false, 'micro_scalping');
+
+        self::assertCount(2050, $projector->events());
+        self::assertSame(2050, (fn (): int => count($this->appliedEvents))->call($projector));
+    }
+
+    public function testMicroProjectionDropsTradesOlderThanTheSixtySecondWindow(): void
+    {
+        $events = [];
+        foreach (['2026-08-01T10:00:00.000000Z', '2026-08-01T10:01:00.000000Z', '2026-08-01T10:01:01.000000Z'] as $index => $time) {
+            $timestamp = new \DateTimeImmutable($time);
+            $events[] = PaperMarketEvent::create(
+                PaperMarketDataNetwork::MAINNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                'BTCUSDT',
+                PaperMarketDataChannel::PUBLIC_TRADE,
+                $timestamp,
+                $timestamp,
+                (string) ($index + 1),
+                ['trade_id' => (string) ($index + 1), 'price' => '100', 'quantity' => '1', 'aggressor_side' => 'buy'],
+            );
+        }
+        $projector = new PaperMarketStateProjector(new PaperKlineProvider());
+
+        $projector->restore($events, false, 'micro_scalping');
+
+        self::assertSame(array_slice($events, 1), $projector->events());
+    }
+
+    public function testMicroProjectionRetainsEveryBookInsideTheSixtySecondWindow(): void
+    {
+        $events = [];
+        $start = new \DateTimeImmutable('2026-08-01T10:00:00.000000Z');
+        for ($index = 0; $index < 2050; ++$index) {
+            $timestamp = $start->modify('+' . $index . ' milliseconds');
+            $events[] = PaperMarketEvent::create(
+                PaperMarketDataNetwork::MAINNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                'BTCUSDT',
+                PaperMarketDataChannel::TOP_OF_BOOK,
+                $timestamp,
+                $timestamp,
+                (string) ($index + 1),
+                ['bid_price' => '99.5', 'ask_price' => '100.5'],
+            );
+        }
+        $projector = new PaperMarketStateProjector(new PaperKlineProvider());
+
+        $projector->restore($events, false, 'micro_scalping');
+
+        self::assertCount(2050, $projector->events());
+        self::assertSame(2050, (fn (): int => count($this->appliedEvents))->call($projector));
+    }
+
     public function testTopOfBookUpdatesAndCrossedBookFailsClosed(): void
     {
         $projector = new PaperMarketStateProjector(new PaperKlineProvider());

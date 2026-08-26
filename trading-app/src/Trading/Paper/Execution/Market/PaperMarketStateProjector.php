@@ -13,6 +13,10 @@ use Brick\Math\Exception\MathException;
 
 final class PaperMarketStateProjector
 {
+    private const MICROSTRUCTURE_WINDOW_SECONDS = 60;
+
+    private const MICRO_COMPACTION_INTERVAL_SECONDS = 5;
+
     /** @var array<string, string> */
     private array $appliedEvents = [];
 
@@ -22,11 +26,21 @@ final class PaperMarketStateProjector
     /** @var list<PaperMarketEvent> */
     private array $eventLog = [];
 
+    /** @var array<string, int> */
+    private array $eventLogCounts = [];
+
+    private ?int $lastMicroCompactionBucket = null;
+
     public function __construct(private readonly PaperKlineProvider $klines)
     {
     }
 
-    public function apply(PaperMarketEvent $event): void
+    public function apply(
+        PaperMarketEvent $event,
+        bool $projectLegacyKlines = true,
+        ?string $modernModeId = null,
+        bool $compactModern = true,
+    ): void
     {
         $existingHash = $this->appliedEvents[$event->eventId] ?? null;
         if ($existingHash !== null) {
@@ -39,24 +53,92 @@ final class PaperMarketStateProjector
 
         $timeframe = $this->timeframe($event->channel);
         if ($timeframe instanceof Timeframe) {
-            $this->applyCandle($event, $timeframe);
+            $this->applyCandle($event, $timeframe, $projectLegacyKlines);
         } elseif ($event->channel === PaperMarketDataChannel::TOP_OF_BOOK) {
             $this->applyBook($event);
         }
 
         $this->appliedEvents[$event->eventId] = $event->payloadHash;
         $this->eventLog[] = $event;
+        $retentionKey = $event->symbol . '/' . $event->channel->value;
+        $this->eventLogCounts[$retentionKey] = ($this->eventLogCounts[$retentionKey] ?? 0) + 1;
+        if ($modernModeId !== null && $compactModern) {
+            $compacted = false;
+            if ($modernModeId === 'micro_scalping') {
+                $bucket = intdiv(
+                    (int) $event->receivedTimestamp->format('U'),
+                    self::MICRO_COMPACTION_INTERVAL_SECONDS,
+                );
+                if ($bucket !== $this->lastMicroCompactionBucket) {
+                    $this->compactModern($modernModeId, $event->receivedTimestamp);
+                    $this->lastMicroCompactionBucket = $bucket;
+                    $compacted = true;
+                }
+            }
+            $limit = $this->modernRetentionLimit($modernModeId, $event->channel);
+            if (!$compacted
+                && !($modernModeId === 'micro_scalping'
+                    && in_array($event->channel, [
+                        PaperMarketDataChannel::TOP_OF_BOOK,
+                        PaperMarketDataChannel::PUBLIC_TRADE,
+                    ], true))
+                && $this->eventLogCounts[$retentionKey] > $limit + 32
+            ) {
+                $this->compactModern($modernModeId);
+            }
+        }
     }
 
     /** @param iterable<PaperMarketEvent> $events */
-    public function restore(iterable $events): void
+    public function restore(
+        iterable $events,
+        bool $projectLegacyKlines = true,
+        ?string $modernModeId = null,
+    ): void
     {
         $this->klines->clear();
         $this->books = [];
         $this->appliedEvents = [];
         $this->eventLog = [];
+        $this->eventLogCounts = [];
+        $this->lastMicroCompactionBucket = null;
         foreach ($events as $event) {
-            $this->apply($event);
+            $this->apply($event, $projectLegacyKlines, $modernModeId);
+        }
+        if ($modernModeId !== null) {
+            $this->compactModern($modernModeId);
+        }
+    }
+
+    public function rollbackLastModern(PaperMarketEvent $event): void
+    {
+        $lastKey = array_key_last($this->eventLog);
+        $last = $lastKey === null ? null : $this->eventLog[$lastKey];
+        if (!$last instanceof PaperMarketEvent
+            || !hash_equals($last->eventId, $event->eventId)
+            || !hash_equals($last->payloadHash, $event->payloadHash)
+        ) {
+            throw new \LogicException('paper_market_modern_rollback_invalid');
+        }
+
+        array_pop($this->eventLog);
+        unset($this->appliedEvents[$event->eventId]);
+        $retentionKey = $event->symbol . '/' . $event->channel->value;
+        $this->eventLogCounts[$retentionKey] = ($this->eventLogCounts[$retentionKey] ?? 1) - 1;
+        if ($event->channel !== PaperMarketDataChannel::TOP_OF_BOOK) {
+            return;
+        }
+
+        unset($this->books[$event->symbol]);
+        for ($index = count($this->eventLog) - 1; $index >= 0; --$index) {
+            $candidate = $this->eventLog[$index];
+            if ($candidate->symbol === $event->symbol
+                && $candidate->channel === PaperMarketDataChannel::TOP_OF_BOOK
+            ) {
+                $this->applyBook($candidate);
+
+                return;
+            }
         }
     }
 
@@ -72,7 +154,70 @@ final class PaperMarketStateProjector
         return $this->books[$symbol] ?? null;
     }
 
-    private function applyCandle(PaperMarketEvent $event, Timeframe $timeframe): void
+    private function compactModern(string $modeId, ?\DateTimeImmutable $through = null): void
+    {
+        if (!in_array($modeId, ['day_trading', 'scalping', 'micro_scalping'], true)) {
+            throw new \LogicException('paper_market_modern_mode_invalid');
+        }
+        if ($through === null && $this->eventLog !== []) {
+            $through = $this->eventLog[array_key_last($this->eventLog)]->receivedTimestamp;
+        }
+        $microstructureWindowStart = $modeId === 'micro_scalping' && $through !== null
+            ? $through->modify('-' . self::MICROSTRUCTURE_WINDOW_SECONDS . ' seconds')
+            : null;
+        $counts = [];
+        $retained = [];
+        for ($index = count($this->eventLog) - 1; $index >= 0; --$index) {
+            $event = $this->eventLog[$index];
+            $key = $event->symbol . '/' . $event->channel->value;
+            if (in_array($event->channel, [
+                PaperMarketDataChannel::TOP_OF_BOOK,
+                PaperMarketDataChannel::PUBLIC_TRADE,
+            ], true)
+                && $microstructureWindowStart instanceof \DateTimeImmutable
+            ) {
+                if ($event->exchangeTimestamp >= $microstructureWindowStart) {
+                    $retained[] = $event;
+                }
+
+                continue;
+            }
+            $limit = $this->modernRetentionLimit($modeId, $event->channel);
+            $counts[$key] = ($counts[$key] ?? 0) + 1;
+            if ($counts[$key] <= $limit) {
+                $retained[] = $event;
+            }
+        }
+        $this->eventLog = array_reverse($retained);
+        $this->appliedEvents = [];
+        $this->eventLogCounts = [];
+        foreach ($this->eventLog as $event) {
+            $this->appliedEvents[$event->eventId] = $event->payloadHash;
+            $key = $event->symbol . '/' . $event->channel->value;
+            $this->eventLogCounts[$key] = ($this->eventLogCounts[$key] ?? 0) + 1;
+        }
+    }
+
+    private function modernRetentionLimit(string $modeId, PaperMarketDataChannel $channel): int
+    {
+        if ($channel === PaperMarketDataChannel::CANDLE_1H) {
+            return $modeId === 'day_trading' ? 1003 : ($modeId === 'scalping' ? 250 : 1);
+        }
+        if (in_array($channel, [
+            PaperMarketDataChannel::CANDLE_1M,
+            PaperMarketDataChannel::CANDLE_5M,
+            PaperMarketDataChannel::CANDLE_15M,
+        ], true)) {
+            return $modeId === 'micro_scalping' && $channel === PaperMarketDataChannel::CANDLE_15M ? 1 : 250;
+        }
+        if (in_array($channel, [PaperMarketDataChannel::TOP_OF_BOOK, PaperMarketDataChannel::PUBLIC_TRADE], true)) {
+            return $modeId === 'micro_scalping' ? 2048 : 1;
+        }
+
+        return 8;
+    }
+
+    private function applyCandle(PaperMarketEvent $event, Timeframe $timeframe, bool $projectLegacyKlines): void
     {
         $payload = $event->payload;
         if (($payload['confirmed'] ?? null) !== true) {
@@ -99,6 +244,9 @@ final class PaperMarketStateProjector
         }
 
         $openTime = $this->openTime($payload['start_time'] ?? null, $event->exchangeTimestamp, $timeframe);
+        if (!$projectLegacyKlines) {
+            return;
+        }
         $this->klines->put(new KlineDto(
             symbol: $event->symbol,
             timeframe: $timeframe,

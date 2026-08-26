@@ -407,7 +407,15 @@ JSON,
 
         $pending = $this->store->pendingEffects($this->cell);
         self::assertCount(2, $pending);
-        self::assertSame([], $this->store->acknowledgedSources($this->cell));
+        self::assertSame(
+            [$key1, $key2],
+            array_map(
+                static fn (PaperPendingEffect $effect): string => $effect->effectKey,
+                $this->store->pendingEffectsAt($this->cell, 0),
+            ),
+        );
+        self::assertSame([], $this->store->pendingEffectsAt($this->cell, 1));
+        self::assertSame([], iterator_to_array($this->store->acknowledgedSources($this->cell), false));
         self::assertContainsOnlyInstancesOf(PaperPendingEffect::class, $pending);
         self::assertSame([$key1, $key2], array_map(static fn (PaperPendingEffect $effect): string => $effect->effectKey, $pending));
         $this->store->recordEffectRetry($this->cell, 0, $key1);
@@ -424,10 +432,13 @@ JSON,
 
         $this->store->acknowledge($this->cell, 0, $key1, ['order_id' => 'fake-1'], 1);
         self::assertSame([$key2], array_map(static fn (PaperPendingEffect $effect): string => $effect->effectKey, $this->store->pendingEffects($this->cell)));
-        self::assertSame([], $this->store->acknowledgedSources($this->cell));
+        self::assertSame([], iterator_to_array($this->store->acknowledgedSources($this->cell), false));
         $this->store->acknowledge($this->cell, 0, $key2, ['order_id' => 'fake-2'], 2);
         self::assertSame([], $this->store->pendingEffects($this->cell));
-        self::assertSame([$this->event(0)->eventId], array_map(static fn (PaperMarketEvent $event): string => $event->eventId, $this->store->acknowledgedSources($this->cell)));
+        self::assertSame([$this->event(0)->eventId], array_map(
+            static fn (PaperMarketEvent $event): string => $event->eventId,
+            iterator_to_array($this->store->acknowledgedSources($this->cell), false),
+        ));
         self::assertSame(PaperSourceClaim::ACCEPTED, $this->store->claimSource($this->cell, 1, $this->event(1))->status);
         self::assertSame(2, $this->store->checkpoint($this->cell)->fakeEventCursor);
     }

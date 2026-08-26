@@ -254,7 +254,7 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
             if ($position > $expected) {
                 throw new \LogicException('paper_execution_source_gap');
             }
-            if ($this->hasPendingEffects($cell->id)) {
+            if ($expected > 0 && $this->hasPendingEffectsAt($cell->id, $expected - 1)) {
                 throw new \LogicException('paper_execution_effect_pending');
             }
             if ($this->databaseBoolean($checkpoint['killed'] ?? false)) {
@@ -376,6 +376,34 @@ SQL, [$cell->id]);
         ), $rows);
     }
 
+    public function pendingEffectsAt(PaperExecutionCell $cell, int $sourcePosition): array
+    {
+        if ($sourcePosition < 0) {
+            throw new \InvalidArgumentException('paper_execution_source_position_invalid');
+        }
+        $rows = $this->connection->fetchAllAssociative(<<<'SQL'
+SELECT requested.source_position, requested.effect_key, requested.payload::text AS payload, requested.journal_ordinal
+FROM paper_execution_event requested
+WHERE requested.cell_id = ?
+  AND requested.source_position = ?
+  AND requested.event_type = 'effect_requested'
+  AND NOT EXISTS (
+      SELECT 1 FROM paper_execution_event acknowledged
+      WHERE acknowledged.cell_id = requested.cell_id
+        AND acknowledged.effect_key = requested.effect_key
+        AND acknowledged.event_type = 'effect_acknowledged'
+  )
+ORDER BY requested.journal_ordinal
+SQL, [$cell->id, $sourcePosition]);
+
+        return array_map(fn (array $row): PaperPendingEffect => new PaperPendingEffect(
+            sourcePosition: (int) $row['source_position'],
+            effectKey: (string) $row['effect_key'],
+            payload: $this->decodeJsonMap($row['payload'] ?? null),
+            journalOrdinal: (int) $row['journal_ordinal'],
+        ), $rows);
+    }
+
     public function acknowledge(PaperExecutionCell $cell, int $position, string $effectKey, array $payload, int $fakeEventCursor): void
     {
         $this->assertEffectKey($effectKey);
@@ -450,34 +478,35 @@ SQL, [$cell->id]);
         return $this->checkpointFromRow($row);
     }
 
-    public function acknowledgedSources(PaperExecutionCell $cell): array
+    public function acknowledgedSources(PaperExecutionCell $cell): iterable
     {
         $rows = $this->connection->iterateColumn(<<<'SQL'
+WITH unresolved_positions AS MATERIALIZED (
+    SELECT requested.source_position
+    FROM paper_execution_event requested
+    WHERE requested.cell_id = ?
+      AND requested.event_type = 'effect_requested'
+      AND NOT EXISTS (
+          SELECT 1 FROM paper_execution_event acknowledged
+          WHERE acknowledged.cell_id = requested.cell_id
+            AND acknowledged.effect_key = requested.effect_key
+            AND acknowledged.event_type = 'effect_acknowledged'
+      )
+)
 SELECT claimed.payload::text
 FROM paper_execution_event claimed
 WHERE claimed.cell_id = ?
   AND claimed.event_type = 'source_claimed'
   AND NOT EXISTS (
-      SELECT 1 FROM paper_execution_event requested
-      WHERE requested.cell_id = claimed.cell_id
-        AND requested.source_position = claimed.source_position
-        AND requested.event_type = 'effect_requested'
-        AND NOT EXISTS (
-            SELECT 1 FROM paper_execution_event acknowledged
-            WHERE acknowledged.cell_id = requested.cell_id
-              AND acknowledged.effect_key = requested.effect_key
-              AND acknowledged.event_type = 'effect_acknowledged'
-        )
+      SELECT 1 FROM unresolved_positions unresolved
+      WHERE unresolved.source_position = claimed.source_position
   )
 ORDER BY claimed.source_position
-SQL, [$cell->id]);
+SQL, [$cell->id, $cell->id]);
 
-        $events = [];
         foreach ($rows as $payload) {
-            $events[] = PaperMarketEvent::fromArray($this->decodeJsonMap($payload));
+            yield PaperMarketEvent::fromArray($this->decodeJsonMap($payload));
         }
-
-        return $events;
     }
 
     public function journalEventCounts(PaperExecutionCell $cell): array
@@ -757,12 +786,14 @@ SQL, [$checkpoint['cell_id'], $ordinal, $eventType, $sourcePosition, $sourceEven
         return CanonicalJson::encode($this->decodeJsonMap($json));
     }
 
-    private function hasPendingEffects(string $cellId): bool
+    private function hasPendingEffectsAt(string $cellId, int $sourcePosition): bool
     {
         return (bool) $this->connection->fetchOne(<<<'SQL'
 SELECT EXISTS (
     SELECT 1 FROM paper_execution_event requested
-    WHERE requested.cell_id = ? AND requested.event_type = 'effect_requested'
+    WHERE requested.cell_id = ?
+      AND requested.source_position = ?
+      AND requested.event_type = 'effect_requested'
       AND NOT EXISTS (
           SELECT 1 FROM paper_execution_event acknowledged
           WHERE acknowledged.cell_id = requested.cell_id
@@ -770,7 +801,7 @@ SELECT EXISTS (
             AND acknowledged.event_type = 'effect_acknowledged'
       )
 )
-SQL, [$cellId]);
+SQL, [$cellId, $sourcePosition]);
     }
 
     private function assertEffectKey(string $effectKey): void

@@ -16,16 +16,19 @@ use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\Microstructure\CanonicalPublicMarketDataNetwork;
 use Psr\Log\LoggerInterface;
 
-final readonly class EffectiveTradingConfigResolver implements EffectiveTradingConfigResolverInterface
+final class EffectiveTradingConfigResolver implements EffectiveTradingConfigResolverInterface
 {
+    /** @var array<string, EffectiveTradingConfigSnapshot> */
+    private array $snapshots = [];
+
     public function __construct(
-        private ?TradingConfigLayerLoader $loader = null,
-        private ?LoggerInterface $logger = null,
-        private ?ModeContractLoader $modeContracts = null,
-        private ?SetupContractLoader $setupContracts = null,
-        private ?SetupCompiler $setupCompiler = null,
-        private ?ConditionCatalog $conditionCatalog = null,
-        private ?EffectiveTradingConfigComposer $composer = null,
+        private readonly ?TradingConfigLayerLoader $loader = null,
+        private readonly ?LoggerInterface $logger = null,
+        private readonly ?ModeContractLoader $modeContracts = null,
+        private readonly ?SetupContractLoader $setupContracts = null,
+        private readonly ?SetupCompiler $setupCompiler = null,
+        private readonly ?ConditionCatalog $conditionCatalog = null,
+        private readonly ?EffectiveTradingConfigComposer $composer = null,
     ) {
     }
 
@@ -33,6 +36,10 @@ final readonly class EffectiveTradingConfigResolver implements EffectiveTradingC
     {
         if (!$request instanceof EffectiveTradingConfigRequest) {
             throw new TradingConfigException('Canonical resolution requires an EffectiveTradingConfigRequest; legacy positional profiles and fallback are forbidden.');
+        }
+        $cacheKey = json_encode($request->toArray(), JSON_THROW_ON_ERROR);
+        if (isset($this->snapshots[$cacheKey])) {
+            return $this->snapshots[$cacheKey];
         }
 
         $modernShadowIdentity = $request->modeId . '@' . $request->modeVersion;
@@ -125,6 +132,6 @@ final readonly class EffectiveTradingConfigResolver implements EffectiveTradingC
             'layer_count' => count($snapshot->orderedLayers()),
         ]);
 
-        return $snapshot;
+        return $this->snapshots[$cacheKey] = $snapshot;
     }
 }

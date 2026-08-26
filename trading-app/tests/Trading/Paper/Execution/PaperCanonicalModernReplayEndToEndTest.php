@@ -88,7 +88,8 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
         $root = sys_get_temp_dir() . '/paper_modern_real_replay_' . $venueId . '_' . bin2hex(random_bytes(5));
         $triggerTime = new \DateTimeImmutable('2026-08-20T12:00:04Z');
         $clock = new PaperReplayClock($triggerTime);
-        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        $legacyKlines = new PaperKlineProvider();
+        $market = new PaperMarketStateProjector($legacyKlines);
         $runtimeFactory = new PaperFakeRuntimeFactory($root, $clock, 'representative-modern-replay-seed');
         $resolver = new EffectiveTradingConfigResolver();
         $snapshot = $resolver->resolve(new EffectiveTradingConfigRequest(
@@ -115,7 +116,7 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
         [$prefix, $trigger] = $this->representativeEvents($venue);
         $probeRoot = $root . '_probe';
         $probeMarket = new PaperMarketStateProjector(new PaperKlineProvider());
-        $probeMarket->restore([...$prefix, $trigger]);
+        $probeMarket->restore([...$prefix, $trigger], false);
         $probePreparation = $this->canonicalPreparation(
             $probeMarket,
             $clock,
@@ -172,8 +173,10 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
             self::assertSame(1, $strategy->delegateCalls);
             self::assertSame(1, $intents->reservations);
             self::assertSame(0, $intents->acknowledgements);
+            self::assertSame([], $legacyKlines->getKlines('BTCUSDT', \App\Common\Enum\Timeframe::TF_15M));
 
-            $restartedMarket = new PaperMarketStateProjector(new PaperKlineProvider());
+            $restartedLegacyKlines = new PaperKlineProvider();
+            $restartedMarket = new PaperMarketStateProjector($restartedLegacyKlines);
             $restartedFactory = new PaperFakeRuntimeFactory($root, $clock, 'representative-modern-replay-seed');
             $restarted = $this->coordinator(
                 $store,
@@ -206,6 +209,7 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
             self::assertSame('paper_canonical_fake_dispatcher', $entries[0]->metadata['canonical_dispatch_source'] ?? null);
             self::assertSame($cell->id, $entries[0]->metadata['paper_execution_cell_id'] ?? null);
             self::assertSame($cell->modernIdentity?->configHash, $entries[0]->metadata['config_hash'] ?? null);
+            self::assertSame([], $restartedLegacyKlines->getKlines('BTCUSDT', \App\Common\Enum\Timeframe::TF_15M));
         } finally {
             (new Filesystem())->remove($root);
         }
