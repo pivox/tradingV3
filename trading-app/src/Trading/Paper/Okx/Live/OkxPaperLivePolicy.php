@@ -12,6 +12,10 @@ final readonly class OkxPaperLivePolicy
     public const MAX_FRAME_BYTES = 1_048_576;
     public const MAX_QUEUED_FRAMES = 512;
     public const MAX_QUEUED_BYTES = 2_097_152;
+    public const PAUSE_QUEUED_FRAMES = 384;
+    public const PAUSE_QUEUED_BYTES = 1_048_576;
+    public const RESUME_QUEUED_FRAMES = 256;
+    public const RESUME_QUEUED_BYTES = 524_288;
     public const MAX_RESYNC_ATTEMPTS = 3;
     public const RESYNC_ATTEMPT_TIMEOUT_SECONDS = 240.0;
     public const MAX_OVERLAP_HISTORY_PAGES = 50;

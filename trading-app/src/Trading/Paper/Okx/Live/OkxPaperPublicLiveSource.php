@@ -88,6 +88,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     /** @var array{public: bool, business: bool} */
     private array $socketOpen = ['public' => false, 'business' => false];
 
+    /** @var array{public: bool, business: bool} */
+    private array $socketAdmissionsPaused = ['public' => false, 'business' => false];
+
     private bool $resumedHealthyStop;
     private bool $resumedHealthyStopDrain;
     private bool $resumedUnprovenHealthyStop;
@@ -1951,12 +1954,14 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $generation = $this->connectionGeneration;
         $transport->connect(
             $uri,
-            function () use (&$opened, $generation, $socket): void {
+            function () use (&$opened, $generation, $socket, $queue): void {
                 if ($generation !== $this->connectionGeneration) {
                     return;
                 }
                 $opened = true;
                 $this->socketOpen[$socket] = true;
+                $this->socketAdmissionsPaused[$socket] = false;
+                $this->pauseSocketAdmissionsAtHighWatermark($socket, $queue);
                 $this->loop->stop();
             },
             function (string $frame) use ($queue, $generation, $socket): void {
@@ -2078,6 +2083,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
         try {
             $queue->enqueue($frame);
+            $this->pauseSocketAdmissionsAtHighWatermark($socket, $queue);
         } catch (OkxPaperLiveIntegrityException $exception) {
             if ($exception->getMessage() === 'market_data_backpressure_exhausted') {
                 $this->failTerminal('market_data_backpressure_exhausted');
@@ -2503,12 +2509,14 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $opened = false;
         $transport->connect(
             $uri,
-            function () use (&$opened, $generation, $socket, $afterOpen): void {
+            function () use (&$opened, $generation, $socket, $queue, $afterOpen): void {
                 if ($generation !== $this->connectionGeneration || $this->stopped) {
                     return;
                 }
                 $opened = true;
                 $this->socketOpen[$socket] = true;
+                $this->socketAdmissionsPaused[$socket] = false;
+                $this->pauseSocketAdmissionsAtHighWatermark($socket, $queue);
                 try {
                     $afterOpen();
                 } catch (\Throwable $exception) {
@@ -4099,6 +4107,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             }
             $queue->replace($retained);
             $this->persistStreamingQueues();
+            $socket = $business ? 'business' : 'public';
+            $this->pauseSocketAdmissionsAtHighWatermark($socket, $queue);
+            $this->resumeSocketAdmissionsAfterDrain($socket, $queue);
             if (!$acknowledged) {
                 $this->loop->run();
             }
@@ -4285,6 +4296,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             }
             $this->lastCompletedQueuedSocket = $socket;
             $this->persistStreamingQueues();
+            $this->resumeSocketAdmissionsAfterDrain($socket, $queue);
             $this->rescheduleHeartbeatAfterQueueDrain(
                 $socket,
                 $queue,
@@ -4328,8 +4340,53 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $this->activeQueuedEventsRemaining = 0;
         $this->activeQueuedFramesRemaining = 0;
         $this->persistStreamingQueues();
+        $this->resumeSocketAdmissionsAfterDrain($socket, $queue);
         $this->rescheduleHeartbeatAfterQueueDrain($socket, $queue);
         $this->loopPump?->pump();
+    }
+
+    private function pauseSocketAdmissionsAtHighWatermark(
+        string $socket,
+        OkxPaperPublicFrameQueue $queue,
+    ): void {
+        if (!$this->socketReady($socket === 'business')
+            || $this->socketAdmissionsPaused[$socket]
+            || !$queue->shouldPauseAdmissions()
+        ) {
+            return;
+        }
+        $transport = $socket === 'public'
+            ? $this->publicTransport
+            : $this->businessTransport;
+        if (!$transport instanceof OkxPaperPausableWebSocketTransportInterface) {
+            return;
+        }
+
+        $transport->pause();
+        $this->socketAdmissionsPaused[$socket] = true;
+    }
+
+    private function resumeSocketAdmissionsAfterDrain(
+        string $socket,
+        OkxPaperPublicFrameQueue $queue,
+    ): void {
+        if ($this->healthyStopRequested
+            || !$this->socketAdmissionsPaused[$socket]
+            || !$queue->canResumeAdmissions()
+        ) {
+            return;
+        }
+        $transport = $socket === 'public'
+            ? $this->publicTransport
+            : $this->businessTransport;
+        if (!$transport instanceof OkxPaperPausableWebSocketTransportInterface) {
+            $this->socketAdmissionsPaused[$socket] = false;
+
+            return;
+        }
+
+        $this->socketAdmissionsPaused[$socket] = false;
+        $transport->resume();
     }
 
     private function rescheduleHeartbeatAfterQueueDrain(

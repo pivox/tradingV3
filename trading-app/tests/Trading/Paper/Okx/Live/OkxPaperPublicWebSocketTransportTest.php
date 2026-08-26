@@ -84,6 +84,92 @@ final class OkxPaperPublicWebSocketTransportTest extends TestCase
         $transport->send($recursive);
     }
 
+    public function testPausesAndResumesTheActivePawlConnection(): void
+    {
+        self::assertTrue(method_exists(\Ratchet\Client\WebSocket::class, 'pause'));
+        self::assertTrue(method_exists(\Ratchet\Client\WebSocket::class, 'resume'));
+        $connection = new FakePawlPublicConnection();
+        $transport = new PawlOkxPaperPublicWebSocketTransport(
+            loop: new DeterministicLoop(),
+            connector: static fn (string $uri): PromiseInterface => resolve($connection),
+        );
+        $transport->connect(
+            OkxPaperPublicConfig::WEB_SOCKET_URI,
+            static function (): void {},
+            static function (string $frame): void {},
+            static function (?int $code): void {},
+            static function (\Throwable $error): void {},
+        );
+
+        $transport->pause();
+        $transport->resume();
+
+        self::assertSame(1, $connection->pauseCount);
+        self::assertSame(1, $connection->resumeCount);
+    }
+
+    public function testPauseDefersCallbacksAlreadyBufferedByPawlAndResumesInOrder(): void
+    {
+        $connection = new FakePawlPublicConnection();
+        $transport = new PawlOkxPaperPublicWebSocketTransport(
+            loop: new DeterministicLoop(),
+            connector: static fn (string $uri): PromiseInterface => resolve($connection),
+        );
+        $received = [];
+        $transport->connect(
+            OkxPaperPublicConfig::WEB_SOCKET_URI,
+            static function (): void {},
+            static function (string $frame) use (&$received, $transport): void {
+                $received[] = $frame;
+                if ($frame !== 'third') {
+                    $transport->pause();
+                }
+            },
+            static function (?int $code): void {},
+            static function (\Throwable $error): void {},
+        );
+
+        $connection->emit('message', 'first');
+        $connection->emit('message', 'second');
+        $connection->emit('message', 'third');
+        self::assertSame(['first'], $received);
+
+        $transport->resume();
+        self::assertSame(['first', 'second'], $received);
+        $transport->resume();
+
+        self::assertSame(['first', 'second', 'third'], $received);
+        self::assertSame(2, $connection->pauseCount);
+        self::assertSame(1, $connection->resumeCount);
+    }
+
+    public function testPausedPawlCallbackBufferFailsClosedAtItsByteBound(): void
+    {
+        $connection = new FakePawlPublicConnection();
+        $transport = new PawlOkxPaperPublicWebSocketTransport(
+            loop: new DeterministicLoop(),
+            connector: static fn (string $uri): PromiseInterface => resolve($connection),
+        );
+        $errors = [];
+        $transport->connect(
+            OkxPaperPublicConfig::WEB_SOCKET_URI,
+            static function (): void {},
+            static function (string $frame) use ($transport): void {
+                $transport->pause();
+            },
+            static function (?int $code): void {},
+            static function (\Throwable $error) use (&$errors): void { $errors[] = $error; },
+        );
+
+        $connection->emit('message', 'pause');
+        $connection->emit('message', str_repeat('x', OkxPaperLivePolicy::MAX_FRAME_BYTES));
+        $connection->emit('message', 'overflow');
+
+        self::assertSame(1, $connection->closeCount);
+        self::assertCount(1, $errors);
+        self::assertSame('market_data_backpressure_exhausted', $errors[0]->getMessage());
+    }
+
     public function testSendBeforeOpenFailsClosed(): void
     {
         $transport = new PawlOkxPaperPublicWebSocketTransport(
@@ -319,6 +405,10 @@ final class OkxPaperPublicWebSocketTransportTest extends TestCase
         self::assertSame(1_048_576, OkxPaperLivePolicy::MAX_FRAME_BYTES);
         self::assertSame(512, OkxPaperLivePolicy::MAX_QUEUED_FRAMES);
         self::assertSame(2_097_152, OkxPaperLivePolicy::MAX_QUEUED_BYTES);
+        self::assertSame(384, OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES);
+        self::assertSame(1_048_576, OkxPaperLivePolicy::PAUSE_QUEUED_BYTES);
+        self::assertSame(256, OkxPaperLivePolicy::RESUME_QUEUED_FRAMES);
+        self::assertSame(524_288, OkxPaperLivePolicy::RESUME_QUEUED_BYTES);
         self::assertSame(3, OkxPaperLivePolicy::MAX_RESYNC_ATTEMPTS);
         self::assertSame(240.0, OkxPaperLivePolicy::RESYNC_ATTEMPT_TIMEOUT_SECONDS);
         self::assertSame(50, OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES);
@@ -390,6 +480,8 @@ final class FakePawlPublicConnection
     public array $sent = [];
 
     public int $closeCount = 0;
+    public int $pauseCount = 0;
+    public int $resumeCount = 0;
 
     public function on(string $event, callable $listener): void
     {
@@ -415,5 +507,15 @@ final class FakePawlPublicConnection
     public function close(): void
     {
         ++$this->closeCount;
+    }
+
+    public function pause(): void
+    {
+        ++$this->pauseCount;
+    }
+
+    public function resume(): void
+    {
+        ++$this->resumeCount;
     }
 }

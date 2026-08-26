@@ -26,6 +26,7 @@ use App\Trading\Paper\Okx\Live\OkxPaperLivePolicy;
 use App\Trading\Paper\Okx\Live\OkxPaperLoopPumpInterface;
 use App\Trading\Paper\Okx\Live\OkxPaperOrderBookMaterializer;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicFrameQueue;
+use App\Trading\Paper\Okx\Live\OkxPaperPausableWebSocketTransportInterface;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSource;
 use App\Trading\Paper\Okx\Live\ReactOkxPaperLoopPump;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicSubscriptionSet;
@@ -2185,6 +2186,64 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(PaperMarketEvent::class, $businessEvent);
         self::assertSame(PaperMarketDataChannel::CANDLE_1M, $businessEvent->channel);
         self::assertSame(1, $publicQueue->count());
+    }
+
+    public function testLiveQueuePausesAtHighWatermarkAndResumesAfterDurableDrain(): void
+    {
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $publicQueue = new OkxPaperPublicFrameQueue();
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            publicQueue: $publicQueue,
+            loopPump: new Task7CountingLoopPump(),
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        self::assertSame(1, $source->pendingDurableBatchSize());
+        $source->acknowledge($sentinel->eventId);
+        for ($index = 0; $index < OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES; ++$index) {
+            $public->message(Task7Transport::tradeFrame([(string) (10000 + $index)]));
+        }
+
+        self::assertSame(1, $public->pauseCount);
+        self::assertSame(OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES, $publicQueue->count());
+        $public->afterResume = static function () use ($public): void {
+            for ($index = 0; $index < 128; ++$index) {
+                $public->message(Task7Transport::tradeFrame([(string) (20000 + $index)]));
+            }
+        };
+
+        for ($batch = 0; $batch < 4; ++$batch) {
+            $events->next();
+            for ($remaining = 32; $remaining > 0; --$remaining) {
+                $event = $events->current();
+                self::assertInstanceOf(PaperMarketEvent::class, $event);
+                self::assertSame($remaining, $source->pendingDurableBatchSize());
+                $source->acknowledge($event->eventId);
+                if ($remaining > 1) {
+                    $events->next();
+                }
+            }
+        }
+
+        self::assertSame(1, $public->resumeCount);
+        self::assertSame(2, $public->pauseCount);
+        self::assertSame(OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES, $publicQueue->count());
     }
 
     public function testFilteredFrameBatchStillPumpsAndUpdatesSocketFairness(): void
@@ -11154,7 +11213,7 @@ final class Task7RestClient implements OkxPaperPublicRestClientInterface
     }
 }
 
-final class Task7Transport implements OkxPaperPublicWebSocketTransportInterface
+final class Task7Transport implements OkxPaperPausableWebSocketTransportInterface
 {
     /** @var list<string> */
     public array $connections = [];
@@ -11169,6 +11228,9 @@ final class Task7Transport implements OkxPaperPublicWebSocketTransportInterface
     public array $connectResponses = [];
 
     public int $closeCount = 0;
+    public int $pauseCount = 0;
+    public int $resumeCount = 0;
+    public ?\Closure $afterResume = null;
 
     private ?\Closure $onMessage = null;
     private bool $connected = false;
@@ -11233,6 +11295,17 @@ final class Task7Transport implements OkxPaperPublicWebSocketTransportInterface
         ++$this->closeCount;
         $this->connected = false;
         $this->onMessage = null;
+    }
+
+    public function pause(): void
+    {
+        ++$this->pauseCount;
+    }
+
+    public function resume(): void
+    {
+        ++$this->resumeCount;
+        ($this->afterResume ?? static function (): void {})();
     }
 
     /**
