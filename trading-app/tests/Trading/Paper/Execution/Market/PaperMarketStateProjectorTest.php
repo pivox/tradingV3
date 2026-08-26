@@ -65,6 +65,28 @@ final class PaperMarketStateProjectorTest extends TestCase
         self::assertEquals($provider->getKlines('BTCUSDT', Timeframe::TF_5M), $restoredProvider->getKlines('BTCUSDT', Timeframe::TF_5M));
     }
 
+    public function testModernProjectionRetainsCanonicalEventsWithoutBuildingLegacyKlines(): void
+    {
+        $provider = new PaperKlineProvider();
+        $projector = new PaperMarketStateProjector($provider);
+        $event = $this->candle(
+            PaperMarketDataVenue::HYPERLIQUID,
+            PaperMarketDataNetwork::TESTNET,
+            $this->payload('1m', '1785578400000'),
+            '1',
+        );
+
+        $projector->apply($event, false);
+
+        self::assertSame([$event], $projector->events());
+        self::assertSame([], $provider->getKlines('BTCUSDT', Timeframe::TF_1M));
+
+        $projector->restore([$event], false);
+
+        self::assertSame([$event], $projector->events());
+        self::assertSame([], $provider->getKlines('BTCUSDT', Timeframe::TF_1M));
+    }
+
     public function testTopOfBookUpdatesAndCrossedBookFailsClosed(): void
     {
         $projector = new PaperMarketStateProjector(new PaperKlineProvider());

@@ -26,7 +26,7 @@ final class PaperMarketStateProjector
     {
     }
 
-    public function apply(PaperMarketEvent $event): void
+    public function apply(PaperMarketEvent $event, bool $projectLegacyKlines = true): void
     {
         $existingHash = $this->appliedEvents[$event->eventId] ?? null;
         if ($existingHash !== null) {
@@ -39,7 +39,7 @@ final class PaperMarketStateProjector
 
         $timeframe = $this->timeframe($event->channel);
         if ($timeframe instanceof Timeframe) {
-            $this->applyCandle($event, $timeframe);
+            $this->applyCandle($event, $timeframe, $projectLegacyKlines);
         } elseif ($event->channel === PaperMarketDataChannel::TOP_OF_BOOK) {
             $this->applyBook($event);
         }
@@ -49,14 +49,14 @@ final class PaperMarketStateProjector
     }
 
     /** @param iterable<PaperMarketEvent> $events */
-    public function restore(iterable $events): void
+    public function restore(iterable $events, bool $projectLegacyKlines = true): void
     {
         $this->klines->clear();
         $this->books = [];
         $this->appliedEvents = [];
         $this->eventLog = [];
         foreach ($events as $event) {
-            $this->apply($event);
+            $this->apply($event, $projectLegacyKlines);
         }
     }
 
@@ -72,7 +72,7 @@ final class PaperMarketStateProjector
         return $this->books[$symbol] ?? null;
     }
 
-    private function applyCandle(PaperMarketEvent $event, Timeframe $timeframe): void
+    private function applyCandle(PaperMarketEvent $event, Timeframe $timeframe, bool $projectLegacyKlines): void
     {
         $payload = $event->payload;
         if (($payload['confirmed'] ?? null) !== true) {
@@ -99,6 +99,9 @@ final class PaperMarketStateProjector
         }
 
         $openTime = $this->openTime($payload['start_time'] ?? null, $event->exchangeTimestamp, $timeframe);
+        if (!$projectLegacyKlines) {
+            return;
+        }
         $this->klines->put(new KlineDto(
             symbol: $event->symbol,
             timeframe: $timeframe,

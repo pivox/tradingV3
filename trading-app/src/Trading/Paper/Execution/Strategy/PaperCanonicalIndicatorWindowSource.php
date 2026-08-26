@@ -52,19 +52,35 @@ final readonly class PaperCanonicalIndicatorWindowSource
         if ($requestedTimeframes === [] || $requestedTimeframes !== $expectedRequested) {
             throw new \LogicException('paper_canonical_strategy_indicator_timeframes_invalid');
         }
+        $requestedNativeTimeframes = array_values(array_intersect(self::NATIVE_TIMEFRAMES, $requestedTimeframes));
+        if (in_array('4h', $requestedTimeframes, true)
+            && !in_array('1h', $requestedNativeTimeframes, true)
+        ) {
+            $requestedNativeTimeframes[] = '1h';
+        }
 
         $now = $this->clock->now();
         if ($trigger->receivedTimestamp > $now) {
             return null;
         }
-        $projectedEvents = array_values(array_filter(
-            $this->market->events(),
-            static fn (PaperMarketEvent $event): bool =>
-                $event->sourceNetwork === $cell->network
-                && $event->sourceVenue === $cell->marketDataVenue
-                && $event->symbol === $trigger->symbol,
-        ));
-        $latest = $projectedEvents === [] ? null : $projectedEvents[array_key_last($projectedEvents)];
+        $latest = null;
+        $events = [];
+        foreach ($this->market->events() as $event) {
+            if ($event->sourceNetwork !== $cell->network
+                || $event->sourceVenue !== $cell->marketDataVenue
+                || $event->symbol !== $trigger->symbol
+            ) {
+                continue;
+            }
+            $latest = $event;
+            $eventTimeframe = $this->timeframe($event->channel);
+            if ($event->receivedTimestamp <= $now
+                && $eventTimeframe !== null
+                && in_array($eventTimeframe, $requestedNativeTimeframes, true)
+            ) {
+                $events[] = $event;
+            }
+        }
         if (!$latest instanceof PaperMarketEvent
             || !hash_equals($latest->eventId, $trigger->eventId)
             || !hash_equals(
@@ -74,10 +90,6 @@ final readonly class PaperCanonicalIndicatorWindowSource
         ) {
             throw new \LogicException('paper_canonical_strategy_trigger_not_current');
         }
-        $events = array_values(array_filter(
-            $projectedEvents,
-            static fn (PaperMarketEvent $event): bool => $event->receivedTimestamp <= $now,
-        ));
         $candles = $this->adapter->adaptCandleEvents($events);
         $availableThrough = $now->format('Y-m-d\TH:i:s.u\Z');
         $byTimeframe = [];

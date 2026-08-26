@@ -113,7 +113,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         $canonicalDecision = null;
         $canonicalPreparation = null;
         try {
-            $this->market->apply($event);
+            $this->market->apply($event, !$cell->isModern());
             if ($cell->isModern()) {
                 $datasetIdentity = $this->store->datasetIdentity($cell);
                 if ($datasetIdentity['dataset_id'] !== $datasetId) {
@@ -138,7 +138,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
                 }
             }
         } finally {
-            $this->market->restore($snapshot);
+            $this->market->restore($snapshot, !$cell->isModern());
         }
 
         $provenance = $cell->provenance($eligibility);
@@ -233,7 +233,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         }
 
         $this->reconcilePending($cell, $runtime, false);
-        $this->market->apply($event);
+        $this->market->apply($event, !$cell->isModern());
     }
 
     public function counters(PaperExecutionCell $cell): PaperExecutionCounters
@@ -405,7 +405,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         if (!$force && $this->restoredCellId === $cell->id) {
             return;
         }
-        $this->market->restore($this->store->acknowledgedSources($cell));
+        $this->market->restore($this->store->acknowledgedSources($cell), !$cell->isModern());
         $this->restoredCellId = $cell->id;
     }
 

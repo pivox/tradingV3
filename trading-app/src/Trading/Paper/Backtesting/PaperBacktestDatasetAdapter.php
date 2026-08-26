@@ -195,8 +195,7 @@ final class PaperBacktestDatasetAdapter
             NormalizedBacktestCandle $left,
             NormalizedBacktestCandle $right,
         ): int {
-            return [$left->marketDataVenue, $left->symbol, self::DURATIONS[$left->timeframe], $left->openAt, $left->sourceRecordId]
-                <=> [$right->marketDataVenue, $right->symbol, self::DURATIONS[$right->timeframe], $right->openAt, $right->sourceRecordId];
+            return self::compareCandles($left, $right);
         });
         usort($publicTrades, static fn (
             NormalizedBacktestPublicTrade $left,
@@ -252,11 +251,31 @@ final class PaperBacktestDatasetAdapter
             NormalizedBacktestCandle $left,
             NormalizedBacktestCandle $right,
         ): int {
-            return [$left->marketDataVenue, $left->symbol, self::DURATIONS[$left->timeframe], $left->openAt, $left->sourceRecordId]
-                <=> [$right->marketDataVenue, $right->symbol, self::DURATIONS[$right->timeframe], $right->openAt, $right->sourceRecordId];
+            return self::compareCandles($left, $right);
         });
 
         return $candles;
+    }
+
+    private static function compareCandles(
+        NormalizedBacktestCandle $left,
+        NormalizedBacktestCandle $right,
+    ): int {
+        $comparison = $left->marketDataVenue <=> $right->marketDataVenue;
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+        $comparison = $left->symbol <=> $right->symbol;
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+        $comparison = self::DURATIONS[$left->timeframe] <=> self::DURATIONS[$right->timeframe];
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+        $comparison = $left->openAt <=> $right->openAt;
+
+        return $comparison !== 0 ? $comparison : $left->sourceRecordId <=> $right->sourceRecordId;
     }
 
     /**
