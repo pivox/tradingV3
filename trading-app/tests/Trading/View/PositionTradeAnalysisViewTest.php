@@ -17,6 +17,7 @@ use DoctrineMigrations\Version20260719130000;
 use DoctrineMigrations\Version20260808114000;
 use DoctrineMigrations\Version20260811120000;
 use DoctrineMigrations\Version20260820000000;
+use DoctrineMigrations\Version20260826120000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -42,6 +43,7 @@ use Psr\Log\NullLogger;
 #[CoversClass(Version20260808114000::class)]
 #[CoversClass(Version20260811120000::class)]
 #[CoversClass(Version20260820000000::class)]
+#[CoversClass(Version20260826120000::class)]
 final class PositionTradeAnalysisViewTest extends TestCase
 {
     private Connection $conn;
@@ -166,6 +168,72 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('not_applicable', $eth['cost_completeness']);
         self::assertNull($eth['close_event_id']);
         self::assertNull($eth['recorded_pnl_usdt']);
+    }
+
+    public function testCanonicalViewUsesAnExplainablePlannerFence(): void
+    {
+        $definition = $this->conn->fetchOne(
+            "SELECT pg_get_viewdef('position_trade_analysis_v2_legacy_source'::regclass, true)",
+        );
+
+        self::assertIsString($definition);
+        self::assertStringContainsString(
+            'LATERAL jsonb_populate_record',
+            $definition,
+        );
+        self::assertStringNotContainsString('AS MATERIALIZED', $definition);
+        self::assertSame(1, substr_count($definition, 'jsonb_populate_record'));
+        self::assertMatchesRegularExpression(
+            '/[a-zA-Z_][a-zA-Z0-9_]*\.run_id,/',
+            $definition,
+        );
+        self::assertStringContainsString(
+            'populated.net_pnl_usdt,',
+            $definition,
+        );
+        $plan = $this->conn->fetchFirstColumn(
+            'EXPLAIN SELECT * FROM position_trade_analysis_v2 WHERE entry_event_id = -1 LIMIT 1',
+        );
+        self::assertNotSame([], $plan);
+        self::assertStringNotContainsString(
+            'CTE Scan on composed',
+            implode("\n", $plan),
+        );
+    }
+
+    public function testCompositeOnceMigrationSupportsDownThenUpRoundTrip(): void
+    {
+        $migration = new Version20260826120000($this->conn, new NullLogger());
+        $migration->down(new Schema());
+        foreach ($migration->getSql() as $query) {
+            $this->conn->executeStatement(
+                $query->getStatement(),
+                $query->getParameters(),
+                $query->getTypes(),
+            );
+        }
+        $restored = $this->conn->fetchOne(
+            "SELECT pg_get_viewdef('position_trade_analysis_v2_legacy_source'::regclass, true)",
+        );
+        self::assertIsString($restored);
+        self::assertStringNotContainsString('LATERAL jsonb_populate_record', $restored);
+        self::assertGreaterThan(1, substr_count($restored, 'jsonb_populate_record'));
+
+        $migration = new Version20260826120000($this->conn, new NullLogger());
+        $migration->up(new Schema());
+        foreach ($migration->getSql() as $query) {
+            $this->conn->executeStatement(
+                $query->getStatement(),
+                $query->getParameters(),
+                $query->getTypes(),
+            );
+        }
+        $optimized = $this->conn->fetchOne(
+            "SELECT pg_get_viewdef('position_trade_analysis_v2_legacy_source'::regclass, true)",
+        );
+        self::assertIsString($optimized);
+        self::assertStringContainsString('LATERAL jsonb_populate_record', $optimized);
+        self::assertSame(1, substr_count($optimized, 'jsonb_populate_record'));
     }
 
     public function testStructuredCanonicalIdentityIsProjectedWithoutLegacyFallback(): void
@@ -1865,6 +1933,17 @@ SQL);
         foreach ($up->getSql() as $query) {
             $this->conn->executeStatement($query->getStatement(), $query->getParameters(), $query->getTypes());
         }
+        foreach ([Version20260820000000::class, Version20260826120000::class] as $successorClass) {
+            $successor = new $successorClass($this->conn, new NullLogger());
+            $successor->up(new Schema());
+            foreach ($successor->getSql() as $query) {
+                $this->conn->executeStatement(
+                    $query->getStatement(),
+                    $query->getParameters(),
+                    $query->getTypes(),
+                );
+            }
+        }
 
         self::assertSame('position_trade_analysis_v2', $this->conn->fetchOne("SELECT to_regclass('position_trade_analysis_v2')::text"));
         self::assertSame('position_trade_analysis_v2_legacy_source', $this->conn->fetchOne("SELECT to_regclass('position_trade_analysis_v2_legacy_source')::text"));
@@ -2595,8 +2674,14 @@ SQL);
         if (!class_exists(Version20260811120000::class, false)) {
             require_once \dirname(__DIR__, 3) . '/migrations/Version20260811120000.php';
         }
+        if (!class_exists(Version20260820000000::class, false)) {
+            require_once \dirname(__DIR__, 3) . '/migrations/Version20260820000000.php';
+        }
+        if (!class_exists(Version20260826120000::class, false)) {
+            require_once \dirname(__DIR__, 3) . '/migrations/Version20260826120000.php';
+        }
 
-        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class, Version20260625020000::class, Version20260626000000::class, Version20260719130000::class, Version20260808114000::class, Version20260811120000::class] as $migrationClass) {
+        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class, Version20260625020000::class, Version20260626000000::class, Version20260719130000::class, Version20260808114000::class, Version20260811120000::class, Version20260820000000::class, Version20260826120000::class] as $migrationClass) {
             $migration = new $migrationClass($this->conn, new NullLogger());
             $migration->up(new Schema());
             foreach ($migration->getSql() as $query) {
