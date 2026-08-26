@@ -39,6 +39,13 @@ final readonly class PaperCanonicalExecutionCostSource
             return null;
         }
         $this->assertBook($cell, $trigger, $policy, $book);
+        if (CanonicalOrderPlanTime::isOlderThan(
+            $book->observedAt,
+            $this->clock->now(),
+            $policy->entryZone->maximumInputAgeSeconds,
+        )) {
+            return null;
+        }
 
         $funding = $this->funding->snapshotFor(
             $cell,
@@ -186,13 +193,6 @@ final readonly class PaperCanonicalExecutionCostSource
         $now = $this->clock->now();
         if ($book->observedAt > $now) {
             throw new \LogicException('paper_canonical_execution_cost_book_future');
-        }
-        if (CanonicalOrderPlanTime::isOlderThan(
-            $book->observedAt,
-            $now,
-            $policy->entryZone->maximumInputAgeSeconds,
-        )) {
-            throw new \LogicException('paper_canonical_execution_cost_book_stale');
         }
     }
 

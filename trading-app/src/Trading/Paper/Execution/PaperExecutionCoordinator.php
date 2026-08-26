@@ -108,13 +108,17 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
             throw new \LogicException('paper_execution_cell_killed');
         }
 
-        $snapshot = $this->market->events();
+        $modern = $cell->isModern();
+        $snapshot = $modern ? null : $this->market->events();
+        $eventCountBefore = count($this->market->events());
+        $tentativeApplied = false;
         $prepared = null;
         $canonicalDecision = null;
         $canonicalPreparation = null;
         try {
-            $this->market->apply($event, !$cell->isModern());
-            if ($cell->isModern()) {
+            $this->market->apply($event, !$modern);
+            $tentativeApplied = count($this->market->events()) === $eventCountBefore + 1;
+            if ($modern) {
                 $datasetIdentity = $this->store->datasetIdentity($cell);
                 if ($datasetIdentity['dataset_id'] !== $datasetId) {
                     throw new \LogicException('paper_canonical_strategy_dataset_mismatch');
@@ -138,7 +142,13 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
                 }
             }
         } finally {
-            $this->market->restore($snapshot, !$cell->isModern());
+            if ($modern) {
+                if ($tentativeApplied) {
+                    $this->market->rollbackLastModern($event);
+                }
+            } else {
+                $this->market->restore($snapshot ?? []);
+            }
         }
 
         $provenance = $cell->provenance($eligibility);

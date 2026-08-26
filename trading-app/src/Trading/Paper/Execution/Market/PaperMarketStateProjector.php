@@ -60,6 +60,36 @@ final class PaperMarketStateProjector
         }
     }
 
+    public function rollbackLastModern(PaperMarketEvent $event): void
+    {
+        $lastKey = array_key_last($this->eventLog);
+        $last = $lastKey === null ? null : $this->eventLog[$lastKey];
+        if (!$last instanceof PaperMarketEvent
+            || !hash_equals($last->eventId, $event->eventId)
+            || !hash_equals($last->payloadHash, $event->payloadHash)
+        ) {
+            throw new \LogicException('paper_market_modern_rollback_invalid');
+        }
+
+        array_pop($this->eventLog);
+        unset($this->appliedEvents[$event->eventId]);
+        if ($event->channel !== PaperMarketDataChannel::TOP_OF_BOOK) {
+            return;
+        }
+
+        unset($this->books[$event->symbol]);
+        for ($index = count($this->eventLog) - 1; $index >= 0; --$index) {
+            $candidate = $this->eventLog[$index];
+            if ($candidate->symbol === $event->symbol
+                && $candidate->channel === PaperMarketDataChannel::TOP_OF_BOOK
+            ) {
+                $this->applyBook($candidate);
+
+                return;
+            }
+        }
+    }
+
     /** @return list<PaperMarketEvent> */
     public function events(): array
     {

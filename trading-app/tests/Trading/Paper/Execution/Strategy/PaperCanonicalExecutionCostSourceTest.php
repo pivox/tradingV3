@@ -102,16 +102,13 @@ final class PaperCanonicalExecutionCostSourceTest extends TestCase
         $source->snapshotFor($cell, $trigger, $policy);
     }
 
-    public function testRejectsStaleBookEvidence(): void
+    public function testReturnsNoCostsForStaleBookEvidence(): void
     {
         [$source, $cell, $trigger, $policy] = $this->context(
             bookExchangeTimestamp: '2026-08-01T09:59:00Z',
         );
 
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('paper_canonical_execution_cost_book_stale');
-
-        $source->snapshotFor($cell, $trigger, $policy);
+        self::assertNull($source->snapshotFor($cell, $trigger, $policy));
     }
 
     public function testPropagatesFundingIntervalMismatch(): void

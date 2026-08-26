@@ -87,6 +87,20 @@ final class PaperMarketStateProjectorTest extends TestCase
         self::assertSame([], $provider->getKlines('BTCUSDT', Timeframe::TF_1M));
     }
 
+    public function testModernRollbackRemovesOnlyTheTentativeEventAndRestoresThePreviousBook(): void
+    {
+        $projector = new PaperMarketStateProjector(new PaperKlineProvider());
+        $previous = $this->book('99.5', '100.5', '10');
+        $tentative = $this->book('100', '101', '11');
+        $projector->apply($previous, false);
+        $projector->apply($tentative, false);
+
+        $projector->rollbackLastModern($tentative);
+
+        self::assertSame([$previous], $projector->events());
+        self::assertSame(['bid' => '99.5', 'ask' => '100.5'], $projector->topOfBook('BTCUSDT'));
+    }
+
     public function testTopOfBookUpdatesAndCrossedBookFailsClosed(): void
     {
         $projector = new PaperMarketStateProjector(new PaperKlineProvider());
