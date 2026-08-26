@@ -30,6 +30,10 @@ final class PositionTradeAnalysisPlannerFenceMigrationTest extends TestCase
         self::assertStringNotContainsString('old_1', $migration);
         self::assertStringNotContainsString('AS MATERIALIZED', $migration);
         self::assertStringContainsString(
+            "ELSE format('%I.%I AS %I', source_alias, attribute.attname, attribute.attname)",
+            $migration,
+        );
+        self::assertStringContainsString(
             'original_definition:',
             $migration,
         );

@@ -183,6 +183,14 @@ final class PositionTradeAnalysisViewTest extends TestCase
         );
         self::assertStringNotContainsString('AS MATERIALIZED', $definition);
         self::assertSame(1, substr_count($definition, 'jsonb_populate_record'));
+        self::assertMatchesRegularExpression(
+            '/[a-zA-Z_][a-zA-Z0-9_]*\.run_id,/',
+            $definition,
+        );
+        self::assertStringContainsString(
+            'populated.net_pnl_usdt,',
+            $definition,
+        );
         $plan = $this->conn->fetchFirstColumn(
             'EXPLAIN SELECT * FROM position_trade_analysis_v2 WHERE entry_event_id = -1 LIMIT 1',
         );

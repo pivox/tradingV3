@@ -82,6 +82,7 @@ DECLARE
     source_tail text;
     source_alias text;
     record_expression text;
+    projected_columns text;
     tail_position integer;
     previous_comment text;
 BEGIN
@@ -116,9 +117,34 @@ BEGIN
         'old_source.',
         source_alias || '.'
     );
+    SELECT string_agg(
+        CASE
+            WHEN attribute.attname = ANY (ARRAY[
+                'snapshot_kline_time', 'entry_rsi', 'entry_atr', 'entry_macd',
+                'entry_ma9', 'entry_ma21', 'entry_vwap',
+                'gross_realized_pnl_usdt', 'entry_fee_usdt', 'exit_fee_usdt',
+                'other_trading_fees_usdt', 'funding_usdt', 'spread_cost_usdt',
+                'slippage_cost_usdt', 'borrow_cost_usdt', 'liquidation_fee_usdt',
+                'total_known_cost_usdt', 'net_pnl_usdt', 'realized_gross_pnl_r',
+                'realized_net_pnl_r', 'position_fully_closed', 'pnl_source',
+                'pnl_quality_flags', 'cost_completeness'
+            ])
+            THEN format('populated.%I AS %I', attribute.attname, attribute.attname)
+            ELSE format('%I.%I AS %I', source_alias, attribute.attname, attribute.attname)
+        END,
+        ', ' ORDER BY attribute.attnum
+    )
+      INTO projected_columns
+      FROM pg_attribute attribute
+     WHERE attribute.attrelid = 'position_trade_analysis_v2_pre_ledger'::regclass
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped;
+    IF projected_columns IS NULL THEN
+        RAISE EXCEPTION 'position_trade_analysis_v2_projection_columns_invalid';
+    END IF;
 
     EXECUTE 'CREATE OR REPLACE VIEW position_trade_analysis_v2_legacy_source AS '
-        || 'SELECT populated.*, '
+        || 'SELECT ' || projected_columns || ', '
         || {$ledgerLiteral} || ' '
         || source_tail
         || ' CROSS JOIN LATERAL '
