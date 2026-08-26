@@ -452,7 +452,7 @@ SQL, [$cell->id]);
 
     public function acknowledgedSources(PaperExecutionCell $cell): array
     {
-        $rows = $this->connection->fetchFirstColumn(<<<'SQL'
+        $rows = $this->connection->iterateColumn(<<<'SQL'
 SELECT claimed.payload::text
 FROM paper_execution_event claimed
 WHERE claimed.cell_id = ?
@@ -472,10 +472,12 @@ WHERE claimed.cell_id = ?
 ORDER BY claimed.source_position
 SQL, [$cell->id]);
 
-        return array_map(
-            fn (mixed $payload): PaperMarketEvent => PaperMarketEvent::fromArray($this->decodeJsonMap($payload)),
-            $rows,
-        );
+        $events = [];
+        foreach ($rows as $payload) {
+            $events[] = PaperMarketEvent::fromArray($this->decodeJsonMap($payload));
+        }
+
+        return $events;
     }
 
     public function journalEventCounts(PaperExecutionCell $cell): array
@@ -583,7 +585,7 @@ SQL, [$checkpoint['cell_id'], $ordinal, $eventType, $sourcePosition, $sourceEven
         $expectedNextSourcePosition = 0;
         $expectedFakeEventCursor = 0;
         $expectedKilled = false;
-        $rows = $this->connection->fetchAllAssociative('SELECT cell_id, journal_ordinal, event_type, source_position, source_event_id, effect_key, payload::text AS payload, payload_checksum FROM paper_execution_event WHERE cell_id = ? ORDER BY journal_ordinal', [$checkpoint['cell_id']]);
+        $rows = $this->connection->iterateAssociative('SELECT cell_id, journal_ordinal, event_type, source_position, source_event_id, effect_key, payload::text AS payload, payload_checksum FROM paper_execution_event WHERE cell_id = ? ORDER BY journal_ordinal', [$checkpoint['cell_id']]);
         foreach ($rows as $row) {
             ++$expectedOrdinal;
             if ((int) $row['journal_ordinal'] !== $expectedOrdinal) {
