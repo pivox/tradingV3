@@ -697,6 +697,10 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
         }
         $stream = $coin . '/' . $interval;
         $next = HyperliquidCandle::fromApiRow($row, $coin, $interval);
+        $finalizedFrontier = $this->checkpoint->finalizedCandleFrontiers[$stream] ?? null;
+        if ($finalizedFrontier !== null && $next->startTime <= $finalizedFrontier) {
+            return;
+        }
         $currentRow = $this->checkpoint->currentCandles[$stream] ?? null;
         if ($currentRow === null) {
             $this->checkpoint = $this->checkpointStore->save(

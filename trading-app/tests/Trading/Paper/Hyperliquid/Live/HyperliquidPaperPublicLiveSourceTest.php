@@ -103,7 +103,11 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
     public function testRestCatchupBridgesFromDurableFrontiersAfterWebSocketSubscription(): void
     {
         $clock = new MockClock('2026-07-29T10:00:00Z');
-        $transport = new DeterministicHyperliquidTransport([]);
+        $transport = new DeterministicHyperliquidTransport([
+            self::candleFrame(1785319260000, '2'),
+            self::candleFrame(1785319380000, '2.1'),
+            self::candleFrame(1785319440000, '2.2'),
+        ]);
         $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
         $checkpoint = $store->loadOrCreate(
             'paper-hyperliquid-live-mainnet',
@@ -144,6 +148,26 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame(1, $transport->connectCount);
         self::assertCount(14, $rest->requests);
         self::assertSame([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1], $rest->connectCounts);
+
+        $captured = [];
+        while (\count($captured) < 9) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $captured[] = $event;
+            $source->acknowledge($event->eventId);
+            if (\count($captured) < 9) {
+                $events->next();
+            }
+        }
+        self::assertSame(PaperMarketDataChannel::CANDLE_1M, $captured[8]->channel);
+        self::assertSame('1785319380000', $captured[8]->payload['start_time']);
+        self::assertCount(1, array_filter(
+            $captured,
+            static fn (PaperMarketEvent $candidate): bool =>
+                $candidate->symbol === 'BTCUSDT'
+                && $candidate->channel === PaperMarketDataChannel::CANDLE_1M
+                && ($candidate->payload['start_time'] ?? null) === '1785319260000',
+        ));
     }
 
     public function testAuthenticatedMetadataAndFundingPrecedeInitialSnapshotBoundaries(): void
@@ -1692,6 +1716,8 @@ final class BridgeAwareWarmupRestClient implements HyperliquidPaperPublicRestCli
         $this->connectCounts[] = $this->transport->connectCount;
         if (\count($this->requests) === 1) {
             $this->clock->sleep(180.0);
+        } elseif (\count($this->requests) === 14) {
+            $this->clock->sleep(120.0);
         }
         $step = ['1m' => 60_000, '5m' => 300_000, '15m' => 900_000, '1h' => 3_600_000][$interval];
         $rows = [];
