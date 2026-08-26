@@ -151,7 +151,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
         }
         if (\in_array(
             $this->checkpoint->phase,
-            ['fresh', 'connecting', 'subscribing', 'warming'],
+            ['fresh', 'connecting', 'subscribing', 'warming', 'catching_up'],
             true,
         )) {
             if ($this->checkpoint->phase !== 'fresh') {
@@ -186,22 +186,27 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
                 $this->connectAndSubscribe();
                 $this->awaitSubscriptions();
                 $this->throwPendingTransportFailure();
+                $this->checkpoint = $this->checkpointStore->save(
+                    $this->checkpoint->withPhase('catching_up'),
+                );
+                $this->scheduleHeartbeat();
                 foreach ($warmup->catchupCandles(
                     $this->checkpoint->finalizedCandleFrontiers,
                     $this->nowMilliseconds(),
                 ) as $candle) {
                     yield from $this->yieldWarmupCandle($candle);
+                    $this->throwPendingTransportFailure();
                 }
                 $this->throwPendingTransportFailure();
+                $this->checkpoint = $this->checkpointStore->save(
+                    $this->checkpoint->withPhase('streaming'),
+                );
                 yield from $this->yieldCandidates([
                     ...($this->metadataClient === null ? [] : $this->metadataEvents()),
                     ...($this->fundingClient === null ? [] : $this->fundingEvents()),
                     $this->normalizer->snapshotBoundary('BTC', 'initial', $this->checkpoint->sourceEpoch),
                     $this->normalizer->snapshotBoundary('ETH', 'initial', $this->checkpoint->sourceEpoch),
                 ]);
-                $this->checkpoint = $this->checkpointStore->save(
-                    $this->checkpoint->withPhase('streaming'),
-                );
                 $this->scheduleHeartbeat();
                 $this->scheduleFundingRefresh();
             } else {
@@ -1086,13 +1091,14 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
 
     private function pumpNetworkLoop(): void
     {
-        if ($this->checkpoint->phase !== 'streaming'
+        $catchingUp = $this->checkpoint->phase === 'catching_up';
+        if (!\in_array($this->checkpoint->phase, ['catching_up', 'streaming'], true)
             || $this->stopped
             || $this->healthyStopRequested
             || $this->transportReadingPaused
-            || $this->queue->count() > 0
-            || $this->preReadyFrames !== []
-            || $this->deferredDecodedFrames !== []
+            || (!$catchingUp && ($this->queue->count() > 0
+                || $this->preReadyFrames !== []
+                || $this->deferredDecodedFrames !== []))
         ) {
             return;
         }
@@ -1109,6 +1115,21 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
         } finally {
             $this->loop->cancelTimer($sliceTimer);
         }
+        if ($catchingUp) {
+            $this->acceptQueuedCatchupPong();
+        }
+    }
+
+    private function acceptQueuedCatchupPong(): void
+    {
+        $frame = $this->queue->peek();
+        if ($frame === null || $this->decoder->decode($frame)['kind'] !== 'pong') {
+            return;
+        }
+        if ($this->queue->dequeue() !== $frame) {
+            throw new \LogicException();
+        }
+        $this->acceptPong();
     }
 
     public function stop(): void
@@ -1210,7 +1231,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
             function () use ($generation): void {
                 if ($generation !== $this->activeGeneration
                     || $this->stopped
-                    || $this->checkpoint->phase !== 'streaming'
+                    || !\in_array($this->checkpoint->phase, ['catching_up', 'streaming'], true)
                 ) {
                     return;
                 }
@@ -1251,7 +1272,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
             function () use ($generation): void {
                 if ($generation !== $this->activeGeneration
                     || $this->stopped
-                    || $this->checkpoint->phase !== 'streaming'
+                    || !\in_array($this->checkpoint->phase, ['catching_up', 'streaming'], true)
                 ) {
                     return;
                 }

@@ -103,6 +103,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
     public function testRestCatchupBridgesFromDurableFrontiersAfterWebSocketSubscription(): void
     {
         $clock = new MockClock('2026-07-29T10:00:00Z');
+        $loop = new HyperliquidDeterministicLoop();
         $transport = new DeterministicHyperliquidTransport([
             self::candleFrame(1785319260000, '2'),
             self::candleFrame(1785319380000, '2.1'),
@@ -134,6 +135,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         $rest = new BridgeAwareWarmupRestClient($clock, $transport);
         $source = $this->source(
             $transport,
+            loop: $loop,
             clock: $clock,
             restClient: $rest,
         );
@@ -150,11 +152,18 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1], $rest->connectCounts);
 
         $captured = [];
+        $runsBeforeCatchupAcknowledgement = $loop->runCount();
         while (\count($captured) < 9) {
             $event = $events->current();
             self::assertInstanceOf(PaperMarketEvent::class, $event);
             $captured[] = $event;
             $source->acknowledge($event->eventId);
+            if (\count($captured) === 1) {
+                self::assertSame(
+                    $runsBeforeCatchupAcknowledgement + 1,
+                    $loop->runCount(),
+                );
+            }
             if (\count($captured) < 9) {
                 $events->next();
             }
