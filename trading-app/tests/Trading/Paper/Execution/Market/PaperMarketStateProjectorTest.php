@@ -121,6 +121,54 @@ final class PaperMarketStateProjectorTest extends TestCase
         self::assertSame(250, (fn (): int => count($this->appliedEvents))->call($projector));
     }
 
+    public function testMicroProjectionRetainsEveryTradeInsideTheSixtySecondWindow(): void
+    {
+        $events = [];
+        $start = new \DateTimeImmutable('2026-08-01T10:00:00.000000Z');
+        for ($index = 0; $index < 2050; ++$index) {
+            $timestamp = $start->modify('+' . $index . ' milliseconds');
+            $events[] = PaperMarketEvent::create(
+                PaperMarketDataNetwork::MAINNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                'BTCUSDT',
+                PaperMarketDataChannel::PUBLIC_TRADE,
+                $timestamp,
+                $timestamp,
+                (string) ($index + 1),
+                ['trade_id' => (string) ($index + 1), 'price' => '100', 'quantity' => '1', 'aggressor_side' => 'buy'],
+            );
+        }
+        $projector = new PaperMarketStateProjector(new PaperKlineProvider());
+
+        $projector->restore($events, false, 'micro_scalping');
+
+        self::assertCount(2050, $projector->events());
+        self::assertSame(2050, (fn (): int => count($this->appliedEvents))->call($projector));
+    }
+
+    public function testMicroProjectionDropsTradesOlderThanTheSixtySecondWindow(): void
+    {
+        $events = [];
+        foreach (['2026-08-01T10:00:00.000000Z', '2026-08-01T10:01:00.000000Z', '2026-08-01T10:01:01.000000Z'] as $index => $time) {
+            $timestamp = new \DateTimeImmutable($time);
+            $events[] = PaperMarketEvent::create(
+                PaperMarketDataNetwork::MAINNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                'BTCUSDT',
+                PaperMarketDataChannel::PUBLIC_TRADE,
+                $timestamp,
+                $timestamp,
+                (string) ($index + 1),
+                ['trade_id' => (string) ($index + 1), 'price' => '100', 'quantity' => '1', 'aggressor_side' => 'buy'],
+            );
+        }
+        $projector = new PaperMarketStateProjector(new PaperKlineProvider());
+
+        $projector->restore($events, false, 'micro_scalping');
+
+        self::assertSame(array_slice($events, 1), $projector->events());
+    }
+
     public function testTopOfBookUpdatesAndCrossedBookFailsClosed(): void
     {
         $projector = new PaperMarketStateProjector(new PaperKlineProvider());

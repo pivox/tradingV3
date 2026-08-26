@@ -13,6 +13,10 @@ use Brick\Math\Exception\MathException;
 
 final class PaperMarketStateProjector
 {
+    private const MICROSTRUCTURE_WINDOW_SECONDS = 60;
+
+    private const MICRO_COMPACTION_INTERVAL_SECONDS = 5;
+
     /** @var array<string, string> */
     private array $appliedEvents = [];
 
@@ -24,6 +28,8 @@ final class PaperMarketStateProjector
 
     /** @var array<string, int> */
     private array $eventLogCounts = [];
+
+    private ?int $lastMicroCompactionBucket = null;
 
     public function __construct(private readonly PaperKlineProvider $klines)
     {
@@ -57,8 +63,24 @@ final class PaperMarketStateProjector
         $retentionKey = $event->symbol . '/' . $event->channel->value;
         $this->eventLogCounts[$retentionKey] = ($this->eventLogCounts[$retentionKey] ?? 0) + 1;
         if ($modernModeId !== null && $compactModern) {
+            $compacted = false;
+            if ($modernModeId === 'micro_scalping') {
+                $bucket = intdiv(
+                    (int) $event->receivedTimestamp->format('U'),
+                    self::MICRO_COMPACTION_INTERVAL_SECONDS,
+                );
+                if ($bucket !== $this->lastMicroCompactionBucket) {
+                    $this->compactModern($modernModeId, $event->receivedTimestamp);
+                    $this->lastMicroCompactionBucket = $bucket;
+                    $compacted = true;
+                }
+            }
             $limit = $this->modernRetentionLimit($modernModeId, $event->channel);
-            if ($this->eventLogCounts[$retentionKey] > $limit + 32) {
+            if (!$compacted
+                && !($modernModeId === 'micro_scalping'
+                    && $event->channel === PaperMarketDataChannel::PUBLIC_TRADE)
+                && $this->eventLogCounts[$retentionKey] > $limit + 32
+            ) {
                 $this->compactModern($modernModeId);
             }
         }
@@ -76,6 +98,7 @@ final class PaperMarketStateProjector
         $this->appliedEvents = [];
         $this->eventLog = [];
         $this->eventLogCounts = [];
+        $this->lastMicroCompactionBucket = null;
         foreach ($events as $event) {
             $this->apply($event, $projectLegacyKlines, $modernModeId);
         }
@@ -128,16 +151,31 @@ final class PaperMarketStateProjector
         return $this->books[$symbol] ?? null;
     }
 
-    private function compactModern(string $modeId): void
+    private function compactModern(string $modeId, ?\DateTimeImmutable $through = null): void
     {
         if (!in_array($modeId, ['day_trading', 'scalping', 'micro_scalping'], true)) {
             throw new \LogicException('paper_market_modern_mode_invalid');
         }
+        if ($through === null && $this->eventLog !== []) {
+            $through = $this->eventLog[array_key_last($this->eventLog)]->receivedTimestamp;
+        }
+        $microTradeWindowStart = $modeId === 'micro_scalping' && $through !== null
+            ? $through->modify('-' . self::MICROSTRUCTURE_WINDOW_SECONDS . ' seconds')
+            : null;
         $counts = [];
         $retained = [];
         for ($index = count($this->eventLog) - 1; $index >= 0; --$index) {
             $event = $this->eventLog[$index];
             $key = $event->symbol . '/' . $event->channel->value;
+            if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE
+                && $microTradeWindowStart instanceof \DateTimeImmutable
+            ) {
+                if ($event->exchangeTimestamp >= $microTradeWindowStart) {
+                    $retained[] = $event;
+                }
+
+                continue;
+            }
             $limit = $this->modernRetentionLimit($modeId, $event->channel);
             $counts[$key] = ($counts[$key] ?? 0) + 1;
             if ($counts[$key] <= $limit) {
