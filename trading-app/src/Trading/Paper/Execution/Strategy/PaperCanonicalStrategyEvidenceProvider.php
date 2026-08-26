@@ -12,7 +12,7 @@ use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 
-final readonly class PaperCanonicalStrategyEvidenceProvider implements PaperCanonicalStrategyEvidenceProviderInterface
+final class PaperCanonicalStrategyEvidenceProvider implements PaperCanonicalStrategyEvidenceProviderInterface
 {
     /** @var array<string, list<string>> */
     private const TIMEFRAMES = [
@@ -21,9 +21,12 @@ final readonly class PaperCanonicalStrategyEvidenceProvider implements PaperCano
         'micro_scalping' => ['1m', '5m'],
     ];
 
+    /** @var array<string, \App\TradingCore\Config\EffectiveTradingConfigSnapshot> */
+    private array $snapshots = [];
+
     public function __construct(
-        private EffectiveTradingConfigResolver $configs,
-        private PaperCanonicalStrategyEvidenceSourceInterface $source,
+        private readonly EffectiveTradingConfigResolver $configs,
+        private readonly PaperCanonicalStrategyEvidenceSourceInterface $source,
     ) {
     }
 
@@ -56,12 +59,15 @@ final readonly class PaperCanonicalStrategyEvidenceProvider implements PaperCano
             $identity->side,
             ShadowExecutionCapability::Paper,
         );
-        $snapshot = $this->configs->resolve($request);
+        $snapshot = $this->snapshots[$cell->id] ??= $this->configs->resolve($request);
         if (!hash_equals($identity->configHash, $snapshot->configHash)
             || !is_string($snapshot->conditionCatalogHash)
             || !hash_equals($identity->conditionCatalogHash, $snapshot->conditionCatalogHash)
         ) {
             throw new \LogicException('paper_canonical_strategy_config_identity_mismatch');
+        }
+        if (!$this->isExecutionTrigger($snapshot, $event)) {
+            throw PaperCanonicalStrategyEvidenceUnavailable::indicatorProjection();
         }
         $timeframes = self::TIMEFRAMES[$identity->modeId] ?? null;
         if ($timeframes === null) {
@@ -127,5 +133,33 @@ final readonly class PaperCanonicalStrategyEvidenceProvider implements PaperCano
             $costs->entrySlippageRate === null ? null : $costs->entrySlippageRate * 10_000.0,
             $inputs->orderBook,
         );
+    }
+
+    private function isExecutionTrigger(
+        \App\TradingCore\Config\EffectiveTradingConfigSnapshot $snapshot,
+        PaperMarketEvent $event,
+    ): bool {
+        $config = $snapshot->payload();
+        $execution = $config['setup']['ast']['execution']['execution_timeframe'] ?? null;
+        $timeframe = is_array($execution) && ($execution['state'] ?? null) === 'defined'
+            ? ($execution['value'] ?? null)
+            : null;
+        if (!is_string($timeframe) || !in_array($timeframe, ['1m', '5m', '15m', '1h', '4h'], true)) {
+            throw new \LogicException('paper_canonical_strategy_execution_timeframe_invalid');
+        }
+        $channel = match ($timeframe) {
+            '1m' => \App\Trading\Paper\MarketData\PaperMarketDataChannel::CANDLE_1M,
+            '5m' => \App\Trading\Paper\MarketData\PaperMarketDataChannel::CANDLE_5M,
+            '15m' => \App\Trading\Paper\MarketData\PaperMarketDataChannel::CANDLE_15M,
+            '1h' => \App\Trading\Paper\MarketData\PaperMarketDataChannel::CANDLE_1H,
+            default => null,
+        };
+        $declared = $event->payload['interval'] ?? $event->payload['bar'] ?? null;
+
+        return $channel !== null
+            && $event->channel === $channel
+            && ($event->payload['confirmed'] ?? null) === true
+            && is_string($declared)
+            && strtolower($declared) === $timeframe;
     }
 }
