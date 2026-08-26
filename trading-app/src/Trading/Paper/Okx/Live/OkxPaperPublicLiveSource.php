@@ -4385,8 +4385,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             return;
         }
 
-        $transport->resume();
         $this->socketAdmissionsPaused[$socket] = false;
+        $transport->resume();
     }
 
     private function rescheduleHeartbeatAfterQueueDrain(

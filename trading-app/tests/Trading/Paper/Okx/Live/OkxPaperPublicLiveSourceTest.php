@@ -2222,6 +2222,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
 
         self::assertSame(1, $public->pauseCount);
         self::assertSame(OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES, $publicQueue->count());
+        $public->afterResume = static function () use ($public): void {
+            for ($index = 0; $index < 128; ++$index) {
+                $public->message(Task7Transport::tradeFrame([(string) (20000 + $index)]));
+            }
+        };
 
         for ($batch = 0; $batch < 4; ++$batch) {
             $events->next();
@@ -2237,7 +2242,8 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         }
 
         self::assertSame(1, $public->resumeCount);
-        self::assertSame(OkxPaperLivePolicy::RESUME_QUEUED_FRAMES, $publicQueue->count());
+        self::assertSame(2, $public->pauseCount);
+        self::assertSame(OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES, $publicQueue->count());
     }
 
     public function testFilteredFrameBatchStillPumpsAndUpdatesSocketFairness(): void
@@ -11224,6 +11230,7 @@ final class Task7Transport implements OkxPaperPausableWebSocketTransportInterfac
     public int $closeCount = 0;
     public int $pauseCount = 0;
     public int $resumeCount = 0;
+    public ?\Closure $afterResume = null;
 
     private ?\Closure $onMessage = null;
     private bool $connected = false;
@@ -11298,6 +11305,7 @@ final class Task7Transport implements OkxPaperPausableWebSocketTransportInterfac
     public function resume(): void
     {
         ++$this->resumeCount;
+        ($this->afterResume ?? static function (): void {})();
     }
 
     /**
