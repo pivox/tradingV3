@@ -478,7 +478,7 @@ SQL, [$cell->id, $sourcePosition]);
         return $this->checkpointFromRow($row);
     }
 
-    public function acknowledgedSources(PaperExecutionCell $cell): array
+    public function acknowledgedSources(PaperExecutionCell $cell): iterable
     {
         $rows = $this->connection->iterateColumn(<<<'SQL'
 WITH unresolved_positions AS MATERIALIZED (
@@ -504,12 +504,9 @@ WHERE claimed.cell_id = ?
 ORDER BY claimed.source_position
 SQL, [$cell->id, $cell->id]);
 
-        $events = [];
         foreach ($rows as $payload) {
-            $events[] = PaperMarketEvent::fromArray($this->decodeJsonMap($payload));
+            yield PaperMarketEvent::fromArray($this->decodeJsonMap($payload));
         }
-
-        return $events;
     }
 
     public function journalEventCounts(PaperExecutionCell $cell): array

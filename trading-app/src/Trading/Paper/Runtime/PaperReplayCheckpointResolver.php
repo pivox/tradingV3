@@ -40,8 +40,13 @@ final readonly class PaperReplayCheckpointResolver
         ) {
             throw new \LogicException('paper_execution_dataset_identity_conflict');
         }
-        $events = $this->store->acknowledgedSources($cell);
-        $last = $events[$position - 1] ?? null;
+        $last = null;
+        foreach ($this->store->acknowledgedSources($cell) as $index => $event) {
+            if ($index === $position - 1) {
+                $last = $event;
+                break;
+            }
+        }
         if ($last === null) {
             throw new \LogicException('paper_execution_checkpoint_corrupt');
         }

@@ -145,8 +145,10 @@ final class PaperMarketStateProjector
             }
         }
         $this->eventLog = array_reverse($retained);
+        $this->appliedEvents = [];
         $this->eventLogCounts = [];
         foreach ($this->eventLog as $event) {
+            $this->appliedEvents[$event->eventId] = $event->payloadHash;
             $key = $event->symbol . '/' . $event->channel->value;
             $this->eventLogCounts[$key] = ($this->eventLogCounts[$key] ?? 0) + 1;
         }

@@ -56,8 +56,8 @@ interface PaperExecutionStoreInterface
 
     public function checkpoint(PaperExecutionCell $cell): PaperExecutionCheckpoint;
 
-    /** @return list<PaperMarketEvent> */
-    public function acknowledgedSources(PaperExecutionCell $cell): array;
+    /** @return iterable<PaperMarketEvent> */
+    public function acknowledgedSources(PaperExecutionCell $cell): iterable;
 
     /** @return array<string, int> */
     public function journalEventCounts(PaperExecutionCell $cell): array;

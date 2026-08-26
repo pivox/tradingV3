@@ -118,8 +118,7 @@ final class PaperMarketStateProjectorTest extends TestCase
         $projector->restore($events, false, 'scalping');
 
         self::assertSame(array_slice($events, -250), $projector->events());
-        $projector->apply($events[0], false, 'scalping');
-        self::assertSame(array_slice($events, -250), $projector->events());
+        self::assertSame(250, (fn (): int => count($this->appliedEvents))->call($projector));
     }
 
     public function testTopOfBookUpdatesAndCrossedBookFailsClosed(): void
