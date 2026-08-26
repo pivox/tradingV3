@@ -253,6 +253,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     /** @return iterable<PaperMarketEvent> */
     private function eventFlow(): iterable
     {
+        $initialCandleBridgeRequired = \in_array(
+            $this->checkpoint->phase,
+            ['warming', 'connecting', 'subscribing'],
+            true,
+        );
         if (!$this->config->acquisitionEnabled) {
             throw new OkxPaperLiveIntegrityException('okx_paper_public_acquisition_disabled');
         }
@@ -332,6 +337,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 'streaming',
                 null,
             );
+        }
+        if ($initialCandleBridgeRequired && $this->checkpoint->phase === 'streaming') {
+            yield from $this->bridgeInitialCandles();
         }
         if ($this->checkpoint->phase === 'streaming') {
             $this->startHeartbeatTimers();
@@ -705,6 +713,116 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
             $this->assertPendingWasAcknowledged();
         }
+    }
+
+    /** @return \Generator<int, PaperMarketEvent> */
+    private function bridgeInitialCandles(): \Generator
+    {
+        foreach (['BTCUSDT', 'ETHUSDT'] as $symbol) {
+            $instrumentId = $this->instruments->nativeInstrumentId($symbol);
+            foreach (['1m', '5m', '15m', '1H'] as $bar) {
+                $stream = $symbol . '/rest/candle_' . $bar;
+                $rows = $this->initialCandleBridgeRows($stream, $instrumentId, $bar);
+                if ($rows === null) {
+                    return;
+                }
+                $this->requiresOverlap[$stream] = true;
+                yield from $this->yieldWarmupRowEvents(
+                    $stream,
+                    [],
+                    $rows,
+                    fn (array $row, OkxPaperMarketEventNormalizer $normalizer): ?PaperMarketEvent => $normalizer
+                        ->warmupCandle($instrumentId, $bar, $row),
+                    fn (array $row): ?OkxPaperStreamFrontier => $this->candleFrontier(
+                        $instrumentId,
+                        $bar,
+                        $row,
+                    ),
+                    streamWithoutTransition: true,
+                );
+                if ($this->checkpoint->phase !== 'streaming') {
+                    return;
+                }
+            }
+        }
+    }
+
+    /** @return list<array<array-key, mixed>>|null */
+    private function initialCandleBridgeRows(
+        string $stream,
+        string $instrumentId,
+        string $bar,
+    ): ?array {
+        $rows = $this->restClient->currentCandles($instrumentId, $bar, null, null, 300);
+        $this->loopPump?->pump();
+        if ($this->checkpoint->phase !== 'streaming') {
+            return null;
+        }
+        if ($rows === [] || \count($rows) > 300) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        $cursor = $this->validatedOldestCandleTimestamp(
+            $rows,
+            $instrumentId,
+            $bar,
+            null,
+        );
+        for ($page = 0; !$this->bridgeRowsContainRequiredFrontier(
+            $stream,
+            $instrumentId,
+            $bar,
+            $rows,
+        ); ++$page) {
+            if ($page >= OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES) {
+                $this->failTerminal('market_data_gap_unresolved');
+            }
+            $older = $this->restClient->historyCandles($instrumentId, $bar, $cursor, 300);
+            $this->loopPump?->pump();
+            if ($this->checkpoint->phase !== 'streaming') {
+                return null;
+            }
+            if ($older === [] || \count($older) > 300) {
+                $this->failTerminal('market_data_gap_unresolved');
+            }
+            $cursor = $this->validatedOldestCandleTimestamp(
+                $older,
+                $instrumentId,
+                $bar,
+                $cursor,
+            );
+            $rows = [...$older, ...$rows];
+        }
+        $this->sortCandleRows($rows);
+
+        return $rows;
+    }
+
+    /** @param list<array<array-key, mixed>> $rows */
+    private function bridgeRowsContainRequiredFrontier(
+        string $stream,
+        string $instrumentId,
+        string $bar,
+        array $rows,
+    ): bool {
+        $required = $this->checkpoint->streamFrontiers[$stream] ?? null;
+        if (!$required instanceof OkxPaperStreamFrontier) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        foreach ($rows as $row) {
+            $candidate = $this->candleFrontier($instrumentId, $bar, $row);
+            if (!$candidate instanceof OkxPaperStreamFrontier
+                || !hash_equals($required->naturalIdentity, $candidate->naturalIdentity)
+            ) {
+                continue;
+            }
+            if (!hash_equals($required->canonicalDigest, $candidate->canonicalDigest)) {
+                throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     /** @return list<array<array-key, mixed>> */
@@ -1427,6 +1545,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         string $stream,
         array $transition,
         bool $continueTransitionAfterBatch = false,
+        ?string $eventStreamOverride = null,
     ): \Generator
     {
         if ($events === []) {
@@ -1436,7 +1555,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         foreach ($events as $index => $accepted) {
             $event = $accepted['event'];
             $frontier = $accepted['frontier'];
-            $eventStream = $transition === [] ? $this->streamForEvent($event) : $stream;
+            $eventStream = $transition === []
+                ? ($eventStreamOverride ?? $this->streamForEvent($event))
+                : $stream;
             $pendingFrontier = [
                 'stream' => $eventStream,
                 'frontier' => $frontier->toArray(),
@@ -1480,6 +1601,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         callable $normalize,
         callable $frontierForRow,
         bool $requireInitialEvent = false,
+        bool $streamWithoutTransition = false,
     ): \Generator {
         if ($rows === []) {
             throw new OkxPaperLiveIntegrityException('okx_paper_public_response_invalid');
@@ -1535,9 +1657,16 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 yield from $this->yieldMarketEvents(
                     $pendingEvents,
                     $stream,
-                    $transition,
-                    true,
+                    $streamWithoutTransition ? [] : $transition,
+                    !$streamWithoutTransition,
+                    $streamWithoutTransition ? $stream : null,
                 );
+                if ($streamWithoutTransition) {
+                    $this->loopPump?->pump();
+                    if ($this->checkpoint->phase !== 'streaming') {
+                        return;
+                    }
+                }
             }
             $pendingEvents = $events;
         }
@@ -1545,8 +1674,12 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             yield from $this->yieldMarketEvents(
                 $pendingEvents,
                 $stream,
-                $transition,
+                $streamWithoutTransition ? [] : $transition,
+                eventStreamOverride: $streamWithoutTransition ? $stream : null,
             );
+            if ($streamWithoutTransition) {
+                $this->loopPump?->pump();
+            }
         }
         if ($requireInitialEvent
             && !$acceptedAny

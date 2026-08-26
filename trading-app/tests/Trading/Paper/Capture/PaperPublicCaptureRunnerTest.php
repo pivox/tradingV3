@@ -110,7 +110,7 @@ final class PaperPublicCaptureRunnerTest extends TestCase
         self::assertSame(1, $okx->calls);
     }
 
-    public function testResumedFinalDurableSnapshotStartsTheLiveDurationBeforeReadingTheSource(): void
+    public function testResumedFinalDurableOkxSnapshotWaitsForPostBridgeWebSocketData(): void
     {
         $datasetId = 'resume-final-snapshot-okx-mainnet';
         $manifest = (new PaperPublicLiveManifestFactory())->create(PaperMarketDataVenue::OKX, $datasetId);
@@ -121,9 +121,9 @@ final class PaperPublicCaptureRunnerTest extends TestCase
         $loop = new CaptureRunnerTrackingLoop();
         $okx = new CaptureRunnerSourceFactory(
             PaperMarketDataVenue::OKX,
-            [],
+            [$this->event(PaperMarketDataVenue::OKX, '2', 2)],
             static function () use ($loop): void {
-                self::assertSame(1, $loop->timerRegistrations);
+                self::assertSame(0, $loop->timerRegistrations);
             },
         );
 
@@ -201,7 +201,7 @@ final class PaperPublicCaptureRunnerTest extends TestCase
             new \DateTimeImmutable(sprintf('2026-08-23T10:00:%02dZ', $seconds)),
             new \DateTimeImmutable(sprintf('2026-08-23T10:00:%02d.100000Z', $seconds)),
             $sequence,
-            ['price' => '65000.0', 'size' => '0.01'],
+            ['price' => '65000.0', 'size' => '0.01', 'origin' => 'ws_trades'],
         );
     }
 
