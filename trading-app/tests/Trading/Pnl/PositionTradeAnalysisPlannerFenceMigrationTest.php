@@ -25,6 +25,9 @@ final class PositionTradeAnalysisPlannerFenceMigrationTest extends TestCase
             "SELECT pg_get_viewdef('position_trade_analysis_v2_legacy_source'::regclass, true)",
             $migration,
         );
+        self::assertStringContainsString('regexp_match(', $migration);
+        self::assertStringContainsString("'old_source.'", $migration);
+        self::assertStringNotContainsString('old_1', $migration);
         self::assertStringContainsString(
             "format('(%s).%I AS %I'",
             $migration,

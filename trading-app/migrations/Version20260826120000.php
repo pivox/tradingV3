@@ -29,7 +29,7 @@ final class Version20260826120000 extends AbstractMigration
         $recordExpression = <<<'SQL'
 jsonb_populate_record(
     NULL::position_trade_analysis_v2_pre_ledger,
-    to_jsonb(old_1.*) || jsonb_build_object(
+    to_jsonb(old_source.*) || jsonb_build_object(
         'snapshot_kline_time', snapshot.kline_time,
         'entry_rsi', trading_v3_safe_numeric(snapshot.values->>'rsi'),
         'entry_atr', trading_v3_safe_numeric(snapshot.values->>'atr'),
@@ -53,7 +53,7 @@ jsonb_populate_record(
         'position_fully_closed', ledger.position_fully_closed,
         'pnl_source', CASE
             WHEN ledger.ledger_row_count IS NOT NULL THEN 'fill_cost_ledger_v1'
-            ELSE old_1.pnl_source
+            ELSE old_source.pnl_source
         END,
         'pnl_quality_flags', to_jsonb(quality.flags),
         'cost_completeness', certified.cost_completeness
@@ -82,15 +82,22 @@ DO \$position_trade_analysis_composite_once\$
 DECLARE
     definition text;
     source_tail text;
+    source_alias text;
+    record_expression text;
     tail_position integer;
 BEGIN
     SELECT pg_get_viewdef('position_trade_analysis_v2_legacy_source'::regclass, true)
       INTO definition;
+    source_alias := (regexp_match(
+        definition,
+        'FROM position_trade_analysis_v2_pre_ledger ([a-zA-Z_][a-zA-Z0-9_]*)'
+    ))[1];
     tail_position := strpos(
         definition,
-        '   FROM position_trade_analysis_v2_pre_ledger old_1'
+        'FROM position_trade_analysis_v2_pre_ledger ' || source_alias
     );
-    IF tail_position = 0
+    IF source_alias IS NULL
+        OR tail_position = 0
         OR strpos(definition, 'jsonb_populate_record') = 0
         OR strpos(definition, 'composed AS MATERIALIZED') > 0
     THEN
@@ -100,10 +107,15 @@ BEGIN
         substring(definition FROM tail_position),
         E' \\n\\t;'
     );
+    record_expression := replace(
+        {$recordLiteral},
+        'old_source.',
+        source_alias || '.'
+    );
 
     EXECUTE 'CREATE OR REPLACE VIEW position_trade_analysis_v2_legacy_source AS '
         || 'WITH composed AS MATERIALIZED (SELECT '
-        || {$recordLiteral} || ' AS legacy_record, '
+        || record_expression || ' AS legacy_record, '
         || {$ledgerLiteral} || ' '
         || source_tail
         || ') SELECT (composed.legacy_record).*, '
@@ -119,21 +131,28 @@ DO \$position_trade_analysis_composite_restore\$
 DECLARE
     definition text;
     source_tail text;
+    source_alias text;
+    record_expression text;
     tail_position integer;
     tail_end_position integer;
     expanded_columns text;
 BEGIN
     SELECT pg_get_viewdef('position_trade_analysis_v2_legacy_source'::regclass, true)
       INTO definition;
+    source_alias := (regexp_match(
+        definition,
+        'FROM position_trade_analysis_v2_pre_ledger ([a-zA-Z_][a-zA-Z0-9_]*)'
+    ))[1];
     tail_position := strpos(
         definition,
-        '           FROM position_trade_analysis_v2_pre_ledger old_1'
+        'FROM position_trade_analysis_v2_pre_ledger ' || source_alias
     );
     tail_end_position := strpos(
         definition,
-        E'\n        )\n SELECT (composed.legacy_record)'
+        'SELECT (composed.legacy_record).entry_event_id'
     );
-    IF tail_position = 0
+    IF source_alias IS NULL
+        OR tail_position = 0
         OR tail_end_position <= tail_position
         OR strpos(definition, 'composed AS MATERIALIZED') = 0
     THEN
@@ -143,10 +162,15 @@ BEGIN
         definition
         FROM tail_position
         FOR tail_end_position - tail_position
-    ));
+    ), E' \\n\\t)');
+    record_expression := replace(
+        {$recordLiteral},
+        'old_source.',
+        source_alias || '.'
+    );
 
     SELECT string_agg(
-        format('(%s).%I AS %I', {$recordLiteral}, attribute.attname, attribute.attname),
+        format('(%s).%I AS %I', record_expression, attribute.attname, attribute.attname),
         ', ' ORDER BY attribute.attnum
     )
       INTO expanded_columns
