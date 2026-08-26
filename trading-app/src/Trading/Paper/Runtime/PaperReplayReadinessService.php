@@ -68,6 +68,8 @@ final readonly class PaperReplayReadinessService
 
             throw $failure;
         }
+        gc_collect_cycles();
+        gc_mem_caches();
         if ($manifest->startExchangeTimestamp === null) {
             throw new \LogicException('paper_replay_clock_start_missing');
         }

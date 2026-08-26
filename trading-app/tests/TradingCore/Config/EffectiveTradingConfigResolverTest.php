@@ -84,4 +84,15 @@ final class EffectiveTradingConfigResolverTest extends TestCase
         self::assertArrayNotHasKey('layers', $logger->contexts[0]);
         self::assertArrayNotHasKey('config', $logger->contexts[0]);
     }
+
+    public function testExactRequestReusesTheImmutableSnapshotWithinTheProcess(): void
+    {
+        $resolver = new EffectiveTradingConfigResolver();
+        $request = new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
+            'hyperliquid', 'mainnet', 'long', ShadowExecutionCapability::Paper,
+        );
+
+        self::assertSame($resolver->resolve($request), $resolver->resolve($request));
+    }
 }
