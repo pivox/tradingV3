@@ -107,6 +107,64 @@ final class PaperExecutionCoordinatorRecoveryTest extends TestCase
     }
 
     #[DataProvider('crashPoints')]
+    public function testSameCoordinatorRetryReconcilesEveryCrashBoundary(PaperCrashPoint $target): void
+    {
+        $root = sys_get_temp_dir() . '/paper_same_instance_recovery_' . bin2hex(random_bytes(5));
+        $store = new InMemoryPaperExecutionStore();
+        $cell = $this->cell();
+        $event = $this->event();
+        $thrown = false;
+        try {
+            $coordinator = $this->coordinator(
+                $store,
+                new RecordingProjectionStore(),
+                $root,
+                static function (PaperCrashPoint $point) use ($target, &$thrown): void {
+                    if (!$thrown && $point === $target) {
+                        $thrown = true;
+                        throw new \RuntimeException('injected_crash');
+                    }
+                },
+            );
+            try {
+                $coordinator->consumeAt(
+                    $cell,
+                    PaperProfileEligibility::REFERENCE_ONLY,
+                    'dataset-1',
+                    0,
+                    $event,
+                );
+                self::fail('Crash point was not reached.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('injected_crash', $exception->getMessage());
+            }
+
+            $coordinator->consumeAt(
+                $cell,
+                PaperProfileEligibility::REFERENCE_ONLY,
+                'dataset-1',
+                0,
+                $event,
+            );
+
+            $runtime = (new PaperFakeRuntimeFactory(
+                $root,
+                new MockClock('2026-08-01T10:00:00Z'),
+            ))->forCell($cell);
+            self::assertCount(1, array_filter(
+                $runtime->stateStore->getOrders('BTCUSDT'),
+                static fn ($order): bool => !$order->reduceOnly,
+            ));
+            self::assertSame([], $store->pendingEffects($cell));
+        } finally {
+            if (is_dir($root)) {
+                foreach (glob($root . '/*') ?: [] as $file) { @unlink($file); }
+                @rmdir($root);
+            }
+        }
+    }
+
+    #[DataProvider('crashPoints')]
     public function testModernCanonicalCrashBoundaryConvergesWithoutDuplicateFakeOrder(PaperCrashPoint $target): void
     {
         $root = sys_get_temp_dir() . '/paper_modern_recovery_' . bin2hex(random_bytes(5));

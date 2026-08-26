@@ -103,6 +103,8 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         $checkpoint = $this->store->checkpoint($cell);
         if ($sourcePosition < $checkpoint->nextSourcePosition) {
             $this->store->claimSource($cell, $sourcePosition, $event);
+            $this->reconcilePending($cell, $runtime, true, $sourcePosition);
+            $this->restoreAcknowledgedMarket($cell, true);
 
             return;
         }
