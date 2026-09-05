@@ -2181,7 +2181,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 static fn (int $offset): array => Task7Transport::tradeFrame([
                     (string) (9100 + $offset),
                 ]),
-                range(1, 257),
+                range(1, 129),
             ),
         ];
         $business->responses = Task7Transport::acknowledgements(
@@ -2201,7 +2201,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $events->next();
 
         $tradeIds = [];
-        for ($remaining = 256; $remaining > 0; --$remaining) {
+        for ($remaining = 128; $remaining > 0; --$remaining) {
             $event = $events->current();
             self::assertInstanceOf(PaperMarketEvent::class, $event);
             $tradeIds[] = $event->payload['trade_id'] ?? null;
@@ -2215,12 +2215,12 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $events->next();
         $last = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $last);
-        self::assertSame('9357', $last->payload['trade_id'] ?? null);
+        self::assertSame('9229', $last->payload['trade_id'] ?? null);
         self::assertSame(1, $source->pendingDurableBatchSize());
         $source->acknowledge($last->eventId);
 
         self::assertSame(
-            array_map(static fn (int $offset): string => (string) (9100 + $offset), range(1, 256)),
+            array_map(static fn (int $offset): string => (string) (9100 + $offset), range(1, 128)),
             $tradeIds,
         );
         self::assertNull($this->checkpointState()['pending_event']);

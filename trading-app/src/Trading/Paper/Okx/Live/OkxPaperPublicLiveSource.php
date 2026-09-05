@@ -24,7 +24,7 @@ use Symfony\Component\Clock\ClockInterface;
 final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 {
     private const MAX_WARMUP_EVENT_BATCH = 100;
-    private const MAX_DURABLE_FRAME_BATCH = 256;
+    private const MAX_DURABLE_FRAME_BATCH = 128;
     private const MAX_DURABLE_EVENT_BATCH = 256;
 
     private readonly OkxPaperInstrumentMap $instruments;
