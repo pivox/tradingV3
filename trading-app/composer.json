@@ -8,6 +8,7 @@
     "ext-json": "*",
     "ext-pdo": "*",
     "ext-pdo_pgsql": "*",
+    "ext-pdo_sqlite": "*",
     "symfony/framework-bundle": "^7.1",
     "symfony/console": "^7.1",
     "symfony/dotenv": "^7.1",

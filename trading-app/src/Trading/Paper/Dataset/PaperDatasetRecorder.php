@@ -26,6 +26,7 @@ final class PaperDatasetRecorder
     private PaperDatasetVerifier $verifier;
     private PaperDatasetRecorderFilesystem $filesystem;
     private PaperDatasetLineReader $lineReader;
+    private PaperDatasetIdentityIndex $identityIndex;
     private string $datasetRoot;
     private string $datasetDirectory;
     private string $eventsPath;
@@ -52,9 +53,6 @@ final class PaperDatasetRecorder
     /** @var array{dev: int, ino: int} */
     private array $lockFileIdentity;
 
-    /** @var array<string, array{payload_hash: string, event_hash: string}> */
-    private array $identities = [];
-
     /** @var array<string, BigInteger> */
     private array $lastSequences = [];
 
@@ -67,6 +65,7 @@ final class PaperDatasetRecorder
     private int $eventCount = 0;
     private int $scannedBytes = 0;
     private ?string $scannedPrefixSha256 = null;
+    private ?\HashContext $scannedHashContext = null;
 
     /** @var array{dev: int, ino: int}|null */
     private ?array $scannedFileIdentity = null;
@@ -85,6 +84,7 @@ final class PaperDatasetRecorder
         ?PaperDatasetVerifier $verifier = null,
         ?PaperDatasetRecorderFilesystem $filesystem = null,
         int $recordingManifestCheckpointInterval = 1,
+        ?PaperDatasetIdentityIndex $identityIndex = null,
     ) {
         PaperDatasetManifest::assertDatasetId($manifest->datasetId);
         if ($recordingManifestCheckpointInterval < 1
@@ -99,6 +99,7 @@ final class PaperDatasetRecorder
         $this->verifier = $verifier ?? new PaperDatasetVerifier($this->codec);
         $this->filesystem = $filesystem ?? new PaperDatasetRecorderFilesystem();
         $this->lineReader = new PaperDatasetLineReader($this->filesystem);
+        $this->identityIndex = $identityIndex ?? new PaperDatasetIdentityIndex();
         $this->identityManifest = $manifest;
         $this->recordingManifestCheckpointInterval = $recordingManifestCheckpointInterval;
 
@@ -239,8 +240,8 @@ final class PaperDatasetRecorder
         $this->assertPinnedDirectories();
         $this->assertRecording();
 
-        $durableIdentities = $this->identities;
-        $nextIdentities = $this->identities;
+        /** @var array<string, array{event_id: string, payload_hash: string, event_hash: string}> $batchIdentities */
+        $batchIdentities = [];
         $nextSequences = $this->lastSequences;
         $nextChannels = $this->channels;
         $nextGaps = $this->sequenceGaps;
@@ -258,8 +259,8 @@ final class PaperDatasetRecorder
             $this->assertEventMatchesManifest($event);
             $canonicalEvent = CanonicalJson::encode($event->toArray());
             $eventHash = hash('sha256', $canonicalEvent);
-            if (isset($durableIdentities[$event->eventId])) {
-                $identity = $durableIdentities[$event->eventId];
+            $identity = $this->identityIndex->find($event->eventId);
+            if ($identity !== null) {
                 if ($newEventsStarted
                     || !hash_equals($identity['payload_hash'], $event->payloadHash)
                     || !hash_equals($identity['event_hash'], $eventHash)
@@ -270,7 +271,7 @@ final class PaperDatasetRecorder
 
                 continue;
             }
-            if (isset($nextIdentities[$event->eventId])) {
+            if (isset($batchIdentities[$event->eventId])) {
                 throw new \RuntimeException('market_event_identity_conflict');
             }
 
@@ -293,7 +294,8 @@ final class PaperDatasetRecorder
             $newEvents[] = $event;
             $newLines[] = $line;
             $results[] = PaperDatasetAppendResult::APPENDED;
-            $nextIdentities[$event->eventId] = [
+            $batchIdentities[$event->eventId] = [
+                'event_id' => $event->eventId,
                 'payload_hash' => $event->payloadHash,
                 'event_hash' => $eventHash,
             ];
@@ -339,6 +341,7 @@ final class PaperDatasetRecorder
             throw $failure;
         }
         $this->assertPinnedDirectories();
+        $this->identityIndex->addBatch(array_values($batchIdentities));
 
         $nextManifest = $this->currentManifest->withRecordingFacts(
             startExchangeTimestamp: $nextStart,
@@ -354,13 +357,13 @@ final class PaperDatasetRecorder
         }
         $this->removeAppendIntent();
 
-        $this->identities = $nextIdentities;
         $this->lastSequences = $nextSequences;
         $this->channels = $nextChannels;
         $this->sequenceGaps = $nextGaps;
         $this->eventCount = $nextEventCount;
         $this->scannedBytes = $durableAppend['size'];
         $this->scannedPrefixSha256 = $durableAppend['sha256'];
+        $this->scannedHashContext = $durableAppend['hash_context'];
         $this->scannedFileIdentity = $durableAppend['identity'];
         $this->lastEventId = $nextLastEventId;
         $this->lastDurableEvent = $nextLastDurableEvent;
@@ -384,8 +387,8 @@ final class PaperDatasetRecorder
         $canonicalEvent = CanonicalJson::encode($event->toArray());
         $eventHash = hash('sha256', $canonicalEvent);
 
-        if (isset($this->identities[$event->eventId])) {
-            $identity = $this->identities[$event->eventId];
+        $identity = $this->identityIndex->find($event->eventId);
+        if ($identity !== null) {
             if (!hash_equals($identity['payload_hash'], $event->payloadHash)
                 || !hash_equals($identity['event_hash'], $eventHash)
             ) {
@@ -428,6 +431,7 @@ final class PaperDatasetRecorder
             throw $failure;
         }
         $this->assertPinnedDirectories();
+        $this->identityIndex->add($event->eventId, $event->payloadHash, $eventHash);
 
         $nextChannels = $this->channels;
         $nextChannels[] = $event->channel->value;
@@ -453,10 +457,6 @@ final class PaperDatasetRecorder
         }
         $this->removeAppendIntent();
 
-        $this->identities[$event->eventId] = [
-            'payload_hash' => $event->payloadHash,
-            'event_hash' => $eventHash,
-        ];
         if ($nextSequence !== null) {
             $this->lastSequences[$sequenceKey] = $nextSequence;
         }
@@ -465,6 +465,7 @@ final class PaperDatasetRecorder
         $this->eventCount = $nextManifest->eventCount;
         $this->scannedBytes = $durableAppend['size'];
         $this->scannedPrefixSha256 = $durableAppend['sha256'];
+        $this->scannedHashContext = $durableAppend['hash_context'];
         $this->scannedFileIdentity = $durableAppend['identity'];
         $this->lastEventId = $event->eventId;
         $this->lastDurableEvent = $event;
@@ -1120,6 +1121,7 @@ final class PaperDatasetRecorder
     private function scanDurableTailCandidate(): void
     {
         $handle = $this->openRegularFile($this->eventsPath, 'rb', 'paper_dataset_events_unreadable');
+        $identityCandidateOpen = false;
 
         try {
             $statistics = $this->filesystem->stat($handle, 'paper_dataset_events_read_failed');
@@ -1139,15 +1141,30 @@ final class PaperDatasetRecorder
             if ($durableSize < $this->scannedBytes) {
                 throw new \RuntimeException('paper_dataset_events_size_regressed');
             }
-            $parsedDigest = $this->readPrefixForScan($handle, $this->scannedBytes);
-            $prefixSha256 = $parsedDigest['sha256'];
-            if ($this->scannedPrefixSha256 !== null
-                && !hash_equals($this->scannedPrefixSha256, $prefixSha256)
-            ) {
-                throw new \RuntimeException('paper_dataset_events_prefix_changed');
+            $hasAuthenticatedPrefix = $this->scannedHashContext !== null;
+            if ($hasAuthenticatedPrefix) {
+                if (!$this->filesystem->seek(
+                    $handle,
+                    $this->scannedBytes,
+                    SEEK_SET,
+                    'paper_dataset_events_read_failed',
+                )) {
+                    throw new \RuntimeException('paper_dataset_events_read_failed');
+                }
+                $digestContext = hash_copy($this->scannedHashContext);
+            } else {
+                $parsedDigest = $this->readPrefixForScan($handle, $this->scannedBytes);
+                $prefixSha256 = $parsedDigest['sha256'];
+                if ($this->scannedPrefixSha256 !== null
+                    && !hash_equals($this->scannedPrefixSha256, $prefixSha256)
+                ) {
+                    throw new \RuntimeException('paper_dataset_events_prefix_changed');
+                }
+                $digestContext = $parsedDigest['context'];
             }
 
-            $identities = $this->identities;
+            $this->identityIndex->beginCandidate();
+            $identityCandidateOpen = true;
             $lastSequences = $this->lastSequences;
             $sequenceGaps = $this->sequenceGaps;
             $channels = $this->channels;
@@ -1162,7 +1179,7 @@ final class PaperDatasetRecorder
                 'paper_dataset_events_read_failed',
                 'paper_dataset_event_line_truncated',
             )) !== false) {
-                hash_update($parsedDigest['context'], $line);
+                hash_update($digestContext, $line);
                 if (trim($line) === '') {
                     continue;
                 }
@@ -1178,7 +1195,7 @@ final class PaperDatasetRecorder
                 }
 
                 $this->assertEventMatchesManifest($event);
-                if (isset($identities[$event->eventId])) {
+                if ($this->identityIndex->find($event->eventId) !== null) {
                     throw new \RuntimeException('paper_dataset_duplicate_identity');
                 }
 
@@ -1197,10 +1214,11 @@ final class PaperDatasetRecorder
                     $lastSequences[$sequenceKey] = $sequence;
                 }
 
-                $identities[$event->eventId] = [
-                    'payload_hash' => $event->payloadHash,
-                    'event_hash' => hash('sha256', CanonicalJson::encode($event->toArray())),
-                ];
+                $this->identityIndex->add(
+                    $event->eventId,
+                    $event->payloadHash,
+                    hash('sha256', CanonicalJson::encode($event->toArray())),
+                );
                 $channels[] = $event->channel->value;
                 ++$eventCount;
                 $lastEventId = $event->eventId;
@@ -1221,15 +1239,17 @@ final class PaperDatasetRecorder
             if ($position === false || $position !== $durableSize) {
                 throw new \RuntimeException('paper_dataset_events_read_failed');
             }
-            $durableSha256 = hash_final($parsedDigest['context']);
-            if (!$this->filesystem->seek($handle, 0, SEEK_SET, 'paper_dataset_events_tail_rehash')) {
-                throw new \RuntimeException('paper_dataset_events_snapshot_changed');
-            }
-            $rehash = $this->filesystem->checksum($handle, 'paper_dataset_events_tail_rehash');
-            if ($rehash['bytes'] !== $durableSize
-                || !hash_equals($durableSha256, $rehash['checksum'])
-            ) {
-                throw new \RuntimeException('paper_dataset_events_snapshot_changed');
+            $durableSha256 = hash_final(hash_copy($digestContext));
+            if (!$hasAuthenticatedPrefix) {
+                if (!$this->filesystem->seek($handle, 0, SEEK_SET, 'paper_dataset_events_tail_rehash')) {
+                    throw new \RuntimeException('paper_dataset_events_snapshot_changed');
+                }
+                $rehash = $this->filesystem->checksum($handle, 'paper_dataset_events_tail_rehash');
+                if ($rehash['bytes'] !== $durableSize
+                    || !hash_equals($durableSha256, $rehash['checksum'])
+                ) {
+                    throw new \RuntimeException('paper_dataset_events_snapshot_changed');
+                }
             }
             $finalStatistics = $this->filesystem->stat($handle, 'paper_dataset_events_tail_validation');
             if ($finalStatistics === false
@@ -1246,6 +1266,22 @@ final class PaperDatasetRecorder
                 $this->eventsPath,
                 'paper_dataset_events_tail_validation',
             );
+            $this->identityIndex->commitCandidate();
+            $identityCandidateOpen = false;
+        } catch (\Throwable $failure) {
+            if ($identityCandidateOpen) {
+                try {
+                    $this->identityIndex->rollbackCandidate();
+                } catch (\Throwable $rollbackFailure) {
+                    throw new \RuntimeException(
+                        'paper_dataset_identity_index_unavailable',
+                        0,
+                        $rollbackFailure,
+                    );
+                }
+            }
+
+            throw $failure;
         } finally {
             fclose($handle);
         }
@@ -1253,13 +1289,13 @@ final class PaperDatasetRecorder
         $channels = array_values(array_unique($channels));
         sort($channels, SORT_STRING);
         ksort($sequenceGaps, SORT_STRING);
-        $this->identities = $identities;
         $this->lastSequences = $lastSequences;
         $this->sequenceGaps = $sequenceGaps;
         $this->channels = $channels;
         $this->eventCount = $eventCount;
         $this->scannedBytes = $durableSize;
         $this->scannedPrefixSha256 = $durableSha256;
+        $this->scannedHashContext = $digestContext;
         $this->scannedFileIdentity = [
             'dev' => $statistics['dev'],
             'ino' => $statistics['ino'],
@@ -1337,7 +1373,7 @@ final class PaperDatasetRecorder
         return implode('/', $parts);
     }
 
-    /** @return array{size: int, sha256: string, identity: array{dev: int, ino: int}} */
+    /** @return array{size: int, sha256: string, hash_context: \HashContext, identity: array{dev: int, ino: int}} */
     private function appendDurably(#[\SensitiveParameter] string $line): array
     {
         $this->assertPinnedDirectories();
@@ -1355,12 +1391,7 @@ final class PaperDatasetRecorder
 
                 $originalLength = $statistics['size'];
                 $this->assertParsedSnapshotContinuity($handle, $this->scannedBytes);
-                $expectedAppendedSha256 = $this->checksumPrefix(
-                    $handle,
-                    $this->scannedBytes,
-                    'paper_dataset_events_snapshot_validation',
-                    $line,
-                );
+                $expectedDigest = $this->expectedAppendDigest($line);
                 try {
                     $this->assertPinnedDirectories();
                     $this->writeAll($handle, $line, 'paper_dataset_events_write_failed');
@@ -1373,17 +1404,14 @@ final class PaperDatasetRecorder
                     if ($statistics['size'] !== $originalLength + strlen($line)) {
                         throw new \RuntimeException('paper_dataset_events_write_failed');
                     }
+                    $this->assertAppendedSuffix($handle, $originalLength, $line);
                     $this->assertParsedSnapshotContinuity($handle, $statistics['size']);
                     $this->assertHandleMatchesPath($handle, $this->eventsPath);
-                    $appendedSha256 = $this->checksumPrefix($handle, $statistics['size']);
-                    $this->assertExpectedAppendedChecksum($expectedAppendedSha256, $appendedSha256);
-                    $this->assertParsedSnapshotContinuity($handle, $statistics['size']);
-                    $finalAppendedSha256 = $this->checksumPrefix($handle, $statistics['size']);
-                    $this->assertExpectedAppendedChecksum($expectedAppendedSha256, $finalAppendedSha256);
 
                     return [
                         'size' => $statistics['size'],
-                        'sha256' => $finalAppendedSha256,
+                        'sha256' => $expectedDigest['sha256'],
+                        'hash_context' => $expectedDigest['context'],
                         'identity' => [
                             'dev' => $statistics['dev'],
                             'ino' => $statistics['ino'],
@@ -1406,7 +1434,7 @@ final class PaperDatasetRecorder
         }
     }
 
-    /** @return array{size: int, sha256: string, identity: array{dev: int, ino: int}} */
+    /** @return array{size: int, sha256: string, hash_context: \HashContext, identity: array{dev: int, ino: int}} */
     private function appendBatchDurably(#[\SensitiveParameter] string $suffix): array
     {
         $this->assertPinnedDirectories();
@@ -1428,7 +1456,7 @@ final class PaperDatasetRecorder
                     throw new \RuntimeException('paper_dataset_events_snapshot_changed');
                 }
                 $originalLength = $statistics['size'];
-                $expectedSha256 = $this->expectedBatchAppendChecksum($handle, $suffix);
+                $expectedDigest = $this->expectedAppendDigest($suffix);
 
                 try {
                     $this->assertPinnedDirectories();
@@ -1445,8 +1473,7 @@ final class PaperDatasetRecorder
                     ) {
                         throw new \RuntimeException('paper_dataset_events_write_failed');
                     }
-                    $actualSha256 = $this->checksumPrefix($handle, $expectedSize);
-                    $this->assertExpectedAppendedChecksum($expectedSha256, $actualSha256);
+                    $this->assertAppendedSuffix($handle, $originalLength, $suffix);
                     $final = $this->filesystem->stat($handle, 'paper_dataset_events_read_failed');
                     if ($final === false
                         || !isset($final['size'])
@@ -1460,7 +1487,8 @@ final class PaperDatasetRecorder
 
                     return [
                         'size' => $expectedSize,
-                        'sha256' => $actualSha256,
+                        'sha256' => $expectedDigest['sha256'],
+                        'hash_context' => $expectedDigest['context'],
                         'identity' => [
                             'dev' => $final['dev'],
                             'ino' => $final['ino'],
@@ -1483,54 +1511,47 @@ final class PaperDatasetRecorder
         }
     }
 
-    /** @param resource $handle */
-    private function expectedBatchAppendChecksum(
-        $handle,
-        #[\SensitiveParameter] string $suffix,
-    ): string {
-        if ($this->scannedPrefixSha256 === null
-            || !$this->filesystem->seek(
-                $handle,
-                0,
-                SEEK_SET,
-                'paper_dataset_events_snapshot_validation',
-            )
-        ) {
+    /** @return array{sha256: string, context: \HashContext} */
+    private function expectedAppendDigest(#[\SensitiveParameter] string $suffix): array
+    {
+        if ($this->scannedPrefixSha256 === null || $this->scannedHashContext === null) {
             throw new \RuntimeException('paper_dataset_events_snapshot_changed');
         }
 
-        $remaining = $this->scannedBytes;
-        $context = hash_init('sha256');
-        while ($remaining > 0) {
-            $chunk = $this->filesystem->read(
-                $handle,
-                min(8192, $remaining),
-                'paper_dataset_events_snapshot_validation',
-            );
-            if ($chunk === false || $chunk === '') {
-                throw new \RuntimeException('paper_dataset_events_snapshot_changed');
-            }
-            hash_update($context, $chunk);
-            $remaining -= \strlen($chunk);
-        }
-        $prefix = hash_final(hash_copy($context));
-        if (!hash_equals($this->scannedPrefixSha256, $prefix)) {
-            throw new \RuntimeException('paper_dataset_events_snapshot_changed');
-        }
+        $context = hash_copy($this->scannedHashContext);
         hash_update($context, $suffix);
 
-        return hash_final($context);
+        return [
+            'sha256' => hash_final(hash_copy($context)),
+            'context' => $context,
+        ];
     }
 
-    private function assertExpectedAppendedChecksum(string $expected, string $actual): void
+    /** @param resource $handle */
+    private function assertAppendedSuffix(
+        $handle,
+        int $offset,
+        #[\SensitiveParameter] string $expected,
+    ): void
     {
-        if (hash_equals($expected, $actual)) {
-            return;
+        if (!$this->filesystem->seek(
+            $handle,
+            $offset,
+            SEEK_SET,
+            'paper_dataset_events_append_validation',
+        )) {
+            throw new \RuntimeException('paper_dataset_events_snapshot_changed');
         }
+        $actual = $this->readExactBytes(
+            $handle,
+            \strlen($expected),
+            'paper_dataset_events_append_validation',
+        );
+        if (!hash_equals(hash('sha256', $expected), hash('sha256', $actual))) {
+            $this->usable = false;
 
-        $this->usable = false;
-
-        throw new \RuntimeException('paper_dataset_events_snapshot_changed');
+            throw new \RuntimeException('paper_dataset_events_snapshot_changed');
+        }
     }
 
     /** @param resource $handle */
@@ -1652,15 +1673,6 @@ final class PaperDatasetRecorder
                 || !$this->sameFile($this->scannedFileIdentity, $statistics)
                 || $this->scannedPrefixSha256 === null
             ) {
-                throw new \RuntimeException('paper_dataset_events_snapshot_changed');
-            }
-
-            $prefixSha256 = $this->checksumPrefix(
-                $handle,
-                $this->scannedBytes,
-                'paper_dataset_events_snapshot_validation',
-            );
-            if (!hash_equals($this->scannedPrefixSha256, $prefixSha256)) {
                 throw new \RuntimeException('paper_dataset_events_snapshot_changed');
             }
 
