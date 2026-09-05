@@ -270,6 +270,55 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $source->stop();
     }
 
+    public function testInitialCandleBridgeStopsPaginationWhenNetworkPumpStartsReconnect(): void
+    {
+        $rest = Task7RestClient::withInitialDataset();
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $pump = new Task7CountingLoopPump();
+        $source = $this->source($rest, $public, $business, loopPump: $pump);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+        $source->acknowledge($sentinel->eventId);
+
+        $initial = $rest->candleRows['BTC-USDT-SWAP/1m'][0];
+        $middle = $initial;
+        $middle[0] = (string) ((int) $initial[0] + 60_000);
+        $newest = $middle;
+        $newest[0] = (string) ((int) $middle[0] + 60_000);
+        $rest->candleResponsePages['BTC-USDT-SWAP/1m'] = [[$newest]];
+        $rest->historyCandlePages = [[$middle, $initial]];
+        $pumpCount = 0;
+        $pump->onPump(static function () use (&$pumpCount, $public): void {
+            ++$pumpCount;
+            if ($pumpCount === 2) {
+                $public->disconnect();
+            }
+        });
+
+        $method = new \ReflectionMethod($source, 'initialCandleBridgeRows');
+        $rows = $method->invoke(
+            $source,
+            'BTCUSDT/rest/candle_1m',
+            'BTC-USDT-SWAP',
+            '1m',
+        );
+
+        self::assertNull($rows);
+        self::assertSame('reconnecting', $this->checkpointState()['phase']);
+    }
+
     public function testInitialCandleBridgeSkipsUnconfirmedRowsWhileLocatingTheFrontier(): void
     {
         $rest = Task7RestClient::withInitialDataset();
@@ -2262,6 +2311,69 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(PaperMarketEvent::class, $second);
         $source->acknowledge($second->eventId);
         self::assertSame($bridgePumpCount + 2, $pump->count);
+    }
+
+    public function testDurableRestBatchCompletionPumpsTheNetworkLoop(): void
+    {
+        $rest = Task7RestClient::withInitialDataset();
+        $rest->tradeRows['BTC-USDT-SWAP'] = [
+            ...$rest->tradeRows['BTC-USDT-SWAP'],
+            [
+                'instId' => 'BTC-USDT-SWAP',
+                'tradeId' => '101',
+                'px' => '100.6',
+                'sz' => '3',
+                'side' => 'sell',
+                'source' => '0',
+                'ts' => '1784970100001',
+            ],
+            [
+                'instId' => 'BTC-USDT-SWAP',
+                'tradeId' => '102',
+                'px' => '100.7',
+                'sz' => '4',
+                'side' => 'buy',
+                'source' => '0',
+                'ts' => '1784970100002',
+            ],
+        ];
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = Task7Transport::acknowledgements(
+            self::publicArguments(),
+            'public',
+        );
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $pump = new Task7CountingLoopPump();
+        $source = $this->source($rest, $public, $business, loopPump: $pump);
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+
+        for ($index = 0; $index < 4; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            self::assertStringStartsWith('candle_', $event->channel->value);
+            $source->acknowledge($event->eventId);
+            $events->next();
+        }
+
+        $pumpCountBeforeBatch = $pump->count;
+        for ($remaining = 3; $remaining > 0; --$remaining) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $event->channel);
+            self::assertSame($remaining, $source->pendingDurableBatchSize());
+            $source->acknowledge($event->eventId);
+            if ($remaining > 1) {
+                $events->next();
+            }
+        }
+
+        self::assertSame($pumpCountBeforeBatch + 1, $pump->count);
+        self::assertNull($this->checkpointState()['pending_event']);
     }
 
     public function testReactLoopPumpRunsExactlyOneNonBlockingTick(): void
@@ -11476,6 +11588,7 @@ final class Task7Transport implements OkxPaperPausableWebSocketTransportInterfac
     public ?\Closure $afterResume = null;
 
     private ?\Closure $onMessage = null;
+    private ?\Closure $onClose = null;
     private bool $connected = false;
 
     public function __construct(
@@ -11497,6 +11610,7 @@ final class Task7Transport implements OkxPaperPausableWebSocketTransportInterfac
         $this->recordAndMaybeFail('connect');
         $this->connections[] = $uri;
         $this->onMessage = \Closure::fromCallable($onMessage);
+        $this->onClose = \Closure::fromCallable($onClose);
         $this->connected = true;
         $onOpen();
         foreach ($this->connectResponses as $response) {
@@ -11538,6 +11652,16 @@ final class Task7Transport implements OkxPaperPausableWebSocketTransportInterfac
         ++$this->closeCount;
         $this->connected = false;
         $this->onMessage = null;
+        $this->onClose = null;
+    }
+
+    public function disconnect(): void
+    {
+        if (!$this->connected) {
+            return;
+        }
+        $this->connected = false;
+        ($this->onClose ?? throw new \LogicException('transport_not_connected'))();
     }
 
     public function pause(): void

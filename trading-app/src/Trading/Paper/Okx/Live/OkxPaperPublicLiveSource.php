@@ -435,8 +435,19 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         if ($this->activeQueuedEventsRemaining > 0) {
             --$this->activeQueuedEventsRemaining;
             if ($this->activeQueuedEventsRemaining === 0) {
-                $this->completeActiveQueuedFrame();
+                if ($this->activeQueuedSocket !== null) {
+                    $this->completeActiveQueuedFrame();
+                } else {
+                    // REST warmup/recovery batches are durable boundaries too.
+                    // Give websocket control and data callbacks one bounded tick
+                    // before the next synchronous REST/persistence unit starts.
+                    $this->loopPump?->pump();
+                }
             }
+        } elseif ($this->activeQueuedSocket === null) {
+            // Single REST/control events do not create an explicit batch, but
+            // their acknowledgement is still a safe durable pump boundary.
+            $this->loopPump?->pump();
         }
     }
 
@@ -779,7 +790,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             }
             $older = $this->restClient->historyCandles($instrumentId, $bar, $cursor, 300);
             $this->loopPump?->pump();
-            if ($this->stopped) {
+            // @phpstan-ignore notIdentical.alwaysFalse (the network pump can transition the checkpoint)
+            if ($this->checkpoint->phase !== 'streaming') {
                 return null;
             }
             if ($older === [] || \count($older) > 300) {
