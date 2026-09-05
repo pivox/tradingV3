@@ -42,6 +42,9 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
                 'PAPER_EXECUTION_ENABLED' => '0',
             ]);
             $process->setTimeout(null);
+            // Symfony still forwards pipe chunks to the start callback when
+            // output storage is disabled; this prevents an unbounded internal
+            // buffer while the callback below retains only bounded tails.
             $process->disableOutput();
             $signalState = $this->forwardSignalsTo($process, $operatorSignal);
             try {

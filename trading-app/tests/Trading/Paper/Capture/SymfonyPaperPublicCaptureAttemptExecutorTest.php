@@ -83,6 +83,10 @@ PHP,
         self::assertStringNotContainsString('secret', $result->stdoutTail);
         self::assertStringNotContainsString('/private/', $result->stderrTail);
         self::assertStringNotContainsString('secret', $result->stderrTail);
+        self::assertStringContainsString('[path]', $result->stdoutTail);
+        self::assertStringContainsString('[redacted]', $result->stdoutTail);
+        self::assertStringContainsString('[path]', $result->stderrTail);
+        self::assertStringContainsString('[redacted]', $result->stderrTail);
         self::assertLessThanOrEqual(8192, \strlen($result->stdoutTail));
         self::assertLessThanOrEqual(8192, \strlen($result->stderrTail));
         self::assertSame([
