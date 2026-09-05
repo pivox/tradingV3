@@ -143,6 +143,9 @@ services:
     App\Trading\Paper\Certification\Campaign\PaperCertificationCampaignProcessExecutorInterface:
         alias: App\Trading\Paper\Certification\Campaign\SymfonyPaperCertificationCampaignProcessExecutor
 
+    App\Trading\Paper\Capture\PaperPublicCaptureAttemptExecutorInterface:
+        alias: App\Trading\Paper\Capture\SymfonyPaperPublicCaptureAttemptExecutor
+
     App\TradingCore\Microstructure\CanonicalMicrostructureSnapshotProviderInterface:
         alias: App\TradingCore\Microstructure\PaperMarketStateMicrostructureSnapshotProvider
 

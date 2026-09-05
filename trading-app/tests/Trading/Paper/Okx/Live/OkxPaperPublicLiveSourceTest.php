@@ -3271,7 +3271,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             $state['resync_by_symbol']['BTCUSDT']['source_sequence'] ?? null,
         );
         self::assertSame(
-            '2026-07-25T10:04:00.000000Z',
+            '2026-07-25T10:15:00.000000Z',
             $state['resync_by_symbol']['BTCUSDT']['deadline_at'] ?? null,
         );
         self::assertSame(
@@ -3448,7 +3448,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $state = $this->checkpointState();
         self::assertSame(2, $state['resync_by_symbol']['BTCUSDT']['attempt'] ?? null);
         self::assertSame(
-            '2026-07-25T10:08:00.000000Z',
+            '2026-07-25T10:30:00.000000Z',
             $state['resync_by_symbol']['BTCUSDT']['deadline_at'] ?? null,
         );
     }
@@ -7319,7 +7319,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame('5100', OkxPaperRetainedTradeRow::expand($merged[5_099])['tradeId']);
     }
 
-    public function testHistoryTradePaginationRestartCallsSavedCursorAndEmitsDurableSuffix(): void
+    public function testHistoryTradePaginationRecoversBeyondFormerFiftyPageBound(): void
     {
         $state = OkxPaperLiveCheckpoint::fresh(
             self::DATASET_ID,
@@ -7382,7 +7382,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             'pagination_type' => 2,
             'next_cursor' => '1784970101000',
             'pages_consumed' => 0,
-            'pages_remaining' => 10,
+            'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
             'target_frontier' => $frontier,
             'deadline_at' => '2026-07-25T10:00:10.000000Z',
             'retained_rows' => [self::restTrade('200', '1784970101000')],
@@ -7402,10 +7402,12 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         );
 
         $rest = new Task7RestClient();
-        $rest->historyTradePages = [[
-            self::restTrade('150', '1784970100500'),
-            self::restTrade('100', '1784970100000'),
-        ]];
+        for ($tradeId = 150; $tradeId >= 100; --$tradeId) {
+            $rest->historyTradePages[] = [self::restTrade(
+                (string) $tradeId,
+                (string) (1784970100000 + $tradeId - 100),
+            )];
+        }
         $observedPublicConnectTransition = null;
         $public = new Task7Transport(
             beforeAction: function (string $operation) use (
@@ -7438,10 +7440,15 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $first = $events->current();
 
         self::assertInstanceOf(PaperMarketEvent::class, $first);
-        self::assertSame('150', $first->payload['trade_id'] ?? null);
+        self::assertSame('101', $first->payload['trade_id'] ?? null);
+        self::assertCount(51, $rest->calls);
         self::assertSame(
-            [['historyTrades', ['BTC-USDT-SWAP', 2, '1784970101000', 100]]],
-            $rest->calls,
+            ['historyTrades', ['BTC-USDT-SWAP', 2, '1784970101000', 100]],
+            $rest->calls[0],
+        );
+        self::assertSame(
+            ['historyTrades', ['BTC-USDT-SWAP', 1, '101', 100]],
+            $rest->calls[50],
         );
         self::assertSame([
             'kind' => 'transport_connect',
@@ -7459,9 +7466,10 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertIsString(
             array_column($history, 2, 0)[hash(
                 'sha256',
-                'okx|BTC-USDT-SWAP|public_trade|150',
+                'okx|BTC-USDT-SWAP|public_trade|101',
             )] ?? null,
         );
+        self::assertNull($source->failureReason());
     }
 
     public function testHistoryCandlePaginationRestartCallsSavedCursorAndEmitsDurableSuffix(): void
