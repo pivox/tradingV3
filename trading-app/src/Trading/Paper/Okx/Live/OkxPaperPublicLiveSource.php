@@ -24,8 +24,8 @@ use Symfony\Component\Clock\ClockInterface;
 final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 {
     private const MAX_WARMUP_EVENT_BATCH = 100;
-    private const MAX_DURABLE_FRAME_BATCH = 32;
-    private const MAX_DURABLE_EVENT_BATCH = 128;
+    private const MAX_DURABLE_FRAME_BATCH = 256;
+    private const MAX_DURABLE_EVENT_BATCH = 256;
 
     private readonly OkxPaperInstrumentMap $instruments;
     private readonly OkxPaperPublicSubscriptionSet $subscriptions;
@@ -393,13 +393,17 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     {
         try {
             if ($this->durableEventBatchBase instanceof OkxPaperLiveCheckpoint) {
-                if ($this->continuationTransition !== null) {
-                    throw new \LogicException('okx_paper_durable_batch_boundary_invalid');
-                }
-                $prepared = $this->checkpointStore
-                    ->prepareStreamingBatchAcknowledgement(
+                $prepared = $this->continuationTransition === null
+                    && $this->checkpoint->phase === 'streaming'
+                    && $this->checkpoint->reconnect['attempt'] === 0
+                    ? $this->checkpointStore->prepareStreamingBatchAcknowledgement(
                         $this->checkpoint,
                         $eventId,
+                    )
+                    : $this->checkpointStore->prepareDurableBatchAcknowledgement(
+                        $this->checkpoint,
+                        $eventId,
+                        $this->continuationTransition,
                     );
                 $this->checkpoint = $this->activeQueuedEventsRemaining === 1
                     ? $this->checkpointStore->commitPreparedEventBatch(
@@ -440,9 +444,6 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     {
         if ($this->activeQueuedSocket !== null) {
             $this->durableFrameBatchingEnabled = true;
-        }
-        if ($this->checkpoint->reconnect['attempt'] > 0) {
-            return 1;
         }
         if ($this->activeQueuedEventsRemaining > 1
             && !$this->durableEventBatchBase instanceof OkxPaperLiveCheckpoint
@@ -778,7 +779,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             }
             $older = $this->restClient->historyCandles($instrumentId, $bar, $cursor, 300);
             $this->loopPump?->pump();
-            if ($this->checkpoint->phase !== 'streaming') {
+            if ($this->stopped) {
                 return null;
             }
             if ($older === [] || \count($older) > 300) {
@@ -1429,29 +1430,23 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
         $logicalStream = str_replace(['/rest/', '/ws/'], '/', $stream);
         $identityHash = hash('sha256', $candidate->naturalIdentity);
-        foreach ($this->checkpoint->acknowledgedIdentityHistory[$logicalStream] ?? [] as $entry) {
-            try {
-                $entry = OkxPaperAcknowledgedIdentityEntry::expand($entry);
-            } catch (\InvalidArgumentException $exception) {
-                throw new OkxPaperLiveIntegrityException(
-                    'okx_paper_live_checkpoint_invalid',
-                    0,
-                    $exception,
-                );
-            }
-            if (hash_equals($entry[0], $identityHash)) {
-                return [
-                    'overlap_digest' => $entry[1],
-                    'rest_canonical_digest' => $entry[2]
-                        === OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST
-                            ? null
-                            : $entry[2],
-                    'ws_canonical_digest' => $entry[3]
-                        === OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST
-                            ? null
-                            : $entry[3],
-                ];
-            }
+        $entry = $this->checkpointStore->acknowledgedIdentityEntry(
+            $this->checkpoint,
+            $logicalStream,
+            $identityHash,
+        );
+        if ($entry !== null) {
+            return [
+                'overlap_digest' => $entry[1],
+                'rest_canonical_digest' => $entry[2]
+                    === OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST
+                        ? null
+                        : $entry[2],
+                'ws_canonical_digest' => $entry[3]
+                    === OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST
+                        ? null
+                        : $entry[3],
+            ];
         }
 
         return null;
@@ -1550,6 +1545,29 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     {
         if ($events === []) {
             return;
+        }
+        if ($this->activeQueuedSocket === null
+            && \count($events) > self::MAX_DURABLE_EVENT_BATCH
+        ) {
+            $chunks = array_chunk($events, self::MAX_DURABLE_EVENT_BATCH);
+            $lastChunk = \count($chunks) - 1;
+            foreach ($chunks as $index => $chunk) {
+                yield from $this->yieldMarketEvents(
+                    $chunk,
+                    $stream,
+                    $transition,
+                    $index < $lastChunk || $continueTransitionAfterBatch,
+                    $eventStreamOverride,
+                );
+            }
+
+            return;
+        }
+        if ($this->activeQueuedSocket === null && \count($events) > 1) {
+            if ($this->activeQueuedEventsRemaining !== 0) {
+                throw new \LogicException('okx_paper_durable_batch_boundary_invalid');
+            }
+            $this->activeQueuedEventsRemaining = \count($events);
         }
         $last = \count($events) - 1;
         foreach ($events as $index => $accepted) {
@@ -4761,10 +4779,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
         }
         $rows = $this->restClient->orderBook($instrumentId, 400);
-        if ($this->resyncAttemptExpired($symbol, $generation, $deadline)
-            || \count($rows) !== 1
-            || !\is_array($rows[0])
-        ) {
+        if (\count($rows) !== 1 || !\is_array($rows[0])) {
+            throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+        }
+        // @phpstan-ignore if.alwaysFalse (the synchronous REST call can cross the deadline)
+        if ($this->resyncAttemptExpired($symbol, $generation, $deadline)) {
             throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
         }
         $replacement = new OkxPaperOrderBookMaterializer();

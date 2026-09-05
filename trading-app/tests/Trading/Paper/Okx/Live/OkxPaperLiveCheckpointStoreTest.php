@@ -300,6 +300,138 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         OkxPaperLiveCheckpoint::fromArray($state);
     }
 
+    public function testAcknowledgedIdentityHistoryIsStoredInAnAuthenticatedSidecarAndRestored(): void
+    {
+        $directory = $this->datasetDirectory('identity-history-sidecar');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $event = $this->tradeEvent('rest_recovery');
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $event,
+            'trade|242720721',
+            'BTCUSDT/rest/public_trade',
+        );
+
+        $persisted = json_decode(
+            (string) file_get_contents($this->checkpointPath($directory)),
+            true,
+            512,
+            \JSON_THROW_ON_ERROR,
+        );
+        self::assertIsArray($persisted);
+        self::assertArrayNotHasKey('acknowledged_identity_history', $persisted);
+        self::assertSame(
+            'okx_acknowledged_identity_history_v1',
+            $persisted['acknowledged_identity_history_ref']['format'] ?? null,
+        );
+        $sha256 = $persisted['acknowledged_identity_history_ref']['sha256'] ?? null;
+        self::assertIsString($sha256);
+        self::assertFileExists(
+            $directory . '/checkpoints/okx-live/acknowledged-identities-'
+                . $sha256 . '.bin',
+        );
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $this->tradeEvent('rest_recovery', tradeId: '242720722', sequence: '2'),
+            'trade|242720722',
+            'BTCUSDT/rest/public_trade',
+        );
+        self::assertFileDoesNotExist(
+            $directory . '/checkpoints/okx-live/acknowledged-identities-'
+                . $sha256 . '.bin',
+        );
+        self::assertCount(
+            1,
+            glob($directory . '/checkpoints/okx-live/acknowledged-identities-*.bin')
+                ?: [],
+        );
+        unset($store);
+
+        $restored = (new OkxPaperLiveCheckpointStore($directory))->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame(
+            $checkpoint->acknowledgedIdentityHistory,
+            $restored->acknowledgedIdentityHistory,
+        );
+    }
+
+    public function testTamperedAcknowledgedIdentityHistorySidecarFailsClosed(): void
+    {
+        $directory = $this->datasetDirectory('tampered-identity-history-sidecar');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $this->tradeEvent('rest_recovery'),
+            'trade|242720721',
+            'BTCUSDT/rest/public_trade',
+        );
+        $ref = $checkpoint->acknowledgedIdentityHistoryRef;
+        self::assertNotNull($ref);
+        $path = $directory . '/checkpoints/okx-live/acknowledged-identities-'
+            . $ref['sha256'] . '.bin';
+        unset($store);
+        self::assertNotFalse(file_put_contents($path, 'tampered'));
+        self::assertTrue(chmod($path, 0600));
+
+        $this->expectException(OkxPaperLiveIntegrityException::class);
+        $this->expectExceptionMessage('okx_paper_live_checkpoint_invalid');
+        (new OkxPaperLiveCheckpointStore($directory))->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+    }
+
+    public function testCheckpointWriteFailureKeepsThePreviouslyPublishedIdentitySidecar(): void
+    {
+        $directory = $this->datasetDirectory('identity-sidecar-checkpoint-failure');
+        $filesystem = new FailingOkxPaperLiveCheckpointFilesystem();
+        $store = new OkxPaperLiveCheckpointStore($directory, $filesystem);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $this->tradeEvent('rest_recovery'),
+            'trade|242720721',
+            'BTCUSDT/rest/public_trade',
+        );
+        $published = glob(
+            $directory . '/checkpoints/okx-live/acknowledged-identities-*.bin',
+        ) ?: [];
+        self::assertCount(1, $published);
+        $filesystem->failCheckpointSync = true;
+
+        try {
+            $this->acknowledgeEventForTest(
+                $store,
+                $checkpoint,
+                $this->tradeEvent('rest_recovery', tradeId: '242720722', sequence: '2'),
+                'trade|242720722',
+                'BTCUSDT/rest/public_trade',
+            );
+            self::fail('The injected checkpoint sync failure must interrupt publication.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('okx_paper_live_checkpoint_write_failed', $exception->getMessage());
+        }
+
+        self::assertSame(
+            $published,
+            glob($directory . '/checkpoints/okx-live/acknowledged-identities-*.bin')
+                ?: [],
+        );
+        self::assertNull($store->acknowledgedIdentityEntry(
+            $checkpoint,
+            'BTCUSDT/public_trade',
+            hash('sha256', 'okx|BTC-USDT-SWAP|public_trade|242720722'),
+        ));
+    }
+
     public function testEarlierCheckpointVersionsAreRejectedInsteadOfReusingOldDigestSemantics(): void
     {
         foreach ([3, 4, 5, 6, 7, 8] as $schemaVersion) {
@@ -5543,6 +5675,11 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
                 'reason' => 'reconnect',
             ]];
             $ethHeadState['resync_by_symbol']['BTCUSDT'] = null;
+            unset($ethHeadState['acknowledged_identity_history_ref']);
+            if ($checkpoint->acknowledgedIdentityHistory !== []) {
+                $ethHeadState['acknowledged_identity_history'] =
+                    $checkpoint->acknowledgedIdentityHistory;
+            }
             unset($store);
             $ethHeadDirectory = $this->datasetDirectory('eth-head-recovery-' . $case);
             $ethHeadStore = new OkxPaperLiveCheckpointStore($ethHeadDirectory);

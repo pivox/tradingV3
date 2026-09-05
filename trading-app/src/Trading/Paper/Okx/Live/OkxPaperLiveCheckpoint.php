@@ -71,6 +71,7 @@ final readonly class OkxPaperLiveCheckpoint
      *     public: array{frames: int, bytes: int},
      *     business: array{frames: int, bytes: int}
      * }|null $streamingQueueRef
+     * @param array{format: string, sha256: string, storage_bytes: int, entries: int}|null $acknowledgedIdentityHistoryRef
      * @param array<string, list<array{string, string, string, string}|string>> $acknowledgedIdentityHistory
      * @param array{stream: string, frontier: OkxPaperStreamFrontier}|null $pendingFrontier
      */
@@ -97,6 +98,7 @@ final readonly class OkxPaperLiveCheckpoint
         public array $overlapPaginationByStream,
         public array $streamingQueues,
         public ?array $streamingQueueRef,
+        public ?array $acknowledgedIdentityHistoryRef,
         public array $acknowledgedIdentityHistory,
         private bool $streamingQueuesExplicit,
     ) {
@@ -177,6 +179,9 @@ final readonly class OkxPaperLiveCheckpoint
             }
             if (array_key_exists('acknowledged_identity_history', $state)) {
                 $expectedKeys[] = 'acknowledged_identity_history';
+            }
+            if (array_key_exists('acknowledged_identity_history_ref', $state)) {
+                $expectedKeys[] = 'acknowledged_identity_history_ref';
             }
             self::assertExactKeys($state, $expectedKeys);
             if ($state['schema_version'] !== self::SCHEMA_VERSION
@@ -260,6 +265,17 @@ final readonly class OkxPaperLiveCheckpoint
                 $streamingQueues,
                 $streamingQueueRef,
             );
+            $acknowledgedIdentityHistoryRef = array_key_exists(
+                'acknowledged_identity_history_ref',
+                $state,
+            ) ? self::acknowledgedIdentityHistoryRef(
+                $state['acknowledged_identity_history_ref'],
+            ) : null;
+            if ($acknowledgedIdentityHistoryRef !== null
+                && array_key_exists('acknowledged_identity_history', $state)
+            ) {
+                throw new \InvalidArgumentException();
+            }
             $acknowledgedIdentityHistory = self::acknowledgedIdentityHistory(
                 $state['acknowledged_identity_history'] ?? [],
             );
@@ -360,6 +376,7 @@ final readonly class OkxPaperLiveCheckpoint
                 overlapPaginationByStream: $paginationByStream,
                 streamingQueues: $streamingQueues,
                 streamingQueueRef: $streamingQueueRef,
+                acknowledgedIdentityHistoryRef: $acknowledgedIdentityHistoryRef,
                 acknowledgedIdentityHistory: $acknowledgedIdentityHistory,
                 streamingQueuesExplicit: $streamingQueuesExplicit,
             );
@@ -385,9 +402,16 @@ final readonly class OkxPaperLiveCheckpoint
         #[\SensitiveParameter] ?array $pendingFrontier,
     ): self {
         try {
-            if (!\in_array($this->phase, ['streaming', 'stopping'], true)
+            if (!\in_array($this->phase, [
+                'warming',
+                'connecting',
+                'subscribing',
+                'streaming',
+                'reconnecting',
+                'resyncing',
+                'stopping',
+            ], true)
                 || $this->pendingEvent !== null
-                || $this->pendingTransition !== null
                 || $event->sourceVenue->value !== 'okx'
                 || !\in_array($event->symbol, self::SYMBOLS, true)
             ) {
@@ -428,6 +452,7 @@ final readonly class OkxPaperLiveCheckpoint
                 overlapPaginationByStream: $this->overlapPaginationByStream,
                 streamingQueues: $this->streamingQueues,
                 streamingQueueRef: $this->streamingQueueRef,
+                acknowledgedIdentityHistoryRef: $this->acknowledgedIdentityHistoryRef,
                 acknowledgedIdentityHistory: $this->acknowledgedIdentityHistory,
                 streamingQueuesExplicit: $this->streamingQueuesExplicit,
             );
@@ -500,6 +525,7 @@ final readonly class OkxPaperLiveCheckpoint
                 overlapPaginationByStream: $this->overlapPaginationByStream,
                 streamingQueues: $this->streamingQueues,
                 streamingQueueRef: $this->streamingQueueRef,
+                acknowledgedIdentityHistoryRef: null,
                 acknowledgedIdentityHistory: $acknowledgedIdentityHistory,
                 streamingQueuesExplicit: $this->streamingQueuesExplicit,
             );
@@ -516,6 +542,95 @@ final readonly class OkxPaperLiveCheckpoint
                 $exception,
             );
         }
+    }
+
+    /** @param array<string, list<array{string, string, string, string}|string>> $history */
+    public function withHydratedAcknowledgedIdentityHistory(array $history): self
+    {
+        if ($this->acknowledgedIdentityHistoryRef === null
+            || $this->acknowledgedIdentityHistory !== []
+        ) {
+            throw new \InvalidArgumentException('okx_paper_live_checkpoint_invalid');
+        }
+        try {
+            $history = self::acknowledgedIdentityHistory($history);
+        } catch (\Throwable $exception) {
+            throw new \InvalidArgumentException(
+                'okx_paper_live_checkpoint_invalid',
+                0,
+                $exception,
+            );
+        }
+        if (self::acknowledgedIdentityCount($history)
+            !== $this->acknowledgedIdentityHistoryRef['entries']
+        ) {
+            throw new \InvalidArgumentException('okx_paper_live_checkpoint_invalid');
+        }
+
+        return $this->withAcknowledgedIdentityState(
+            $this->acknowledgedIdentityHistoryRef,
+            $history,
+        );
+    }
+
+    /** @param array{format: string, sha256: string, storage_bytes: int, entries: int} $ref */
+    public function withAcknowledgedIdentityHistoryRef(array $ref): self
+    {
+        try {
+            $ref = self::acknowledgedIdentityHistoryRef($ref);
+        } catch (\Throwable $exception) {
+            throw new \InvalidArgumentException(
+                'okx_paper_live_checkpoint_invalid',
+                0,
+                $exception,
+            );
+        }
+        if ($this->acknowledgedIdentityHistoryRef !== null
+            || self::acknowledgedIdentityCount($this->acknowledgedIdentityHistory)
+                !== $ref['entries']
+        ) {
+            throw new \InvalidArgumentException('okx_paper_live_checkpoint_invalid');
+        }
+
+        return $this->withAcknowledgedIdentityState(
+            $ref,
+            $this->acknowledgedIdentityHistory,
+        );
+    }
+
+    /**
+     * @param array{format: string, sha256: string, storage_bytes: int, entries: int}|null $ref
+     * @param array<string, list<array{string, string, string, string}|string>> $history
+     */
+    private function withAcknowledgedIdentityState(?array $ref, array $history): self
+    {
+        return new self(
+            schemaVersion: $this->schemaVersion,
+            datasetId: $this->datasetId,
+            configurationSha256: $this->configurationSha256,
+            phase: $this->phase,
+            failureReason: $this->failureReason,
+            pendingTransition: $this->pendingTransition,
+            remainingSymbols: $this->remainingSymbols,
+            remainingBoundaries: $this->remainingBoundaries,
+            connectionEpoch: $this->connectionEpoch,
+            sourceEpochs: $this->sourceEpochs,
+            initialHourlyWindowEnds: $this->initialHourlyWindowEnds,
+            streamFrontiers: $this->streamFrontiers,
+            ordinalState: $this->ordinalState,
+            lastAcknowledgedEventId: $this->lastAcknowledgedEventId,
+            pendingEvent: $this->pendingEvent,
+            pendingFrontier: $this->pendingFrontier,
+            healthyStop: $this->healthyStop,
+            reconnect: $this->reconnect,
+            resyncBySymbol: $this->resyncBySymbol,
+            overlapPaginationByStream: $this->overlapPaginationByStream,
+            streamingQueues: $this->streamingQueues,
+            streamingQueueRef: $this->streamingQueueRef,
+            acknowledgedIdentityHistoryRef: $ref,
+            acknowledgedIdentityHistory: $history,
+            streamingQueuesExplicit: $this->streamingQueuesExplicit,
+        );
     }
 
     /** @return array<string, mixed> */
@@ -600,7 +715,9 @@ final readonly class OkxPaperLiveCheckpoint
         } elseif ($this->streamingQueuesExplicit) {
             $state['streaming_queues'] = $this->streamingQueues;
         }
-        if ($this->acknowledgedIdentityHistory !== []) {
+        if ($this->acknowledgedIdentityHistoryRef !== null) {
+            $state['acknowledged_identity_history_ref'] = $this->acknowledgedIdentityHistoryRef;
+        } elseif ($this->acknowledgedIdentityHistory !== []) {
             $state['acknowledged_identity_history'] = $this->acknowledgedIdentityHistory;
         }
 
@@ -670,6 +787,36 @@ final readonly class OkxPaperLiveCheckpoint
         }
 
         return $validated;
+    }
+
+    /** @param array<string, list<array{string, string, string, string}|string>> $history */
+    private static function acknowledgedIdentityCount(array $history): int
+    {
+        return array_sum(array_map(\count(...), $history));
+    }
+
+    /** @return array{format: string, sha256: string, storage_bytes: int, entries: int} */
+    private static function acknowledgedIdentityHistoryRef(mixed $value): array
+    {
+        if (!\is_array($value) || array_is_list($value)) {
+            throw new \InvalidArgumentException();
+        }
+        self::assertExactKeys($value, ['format', 'sha256', 'storage_bytes', 'entries']);
+        if ($value['format'] !== 'okx_acknowledged_identity_history_v1'
+            || !\is_string($value['sha256'])
+            || preg_match(self::SHA256_PATTERN, $value['sha256']) !== 1
+            || !\is_int($value['storage_bytes'])
+            || $value['storage_bytes'] < 8
+            || $value['storage_bytes'] > OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES
+            || !\is_int($value['entries'])
+            || $value['entries'] < 1
+            || $value['entries'] > 2 * OkxPaperLivePolicy::MAX_TRADE_ACKNOWLEDGED_IDENTITIES
+                + 8 * OkxPaperLivePolicy::MAX_CANDLE_ACKNOWLEDGED_IDENTITIES
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        return $value;
     }
 
     /** @return list<string> */

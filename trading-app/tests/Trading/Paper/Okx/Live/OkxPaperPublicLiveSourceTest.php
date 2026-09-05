@@ -2181,7 +2181,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 static fn (int $offset): array => Task7Transport::tradeFrame([
                     (string) (9100 + $offset),
                 ]),
-                range(1, 33),
+                range(1, 257),
             ),
         ];
         $business->responses = Task7Transport::acknowledgements(
@@ -2201,7 +2201,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $events->next();
 
         $tradeIds = [];
-        for ($remaining = 32; $remaining > 0; --$remaining) {
+        for ($remaining = 256; $remaining > 0; --$remaining) {
             $event = $events->current();
             self::assertInstanceOf(PaperMarketEvent::class, $event);
             $tradeIds[] = $event->payload['trade_id'] ?? null;
@@ -2215,12 +2215,12 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $events->next();
         $last = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $last);
-        self::assertSame('9133', $last->payload['trade_id'] ?? null);
+        self::assertSame('9357', $last->payload['trade_id'] ?? null);
         self::assertSame(1, $source->pendingDurableBatchSize());
         $source->acknowledge($last->eventId);
 
         self::assertSame(
-            array_map(static fn (int $offset): string => (string) (9100 + $offset), range(1, 32)),
+            array_map(static fn (int $offset): string => (string) (9100 + $offset), range(1, 256)),
             $tradeIds,
         );
         self::assertNull($this->checkpointState()['pending_event']);
@@ -2392,9 +2392,9 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             }
         };
 
-        for ($batch = 0; $batch < 4; ++$batch) {
+        for ($batch = 0; $batch < 1; ++$batch) {
             $events->next();
-            for ($remaining = 32; $remaining > 0; --$remaining) {
+            for ($remaining = 128; $remaining > 0; --$remaining) {
                 $event = $events->current();
                 self::assertInstanceOf(PaperMarketEvent::class, $event);
                 self::assertSame($remaining, $source->pendingDurableBatchSize());
@@ -2683,7 +2683,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $deduplicated = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $deduplicated);
         self::assertSame('9101', $deduplicated->payload['trade_id'] ?? null);
-        self::assertSame(1, $source->pendingDurableBatchSize());
+        self::assertSame(101, $source->pendingDurableBatchSize());
         $source->acknowledge($deduplicated->eventId);
     }
 
@@ -7124,7 +7124,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         ]), $retained[498]);
     }
 
-    public function testReconnectRecentTradeSuffixReservesTheEnclosingCheckpointBudget(): void
+    public function testReconnectRecentTradeSuffixFitsWithExternalizedIdentityHistory(): void
     {
         $clock = new MockClock('2026-07-25T10:00:00.000000Z');
         $rows = array_map(
@@ -7207,17 +7207,17 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $events = $source->events();
         self::assertInstanceOf(\Generator::class, $events);
 
-        try {
-            $events->current();
-            self::fail('The retained suffix must reserve the enclosing checkpoint byte budget.');
-        } catch (OkxPaperLiveIntegrityException $exception) {
-            self::assertSame('market_data_gap_unresolved', $exception->getMessage());
-        }
-
-        $failed = $this->checkpointState();
-        self::assertSame('failed', $failed['phase']);
-        self::assertSame('market_data_gap_unresolved', $failed['failure_reason']);
-        self::assertNull($failed['overlap_pagination_by_stream'][$stream]);
+        $first = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $first);
+        self::assertSame('2001', $first->payload['trade_id'] ?? null);
+        $checkpoint = file_get_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+        );
+        self::assertIsString($checkpoint);
+        self::assertLessThanOrEqual(
+            OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES,
+            \strlen($checkpoint),
+        );
     }
 
     public function testHistoryTradePaginationCheckpointDurablyRoundTripsRetainedRows(): void
@@ -7909,7 +7909,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             $this->checkpointState()['reconnect']['stable_since'],
         );
         self::assertSame(
-            1,
+            2,
             $source->pendingDurableBatchSize(),
             'Reconnect stabilization must preserve per-event acknowledgement effects.',
         );
@@ -9538,8 +9538,14 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             self::CONFIGURATION_SHA256,
         );
         $sourceCheckpoint = $this->sourceCheckpoint($source);
-        self::assertSame($disk->toArray(), $adopted->toArray());
-        self::assertSame($disk->toArray(), $sourceCheckpoint->toArray());
+        self::assertSame(
+            $this->materializedCheckpointState($disk),
+            $this->materializedCheckpointState($adopted),
+        );
+        self::assertSame(
+            $this->materializedCheckpointState($disk),
+            $this->materializedCheckpointState($sourceCheckpoint),
+        );
         self::assertSame(
             ['public' => [json_encode(
                 Task7Transport::bookFrame('9005', '9004', '5'),
@@ -9567,7 +9573,10 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             self::DATASET_ID,
             self::CONFIGURATION_SHA256,
         );
-        self::assertSame($disk->toArray(), $restart->toArray());
+        self::assertSame(
+            $this->materializedCheckpointState($disk),
+            $this->materializedCheckpointState($restart),
+        );
         self::assertSame(
             '9004',
             $restart->resyncBySymbol['BTCUSDT']['book_snapshot']['seqId'] ?? null,
@@ -11139,6 +11148,20 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertIsString($contents);
         $state = json_decode($contents, true, 512, \JSON_THROW_ON_ERROR);
         self::assertIsArray($state);
+        $identityRef = $state['acknowledged_identity_history_ref'] ?? null;
+        if (\is_array($identityRef)) {
+            $blob = file_get_contents(
+                $this->testRoot . '/checkpoints/okx-live/acknowledged-identities-'
+                    . $identityRef['sha256'] . '.bin',
+            );
+            self::assertIsString($blob);
+            self::assertStringStartsWith("OKXI1\0", $blob);
+            self::assertSame($identityRef['sha256'], hash('sha256', $blob));
+            $history = json_decode(substr($blob, 6), true, 512, \JSON_THROW_ON_ERROR);
+            self::assertIsArray($history);
+            unset($state['acknowledged_identity_history_ref']);
+            $state['acknowledged_identity_history'] = $history;
+        }
 
         return $state;
     }
@@ -11151,6 +11174,19 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(OkxPaperLiveCheckpoint::class, $checkpoint);
 
         return $checkpoint;
+    }
+
+    /** @return array<string, mixed> */
+    private function materializedCheckpointState(OkxPaperLiveCheckpoint $checkpoint): array
+    {
+        $state = $checkpoint->toArray();
+        unset($state['acknowledged_identity_history_ref']);
+        if ($checkpoint->acknowledgedIdentityHistory !== []) {
+            $state['acknowledged_identity_history'] =
+                $checkpoint->acknowledgedIdentityHistory;
+        }
+
+        return $state;
     }
 
     /**
