@@ -1237,11 +1237,14 @@ final readonly class OkxPaperLiveCheckpoint
         }
 
         if ($resync['policy'] === 'book_seq_overlap_v1') {
+            $bookSnapshot = $resync['book_snapshot'] ?? null;
+            $bookAuthority = $streamFrontiers[$symbol . '/ws/top_of_book']
+                ?? (\is_array($bookSnapshot)
+                    ? $resync['frontier']
+                    : ($streamFrontiers[$symbol . '/rest/top_of_book'] ?? null));
             if (!self::sameFrontier(
                 $resync['frontier'],
-                $streamFrontiers[$symbol . '/ws/top_of_book']
-                    ?? $streamFrontiers[$symbol . '/rest/top_of_book']
-                    ?? null,
+                $bookAuthority,
             )) {
                 throw new \InvalidArgumentException();
             }
@@ -1254,7 +1257,6 @@ final readonly class OkxPaperLiveCheckpoint
                         'resyncing' => 'sequence_gap',
                         default => null,
                     };
-            $bookSnapshot = $resync['book_snapshot'] ?? null;
             $recoveredBookFrontier = $streamFrontiers[$symbol . '/rest/top_of_book'] ?? null;
             $bookRecoveryCaptured = \is_array($bookSnapshot)
                 && $recoveredBookFrontier instanceof OkxPaperStreamFrontier

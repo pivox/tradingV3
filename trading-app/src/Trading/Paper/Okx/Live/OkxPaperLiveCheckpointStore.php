@@ -3365,7 +3365,9 @@ final class OkxPaperLiveCheckpointStore
             return $this->sameCanonicalValue($currentResync, $candidateResync);
         }
         if ($expected['stage'] === 'order_book') {
-            $bookFrontier = $current->streamFrontiers[$symbol . '/ws/top_of_book'] ?? null;
+            $bookFrontier = $current->streamFrontiers[$symbol . '/ws/top_of_book']
+                ?? $current->streamFrontiers[$symbol . '/rest/top_of_book']
+                ?? null;
 
             return $bookFrontier instanceof OkxPaperStreamFrontier
                 && \is_array($candidateResync)
@@ -3516,12 +3518,6 @@ final class OkxPaperLiveCheckpointStore
                 'reason' => 'reconnect',
             ]
                 && $bookFrontier instanceof OkxPaperStreamFrontier
-                && !$this->currentRecoveryBookSnapshotWasAcknowledged(
-                    $checkpoint,
-                    $symbol,
-                    $checkpoint->streamFrontiers[$symbol . '/rest/top_of_book']
-                        ?? $bookFrontier,
-                )
             ) {
                 return [
                     'kind' => 'rest_fetch',
