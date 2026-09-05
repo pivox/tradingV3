@@ -132,14 +132,14 @@ final class PaperPublicCaptureStopController
     private function scheduleTimer(int $durationSeconds): void
     {
         $this->timer = $this->loop->addTimer($durationSeconds, function (): void {
-            $this->requestStop();
+            $this->requestHealthyStop();
         });
     }
 
     private function registerSignalListeners(): void
     {
         $listener = function (): void {
-            $this->requestStop();
+            $this->requestAbnormalStop();
         };
 
         if (function_exists('pcntl_signal')) {
@@ -150,7 +150,7 @@ final class PaperPublicCaptureStopController
         }
     }
 
-    private function requestStop(): void
+    private function requestHealthyStop(): void
     {
         if ($this->stopRequested) {
             return;
@@ -167,5 +167,19 @@ final class PaperPublicCaptureStopController
             }
             $this->loop->stop();
         }
+    }
+
+    private function requestAbnormalStop(): void
+    {
+        if ($this->stopRequested) {
+            return;
+        }
+        $this->stopRequested = true;
+        try {
+            $this->source->stop();
+        } catch (\Throwable) {
+            // The dataset capture will observe an abnormal terminal state.
+        }
+        $this->loop->stop();
     }
 }

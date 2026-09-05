@@ -29,13 +29,19 @@ final class PaperPublicCaptureSupervisorCommandTest extends TestCase
             '--duration-sec' => '86400',
             '--attempts' => '3',
         ]));
+        $payload = json_decode(trim($tester->getDisplay()), true, 16, JSON_THROW_ON_ERROR);
+        self::assertIsArray($payload);
+        self::assertMatchesRegularExpression(
+            '/\Arepresentative-hyperliquid-20260905-run-[0-9a-f]{32}-attempt-002-mainnet\z/D',
+            $payload['dataset_id'] ?? '',
+        );
+        unset($payload['dataset_id']);
         self::assertSame([
             'attempts_used' => 2,
-            'dataset_id' => 'representative-hyperliquid-20260905-attempt-002-mainnet',
             'ok' => true,
             'schema_version' => 'paper-public-capture-supervision-result-v1',
             'source_venue' => 'hyperliquid',
-        ], json_decode(trim($tester->getDisplay()), true, 16, JSON_THROW_ON_ERROR));
+        ], $payload);
     }
 
     public function testRejectsInvalidOptionsBeforeStartingAnAttempt(): void

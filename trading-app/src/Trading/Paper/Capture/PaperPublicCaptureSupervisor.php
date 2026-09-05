@@ -31,11 +31,13 @@ final readonly class PaperPublicCaptureSupervisor
             throw new \InvalidArgumentException('paper_public_capture_attempts_invalid');
         }
         PaperDatasetManifest::assertDatasetId($datasetPrefix);
+        $runId = bin2hex(random_bytes(16));
 
         for ($attempt = 1; $attempt <= $maximumAttempts; ++$attempt) {
             $datasetId = sprintf(
-                '%s-attempt-%03d-mainnet',
+                '%s-run-%s-attempt-%03d-mainnet',
                 $datasetPrefix,
+                $runId,
                 $attempt,
             );
             PaperDatasetManifest::assertDatasetId($datasetId);

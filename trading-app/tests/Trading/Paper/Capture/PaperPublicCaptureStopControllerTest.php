@@ -62,6 +62,24 @@ final class PaperPublicCaptureStopControllerTest extends TestCase
         self::assertSame(1, $source->stopCalls);
     }
 
+    public function testSignalRequestsAbnormalStopInsteadOfCompletingShortCapture(): void
+    {
+        if (!function_exists('pcntl_signal')) {
+            self::markTestSkipped('Signal support is unavailable.');
+        }
+
+        $loop = new CaptureStopLoop();
+        $source = new CaptureStopSource();
+        $controller = new PaperPublicCaptureStopController($loop, $source);
+        $controller->start(300);
+
+        ($loop->signals[SIGTERM])();
+
+        self::assertSame(0, $source->healthyStopCalls);
+        self::assertSame(1, $source->stopCalls);
+        self::assertSame(1, $loop->stopCalls);
+    }
+
     public function testOkxDeferredDurationStartsOnlyAfterPostBridgeWebSocketDataIsDurable(): void
     {
         $loop = new CaptureStopLoop();

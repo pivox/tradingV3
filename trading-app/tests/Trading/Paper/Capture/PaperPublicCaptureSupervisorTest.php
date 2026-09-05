@@ -26,15 +26,23 @@ final class PaperPublicCaptureSupervisorTest extends TestCase
 
         self::assertTrue($result->ok);
         self::assertSame(3, $result->attemptsUsed);
-        self::assertSame(
-            'representative-hyperliquid-20260905-attempt-003-mainnet',
-            $result->datasetId,
+        self::assertMatchesRegularExpression(
+            '/\Arepresentative-hyperliquid-20260905-run-[0-9a-f]{32}-attempt-003-mainnet\z/D',
+            $result->datasetId ?? '',
         );
-        self::assertSame([
-            ['hyperliquid', 'representative-hyperliquid-20260905-attempt-001-mainnet', 86_400],
-            ['hyperliquid', 'representative-hyperliquid-20260905-attempt-002-mainnet', 86_400],
-            ['hyperliquid', 'representative-hyperliquid-20260905-attempt-003-mainnet', 86_400],
-        ], $executor->calls);
+        self::assertCount(3, $executor->calls);
+        $runIds = [];
+        foreach ($executor->calls as $index => $call) {
+            self::assertSame('hyperliquid', $call[0]);
+            self::assertSame(86_400, $call[2]);
+            self::assertMatchesRegularExpression(
+                sprintf('/\Arepresentative-hyperliquid-20260905-run-([0-9a-f]{32})-attempt-%03d-mainnet\z/D', $index + 1),
+                $call[1],
+            );
+            preg_match('/-run-([0-9a-f]{32})-attempt-/', $call[1], $matches);
+            $runIds[] = $matches[1] ?? null;
+        }
+        self::assertCount(1, array_unique($runIds));
     }
 
     public function testStopsExactlyAtBoundAfterTerminalFailures(): void
@@ -53,6 +61,19 @@ final class PaperPublicCaptureSupervisorTest extends TestCase
         self::assertNull($result->datasetId);
         self::assertSame('paper_public_capture_attempts_exhausted', $result->blocker);
         self::assertCount(3, $executor->calls);
+    }
+
+    public function testUsesAUniqueRunScopeAcrossSupervisorInvocations(): void
+    {
+        $executor = new SupervisorAttemptExecutor([0, 0]);
+        $supervisor = new PaperPublicCaptureSupervisor($executor);
+
+        $first = $supervisor->run('okx', 'representative-okx-20260905', 300, 1);
+        $second = $supervisor->run('okx', 'representative-okx-20260905', 300, 1);
+
+        self::assertNotNull($first->datasetId);
+        self::assertNotNull($second->datasetId);
+        self::assertNotSame($first->datasetId, $second->datasetId);
     }
 }
 

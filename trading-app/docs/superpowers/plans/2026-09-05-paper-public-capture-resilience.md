@@ -123,15 +123,15 @@ git commit -m "feat(paper): isolate public capture attempts"
 
 - [ ] **Step 1: Write failing supervisor tests**
 
-Use a fake executor returning `[1, 1, 0]`. Assert the supervisor derives:
+Use a fake executor returning `[1, 1, 0]`. Assert the supervisor derives IDs sharing one random run scope:
 
 ```text
-representative-hyperliquid-20260905-attempt-001-mainnet
-representative-hyperliquid-20260905-attempt-002-mainnet
-representative-hyperliquid-20260905-attempt-003-mainnet
+representative-hyperliquid-20260905-run-<nonce>-attempt-001-mainnet
+representative-hyperliquid-20260905-run-<nonce>-attempt-002-mainnet
+representative-hyperliquid-20260905-run-<nonce>-attempt-003-mainnet
 ```
 
-Assert it stops after success, and a fake returning only failures stops exactly at the configured attempt count.
+Assert it stops after success, a fake returning only failures stops exactly at the configured attempt count, and separate supervisor invocations never derive the same dataset ID. Assert separately that process signals cause an abnormal source stop while timer expiration alone requests healthy completion.
 
 - [ ] **Step 2: Write failing command tests**
 
@@ -149,7 +149,7 @@ Expected: missing classes.
 
 - [ ] **Step 4: Implement minimal supervisor behavior**
 
-Validate venue through `PaperMarketDataVenue`, require duration 300..604800, attempts 1..99, validate every derived ID with `PaperDatasetManifest::assertDatasetId()`, execute sequentially, and return immediately on exit code zero. Never delete a failed dataset and never reuse an ID.
+Validate venue through `PaperMarketDataVenue`, require duration 300..604800, attempts 1..99, create one cryptographically random run scope per invocation, validate every derived ID with `PaperDatasetManifest::assertDatasetId()`, execute sequentially, and return immediately on exit code zero. Never delete a failed dataset and never reuse an ID. Treat `SIGINT` and `SIGTERM` as abnormal stops so an early operator or service-manager interruption cannot be reported as a successful duration.
 
 - [ ] **Step 5: Implement the redacted command adapter**
 

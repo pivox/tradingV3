@@ -50,7 +50,9 @@ nohup caffeinate -dimsu env \
   >"$PWD/var/log/paper-capture/hyperliquid-YYYYMMDD.log" 2>&1 </dev/null &
 ```
 
-Replace the date and the absolute data root before launch. Reusing a prefix whose attempt directories already exist will fail closed; use a new date/version prefix instead. The attempt bound limits disk growth, and the supervisor never deletes failed evidence.
+Replace the date and the absolute data root before launch. Each supervisor invocation adds a cryptographically random run scope before the attempt number, preventing collisions when a prefix is reused or two supervisors overlap. The attempt bound limits disk growth, and the supervisor never deletes failed evidence.
+
+`SIGINT` and `SIGTERM` are abnormal stops: they leave the active dataset incomplete and make the supervisor start a fresh attempt. Only expiration of the requested duration can initiate healthy completion.
 
 ## Health checks
 
