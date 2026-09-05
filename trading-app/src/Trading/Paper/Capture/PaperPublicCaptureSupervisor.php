@@ -62,17 +62,23 @@ final readonly class PaperPublicCaptureSupervisor
                 'stderr_tail' => $result->stderrTail,
                 'orphan_finalized' => $result->orphanFinalized,
             ]);
+            if ($result->orphanFinalized === false) {
+                return PaperPublicCaptureSupervisorResult::orphanFinalizationFailed(
+                    $venueIdentity->value,
+                    $attempt,
+                );
+            }
+            if ($result->termSignal !== null) {
+                return PaperPublicCaptureSupervisorResult::interrupted(
+                    $venueIdentity->value,
+                    $attempt,
+                );
+            }
             if ($result->succeeded()) {
                 return PaperPublicCaptureSupervisorResult::success(
                     $venueIdentity->value,
                     $attempt,
                     $datasetId,
-                );
-            }
-            if ($result->orphanFinalized === false) {
-                return PaperPublicCaptureSupervisorResult::orphanFinalizationFailed(
-                    $venueIdentity->value,
-                    $attempt,
                 );
             }
         }

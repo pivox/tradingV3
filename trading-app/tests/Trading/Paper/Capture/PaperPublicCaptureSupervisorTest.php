@@ -115,6 +115,37 @@ final class PaperPublicCaptureSupervisorTest extends TestCase
         self::assertSame('paper_public_capture_orphan_finalization_failed', $result->blocker);
         self::assertSame(1, $executor->calls);
     }
+
+    public function testOperatorSignalStopsSupervisionWithoutStartingAnotherAttempt(): void
+    {
+        $executor = new class implements PaperPublicCaptureAttemptExecutorInterface {
+            public int $calls = 0;
+
+            public function execute(
+                string $venue,
+                string $datasetId,
+                int $durationSeconds,
+            ): PaperPublicCaptureAttemptResult {
+                ++$this->calls;
+
+                return new PaperPublicCaptureAttemptResult(
+                    exitCode: 0,
+                    termSignal: SIGTERM,
+                );
+            }
+        };
+
+        $result = (new PaperPublicCaptureSupervisor($executor))->run(
+            'okx',
+            'representative-okx-20260905',
+            300,
+            8,
+        );
+
+        self::assertFalse($result->ok);
+        self::assertSame('paper_public_capture_supervision_interrupted', $result->blocker);
+        self::assertSame(1, $executor->calls);
+    }
 }
 
 final class CaptureSupervisorTestLogger extends AbstractLogger

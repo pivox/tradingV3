@@ -27,6 +27,7 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
         $stdoutTail = '';
         $stderrTail = '';
         $pid = null;
+        $operatorSignal = null;
         try {
             $process = new Process([
                 \PHP_BINARY,
@@ -41,7 +42,7 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
             ]);
             $process->setTimeout(null);
             $process->disableOutput();
-            $signalState = $this->forwardSignalsTo($process);
+            $signalState = $this->forwardSignalsTo($process, $operatorSignal);
             try {
                 $captureOutput = static function (string $type, string $chunk) use (&$stdoutTail, &$stderrTail): void {
                     $tail = $type === Process::OUT ? $stdoutTail : $stderrTail;
@@ -63,7 +64,8 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
 
             return new PaperPublicCaptureAttemptResult(
                 exitCode: $exitCode,
-                termSignal: $process->hasBeenSignaled() ? $process->getTermSignal() : null,
+                termSignal: $operatorSignal
+                    ?? ($process->hasBeenSignaled() ? $process->getTermSignal() : null),
                 pid: $pid,
                 startedAt: $startedAt,
                 endedAt: self::now(),
@@ -109,7 +111,7 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
     }
 
     /** @return array{async: bool, handlers: array<int, callable|int>}|null */
-    private function forwardSignalsTo(Process $process): ?array
+    private function forwardSignalsTo(Process $process, ?int &$operatorSignal): ?array
     {
         if (!function_exists('pcntl_async_signals')
             || !function_exists('pcntl_signal')
@@ -124,7 +126,8 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
         ];
         foreach ([\SIGINT, \SIGTERM] as $signal) {
             $state['handlers'][$signal] = pcntl_signal_get_handler($signal);
-            pcntl_signal($signal, static function (int $received) use ($process): void {
+            pcntl_signal($signal, static function (int $received) use ($process, &$operatorSignal): void {
+                $operatorSignal ??= $received;
                 if (!$process->isRunning()) {
                     return;
                 }

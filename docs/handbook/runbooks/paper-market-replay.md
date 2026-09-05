@@ -91,6 +91,8 @@ exit code, signal and stdout/stderr tails). After an abrupt child loss, it
 authenticates and freezes any orphaned `recording` dataset as `incomplete` before
 starting a fresh dataset ID. If that terminalization cannot be proven, supervision
 stops fail-closed instead of silently abandoning the manifest.
+An operator `SIGINT`/`SIGTERM` is recorded and stops the supervision loop after the
+current child has terminated; it never consumes another attempt.
 
 Hyperliquid public trades cannot be reconstructed exactly across a websocket
 disconnect. A close or pong timeout therefore ends the current attempt immediately

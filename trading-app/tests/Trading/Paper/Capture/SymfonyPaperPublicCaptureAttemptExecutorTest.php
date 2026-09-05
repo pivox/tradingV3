@@ -112,7 +112,9 @@ PHP,
             <<<'PHP'
 <?php
 file_put_contents((string) getenv('PAPER_CAPTURE_SIGNAL_READY'), 'ready');
-sleep(30);
+pcntl_async_signals(true);
+pcntl_signal(SIGTERM, static function (): never { exit(0); });
+while (true) { usleep(10_000); }
 PHP,
         ));
         $autoload = \dirname(__DIR__, 4) . '/vendor/autoload.php';
@@ -124,7 +126,10 @@ PHP,
 require %s;
 $executor = new App\Trading\Paper\Capture\SymfonyPaperPublicCaptureAttemptExecutor($argv[1]);
 $attempt = $executor->execute('okx', 'signal-forwarding-okx-mainnet', 300);
-file_put_contents($argv[2], (string) $attempt->exitCode);
+file_put_contents($argv[2], json_encode([
+    'exit_code' => $attempt->exitCode,
+    'term_signal' => $attempt->termSignal,
+], JSON_THROW_ON_ERROR));
 PHP,
                 var_export($autoload, true),
             ),
@@ -147,7 +152,9 @@ PHP,
 
         self::assertSame(0, $supervisor->getExitCode(), $supervisor->getErrorOutput());
         self::assertFileExists($result);
-        self::assertNotSame('0', trim(file_get_contents($result) ?: ''));
+        $attempt = json_decode((string) file_get_contents($result), true, 8, JSON_THROW_ON_ERROR);
+        self::assertSame(0, $attempt['exit_code'] ?? null);
+        self::assertSame(SIGTERM, $attempt['term_signal'] ?? null);
     }
 
     public function testTerminalizesAnAuthenticatedRecordingManifestAfterFatalExit(): void

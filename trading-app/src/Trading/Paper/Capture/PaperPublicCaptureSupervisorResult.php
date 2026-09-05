@@ -44,6 +44,17 @@ final readonly class PaperPublicCaptureSupervisorResult
         );
     }
 
+    public static function interrupted(string $venue, int $attempts): self
+    {
+        return new self(
+            false,
+            $venue,
+            $attempts,
+            null,
+            'paper_public_capture_supervision_interrupted',
+        );
+    }
+
     /** @return array<string, bool|int|string> */
     public function toArray(): array
     {
