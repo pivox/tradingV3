@@ -17,17 +17,17 @@ final readonly class OkxPaperLivePolicy
     public const RESUME_QUEUED_FRAMES = 256;
     public const RESUME_QUEUED_BYTES = 524_288;
     public const MAX_RESYNC_ATTEMPTS = 3;
-    public const RESYNC_ATTEMPT_TIMEOUT_SECONDS = 240.0;
-    public const MAX_OVERLAP_HISTORY_PAGES = 50;
+    public const RESYNC_ATTEMPT_TIMEOUT_SECONDS = 900.0;
+    public const MAX_OVERLAP_HISTORY_PAGES = 250;
     public const LEGACY_MAX_OVERLAP_HISTORY_PAGES = 10;
-    public const MAX_RETAINED_RECOVERY_ROWS = 5_500;
+    public const MAX_RETAINED_RECOVERY_ROWS = 25_500;
     public const INITIAL_HOURLY_CANDLE_TARGET = 1_000;
     public const MAX_INITIAL_HOURLY_HISTORY_PAGES = 4;
     public const MAX_TRADE_ACKNOWLEDGED_IDENTITIES = 500;
     public const MAX_CANDLE_ACKNOWLEDGED_IDENTITIES = 300;
     public const MAX_ACKNOWLEDGED_IDENTITIES_PER_STREAM =
         self::MAX_TRADE_ACKNOWLEDGED_IDENTITIES;
-    public const MAX_CHECKPOINT_BYTES = 2_097_152;
+    public const MAX_CHECKPOINT_BYTES = 4_194_304;
     public const RECONNECT_STABLE_SECONDS = 30.0;
     public const RECONNECT_STABLE_ACCEPTED_EVENTS = 12;
 
