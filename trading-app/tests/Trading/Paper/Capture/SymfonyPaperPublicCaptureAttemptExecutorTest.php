@@ -5,6 +5,12 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Capture;
 
 use App\Trading\Paper\Capture\SymfonyPaperPublicCaptureAttemptExecutor;
+use App\Trading\Paper\Capture\PaperPublicCaptureOrphanFinalizer;
+use App\Trading\Paper\Capture\PaperPublicLiveManifestFactory;
+use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
+use App\Trading\Paper\Dataset\PaperDatasetRecorder;
+use App\Trading\Paper\Dataset\PaperDatasetState;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Process\Process;
@@ -67,7 +73,18 @@ PHP,
             86_400,
         );
 
-        self::assertSame(23, $result->exitCode);
+        self::assertSame(23, $result->exitCode, $result->stderrTail);
+        self::assertIsInt($result->pid);
+        self::assertGreaterThan(0, $result->pid);
+        self::assertNull($result->termSignal);
+        self::assertNotSame('', $result->startedAt);
+        self::assertNotSame('', $result->endedAt);
+        self::assertStringNotContainsString('/private/', $result->stdoutTail);
+        self::assertStringNotContainsString('secret', $result->stdoutTail);
+        self::assertStringNotContainsString('/private/', $result->stderrTail);
+        self::assertStringNotContainsString('secret', $result->stderrTail);
+        self::assertLessThanOrEqual(8192, \strlen($result->stdoutTail));
+        self::assertLessThanOrEqual(8192, \strlen($result->stderrTail));
         self::assertSame([
             'argv' => [
                 $this->root . '/bin/console',
@@ -131,5 +148,32 @@ PHP,
         self::assertSame(0, $supervisor->getExitCode(), $supervisor->getErrorOutput());
         self::assertFileExists($result);
         self::assertNotSame('0', trim(file_get_contents($result) ?: ''));
+    }
+
+    public function testTerminalizesAnAuthenticatedRecordingManifestAfterFatalExit(): void
+    {
+        $dataRoot = $this->root . '/paper-data';
+        $datasetId = 'fatal-okx-attempt-mainnet';
+        $manifest = (new PaperPublicLiveManifestFactory())->create(
+            PaperMarketDataVenue::OKX,
+            $datasetId,
+        );
+        new PaperDatasetRecorder($dataRoot, $manifest);
+        self::assertNotFalse(file_put_contents(
+            $this->root . '/bin/console',
+            "<?php fwrite(STDERR, 'simulated fatal'); exit(137);\n",
+        ));
+
+        $result = (new SymfonyPaperPublicCaptureAttemptExecutor(
+            $this->root,
+            new PaperPublicCaptureOrphanFinalizer($dataRoot),
+        ))->execute('okx', $datasetId, 300);
+
+        self::assertSame(137, $result->exitCode);
+        self::assertTrue($result->orphanFinalized);
+        $stored = (new PaperDatasetManifestCodec())->decode(
+            (string) file_get_contents($dataRoot . '/' . $datasetId . '/manifest.json'),
+        );
+        self::assertSame(PaperDatasetState::INCOMPLETE, $stored->state);
     }
 }

@@ -33,6 +33,17 @@ final readonly class PaperPublicCaptureSupervisorResult
         );
     }
 
+    public static function orphanFinalizationFailed(string $venue, int $attempts): self
+    {
+        return new self(
+            false,
+            $venue,
+            $attempts,
+            null,
+            'paper_public_capture_orphan_finalization_failed',
+        );
+    }
+
     /** @return array<string, bool|int|string> */
     public function toArray(): array
     {
