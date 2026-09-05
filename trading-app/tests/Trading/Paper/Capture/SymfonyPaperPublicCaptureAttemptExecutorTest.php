@@ -157,6 +157,30 @@ PHP,
         self::assertSame(SIGTERM, $attempt['term_signal'] ?? null);
     }
 
+    public function testReportsAChildFatalSignalInsteadOfCollapsingItToExit127(): void
+    {
+        if (!function_exists('posix_kill')) {
+            self::markTestSkipped('Signal support is unavailable.');
+        }
+        self::assertNotFalse(file_put_contents(
+            $this->root . '/bin/console',
+            <<<'PHP'
+<?php
+posix_kill(getmypid(), SIGKILL);
+usleep(100_000);
+PHP,
+        ));
+
+        $result = (new SymfonyPaperPublicCaptureAttemptExecutor($this->root))->execute(
+            'okx',
+            'fatal-signal-okx-mainnet',
+            300,
+        );
+
+        self::assertSame(SIGKILL, $result->termSignal);
+        self::assertNotSame(127, $result->exitCode);
+    }
+
     public function testTerminalizesAnAuthenticatedRecordingManifestAfterFatalExit(): void
     {
         $dataRoot = $this->root . '/paper-data';

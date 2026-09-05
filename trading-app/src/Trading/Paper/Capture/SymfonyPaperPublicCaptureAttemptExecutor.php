@@ -28,6 +28,7 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
         $stderrTail = '';
         $pid = null;
         $operatorSignal = null;
+        $process = null;
         try {
             $process = new Process([
                 \PHP_BINARY,
@@ -64,8 +65,7 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
 
             return new PaperPublicCaptureAttemptResult(
                 exitCode: $exitCode,
-                termSignal: $operatorSignal
-                    ?? ($process->hasBeenSignaled() ? $process->getTermSignal() : null),
+                termSignal: $this->terminationSignal($process, $operatorSignal),
                 pid: $pid,
                 startedAt: $startedAt,
                 endedAt: self::now(),
@@ -76,14 +76,34 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
                     : $this->orphanFinalizer?->finalize($datasetId),
             );
         } catch (\Throwable $failure) {
+            $exitCode = $process?->getExitCode() ?? 127;
+            $stderrTail = substr(
+                $stderrTail . "\n" . $failure::class . ': ' . $failure->getMessage(),
+                -self::OUTPUT_TAIL_BYTES,
+            );
+
             return new PaperPublicCaptureAttemptResult(
-                exitCode: 127,
+                exitCode: $exitCode,
+                termSignal: $this->terminationSignal($process, $operatorSignal),
                 pid: $pid,
                 startedAt: $startedAt,
                 endedAt: self::now(),
-                stderrTail: $this->redact($failure::class . ': ' . $failure->getMessage()),
+                stdoutTail: $this->redact($stdoutTail),
+                stderrTail: $this->redact($stderrTail),
                 orphanFinalized: $this->orphanFinalizer?->finalize($datasetId),
             );
+        }
+    }
+
+    private function terminationSignal(?Process $process, ?int $operatorSignal): ?int
+    {
+        if ($operatorSignal !== null || !$process instanceof Process) {
+            return $operatorSignal;
+        }
+        try {
+            return $process->hasBeenSignaled() ? $process->getTermSignal() : null;
+        } catch (\Throwable) {
+            return null;
         }
     }
 
