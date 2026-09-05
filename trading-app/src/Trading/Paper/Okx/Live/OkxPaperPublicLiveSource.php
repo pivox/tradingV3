@@ -109,6 +109,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 
     private ?OkxPaperLiveCheckpoint $durableEventBatchBase = null;
     private bool $durableFrameBatchingEnabled = false;
+    private bool $networkTickActive = false;
+    private bool $streamingQueuesDirty = false;
     private ?\Throwable $deferredQueuedFailure = null;
     private bool $preparingQueuedFrameBatch = false;
 
@@ -441,13 +443,13 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     // REST warmup/recovery batches are durable boundaries too.
                     // Give websocket control and data callbacks one bounded tick
                     // before the next synchronous REST/persistence unit starts.
-                    $this->loopPump?->pump();
+                    $this->pumpNetworkLoop();
                 }
             }
         } elseif ($this->activeQueuedSocket === null) {
             // Single REST/control events do not create an explicit batch, but
             // their acknowledgement is still a safe durable pump boundary.
-            $this->loopPump?->pump();
+            $this->pumpNetworkLoop();
         }
     }
 
@@ -766,7 +768,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         string $bar,
     ): ?array {
         $rows = $this->restClient->currentCandles($instrumentId, $bar, null, null, 300);
-        $this->loopPump?->pump();
+        $this->pumpNetworkLoop();
         if ($this->checkpoint->phase !== 'streaming') {
             return null;
         }
@@ -789,7 +791,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $this->failTerminal('market_data_gap_unresolved');
             }
             $older = $this->restClient->historyCandles($instrumentId, $bar, $cursor, 300);
-            $this->loopPump?->pump();
+            $this->pumpNetworkLoop();
             // @phpstan-ignore notIdentical.alwaysFalse (the network pump can transition the checkpoint)
             if ($this->checkpoint->phase !== 'streaming') {
                 return null;
@@ -1692,7 +1694,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     $streamWithoutTransition ? $stream : null,
                 );
                 if ($streamWithoutTransition) {
-                    $this->loopPump?->pump();
+                    $this->pumpNetworkLoop();
                     if ($this->checkpoint->phase !== 'streaming') {
                         return;
                     }
@@ -1708,7 +1710,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 eventStreamOverride: $streamWithoutTransition ? $stream : null,
             );
             if ($streamWithoutTransition) {
-                $this->loopPump?->pump();
+                $this->pumpNetworkLoop();
             }
         }
         if ($requireInitialEvent
@@ -2174,7 +2176,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $this->businessQueue->count(),
                 $this->businessQueue->bytes(),
             ];
-            $this->loop->run();
+            $this->runNetworkLoop();
             if ($generation !== $this->connectionGeneration) {
                 return false;
             }
@@ -2246,21 +2248,15 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
         try {
             $queue->enqueue($frame);
+            $this->streamingQueuesDirty = true;
             $this->pauseSocketAdmissionsAtHighWatermark($socket, $queue);
+            if (!$this->networkTickActive) {
+                $this->persistDirtyStreamingQueues();
+            }
         } catch (OkxPaperLiveIntegrityException $exception) {
             if ($exception->getMessage() === 'market_data_backpressure_exhausted') {
                 $this->failTerminal('market_data_backpressure_exhausted');
             }
-
-            throw $exception;
-        }
-        try {
-            $this->persistStreamingQueues();
-        } catch (OkxPaperLiveIntegrityException $exception) {
-            if ($exception->getMessage() === 'market_data_backpressure_exhausted') {
-                $this->failTerminal('market_data_backpressure_exhausted');
-            }
-
             throw $exception;
         }
         $this->loop->stop();
@@ -4223,7 +4219,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $this->businessQueue->bytes(),
             ];
             if ($queue->count() === 0) {
-                $this->loop->run();
+                $this->runNetworkLoop();
             }
             $framesToInspect = $queue->count();
             if ($framesToInspect === 0) {
@@ -4274,7 +4270,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             $this->pauseSocketAdmissionsAtHighWatermark($socket, $queue);
             $this->resumeSocketAdmissionsAfterDrain($socket, $queue);
             if (!$acknowledged) {
-                $this->loop->run();
+                $this->runNetworkLoop();
             }
         }
     }
@@ -4329,7 +4325,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         ) {
             return $this->nextQueuedEvents();
         }
-        $this->loop->run();
+        $this->runNetworkLoop();
 
         return [];
     }
@@ -4464,7 +4460,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $socket,
                 $queue,
             );
-            $this->loopPump?->pump();
+            $this->pumpNetworkLoop();
         } else {
             $this->activeQueuedSocket = $business ? 'business' : 'public';
             $this->activeQueuedEventsRemaining = \count($events);
@@ -4505,7 +4501,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $this->persistStreamingQueues();
         $this->resumeSocketAdmissionsAfterDrain($socket, $queue);
         $this->rescheduleHeartbeatAfterQueueDrain($socket, $queue);
-        $this->loopPump?->pump();
+        $this->pumpNetworkLoop();
     }
 
     private function pauseSocketAdmissionsAtHighWatermark(
@@ -4584,6 +4580,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     private function persistStreamingQueues(): void
     {
         if (\in_array($this->checkpoint->phase, ['complete', 'failed', 'stopping'], true)) {
+            $this->streamingQueuesDirty = false;
+
             return;
         }
         try {
@@ -4594,6 +4592,45 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             );
         } catch (\Throwable $failure) {
             $this->reconcileAfterCheckpointWriteFailure($failure);
+        }
+        $this->streamingQueuesDirty = false;
+    }
+
+    private function pumpNetworkLoop(): void
+    {
+        $this->networkTickActive = true;
+        try {
+            $this->loopPump?->pump();
+        } finally {
+            $this->networkTickActive = false;
+        }
+        $this->persistDirtyStreamingQueues();
+    }
+
+    private function runNetworkLoop(): void
+    {
+        $this->networkTickActive = true;
+        try {
+            $this->loop->run();
+        } finally {
+            $this->networkTickActive = false;
+        }
+        $this->persistDirtyStreamingQueues();
+    }
+
+    private function persistDirtyStreamingQueues(): void
+    {
+        if (!$this->streamingQueuesDirty) {
+            return;
+        }
+        try {
+            $this->persistStreamingQueues();
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            if ($exception->getMessage() === 'market_data_backpressure_exhausted') {
+                $this->failTerminal('market_data_backpressure_exhausted');
+            }
+
+            throw $exception;
         }
     }
 

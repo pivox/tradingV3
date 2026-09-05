@@ -2376,6 +2376,58 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertNull($this->checkpointState()['pending_event']);
     }
 
+    public function testOneNetworkPumpCoalescesItsAdmittedQueueCheckpoint(): void
+    {
+        $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot, $filesystem);
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::tradeFrame(['9000']),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $pump = new Task7CountingLoopPump();
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            $public,
+            $business,
+            checkpointStore: $store,
+            loopPump: $pump,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+        $sentinel = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $sentinel);
+
+        $pump->onPump(static function () use ($public): void {
+            foreach (range(1, 10) as $offset) {
+                $public->message(Task7Transport::tradeFrame([
+                    (string) (9100 + $offset),
+                ]));
+            }
+        });
+        $before = count(array_filter(
+            $filesystem->operations,
+            static fn (string $operation): bool => $operation
+                === 'sync:okx_paper_live_queue_sync',
+        ));
+
+        $source->acknowledge($sentinel->eventId);
+
+        $after = count(array_filter(
+            $filesystem->operations,
+            static fn (string $operation): bool => $operation
+                === 'sync:okx_paper_live_queue_sync',
+        ));
+        self::assertSame(2, $after - $before);
+        self::assertSame(10, $this->checkpointState()['streaming_queue_ref']['public']['frames']);
+    }
+
     public function testReactLoopPumpRunsExactlyOneNonBlockingTick(): void
     {
         $loop = new DeterministicLoop();
