@@ -4489,7 +4489,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             },
         ];
         $resumed = $this->source(
-            new Task7RestClient(),
+            Task7RestClient::withInitialDataset(),
             $public,
             $business,
             checkpointStore: $store,
@@ -8023,6 +8023,13 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(PaperMarketEvent::class, $btcReplacement);
         self::assertSame('BTCUSDT', $btcReplacement->symbol);
         self::assertSame('rest_resync_snapshot', $btcReplacement->payload['origin'] ?? null);
+        $reconnectCallOffset = count(Task7RestClient::expectedInitialCalls())
+            + count(Task7RestClient::expectedInitialCandleBridgeCalls());
+        self::assertSame(
+            ['orderBook', ['BTC-USDT-SWAP', 400]],
+            $rest->calls[$reconnectCallOffset] ?? null,
+            'Book overlap must be captured before slower historical recovery.',
+        );
         self::assertSame('9003', $btcReplacement->payload['source_seq_id'] ?? null);
         self::assertSame(2, $btcReplacement->payload['source_epoch'] ?? null);
         $source->acknowledge($btcReplacement->eventId);
@@ -8255,6 +8262,13 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(PaperMarketEvent::class, $reconnecting);
         self::assertSame('reconnecting', $reconnecting->payload['state'] ?? null);
         $source->acknowledge($reconnecting->eventId);
+        $events->next();
+        $recoveredBook = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $recoveredBook);
+        self::assertSame(PaperMarketDataChannel::TOP_OF_BOOK, $recoveredBook->channel);
+        self::assertSame('rest_resync_snapshot', $recoveredBook->payload['origin'] ?? null);
+        self::assertSame('9003', $recoveredBook->payload['source_seq_id'] ?? null);
+        $source->acknowledge($recoveredBook->eventId);
         $events->next();
         $firstRecoveredCandle = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $firstRecoveredCandle);
@@ -11529,11 +11543,11 @@ final class Task7RestClient implements OkxPaperPublicRestClientInterface
     {
         $calls = [];
         foreach (['BTC-USDT-SWAP', 'ETH-USDT-SWAP'] as $instrumentId) {
+            $calls[] = ['orderBook', [$instrumentId, 400]];
             foreach (['15m', '1H', '1m', '5m'] as $bar) {
                 $calls[] = ['currentCandles', [$instrumentId, $bar, null, null, 300]];
             }
             $calls[] = ['recentTrades', [$instrumentId, 500]];
-            $calls[] = ['orderBook', [$instrumentId, 400]];
         }
 
         return $calls;

@@ -1183,11 +1183,18 @@ final readonly class OkxPaperLiveCheckpoint
             }
             $symbol = strstr($stream, '/', true);
             $resync = \is_string($symbol) ? ($resyncBySymbol[$symbol] ?? null) : null;
+            $paginationTarget = ($resync['policy'] ?? null) === 'book_seq_overlap_v1'
+                ? ($streamFrontiers[$stream] ?? null)
+                : ($resync['frontier'] ?? null);
             if (!\is_array($resync)
-                || ($resync['policy'] ?? null) !== 'frontier_overlap_v1'
+                || !\in_array(
+                    $resync['policy'] ?? null,
+                    ['frontier_overlap_v1', 'book_seq_overlap_v1'],
+                    true,
+                )
                 || ($resync['deadline_at'] ?? null) !== ($pagination['deadline_at'] ?? null)
                 || !self::sameFrontier(
-                    $resync['frontier'] ?? null,
+                    $paginationTarget,
                     $pagination['target_frontier'] ?? null,
                 )
             ) {
@@ -1247,10 +1254,24 @@ final readonly class OkxPaperLiveCheckpoint
                         'resyncing' => 'sequence_gap',
                         default => null,
                     };
+            $bookSnapshot = $resync['book_snapshot'] ?? null;
+            $recoveredBookFrontier = $streamFrontiers[$symbol . '/rest/top_of_book'] ?? null;
+            $bookRecoveryCaptured = \is_array($bookSnapshot)
+                && $recoveredBookFrontier instanceof OkxPaperStreamFrontier
+                && ($bookSnapshot['seqId'] ?? null) === $recoveredBookFrontier->sourceIdentity;
             if ($transition !== null) {
                 $valid = ($transition['kind'] === 'rest_fetch'
                         && $transition['stage'] === 'order_book'
                         && $stream === $symbol . '/rest/top_of_book')
+                    || ($bookRecoveryCaptured
+                        && $transition['kind'] === 'rest_fetch'
+                        && \in_array($transition['stage'], [
+                            'current_candles',
+                            'history_candles',
+                            'recent_trades',
+                            'history_trades',
+                        ], true)
+                        && self::validRestTransition($symbol, $stream, $transition['stage']))
                     || ($transition['kind'] === 'timer_schedule'
                         && $transition['stage'] === 'resync_timeout'
                         && $stream === $symbol . '/ws/top_of_book')
@@ -1270,9 +1291,23 @@ final readonly class OkxPaperLiveCheckpoint
             if ($pendingEvent === null) {
                 return;
             }
+            $recoveryChannel = substr($stream, strrpos($stream, '/') + 1);
+            $recoveryChannel = $recoveryChannel === 'candle_1H'
+                ? 'candle_1h'
+                : $recoveryChannel;
             $valid = ($pendingEvent->channel->value === 'top_of_book'
                     && $stream === $symbol . '/rest/top_of_book'
                     && ($pendingEvent->payload['origin'] ?? null) === 'rest_resync_snapshot')
+                || ($bookRecoveryCaptured
+                    && $pendingFrontier !== null
+                    && $pendingEvent->channel->value === $recoveryChannel
+                    && \in_array($recoveryChannel, [
+                        'candle_1m',
+                        'candle_5m',
+                        'candle_15m',
+                        'candle_1h',
+                        'public_trade',
+                    ], true))
                 || ($pendingEvent->channel->value === 'snapshot_boundary'
                     && $stream === $symbol . '/control/snapshot_boundary'
                     && $boundaryReason !== null

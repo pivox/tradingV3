@@ -1104,10 +1104,15 @@ final class OkxPaperLiveCheckpointStore
             $continuationTransition,
         );
         $this->applyAcknowledgementWorkEffects($checkpoint, $state);
+        $continuingResync = $checkpoint->resyncBySymbol[
+            $checkpoint->pendingEvent->symbol
+        ] ?? null;
         if ($recoveryContinues) {
             $symbol = $checkpoint->pendingEvent->symbol;
             $continuedFrontier = $checkpoint->pendingFrontier['frontier']->toArray();
-            $state['resync_by_symbol'][$symbol]['frontier'] = $continuedFrontier;
+            if (($continuingResync['policy'] ?? null) === 'frontier_overlap_v1') {
+                $state['resync_by_symbol'][$symbol]['frontier'] = $continuedFrontier;
+            }
             $continuedStream = $checkpoint->pendingFrontier['stream'];
             if (\is_array($state['overlap_pagination_by_stream'][$continuedStream] ?? null)) {
                 $state['overlap_pagination_by_stream'][$continuedStream]['target_frontier'] =
@@ -1346,10 +1351,24 @@ final class OkxPaperLiveCheckpointStore
             $checkpoint->pendingFrontier['stream']
         ] ?? null;
 
-        return \is_array($resync)
-            && $resync['policy'] === 'frontier_overlap_v1'
-            && $currentFrontier instanceof OkxPaperStreamFrontier
-            && $this->sameCanonicalValue($resync['frontier'], $currentFrontier);
+        if (!\is_array($resync)) {
+            return false;
+        }
+        if ($resync['policy'] === 'frontier_overlap_v1') {
+            return $currentFrontier instanceof OkxPaperStreamFrontier
+                && $this->sameCanonicalValue($resync['frontier'], $currentFrontier);
+        }
+        $bookFrontier = $checkpoint->streamFrontiers[
+            $checkpoint->pendingEvent->symbol . '/rest/top_of_book'
+        ] ?? null;
+
+        return $resync['policy'] === 'book_seq_overlap_v1'
+            && $bookFrontier instanceof OkxPaperStreamFrontier
+            && $this->currentRecoveryBookSnapshotWasAcknowledged(
+                $checkpoint,
+                $checkpoint->pendingEvent->symbol,
+                $bookFrontier,
+            );
     }
 
     /** @param array<string, mixed> $state */
@@ -1476,9 +1495,18 @@ final class OkxPaperLiveCheckpointStore
             return true;
         }
 
-        $reason = $event->channel->value === 'snapshot_boundary'
-            ? ($event->payload['reason'] ?? null)
-            : null;
+        $recoveredStream = $checkpoint->pendingFrontier['stream'] ?? null;
+        if ($event->channel->value !== 'snapshot_boundary') {
+            if (\is_string($recoveredStream)
+                && ($state['overlap_pagination_by_stream'][$recoveredStream] ?? null) !== null
+            ) {
+                $state['overlap_pagination_by_stream'][$recoveredStream] = null;
+            }
+
+            return false;
+        }
+
+        $reason = $event->payload['reason'] ?? null;
         if (!\in_array($reason, ['reconnect', 'sequence_gap'], true)) {
             return false;
         }
@@ -1773,9 +1801,7 @@ final class OkxPaperLiveCheckpointStore
             && ($latestEvent->payload['origin'] ?? null) === 'rest_resync_snapshot'
             && ($latestEvent->payload['source_epoch'] ?? null) === $checkpoint->sourceEpochs[$symbol]
             && ($latestEvent->payload['source_seq_id'] ?? null) === $bookFrontier->sourceIdentity
-            && $this->sameCanonicalValue($latestFrontier, $bookFrontier)
-            && $checkpoint->lastAcknowledgedEventId !== null
-            && hash_equals($checkpoint->lastAcknowledgedEventId, $latestEvent->eventId);
+            && $this->sameCanonicalValue($latestFrontier, $bookFrontier);
     }
 
     private function assertReconnectTransportHasWriteAheadBudget(
@@ -3407,29 +3433,70 @@ final class OkxPaperLiveCheckpointStore
             if ($resync['policy'] === 'book_seq_overlap_v1') {
                 $bookFrontier = $checkpoint->streamFrontiers[$symbol . '/rest/top_of_book'] ?? null;
                 $boundary = $checkpoint->remainingBoundaries[0] ?? null;
-                if ($bookFrontier instanceof OkxPaperStreamFrontier
-                    && \is_array($boundary)
-                    && $boundary['symbol'] === $symbol
-                    && \in_array($boundary['reason'], ['reconnect', 'sequence_gap'], true)
-                    && $this->currentRecoveryBookSnapshotWasAcknowledged(
+                if (!$bookFrontier instanceof OkxPaperStreamFrontier
+                    || !$this->currentRecoveryBookSnapshotWasAcknowledged(
                         $checkpoint,
                         $symbol,
                         $bookFrontier,
                     )
                 ) {
                     return [
-                        'kind' => 'emit_boundary',
+                        'kind' => 'rest_fetch',
                         'symbol' => $symbol,
-                        'stream' => $symbol . '/control/snapshot_boundary',
-                        'stage' => $boundary['reason'],
+                        'stream' => $symbol . '/rest/top_of_book',
+                        'stage' => 'order_book',
                     ];
                 }
 
+                if (\is_array($boundary)
+                    && $boundary === [
+                        'symbol' => $symbol,
+                        'reason' => 'sequence_gap',
+                    ]
+                ) {
+                    return [
+                        'kind' => 'emit_boundary',
+                        'symbol' => $symbol,
+                        'stream' => $symbol . '/control/snapshot_boundary',
+                        'stage' => 'sequence_gap',
+                    ];
+                }
+
+                $afterCompleted = $completedStream === null
+                    || $completedStream === $symbol . '/rest/top_of_book';
+                foreach ($checkpoint->streamFrontiers as $stream => $frontier) {
+                    $stage = $this->frontierRecoveryStage($symbol, $stream);
+                    if ($stage === null || !$frontier instanceof OkxPaperStreamFrontier) {
+                        continue;
+                    }
+                    if (!$afterCompleted) {
+                        if ($stream === $completedStream) {
+                            $afterCompleted = true;
+                        }
+
+                        continue;
+                    }
+
+                    return [
+                        'kind' => 'rest_fetch',
+                        'symbol' => $symbol,
+                        'stream' => $stream,
+                        'stage' => $stage,
+                    ];
+                }
+                if (!$afterCompleted
+                    || !\is_array($boundary)
+                    || $boundary['symbol'] !== $symbol
+                    || !\in_array($boundary['reason'], ['reconnect', 'sequence_gap'], true)
+                ) {
+                    return null;
+                }
+
                 return [
-                    'kind' => 'rest_fetch',
+                    'kind' => 'emit_boundary',
                     'symbol' => $symbol,
-                    'stream' => $symbol . '/rest/top_of_book',
-                    'stage' => 'order_book',
+                    'stream' => $symbol . '/control/snapshot_boundary',
+                    'stage' => $boundary['reason'],
                 ];
             }
 
@@ -3441,6 +3508,28 @@ final class OkxPaperLiveCheckpointStore
         }
 
         if ($completedStream === null) {
+            $bookFrontier = $checkpoint->streamFrontiers[$symbol . '/ws/top_of_book']
+                ?? $checkpoint->streamFrontiers[$symbol . '/rest/top_of_book']
+                ?? null;
+            if (($checkpoint->remainingBoundaries[0] ?? null) === [
+                'symbol' => $symbol,
+                'reason' => 'reconnect',
+            ]
+                && $bookFrontier instanceof OkxPaperStreamFrontier
+                && !$this->currentRecoveryBookSnapshotWasAcknowledged(
+                    $checkpoint,
+                    $symbol,
+                    $checkpoint->streamFrontiers[$symbol . '/rest/top_of_book']
+                        ?? $bookFrontier,
+                )
+            ) {
+                return [
+                    'kind' => 'rest_fetch',
+                    'symbol' => $symbol,
+                    'stream' => $symbol . '/rest/top_of_book',
+                    'stage' => 'order_book',
+                ];
+            }
             $lastAcknowledged = $this->lastAcknowledgedRecoveryTransition($checkpoint, $symbol);
             if ($lastAcknowledged !== null) {
                 return $lastAcknowledged;
@@ -4318,6 +4407,31 @@ final class OkxPaperLiveCheckpointStore
         $stream = $currentTransition['stream'];
         $resync = $current->resyncBySymbol[$symbol] ?? null;
         $streamFrontier = $current->streamFrontiers[$stream] ?? null;
+        if (\is_array($resync)
+            && $resync['policy'] === 'book_seq_overlap_v1'
+            && $streamFrontier instanceof OkxPaperStreamFrontier
+            && $this->sameCanonicalValue(
+                $candidate->resyncBySymbol[$symbol] ?? null,
+                $resync,
+            )
+        ) {
+            foreach ($current->overlapPaginationByStream as $candidateStream => $pagination) {
+                $nextPagination = $candidate->overlapPaginationByStream[$candidateStream];
+                if ($candidateStream === $stream && $pagination !== null) {
+                    if ($nextPagination !== null) {
+                        return false;
+                    }
+
+                    continue;
+                }
+                if (!$this->sameCanonicalValue($pagination, $nextPagination)) {
+                    return false;
+                }
+            }
+
+            return $phase === 'reconnecting'
+                && $this->isExactNextReconnectOverlapTransition($candidate, $pendingTransition);
+        }
         if (!\is_array($resync)
             || $resync['policy'] !== 'frontier_overlap_v1'
             || !$streamFrontier instanceof OkxPaperStreamFrontier

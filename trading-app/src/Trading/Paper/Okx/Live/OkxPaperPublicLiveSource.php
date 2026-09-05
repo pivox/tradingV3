@@ -2987,6 +2987,14 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     $bookFrontier->sourceIdentity,
                 )
             ) {
+                if ($boundary['reason'] === 'reconnect') {
+                    foreach ($this->reconnectRecoveryTransitions($symbol) as $transition) {
+                        if ($transition['stage'] !== 'order_book') {
+                            return $transition;
+                        }
+                    }
+                }
+
                 return [
                     'kind' => 'emit_boundary',
                     'symbol' => $symbol,
@@ -3087,6 +3095,17 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     private function reconnectRecoveryTransitions(string $symbol): array
     {
         $transitions = [];
+        if (($this->checkpoint->streamFrontiers[$symbol . '/ws/top_of_book'] ?? null)
+            instanceof OkxPaperStreamFrontier
+            || ($this->checkpoint->streamFrontiers[$symbol . '/rest/top_of_book'] ?? null)
+                instanceof OkxPaperStreamFrontier
+        ) {
+            $transitions[] = $this->restTransition(
+                $symbol,
+                $symbol . '/rest/top_of_book',
+                'order_book',
+            );
+        }
         foreach ($this->checkpoint->streamFrontiers as $stream => $frontier) {
             if (!$frontier instanceof OkxPaperStreamFrontier
                 || !str_starts_with($stream, $symbol . '/')
@@ -3103,17 +3122,6 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             if ($stage !== null) {
                 $transitions[] = $this->restTransition($symbol, $stream, $stage);
             }
-        }
-        if (($this->checkpoint->streamFrontiers[$symbol . '/ws/top_of_book'] ?? null)
-            instanceof OkxPaperStreamFrontier
-            || ($this->checkpoint->streamFrontiers[$symbol . '/rest/top_of_book'] ?? null)
-                instanceof OkxPaperStreamFrontier
-        ) {
-            $transitions[] = $this->restTransition(
-                $symbol,
-                $symbol . '/rest/top_of_book',
-                'order_book',
-            );
         }
 
         return $transitions;
@@ -3418,7 +3426,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             ),
             'pages_consumed' => 0,
             'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
-            'target_frontier' => $resync['frontier']->toArray(),
+            'target_frontier' => $this->requiredRecoveryFrontier($stream)->toArray(),
             'deadline_at' => $resync['deadline_at'],
             'retained_rows' => $this->compactRetainedCandleRows($rows),
         ];
@@ -3500,7 +3508,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             'next_cursor' => $oldestTimestamp,
             'pages_consumed' => 0,
             'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
-            'target_frontier' => $resync['frontier']->toArray(),
+            'target_frontier' => $this->requiredRecoveryFrontier($stream)->toArray(),
             'deadline_at' => $resync['deadline_at'],
             'retained_rows' => $this->compactRetainedTradeRows($retainedRows),
         ];
@@ -3550,7 +3558,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 'next_cursor' => $oldestTimestamp,
                 'pages_consumed' => 0,
                 'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
-                'target_frontier' => $resync['frontier']->toArray(),
+                'target_frontier' => $this->requiredRecoveryFrontier($stream)->toArray(),
                 'deadline_at' => $resync['deadline_at'],
                 'retained_rows' => $this->compactRetainedCandleRows($newerRows),
             ];
@@ -3710,7 +3718,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 'next_cursor' => $oldestTimestamp,
                 'pages_consumed' => 0,
                 'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
-                'target_frontier' => $resync['frontier']->toArray(),
+                'target_frontier' => $this->requiredRecoveryFrontier($stream)->toArray(),
                 'deadline_at' => $resync['deadline_at'],
                 'retained_rows' => $this->compactRetainedTradeRows($newerRows),
             ];
@@ -3844,7 +3852,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
         $state = $this->checkpoint->toArray();
         $state['overlap_pagination_by_stream'][$stream] = null;
-        $state['resync_by_symbol'][$symbol] = null;
+        if (($state['resync_by_symbol'][$symbol]['policy'] ?? null)
+            !== 'book_seq_overlap_v1'
+        ) {
+            $state['resync_by_symbol'][$symbol] = null;
+        }
         $next = null;
         $transitions = $this->reconnectRecoveryTransitions($symbol);
         foreach ($transitions as $index => $transition) {
@@ -3933,6 +3945,16 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 
         return !\is_array($resync)
             || $this->clock->now() >= new \DateTimeImmutable($resync['deadline_at']);
+    }
+
+    private function requiredRecoveryFrontier(string $stream): OkxPaperStreamFrontier
+    {
+        $frontier = $this->checkpoint->streamFrontiers[$stream] ?? null;
+        if (!$frontier instanceof OkxPaperStreamFrontier) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+
+        return $frontier;
     }
 
     /** @param array<string, mixed> $transition */
