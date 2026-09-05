@@ -1565,6 +1565,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         ) {
             $chunks = array_chunk($events, self::MAX_DURABLE_EVENT_BATCH);
             $lastChunk = \count($chunks) - 1;
+            $expectedPhase = $this->checkpoint->phase;
+            $expectedConnectionGeneration = $this->connectionGeneration;
             foreach ($chunks as $index => $chunk) {
                 yield from $this->yieldMarketEvents(
                     $chunk,
@@ -1573,6 +1575,12 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     $index < $lastChunk || $continueTransitionAfterBatch,
                     $eventStreamOverride,
                 );
+                if ($this->stopped
+                    || $this->checkpoint->phase !== $expectedPhase
+                    || $this->connectionGeneration !== $expectedConnectionGeneration
+                ) {
+                    return;
+                }
             }
 
             return;
@@ -2921,6 +2929,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 continue;
             }
 
+            $recoveryGeneration = $this->connectionGeneration;
             try {
                 $events = $this->reconnectFrontierEvents($symbol, $stream, $transition);
             } catch (\Throwable $exception) {
@@ -2939,6 +2948,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             }
             $transition = $this->checkpoint->pendingTransition ?? $transition;
             yield from $this->yieldMarketEvents($events, $stream, $transition);
+            if ($this->stopped || $this->connectionGeneration !== $recoveryGeneration) {
+                return;
+            }
             if (str_contains($stream, '/ws/')) {
                 $this->requiresOverlap[$stream] = true;
             }

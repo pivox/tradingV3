@@ -341,7 +341,6 @@ final class PaperDatasetRecorder
             throw $failure;
         }
         $this->assertPinnedDirectories();
-        $this->identityIndex->addBatch(array_values($batchIdentities));
 
         $nextManifest = $this->currentManifest->withRecordingFacts(
             startExchangeTimestamp: $nextStart,
@@ -356,6 +355,7 @@ final class PaperDatasetRecorder
             $this->writeRecordingManifestAtomically($nextManifest);
         }
         $this->removeAppendIntent();
+        $this->identityIndex->addBatch(array_values($batchIdentities));
 
         $this->lastSequences = $nextSequences;
         $this->channels = $nextChannels;
@@ -431,7 +431,6 @@ final class PaperDatasetRecorder
             throw $failure;
         }
         $this->assertPinnedDirectories();
-        $this->identityIndex->add($event->eventId, $event->payloadHash, $eventHash);
 
         $nextChannels = $this->channels;
         $nextChannels[] = $event->channel->value;
@@ -456,6 +455,7 @@ final class PaperDatasetRecorder
             $this->writeRecordingManifestAtomically($nextManifest);
         }
         $this->removeAppendIntent();
+        $this->identityIndex->add($event->eventId, $event->payloadHash, $eventHash);
 
         if ($nextSequence !== null) {
             $this->lastSequences[$sequenceKey] = $nextSequence;

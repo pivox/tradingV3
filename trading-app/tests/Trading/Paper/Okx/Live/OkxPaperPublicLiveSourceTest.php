@@ -8119,7 +8119,10 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(0, $reset['accepted_events']);
     }
 
-    public function testReconnectAcceptsNonAdjacentExactCandleOverlapAndEmitsEveryLaterRow(): void
+    #[DataProvider('reconnectCandleRecoveryProvider')]
+    public function testReconnectAcceptsNonAdjacentExactCandleOverlapAndEmitsEveryLaterRow(
+        bool $interruptAfterFirstChunk,
+    ): void
     {
         $clock = new MockClock('2026-07-25T10:00:00.000000Z');
         $store = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
@@ -8154,6 +8157,23 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 $public->message($ethApplied);
             },
         ];
+        $interruptPump = false;
+        $phaseObservedDuringInterruption = null;
+        $source = null;
+        $pump = new Task7CountingLoopPump(function () use (
+            &$interruptPump,
+            &$phaseObservedDuringInterruption,
+            &$source,
+            $public,
+        ): void {
+            if (!$interruptPump) {
+                return;
+            }
+            $interruptPump = false;
+            $public->disconnect();
+            $phaseObservedDuringInterruption = $this->checkpointState()['phase'] ?? null;
+            $source?->stop();
+        });
         $source = $this->source(
             $rest,
             $public,
@@ -8161,6 +8181,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             checkpointStore: $store,
             clock: $clock,
             loop: $loop,
+            loopPump: $pump,
         );
         $events = $source->events();
         self::assertInstanceOf(\Generator::class, $events);
@@ -8184,10 +8205,21 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $rest->candleRows['BTC-USDT-SWAP/15m'] = [[
             '1784970900000', '103', '104', '102', '103.5', '13', '1', '1300', '1',
         ]];
-        $rest->historyCandlePages = [[
-            ['1784970500000', '102', '103', '101', '102.5', '12', '1', '1200', '1'],
-            ['1784970002000', '100', '101', '99', '100.5', '10', '1', '1000', '1'],
-        ]];
+        $rest->historyCandlePages = [$interruptAfterFirstChunk
+            ? [
+                ...array_map(
+                    static fn (int $offset): array => [
+                        (string) (1784970002000 + $offset),
+                        '102', '103', '101', '102.5', '12', '1', '1200', '1',
+                    ],
+                    range(257, 1),
+                ),
+                ['1784970002000', '100', '101', '99', '100.5', '10', '1', '1000', '1'],
+            ]
+            : [
+                ['1784970500000', '102', '103', '101', '102.5', '12', '1', '1200', '1'],
+                ['1784970002000', '100', '101', '99', '100.5', '10', '1', '1000', '1'],
+            ]];
         $rest->tradeRows['BTC-USDT-SWAP'] = [[
             'instId' => 'BTC-USDT-SWAP',
             'tradeId' => '200',
@@ -8270,6 +8302,20 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame('9003', $recoveredBook->payload['source_seq_id'] ?? null);
         $source->acknowledge($recoveredBook->eventId);
         $events->next();
+        if ($interruptAfterFirstChunk) {
+            $interruptPump = true;
+            for ($index = 0; $index < 256; ++$index) {
+                $recovered = $events->current();
+                self::assertInstanceOf(PaperMarketEvent::class, $recovered);
+                $source->acknowledge($recovered->eventId);
+                $events->next();
+            }
+
+            self::assertSame('reconnecting', $phaseObservedDuringInterruption);
+            self::assertFalse($events->valid());
+
+            return;
+        }
         $firstRecoveredCandle = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $firstRecoveredCandle);
         self::assertSame('1784970500000', $firstRecoveredCandle->exchangeTimestamp->format('Uv'));
@@ -8325,6 +8371,13 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             ['historyTrades', ['BTC-USDT-SWAP', 2, '1784970101000', 100]],
             $rest->calls,
         );
+    }
+
+    /** @return iterable<string, array{bool}> */
+    public static function reconnectCandleRecoveryProvider(): iterable
+    {
+        yield 'complete recovery' => [false];
+        yield 'disconnect between durable chunks' => [true];
     }
 
     #[DataProvider('queuedTradeOverlapProvider')]

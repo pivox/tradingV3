@@ -3951,6 +3951,39 @@ final class PaperDatasetRecorderTest extends TestCase
         yield 'post-append fstat failure' => ['post_stat', 'paper_dataset_events_read_failed'];
     }
 
+    #[DataProvider('appendPathProvider')]
+    public function testAppendIntentCleanupFailureLeavesIdentityIndexRecoverable(bool $batch): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $identityIndex = new PaperDatasetIdentityIndex();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+            identityIndex: $identityIndex,
+        );
+        $event = $this->event(sequence: '1');
+        $filesystem->failNextAppendIntentCleanupDirectorySync();
+
+        try {
+            $batch ? $recorder->appendBatch([$event]) : $recorder->append($event);
+            self::fail('The injected append-intent cleanup failure must be reported.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_append_intent_cleanup_failed', $exception->getMessage());
+        }
+
+        self::assertSame(0, $identityIndex->count());
+        $result = $batch ? $recorder->appendBatch([$event])[0] : $recorder->append($event);
+        self::assertSame(PaperDatasetAppendResult::REPLAYED, $result);
+    }
+
+    /** @return iterable<string, array{bool}> */
+    public static function appendPathProvider(): iterable
+    {
+        yield 'single append' => [false];
+        yield 'batch append' => [true];
+    }
+
     #[DataProvider('rollbackFailureProvider')]
     public function testFailedAppendPoisonsRecorderWhenRollbackCannotBeMadeDurable(string $failure): void
     {
@@ -4319,6 +4352,7 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private ?string $manifestPublicationFailureAfterRename = null;
     private bool $failEventSync = false;
     private bool $failAppendRecoverySync = false;
+    private ?int $appendIntentDirectorySyncFailureAt = null;
     private ?string $appendRecoveryMutationPath = null;
     private ?string $appendRecoveryMutationContents = null;
     private bool $shortChecksumRead = false;
@@ -4805,6 +4839,11 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         $this->failManifestDirectorySync = true;
     }
 
+    public function failNextAppendIntentCleanupDirectorySync(): void
+    {
+        $this->appendIntentDirectorySyncFailureAt = $this->appendIntentDirectorySyncs + 2;
+    }
+
     public function failNextManifestBackupDirectorySync(): void
     {
         $this->failManifestBackupDirectorySync = true;
@@ -5224,6 +5263,11 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         }
         if ($operation === 'paper_dataset_append_intent_directory_sync_failed') {
             ++$this->appendIntentDirectorySyncs;
+            if ($this->appendIntentDirectorySyncs === $this->appendIntentDirectorySyncFailureAt) {
+                $this->appendIntentDirectorySyncFailureAt = null;
+
+                return false;
+            }
         }
         if ($operation === 'paper_dataset_manifest_transition_flush_failed') {
             ++$this->manifestTransitionSyncs;
