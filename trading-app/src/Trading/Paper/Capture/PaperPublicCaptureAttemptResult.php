@@ -15,11 +15,15 @@ final readonly class PaperPublicCaptureAttemptResult
         public string $stdoutTail = '',
         public string $stderrTail = '',
         public ?bool $orphanFinalized = null,
+        public ?int $operatorSignal = null,
     ) {
         if ($exitCode < 0 || $exitCode > 255) {
             throw new \InvalidArgumentException('paper_public_capture_attempt_exit_code_invalid');
         }
         if ($termSignal !== null && ($termSignal < 1 || $termSignal > 255)) {
+            throw new \InvalidArgumentException('paper_public_capture_attempt_signal_invalid');
+        }
+        if ($operatorSignal !== null && ($operatorSignal < 1 || $operatorSignal > 255)) {
             throw new \InvalidArgumentException('paper_public_capture_attempt_signal_invalid');
         }
         if ($pid !== null && $pid < 1) {

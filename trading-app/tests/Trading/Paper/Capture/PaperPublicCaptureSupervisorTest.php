@@ -131,6 +131,7 @@ final class PaperPublicCaptureSupervisorTest extends TestCase
                 return new PaperPublicCaptureAttemptResult(
                     exitCode: 0,
                     termSignal: SIGTERM,
+                    operatorSignal: SIGTERM,
                 );
             }
         };
@@ -145,6 +146,60 @@ final class PaperPublicCaptureSupervisorTest extends TestCase
         self::assertFalse($result->ok);
         self::assertSame('paper_public_capture_supervision_interrupted', $result->blocker);
         self::assertSame(1, $executor->calls);
+    }
+
+    public function testChildOnlyFatalSignalRetriesAfterOrphanFinalization(): void
+    {
+        $executor = new class implements PaperPublicCaptureAttemptExecutorInterface {
+            public int $calls = 0;
+
+            public function execute(
+                string $venue,
+                string $datasetId,
+                int $durationSeconds,
+            ): PaperPublicCaptureAttemptResult {
+                ++$this->calls;
+
+                return $this->calls === 1
+                    ? new PaperPublicCaptureAttemptResult(
+                        exitCode: 137,
+                        termSignal: SIGKILL,
+                        orphanFinalized: true,
+                    )
+                    : new PaperPublicCaptureAttemptResult(exitCode: 0);
+            }
+        };
+
+        $result = (new PaperPublicCaptureSupervisor($executor))->run(
+            'okx',
+            'representative-okx-20260905',
+            300,
+            2,
+        );
+
+        self::assertTrue($result->ok);
+        self::assertSame(2, $result->attemptsUsed);
+        self::assertSame(2, $executor->calls);
+    }
+
+    public function testDiagnosticLoggerFailureDoesNotChangeCaptureOutcome(): void
+    {
+        $logger = new class extends AbstractLogger {
+            /** @param array<string, mixed> $context */
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                throw new \RuntimeException('diagnostic_sink_unavailable');
+            }
+        };
+
+        $result = (new PaperPublicCaptureSupervisor(
+            new SupervisorAttemptExecutor([1, 0]),
+            $logger,
+        ))->run('okx', 'representative-okx-20260905', 300, 2);
+
+        self::assertTrue($result->ok);
+        self::assertSame(2, $result->attemptsUsed);
+        self::assertNotNull($result->datasetId);
     }
 }
 

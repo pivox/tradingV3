@@ -133,6 +133,7 @@ $attempt = $executor->execute('okx', 'signal-forwarding-okx-mainnet', 300);
 file_put_contents($argv[2], json_encode([
     'exit_code' => $attempt->exitCode,
     'term_signal' => $attempt->termSignal,
+    'operator_signal' => $attempt->operatorSignal,
 ], JSON_THROW_ON_ERROR));
 PHP,
                 var_export($autoload, true),
@@ -159,6 +160,7 @@ PHP,
         $attempt = json_decode((string) file_get_contents($result), true, 8, JSON_THROW_ON_ERROR);
         self::assertSame(0, $attempt['exit_code'] ?? null);
         self::assertSame(SIGTERM, $attempt['term_signal'] ?? null);
+        self::assertSame(SIGTERM, $attempt['operator_signal'] ?? null);
     }
 
     public function testReportsAChildFatalSignalInsteadOfCollapsingItToExit127(): void
@@ -182,6 +184,7 @@ PHP,
         );
 
         self::assertSame(SIGKILL, $result->termSignal);
+        self::assertNull($result->operatorSignal);
         self::assertNotSame(127, $result->exitCode);
     }
 

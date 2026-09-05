@@ -49,26 +49,31 @@ final readonly class PaperPublicCaptureSupervisor
                 $datasetId,
                 $durationSeconds,
             );
-            $this->logger->info('paper_public_capture_attempt_finished', [
-                'source_venue' => $venueIdentity->value,
-                'dataset_id' => $datasetId,
-                'attempt' => $attempt,
-                'exit_code' => $result->exitCode,
-                'term_signal' => $result->termSignal,
-                'pid' => $result->pid,
-                'started_at' => $result->startedAt,
-                'ended_at' => $result->endedAt,
-                'stdout_tail' => $result->stdoutTail,
-                'stderr_tail' => $result->stderrTail,
-                'orphan_finalized' => $result->orphanFinalized,
-            ]);
+            try {
+                $this->logger->info('paper_public_capture_attempt_finished', [
+                    'source_venue' => $venueIdentity->value,
+                    'dataset_id' => $datasetId,
+                    'attempt' => $attempt,
+                    'exit_code' => $result->exitCode,
+                    'term_signal' => $result->termSignal,
+                    'operator_signal' => $result->operatorSignal,
+                    'pid' => $result->pid,
+                    'started_at' => $result->startedAt,
+                    'ended_at' => $result->endedAt,
+                    'stdout_tail' => $result->stdoutTail,
+                    'stderr_tail' => $result->stderrTail,
+                    'orphan_finalized' => $result->orphanFinalized,
+                ]);
+            } catch (\Throwable) {
+                // Diagnostics are best-effort and must not control retries or success.
+            }
             if ($result->orphanFinalized === false) {
                 return PaperPublicCaptureSupervisorResult::orphanFinalizationFailed(
                     $venueIdentity->value,
                     $attempt,
                 );
             }
-            if ($result->termSignal !== null) {
+            if ($result->operatorSignal !== null) {
                 return PaperPublicCaptureSupervisorResult::interrupted(
                     $venueIdentity->value,
                     $attempt,

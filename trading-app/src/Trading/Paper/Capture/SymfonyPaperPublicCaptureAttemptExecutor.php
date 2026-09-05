@@ -77,6 +77,7 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
                 orphanFinalized: $exitCode === 0
                     ? null
                     : $this->orphanFinalizer?->finalize($datasetId),
+                operatorSignal: $operatorSignal,
             );
         } catch (\Throwable $failure) {
             $exitCode = $process?->getExitCode() ?? 127;
@@ -94,6 +95,7 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
                 stdoutTail: $this->redact($stdoutTail),
                 stderrTail: $this->redact($stderrTail),
                 orphanFinalized: $this->orphanFinalizer?->finalize($datasetId),
+                operatorSignal: $operatorSignal,
             );
         }
     }
