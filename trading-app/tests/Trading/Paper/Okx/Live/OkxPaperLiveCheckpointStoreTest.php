@@ -528,6 +528,14 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         ];
 
         self::assertSame($state, OkxPaperLiveCheckpoint::fromArray($state)->toArray());
+        $state['overlap_pagination_by_stream']['BTCUSDT/ws/public_trade'][
+            'pages_consumed'
+        ] = 17;
+        $state['overlap_pagination_by_stream']['BTCUSDT/ws/public_trade'][
+            'pages_remaining'
+        ] = 33;
+
+        self::assertSame($state, OkxPaperLiveCheckpoint::fromArray($state)->toArray());
     }
 
     public function testClosedSchemaRejectsInvalidFiniteStateAndBounds(): void

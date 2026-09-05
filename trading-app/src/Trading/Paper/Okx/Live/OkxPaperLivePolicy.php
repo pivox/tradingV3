@@ -19,6 +19,7 @@ final readonly class OkxPaperLivePolicy
     public const MAX_RESYNC_ATTEMPTS = 3;
     public const RESYNC_ATTEMPT_TIMEOUT_SECONDS = 900.0;
     public const MAX_OVERLAP_HISTORY_PAGES = 250;
+    public const PREVIOUS_MAX_OVERLAP_HISTORY_PAGES = 50;
     public const LEGACY_MAX_OVERLAP_HISTORY_PAGES = 10;
     public const MAX_RETAINED_RECOVERY_ROWS = 25_500;
     public const INITIAL_HOURLY_CANDLE_TARGET = 1_000;

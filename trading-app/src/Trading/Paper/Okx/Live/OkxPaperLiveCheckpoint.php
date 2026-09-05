@@ -1504,6 +1504,7 @@ final readonly class OkxPaperLiveCheckpoint
                 $pagination['pages_consumed'] + $pagination['pages_remaining'],
                 [
                     OkxPaperLivePolicy::LEGACY_MAX_OVERLAP_HISTORY_PAGES,
+                    OkxPaperLivePolicy::PREVIOUS_MAX_OVERLAP_HISTORY_PAGES,
                     OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
                 ],
                 true,

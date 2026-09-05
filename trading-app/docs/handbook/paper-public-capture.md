@@ -52,7 +52,7 @@ nohup caffeinate -dimsu env \
 
 Replace the date and the absolute data root before launch. Each supervisor invocation adds a cryptographically random run scope before the attempt number, preventing collisions when a prefix is reused or two supervisors overlap. The attempt bound limits disk growth, and the supervisor never deletes failed evidence.
 
-`SIGINT` and `SIGTERM` are abnormal stops: they leave the active dataset incomplete and make the supervisor start a fresh attempt. Only expiration of the requested duration can initiate healthy completion.
+`SIGINT` and `SIGTERM` are forwarded by the supervisor and treated as abnormal stops by the active attempt: they leave its dataset incomplete and start a fresh attempt. Only expiration of the requested duration can initiate healthy completion.
 
 ## Health checks
 

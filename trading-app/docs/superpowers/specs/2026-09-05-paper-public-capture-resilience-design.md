@@ -10,7 +10,7 @@ Hyperliquid exposes candle history but no credential-free, certifiable public-tr
 
 Keep certification fail-closed and address each venue according to its available evidence.
 
-For OKX, widen the finite recovery envelope to 250 history pages and 25,500 retained rows, enlarge the checkpoint ceiling to 4 MiB, and allow 15 minutes for one exact-overlap resync. These limits cover the observed 17,284-trade recovery suffix with margin. Recovery still fails if the exact durable frontier is not found, the deadline expires, the checkpoint exceeds its byte ceiling, pagination stops progressing, or any identity conflicts.
+For OKX, widen the finite recovery envelope to 250 history pages and 25,500 retained rows, enlarge the checkpoint ceiling to 4 MiB, and allow 15 minutes for one exact-overlap resync. These limits cover the observed 17,284-trade recovery suffix with margin. Legacy 10-page and immediately previous 50-page checkpoints remain readable; only new recoveries receive the 250-page budget. Recovery still fails if the exact durable frontier is not found, the deadline expires, the checkpoint exceeds its byte ceiling, pagination stops progressing, or any identity conflicts.
 
 For Hyperliquid, do not restore continuity after a disconnect and do not stitch datasets. Add an operational supervisor that starts each capture in an isolated subprocess and, after a terminal failure, starts a fresh uniquely named dataset. A bounded `--attempts` option prevents an accidental infinite disk-consuming loop. A successful attempt exits immediately. Every failed attempt remains terminal and excluded from certification.
 
@@ -26,7 +26,7 @@ macOS sleep prevention remains an invocation concern: the documented launch wrap
 4. A non-zero exit starts the next fresh dataset until the configured attempt bound is reached.
 5. Exhaustion returns failure with attempt counts only.
 
-Only expiration of the configured duration requests healthy source completion. `SIGINT` and `SIGTERM` request an abnormal stop, leave the dataset incomplete, and therefore produce a non-zero child result that triggers a fresh attempt.
+Only expiration of the configured duration requests healthy source completion. The supervisor temporarily handles `SIGINT` and `SIGTERM`, forwards them to the active child, then restores the previous handlers. The child requests an abnormal stop, leaves the dataset incomplete, and therefore produces a non-zero result that triggers a fresh attempt.
 
 The existing single-attempt command remains unchanged and is the sole writer of dataset events and manifests.
 

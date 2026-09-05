@@ -46,6 +46,8 @@ public const MAX_RETAINED_RECOVERY_ROWS = 25_500;
 public const MAX_CHECKPOINT_BYTES = 4_194_304;
 ```
 
+Preserve 10-page and 50-page budgets as readable checkpoint compatibility values while initializing only new recoveries at 250 pages.
+
 - [ ] **Step 5: Run focused and checkpoint/replay tests**
 
 Run:
@@ -97,7 +99,7 @@ Expected: class/interface not found.
 
 - [ ] **Step 3: Implement the interface, result, and Symfony Process adapter**
 
-Define `execute(string $venue, string $datasetId, int $durationSeconds): PaperPublicCaptureAttemptResult`. Build a Symfony `Process` in `%kernel.project_dir%`, inherit the environment while overriding `PAPER_EXECUTION_ENABLED` to `0`, disable the process timeout because the capture duration is already bounded, and map launch exceptions to exit code 127.
+Define `execute(string $venue, string $datasetId, int $durationSeconds): PaperPublicCaptureAttemptResult`. Build a Symfony `Process` in `%kernel.project_dir%`, inherit the environment while overriding `PAPER_EXECUTION_ENABLED` to `0`, disable the process timeout because the capture duration is already bounded, temporarily forward `SIGINT` and `SIGTERM` to the active child while restoring prior handlers afterwards, and map launch exceptions to exit code 127.
 
 - [ ] **Step 4: Run the executor test and observe GREEN**
 

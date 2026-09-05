@@ -34,11 +34,59 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
             ]);
             $process->setTimeout(null);
             $process->disableOutput();
-            $process->run();
+            $signalState = $this->forwardSignalsTo($process);
+            try {
+                $process->run();
+            } finally {
+                $this->restoreSignals($signalState);
+            }
 
             return new PaperPublicCaptureAttemptResult($process->getExitCode() ?? 1);
         } catch (\Throwable) {
             return new PaperPublicCaptureAttemptResult(127);
         }
+    }
+
+    /** @return array{async: bool, handlers: array<int, callable|int>}|null */
+    private function forwardSignalsTo(Process $process): ?array
+    {
+        if (!function_exists('pcntl_async_signals')
+            || !function_exists('pcntl_signal')
+            || !function_exists('pcntl_signal_get_handler')
+        ) {
+            return null;
+        }
+
+        $state = [
+            'async' => pcntl_async_signals(true),
+            'handlers' => [],
+        ];
+        foreach ([\SIGINT, \SIGTERM] as $signal) {
+            $state['handlers'][$signal] = pcntl_signal_get_handler($signal);
+            pcntl_signal($signal, static function (int $received) use ($process): void {
+                if (!$process->isRunning()) {
+                    return;
+                }
+                try {
+                    $process->signal($received);
+                } catch (\Throwable) {
+                    // The child may already have received the process-group signal.
+                }
+            });
+        }
+
+        return $state;
+    }
+
+    /** @param array{async: bool, handlers: array<int, callable|int>}|null $state */
+    private function restoreSignals(?array $state): void
+    {
+        if ($state === null) {
+            return;
+        }
+        foreach ($state['handlers'] as $signal => $handler) {
+            pcntl_signal($signal, $handler);
+        }
+        pcntl_async_signals($state['async']);
     }
 }

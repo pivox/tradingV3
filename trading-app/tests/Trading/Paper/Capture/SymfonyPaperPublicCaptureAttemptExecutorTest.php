@@ -7,6 +7,7 @@ namespace App\Tests\Trading\Paper\Capture;
 use App\Trading\Paper\Capture\SymfonyPaperPublicCaptureAttemptExecutor;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Process\Process;
 
 #[CoversClass(SymfonyPaperPublicCaptureAttemptExecutor::class)]
 final class SymfonyPaperPublicCaptureAttemptExecutorTest extends TestCase
@@ -78,5 +79,57 @@ PHP,
             ],
             'execution_enabled' => '0',
         ], json_decode(file_get_contents($trace) ?: '', true, 16, JSON_THROW_ON_ERROR));
+    }
+
+    public function testForwardsSupervisorSignalAndSurvivesToReturnChildFailure(): void
+    {
+        if (!function_exists('pcntl_signal') || !function_exists('posix_kill')) {
+            self::markTestSkipped('Signal support is unavailable.');
+        }
+
+        $ready = $this->root . '/ready';
+        $result = $this->root . '/result';
+        $helper = $this->root . '/helper.php';
+        self::assertNotFalse(file_put_contents(
+            $this->root . '/bin/console',
+            <<<'PHP'
+<?php
+file_put_contents((string) getenv('PAPER_CAPTURE_SIGNAL_READY'), 'ready');
+sleep(30);
+PHP,
+        ));
+        $autoload = \dirname(__DIR__, 4) . '/vendor/autoload.php';
+        self::assertNotFalse(file_put_contents(
+            $helper,
+            sprintf(
+                <<<'PHP'
+<?php
+require %s;
+$executor = new App\Trading\Paper\Capture\SymfonyPaperPublicCaptureAttemptExecutor($argv[1]);
+$attempt = $executor->execute('okx', 'signal-forwarding-okx-mainnet', 300);
+file_put_contents($argv[2], (string) $attempt->exitCode);
+PHP,
+                var_export($autoload, true),
+            ),
+        ));
+
+        $supervisor = new Process([\PHP_BINARY, $helper, $this->root, $result], null, [
+            'PAPER_CAPTURE_SIGNAL_READY' => $ready,
+        ]);
+        $supervisor->setTimeout(5.0);
+        $supervisor->start();
+        $deadline = microtime(true) + 2.0;
+        while (!is_file($ready) && microtime(true) < $deadline) {
+            usleep(10_000);
+        }
+        self::assertFileExists($ready);
+        $pid = $supervisor->getPid();
+        self::assertIsInt($pid);
+        self::assertTrue(posix_kill($pid, SIGTERM));
+        $supervisor->wait();
+
+        self::assertSame(0, $supervisor->getExitCode(), $supervisor->getErrorOutput());
+        self::assertFileExists($result);
+        self::assertNotSame('0', trim(file_get_contents($result) ?: ''));
     }
 }
