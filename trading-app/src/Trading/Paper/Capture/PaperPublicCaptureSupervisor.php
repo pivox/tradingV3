@@ -6,11 +6,14 @@ namespace App\Trading\Paper\Capture;
 
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 final readonly class PaperPublicCaptureSupervisor
 {
     public function __construct(
         private PaperPublicCaptureAttemptExecutorInterface $executor,
+        private LoggerInterface $logger = new NullLogger(),
     ) {
     }
 
@@ -41,11 +44,37 @@ final readonly class PaperPublicCaptureSupervisor
                 $attempt,
             );
             PaperDatasetManifest::assertDatasetId($datasetId);
-            if ($this->executor->execute(
+            $result = $this->executor->execute(
                 $venueIdentity->value,
                 $datasetId,
                 $durationSeconds,
-            )->succeeded()) {
+            );
+            $this->logger->info('paper_public_capture_attempt_finished', [
+                'source_venue' => $venueIdentity->value,
+                'dataset_id' => $datasetId,
+                'attempt' => $attempt,
+                'exit_code' => $result->exitCode,
+                'term_signal' => $result->termSignal,
+                'pid' => $result->pid,
+                'started_at' => $result->startedAt,
+                'ended_at' => $result->endedAt,
+                'stdout_tail' => $result->stdoutTail,
+                'stderr_tail' => $result->stderrTail,
+                'orphan_finalized' => $result->orphanFinalized,
+            ]);
+            if ($result->orphanFinalized === false) {
+                return PaperPublicCaptureSupervisorResult::orphanFinalizationFailed(
+                    $venueIdentity->value,
+                    $attempt,
+                );
+            }
+            if ($result->termSignal !== null) {
+                return PaperPublicCaptureSupervisorResult::interrupted(
+                    $venueIdentity->value,
+                    $attempt,
+                );
+            }
+            if ($result->succeeded()) {
                 return PaperPublicCaptureSupervisorResult::success(
                     $venueIdentity->value,
                     $attempt,
