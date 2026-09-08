@@ -1252,6 +1252,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             }
         }
         $candidates = [];
+        $allBatchFrontiersAcknowledged = true;
         /** @var array<string, true> $representedInBatch */
         $representedInBatch = [];
         foreach ($rows as $row) {
@@ -1271,6 +1272,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $stream,
                 $candidateFrontier,
             );
+            if ($acknowledged === null) {
+                $allBatchFrontiersAcknowledged = false;
+            }
             $requiredDurableOverlap = isset(
                 $requiredIdentities[$candidateFrontier->naturalIdentity],
             );
@@ -1324,6 +1328,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $start = 0;
         if ($requiredOverlaps !== []) {
             $overlaps = [];
+            $missingOverlap = false;
             foreach ($requiredOverlaps as $required) {
                 $overlap = null;
                 foreach ($candidates as $index => $candidate) {
@@ -1351,9 +1356,23 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     break;
                 }
                 if (!\is_int($overlap)) {
-                    throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+                    $missingOverlap = true;
+
+                    continue;
                 }
                 $overlaps[] = $overlap;
+            }
+            if ($missingOverlap) {
+                if ($this->canDrainReconnectHandoffBatch(
+                    $stream,
+                    $candidateSourceKind,
+                    $requiredOverlaps,
+                    $allBatchFrontiersAcknowledged,
+                )) {
+                    return [];
+                }
+
+                throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
             }
             $this->requiresOverlap[$stream] = false;
             $start = max($overlaps) + 1;
@@ -1394,6 +1413,34 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
 
         return $events;
+    }
+
+    /**
+     * A reconnect REST recovery can move the durable logical frontier beyond
+     * websocket frames admitted before that recovery completed. Drain only a
+     * batch whose identities are already durable and digest-compatible. Trade
+     * identifiers alone are not an ordering guarantee, so any unacknowledged
+     * identity without the exact overlap remains fail-closed.
+     *
+     * @param list<array{natural_identity: string, canonical_digest: string, overlap_digest: string, source_kind: string}> $requiredOverlaps
+     */
+    private function canDrainReconnectHandoffBatch(
+        string $stream,
+        string $candidateSourceKind,
+        array $requiredOverlaps,
+        bool $allBatchFrontiersAcknowledged,
+    ): bool {
+        if ($candidateSourceKind !== 'ws'
+            || !str_contains($stream, '/ws/')
+            || (!str_ends_with($stream, '/public_trade')
+                && !str_contains($stream, '/candle_'))
+            || ($this->checkpoint->reconnect['attempt'] ?? 0) < 1
+            || \count($requiredOverlaps) !== 1
+        ) {
+            return false;
+        }
+
+        return $allBatchFrontiersAcknowledged;
     }
 
     private function rememberObservedFrontier(

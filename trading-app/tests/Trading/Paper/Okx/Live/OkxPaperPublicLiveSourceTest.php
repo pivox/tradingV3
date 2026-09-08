@@ -7903,6 +7903,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $clock = new MockClock('2026-07-25T10:00:00.000000Z');
         $store = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
         $rest = Task7RestClient::withInitialDataset();
+        $initialBtcTrade = $rest->tradeRows['BTC-USDT-SWAP'][0];
         $public = new FakeOkxPaperPublicWebSocketTransport();
         $business = new FakeOkxPaperPublicWebSocketTransport();
         $deterministic = new DeterministicLoop();
@@ -7931,6 +7932,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             static function () use ($public, $ethApplied): void {
                 $public->message(Task7Transport::bookFrame('9002', '9001', '4'));
                 $public->message($ethApplied);
+                $public->message(Task7Transport::tradeFrame(['110']));
             },
         ];
         $source = $this->source(
@@ -7960,6 +7962,12 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 $events->next();
             }
         }
+        $events->next();
+        $initialTrade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $initialTrade);
+        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $initialTrade->channel);
+        self::assertSame('110', $initialTrade->payload['trade_id'] ?? null);
+        $source->acknowledge($initialTrade->eventId);
         $public->disconnect();
 
         $rest->bookRows['BTC-USDT-SWAP'] = [[
@@ -7974,6 +7982,10 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             'ts' => '1784970302000',
             'seqId' => 9004,
         ]];
+        $rest->tradeRows['BTC-USDT-SWAP'] = [
+            $initialBtcTrade,
+            ...Task7Transport::tradeFrame(['110', '111'])['data'],
+        ];
         $loop->scripts = [
             static fn () => $public->open(attempt: 1),
             static fn () => $business->open(attempt: 1),
@@ -8036,6 +8048,13 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(2, $btcReplacement->payload['source_epoch'] ?? null);
         $source->acknowledge($btcReplacement->eventId);
         $events->next();
+        $btcRecoveredTrade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $btcRecoveredTrade);
+        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $btcRecoveredTrade->channel);
+        self::assertSame('111', $btcRecoveredTrade->payload['trade_id'] ?? null);
+        self::assertSame('rest_recovery', $btcRecoveredTrade->payload['origin'] ?? null);
+        $source->acknowledge($btcRecoveredTrade->eventId);
+        $events->next();
         $btcBoundary = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $btcBoundary);
         self::assertSame('reconnect', $btcBoundary->payload['reason'] ?? null);
@@ -8069,11 +8088,16 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(PaperMarketEvent::class, $ethBoundary);
         self::assertSame('reconnect', $ethBoundary->payload['reason'] ?? null);
         $source->acknowledge($ethBoundary->eventId);
+        $expectedReconnectCalls = Task7RestClient::expectedReconnectCalls();
+        array_splice($expectedReconnectCalls, 6, 0, [[
+            'recentTrades',
+            ['BTC-USDT-SWAP', 500],
+        ]]);
         self::assertSame(
             [
                 ...Task7RestClient::expectedInitialCalls(),
                 ...Task7RestClient::expectedInitialCandleBridgeCalls(),
-                ...Task7RestClient::expectedReconnectCalls(),
+                ...$expectedReconnectCalls,
             ],
             $rest->calls,
             'Reconnect must recover every 4-candle/trade/book logical stream for both symbols.',
@@ -8101,6 +8125,19 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame('9005', $ethRetained->payload['source_seq_id'] ?? null);
         $source->acknowledge($ethRetained->eventId);
         self::assertSame(2, $this->checkpointState()['reconnect']['accepted_events']);
+
+        $public->message(Task7Transport::tradeFrame(['111']), attempt: 1);
+        $loop->scripts = [static fn () => $public->message(
+            Task7Transport::tradeFrame(['110', '111', '112']),
+            attempt: 1,
+        )];
+        $events->next();
+        $retainedTrade = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $retainedTrade);
+        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $retainedTrade->channel);
+        self::assertSame('112', $retainedTrade->payload['trade_id'] ?? null);
+        $source->acknowledge($retainedTrade->eventId);
+        self::assertSame(3, $this->checkpointState()['reconnect']['accepted_events']);
 
         for ($offset = 1; $offset <= 10; ++$offset) {
             $previous = (string) (9003 + $offset);
