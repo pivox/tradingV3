@@ -28,6 +28,7 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
         $stderrTail = '';
         $pid = null;
         $operatorSignal = null;
+        $operatorSignalForwarded = false;
         $process = null;
         try {
             $process = new Process([
@@ -46,7 +47,11 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
             // output storage is disabled; this prevents an unbounded internal
             // buffer while the callback below retains only bounded tails.
             $process->disableOutput();
-            $signalState = $this->forwardSignalsTo($process, $operatorSignal);
+            $signalState = $this->forwardSignalsTo(
+                $process,
+                $operatorSignal,
+                $operatorSignalForwarded,
+            );
             try {
                 $captureOutput = static function (string $type, string $chunk) use (&$stdoutTail, &$stderrTail): void {
                     $tail = $type === Process::OUT ? $stdoutTail : $stderrTail;
@@ -59,6 +64,11 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
                 };
                 $process->start($captureOutput);
                 $pid = $process->getPid();
+                $this->forwardRecordedSignal(
+                    $process,
+                    $operatorSignal,
+                    $operatorSignalForwarded,
+                );
                 $process->wait();
             } finally {
                 $this->restoreSignals($signalState);
@@ -136,7 +146,11 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
     }
 
     /** @return array{async: bool, handlers: array<int, callable|int>}|null */
-    private function forwardSignalsTo(Process $process, ?int &$operatorSignal): ?array
+    private function forwardSignalsTo(
+        Process $process,
+        ?int &$operatorSignal,
+        bool &$operatorSignalForwarded,
+    ): ?array
     {
         if (!function_exists('pcntl_async_signals')
             || !function_exists('pcntl_signal')
@@ -151,13 +165,18 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
         ];
         foreach ([\SIGINT, \SIGTERM] as $signal) {
             $state['handlers'][$signal] = pcntl_signal_get_handler($signal);
-            pcntl_signal($signal, static function (int $received) use ($process, &$operatorSignal): void {
+            pcntl_signal($signal, static function (int $received) use (
+                $process,
+                &$operatorSignal,
+                &$operatorSignalForwarded,
+            ): void {
                 $operatorSignal ??= $received;
                 if (!$process->isRunning()) {
                     return;
                 }
                 try {
                     $process->signal($received);
+                    $operatorSignalForwarded = true;
                 } catch (\Throwable) {
                     // The child may already have received the process-group signal.
                 }
@@ -165,6 +184,25 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
         }
 
         return $state;
+    }
+
+    private function forwardRecordedSignal(
+        Process $process,
+        ?int $operatorSignal,
+        bool &$operatorSignalForwarded,
+    ): void {
+        if ($operatorSignal === null
+            || $operatorSignalForwarded
+            || !$process->isRunning()
+        ) {
+            return;
+        }
+        try {
+            $process->signal($operatorSignal);
+            $operatorSignalForwarded = true;
+        } catch (\Throwable) {
+            // The child may have exited between isRunning() and signal().
+        }
     }
 
     /** @param array{async: bool, handlers: array<int, callable|int>}|null $state */

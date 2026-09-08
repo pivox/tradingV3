@@ -163,6 +163,52 @@ PHP,
         self::assertSame(SIGTERM, $attempt['operator_signal'] ?? null);
     }
 
+    public function testForwardsSignalRecordedBeforeTheChildStarts(): void
+    {
+        if (!function_exists('pcntl_signal') || !function_exists('posix_kill')) {
+            self::markTestSkipped('Signal support is unavailable.');
+        }
+
+        $executor = new SymfonyPaperPublicCaptureAttemptExecutor($this->root);
+        $process = new Process([
+            \PHP_BINARY,
+            '-r',
+            'pcntl_async_signals(true); pcntl_signal(SIGTERM, static fn () => exit(0)); while (true) { usleep(10000); }',
+        ]);
+        $process->setTimeout(2.0);
+        $operatorSignal = null;
+        $signalForwarded = false;
+        $install = new \ReflectionMethod($executor, 'forwardSignalsTo');
+        $restore = new \ReflectionMethod($executor, 'restoreSignals');
+        $signalState = $install->invokeArgs($executor, [
+            $process,
+            &$operatorSignal,
+            &$signalForwarded,
+        ]);
+        try {
+            self::assertTrue(posix_kill(getmypid(), SIGTERM));
+            self::assertSame(SIGTERM, $operatorSignal);
+            self::assertFalse($signalForwarded);
+
+            $process->start();
+            $forwardRecorded = new \ReflectionMethod($executor, 'forwardRecordedSignal');
+            $forwardRecorded->invokeArgs($executor, [
+                $process,
+                $operatorSignal,
+                &$signalForwarded,
+            ]);
+            $process->wait();
+
+            self::assertTrue($signalForwarded);
+            self::assertSame(128 + SIGTERM, $process->getExitCode());
+        } finally {
+            if ($process->isRunning()) {
+                $process->stop(0.0, SIGKILL);
+            }
+            $restore->invoke($executor, $signalState);
+        }
+    }
+
     public function testReportsAChildFatalSignalInsteadOfCollapsingItToExit127(): void
     {
         if (!function_exists('posix_kill')) {

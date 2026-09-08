@@ -2551,6 +2551,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         ) {
             $this->failTerminal('okx_paper_public_reconnect_exhausted');
         }
+        $this->discardQueuedBooksFromPreviousConnection();
         $this->subscriptions->reset();
         $this->publicAcknowledgements = [];
         $this->businessAcknowledgements = [];
@@ -2963,6 +2964,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $this->beginReconnectRecovery($transition);
             }
             if (($transition['stage'] ?? null) === 'order_book') {
+                $recoveryGeneration = $this->connectionGeneration;
                 try {
                     $events = $this->reconnectBookEvents($symbol, $transition);
                 } catch (\Throwable $exception) {
@@ -2970,6 +2972,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                         $this->failTerminal('market_event_identity_conflict', $exception);
                     }
                     $this->failTerminal('market_data_gap_unresolved');
+                }
+                if ($this->stopped || $this->connectionGeneration !== $recoveryGeneration) {
+                    return;
                 }
                 yield from $this->yieldMarketEvents($events, $stream, $transition);
 
@@ -3973,11 +3978,13 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         if (($this->checkpoint->streamFrontiers[$symbol . '/ws/top_of_book'] ?? null)
             instanceof OkxPaperStreamFrontier
         ) {
-            $this->requireQueuedReconnectBookOverlap(
+            if (!$this->requireQueuedReconnectBookOverlap(
                 $symbol,
                 $instrumentId,
                 $replacementState->sourceSequence,
-            );
+            )) {
+                return [];
+            }
         }
         $this->requiresOverlap[$symbol . '/ws/top_of_book'] = false;
         $this->persistDurableBookRecovery($symbol, $rows[0], $transition);
@@ -4053,18 +4060,23 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         string $symbol,
         string $instrumentId,
         string $snapshotSequence,
-    ): void {
+    ): bool {
+        $generation = $this->connectionGeneration;
         if ($this->hasQueuedReconnectBookAuthority($instrumentId, $snapshotSequence)) {
-            return;
+            return true;
         }
 
         // The REST response and the websocket frame linking to it race each
         // other during reconnect. Give the socket one bounded, non-blocking
         // tick so an already-arrived frame can enter the durable queue before
         // declaring the overlap missing.
+        $this->resumePublicAdmissionsForReconnectOverlap();
         $this->pumpNetworkLoop();
+        if ($generation !== $this->connectionGeneration) {
+            return false;
+        }
         if ($this->hasQueuedReconnectBookAuthority($instrumentId, $snapshotSequence)) {
-            return;
+            return true;
         }
 
         while (!$this->reconnectRecoveryDeadlineExpired($symbol)) {
@@ -4092,6 +4104,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 fn () => $this->loop->stop(),
             );
             try {
+                $this->resumePublicAdmissionsForReconnectOverlap();
                 // Every admitted websocket frame stops the loop. Continue
                 // until the exact book chain appears or the durable resync
                 // deadline wakes us, whichever happens first.
@@ -4099,8 +4112,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             } finally {
                 $this->loop->cancelTimer($deadlineTimer);
             }
+            if ($generation !== $this->connectionGeneration) {
+                return false;
+            }
             if ($this->hasQueuedReconnectBookAuthority($instrumentId, $snapshotSequence)) {
-                return;
+                return true;
             }
             $afterProgress = [
                 $this->connectionGeneration,
@@ -4117,6 +4133,18 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
 
         $this->failTerminal('market_data_gap_unresolved');
+    }
+
+    private function resumePublicAdmissionsForReconnectOverlap(): void
+    {
+        if (!$this->socketAdmissionsPaused['public']
+            || !$this->socketReady(false)
+            || !$this->publicTransport instanceof OkxPaperPausableWebSocketTransportInterface
+        ) {
+            return;
+        }
+        $this->socketAdmissionsPaused['public'] = false;
+        $this->publicTransport->resume();
     }
 
     private function hasQueuedReconnectBookAuthority(
@@ -4211,6 +4239,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             $this->failTerminal('okx_paper_public_reconnect_exhausted');
         }
         ++$this->connectionGeneration;
+        $this->discardQueuedBooksFromPreviousConnection();
         $this->subscriptions->reset();
         $this->publicAcknowledgements = [];
         $this->businessAcknowledgements = [];
@@ -4263,6 +4292,22 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         );
         $this->connectionGeneration = $this->checkpoint->connectionEpoch;
         $this->scheduleReconnectTimer($delay);
+    }
+
+    private function discardQueuedBooksFromPreviousConnection(): void
+    {
+        $retained = [];
+        foreach ($this->publicQueue->frames() as $frame) {
+            $message = $this->decoder->decodePublic($frame);
+            if (($message['arg']['channel'] ?? null) !== 'books') {
+                $retained[] = $frame;
+            }
+        }
+        if (\count($retained) === $this->publicQueue->count()) {
+            return;
+        }
+        $this->publicQueue->replace($retained);
+        $this->persistStreamingQueues();
     }
 
     private function startHeartbeatTimers(): void

@@ -4648,8 +4648,18 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(PaperMarketEvent::class, $trade);
         $source->acknowledge($trade->eventId);
 
+        $staleSnapshot = Task7Transport::bookFrame('9003', '-1', '5');
+        $staleSnapshot['action'] = 'snapshot';
+        $public->message($staleSnapshot);
+        $retainedTradeFrame = Task7Transport::tradeFrame(['9902']);
+        $public->message($retainedTradeFrame);
         $public->disconnect();
 
+        self::assertSame(
+            [json_encode($retainedTradeFrame, \JSON_THROW_ON_ERROR)],
+            $publicQueue->frames(),
+            'A new connection must retain recoverable trades but discard prior-generation books.',
+        );
         self::assertSame(1, $public->closeCount);
         self::assertSame(1, $business->closeCount);
         self::assertSame([1.0], $deterministic->timerIntervals());
@@ -4692,7 +4702,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         ], attempt: 0);
         $public->open(attempt: 0);
         $business->fail(new \RuntimeException('stale'), attempt: 0);
-        self::assertSame(0, $publicQueue->count());
+        self::assertSame(1, $publicQueue->count());
         self::assertSame(0, $businessQueue->count());
         self::assertSame($state, $this->checkpointState());
         self::assertSame(1, $public->closeCount);
@@ -7997,12 +8007,15 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                     $public->message($acknowledgement, attempt: 1);
                 }
             },
-            static function () use ($business): void {
+            static function () use ($business, $public): void {
                 foreach (Task7Transport::acknowledgements(
                     self::businessArguments(),
                     'businessReconnect',
                 ) as $acknowledgement) {
                     $business->message($acknowledgement, attempt: 1);
+                }
+                for ($index = 0; $index < OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES; ++$index) {
+                    $public->message(Task7Transport::tradeFrame(['110']), attempt: 1);
                 }
             },
         ];
@@ -8018,6 +8031,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(1, $business->closeCount);
 
         $events->next();
+        self::assertSame(1, $public->pauseCount);
         $btcReconnecting = $events->current();
         self::assertCount(2, $business->connections);
         self::assertInstanceOf(PaperMarketEvent::class, $btcReconnecting);
@@ -8025,13 +8039,18 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(PaperMarketDataChannel::CONNECTION_STATE, $btcReconnecting->channel);
         self::assertSame('reconnecting', $btcReconnecting->payload['state'] ?? null);
         $source->acknowledge($btcReconnecting->eventId);
-        $loop->scripts = [static function () use ($public): void {
+        $resumeSnapshotSent = false;
+        $public->afterResume = static function () use ($public, &$resumeSnapshotSent): void {
+            if ($resumeSnapshotSent) {
+                return;
+            }
+            $resumeSnapshotSent = true;
             $snapshot = Task7Transport::bookFrame('9004', '-1', '5');
             $snapshot['action'] = 'snapshot';
             $snapshot['data'][0]['asks'] = [['102', '2', '0', '1']];
             $snapshot['data'][0]['bids'][] = ['101', '3', '0', '2'];
             $public->message($snapshot, attempt: 1);
-        }];
+        };
         $events->next();
         $btcReplacement = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $btcReplacement);
@@ -8046,6 +8065,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         );
         self::assertSame('9003', $btcReplacement->payload['source_seq_id'] ?? null);
         self::assertSame(2, $btcReplacement->payload['source_epoch'] ?? null);
+        self::assertSame(1, $public->resumeCount);
         $source->acknowledge($btcReplacement->eventId);
         $events->next();
         $btcRecoveredTrade = $events->current();
@@ -8164,6 +8184,31 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertNull($reset['deadline_at']);
         self::assertNull($reset['stable_since']);
         self::assertSame(0, $reset['accepted_events']);
+    }
+
+    public function testReconnectBookOverlapWaitStopsWhenTheConnectionGenerationChanges(): void
+    {
+        $source = null;
+        $pump = new Task7CountingLoopPump(static function () use (&$source): void {
+            self::assertInstanceOf(OkxPaperPublicLiveSource::class, $source);
+            $generation = new \ReflectionProperty($source, 'connectionGeneration');
+            $generation->setValue($source, $generation->getValue($source) + 1);
+        });
+        $source = $this->source(
+            new Task7RestClient(),
+            new Task7Transport(),
+            new Task7Transport(),
+            loopPump: $pump,
+        );
+        $wait = new \ReflectionMethod($source, 'requireQueuedReconnectBookOverlap');
+
+        self::assertFalse($wait->invoke(
+            $source,
+            'BTCUSDT',
+            'BTC-USDT-SWAP',
+            '9001',
+        ));
+        self::assertNull($source->failureReason());
     }
 
     #[DataProvider('reconnectCandleRecoveryProvider')]
