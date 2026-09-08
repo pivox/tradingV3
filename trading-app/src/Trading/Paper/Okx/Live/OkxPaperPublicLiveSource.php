@@ -4007,7 +4007,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         string $instrumentId,
         string $snapshotSequence,
     ): void {
-        if ($this->filterQueuedBookOverlap($instrumentId, $snapshotSequence)) {
+        if ($this->hasQueuedReconnectBookAuthority($instrumentId, $snapshotSequence)) {
             return;
         }
 
@@ -4016,7 +4016,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         // tick so an already-arrived frame can enter the durable queue before
         // declaring the overlap missing.
         $this->pumpNetworkLoop();
-        if ($this->filterQueuedBookOverlap($instrumentId, $snapshotSequence)) {
+        if ($this->hasQueuedReconnectBookAuthority($instrumentId, $snapshotSequence)) {
             return;
         }
 
@@ -4052,7 +4052,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             } finally {
                 $this->loop->cancelTimer($deadlineTimer);
             }
-            if ($this->filterQueuedBookOverlap($instrumentId, $snapshotSequence)) {
+            if ($this->hasQueuedReconnectBookAuthority($instrumentId, $snapshotSequence)) {
                 return;
             }
             $afterProgress = [
@@ -4070,6 +4070,91 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
 
         $this->failTerminal('market_data_gap_unresolved');
+    }
+
+    private function hasQueuedReconnectBookAuthority(
+        string $instrumentId,
+        string $snapshotSequence,
+    ): bool {
+        return $this->filterQueuedReconnectBookSnapshot($instrumentId)
+            || $this->filterQueuedBookOverlap($instrumentId, $snapshotSequence);
+    }
+
+    private function filterQueuedReconnectBookSnapshot(string $instrumentId): bool
+    {
+        $frames = $this->publicQueue->frames();
+        $snapshotOffset = null;
+        foreach ($frames as $offset => $frame) {
+            $message = $this->decoder->decodePublic($frame);
+            if (($message['arg']['channel'] ?? null) === 'books'
+                && ($message['arg']['instId'] ?? null) === $instrumentId
+                && ($message['action'] ?? null) === 'snapshot'
+            ) {
+                $snapshotOffset = $offset;
+                break;
+            }
+        }
+        if (!\is_int($snapshotOffset)) {
+            return false;
+        }
+
+        $retainedFrames = [];
+        $replacement = new OkxPaperOrderBookMaterializer();
+        foreach ($frames as $offset => $frame) {
+            $message = $this->decoder->decodePublic($frame);
+            $isTargetBook = ($message['arg']['channel'] ?? null) === 'books'
+                && ($message['arg']['instId'] ?? null) === $instrumentId;
+            if (!$isTargetBook) {
+                $retainedFrames[] = $frame;
+
+                continue;
+            }
+            $rows = $message['data'] ?? null;
+            if (!\is_array($rows) || !array_is_list($rows) || $rows === []) {
+                throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+            }
+            if ($offset < $snapshotOffset) {
+                if (!$this->isBookUpdate($message)) {
+                    throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+                }
+                foreach ($rows as $row) {
+                    if (!\is_array($row)
+                        || !\is_string($row['seqId'] ?? null)
+                        || !\is_string($row['prevSeqId'] ?? null)
+                    ) {
+                        throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+                    }
+                }
+
+                continue;
+            }
+            if ($offset === $snapshotOffset) {
+                if (($message['action'] ?? null) !== 'snapshot' || \count($rows) !== 1) {
+                    throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+                }
+                $row = $rows[0];
+                if (!\is_array($row)) {
+                    throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+                }
+                $replacement->replaceSnapshot($row);
+                $retainedFrames[] = $frame;
+
+                continue;
+            }
+            if (!$this->isBookUpdate($message)) {
+                throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+            }
+            foreach ($rows as $row) {
+                if (!\is_array($row)) {
+                    throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+                }
+                $replacement->applyDelta($row);
+            }
+            $retainedFrames[] = $frame;
+        }
+        $this->publicQueue->replace($retainedFrames);
+
+        return true;
     }
 
     private function scheduleNextReconnectAttempt(): void

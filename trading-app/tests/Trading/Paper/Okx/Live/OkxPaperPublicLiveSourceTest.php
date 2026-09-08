@@ -8014,10 +8014,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame('reconnecting', $btcReconnecting->payload['state'] ?? null);
         $source->acknowledge($btcReconnecting->eventId);
         $loop->scripts = [static function () use ($public): void {
-            $public->message(
-                Task7Transport::bookFrame('9004', '9003', '5'),
-                attempt: 1,
-            );
+            $snapshot = Task7Transport::bookFrame('9004', '-1', '5');
+            $snapshot['action'] = 'snapshot';
+            $snapshot['data'][0]['asks'] = [['102', '2', '0', '1']];
+            $snapshot['data'][0]['bids'][] = ['101', '3', '0', '2'];
+            $public->message($snapshot, attempt: 1);
         }];
         $events->next();
         $btcReplacement = $events->current();
@@ -8048,9 +8049,12 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame('reconnecting', $ethReconnecting->payload['state'] ?? null);
         $source->acknowledge($ethReconnecting->eventId);
         $loop->scripts = [static function () use ($public): void {
-            $ethQueued = Task7Transport::bookFrame('9005', '9004', '5');
-            $ethQueued['arg']['instId'] = 'ETH-USDT-SWAP';
-            $public->message($ethQueued, attempt: 1);
+            $snapshot = Task7Transport::bookFrame('9005', '-1', '5');
+            $snapshot['action'] = 'snapshot';
+            $snapshot['arg']['instId'] = 'ETH-USDT-SWAP';
+            $snapshot['data'][0]['asks'] = [['202', '2', '0', '1']];
+            $snapshot['data'][0]['bids'][] = ['201', '3', '0', '2'];
+            $public->message($snapshot, attempt: 1);
         }];
         $events->next();
         $ethReplacement = $events->current();
