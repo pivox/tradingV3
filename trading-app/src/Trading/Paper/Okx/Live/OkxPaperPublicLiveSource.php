@@ -4005,9 +4005,20 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         string $instrumentId,
         string $snapshotSequence,
     ): void {
-        if (!$this->filterQueuedBookOverlap($instrumentId, $snapshotSequence)) {
-            $this->failTerminal('market_data_gap_unresolved');
+        if ($this->filterQueuedBookOverlap($instrumentId, $snapshotSequence)) {
+            return;
         }
+
+        // The REST response and the websocket frame linking to it race each
+        // other during reconnect. Give the socket one bounded, non-blocking
+        // tick so an already-arrived frame can enter the durable queue before
+        // declaring the overlap missing.
+        $this->pumpNetworkLoop();
+        if ($this->filterQueuedBookOverlap($instrumentId, $snapshotSequence)) {
+            return;
+        }
+
+        $this->failTerminal('market_data_gap_unresolved');
     }
 
     private function scheduleNextReconnectAttempt(): void
