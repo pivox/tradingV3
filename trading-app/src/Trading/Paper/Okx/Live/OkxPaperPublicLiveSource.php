@@ -2837,6 +2837,10 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     private function resumeReconnectTransportTransition(): void
     {
         $transition = $this->checkpoint->pendingTransition;
+        // A restarted process always rebuilds a fresh physical socket pair.
+        // Any restored book frame therefore belongs to the dead connection
+        // generation and cannot authorize the new REST snapshot.
+        $this->discardQueuedBooksFromPreviousConnection();
         if (($transition['stage'] ?? null) === 'reconnect_delay') {
             return;
         }
@@ -4145,6 +4149,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         // other during reconnect. Give the socket one bounded, non-blocking
         // tick so an already-arrived frame can enter the durable queue before
         // declaring the overlap missing.
+        $this->discardRecoverablePublicFramesBeforeBookAuthority($instrumentId);
         $this->resumePublicAdmissionsForReconnectOverlap();
         $this->pumpNetworkLoop();
         if ($generation !== $this->connectionGeneration) {
@@ -4155,6 +4160,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
 
         while (!$this->reconnectRecoveryDeadlineExpired($symbol)) {
+            $this->discardRecoverablePublicFramesBeforeBookAuthority($instrumentId);
             $beforeProgress = [
                 $this->connectionGeneration,
                 $this->checkpoint->phase,
@@ -4208,6 +4214,54 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
 
         $this->failTerminal('market_data_gap_unresolved');
+    }
+
+    /**
+     * While reconnect recovery is waiting for the exact book authority, queued
+     * trades are covered by the subsequent REST overlap pass. Book traffic for
+     * the current or a still-pending symbol has already failed to authorize the
+     * current REST snapshot and will receive its own fresh recovery. Frames for
+     * a symbol whose boundary is already durable must remain queued for normal
+     * streaming emission. Persist the reduced queue before reopening admissions
+     * so repeated high-watermark pauses cannot consume the hard queue budget.
+     */
+    private function discardRecoverablePublicFramesBeforeBookAuthority(
+        string $instrumentId,
+    ): void
+    {
+        if ($this->publicQueue->count() === 0) {
+            return;
+        }
+        $retained = [];
+        foreach ($this->publicQueue->frames() as $frame) {
+            $message = $this->decoder->decodePublic($frame);
+            if (($message['arg']['channel'] ?? null) !== 'books') {
+                continue;
+            }
+            $frameInstrumentId = $message['arg']['instId'] ?? null;
+            if (!\is_string($frameInstrumentId)) {
+                throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+            }
+            try {
+                $frameSymbol = $this->instruments->normalizedSymbol($frameInstrumentId);
+            } catch (\InvalidArgumentException $exception) {
+                throw new OkxPaperLiveIntegrityException(
+                    'market_data_gap_unresolved',
+                    0,
+                    $exception,
+                );
+            }
+            if ($frameInstrumentId !== $instrumentId
+                && !\in_array($frameSymbol, $this->checkpoint->remainingSymbols, true)
+            ) {
+                $retained[] = $frame;
+            }
+        }
+        if (\count($retained) === $this->publicQueue->count()) {
+            return;
+        }
+        $this->publicQueue->replace($retained);
+        $this->persistStreamingQueues();
     }
 
     private function resumePublicAdmissionsForReconnectOverlap(): void

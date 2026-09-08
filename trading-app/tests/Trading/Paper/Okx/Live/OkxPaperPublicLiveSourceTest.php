@@ -6678,6 +6678,17 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 break;
             }
         }
+        $staleBook = Task7Transport::bookFrame('9999', '-1', '5');
+        $staleBook['action'] = 'snapshot';
+        $retainedTrade = Task7Transport::tradeFrame(['9952']);
+        $checkpoint = $store->saveStreamingQueues(
+            $checkpoint,
+            [
+                json_encode($staleBook, \JSON_THROW_ON_ERROR),
+                json_encode($retainedTrade, \JSON_THROW_ON_ERROR),
+            ],
+            [],
+        );
         self::assertEquals($savedTransition, $this->checkpointState()['pending_transition']);
 
         $writeAhead = [];
@@ -6707,6 +6718,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             self::businessArguments(),
             'restartBusiness',
         );
+        $restartPublicQueue = new OkxPaperPublicFrameQueue();
         $resumed = $this->source(
             Task7RestClient::withInitialDataset(),
             $restartPublic,
@@ -6714,6 +6726,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             checkpointStore: $store,
             clock: $clock,
             loop: new DeterministicLoop(),
+            publicQueue: $restartPublicQueue,
         );
         $resumedEvents = $resumed->events();
         self::assertInstanceOf(\Generator::class, $resumedEvents);
@@ -6777,6 +6790,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             ],
         ], $writeAhead);
         self::assertSame(1, $this->checkpointState()['reconnect']['attempt']);
+        self::assertSame(
+            [json_encode($retainedTrade, \JSON_THROW_ON_ERROR)],
+            $restartPublicQueue->frames(),
+            'Crash-resume socket rebuilding must purge prior-generation book frames.',
+        );
     }
 
     /** @return iterable<string, array{array<string, mixed>}> */
@@ -8162,12 +8180,16 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(PaperMarketDataChannel::CONNECTION_STATE, $btcReconnecting->channel);
         self::assertSame('reconnecting', $btcReconnecting->payload['state'] ?? null);
         $source->acknowledge($btcReconnecting->eventId);
-        $resumeSnapshotSent = false;
-        $public->afterResume = static function () use ($public, &$resumeSnapshotSent): void {
-            if ($resumeSnapshotSent) {
+        $resumeCount = 0;
+        $public->afterResume = static function () use ($public, &$resumeCount): void {
+            ++$resumeCount;
+            if ($resumeCount <= 3) {
+                for ($index = 0; $index < OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES; ++$index) {
+                    $public->message(Task7Transport::tradeFrame(['110']), attempt: 1);
+                }
+
                 return;
             }
-            $resumeSnapshotSent = true;
             $snapshot = Task7Transport::bookFrame('9004', '-1', '5');
             $snapshot['action'] = 'snapshot';
             $snapshot['data'][0]['asks'] = [['102', '2', '0', '1']];
@@ -8188,7 +8210,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         );
         self::assertSame('9003', $btcReplacement->payload['source_seq_id'] ?? null);
         self::assertSame(2, $btcReplacement->payload['source_epoch'] ?? null);
-        self::assertSame(1, $public->resumeCount);
+        self::assertSame(4, $public->resumeCount);
         $source->acknowledge($btcReplacement->eventId);
         $events->next();
         $btcRecoveredTrade = $events->current();
