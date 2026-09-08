@@ -3927,6 +3927,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             instanceof OkxPaperStreamFrontier
         ) {
             $this->requireQueuedReconnectBookOverlap(
+                $symbol,
                 $instrumentId,
                 $replacementState->sourceSequence,
             );
@@ -4002,6 +4003,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     }
 
     private function requireQueuedReconnectBookOverlap(
+        string $symbol,
         string $instrumentId,
         string $snapshotSequence,
     ): void {
@@ -4016,6 +4018,55 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $this->pumpNetworkLoop();
         if ($this->filterQueuedBookOverlap($instrumentId, $snapshotSequence)) {
             return;
+        }
+
+        while (!$this->reconnectRecoveryDeadlineExpired($symbol)) {
+            $beforeProgress = [
+                $this->connectionGeneration,
+                $this->checkpoint->phase,
+                $this->checkpoint->pendingTransition,
+                $this->publicQueue->count(),
+                $this->publicQueue->bytes(),
+                $this->businessQueue->count(),
+                $this->businessQueue->bytes(),
+            ];
+            $resync = $this->checkpoint->resyncBySymbol[$symbol] ?? null;
+            if (!\is_array($resync)) {
+                $this->failTerminal('market_data_gap_unresolved');
+            }
+            $deadline = new \DateTimeImmutable($resync['deadline_at']);
+            $remaining = max(
+                0.0,
+                (float) $deadline->format('U.u')
+                    - (float) $this->clock->now()->format('U.u'),
+            );
+            $deadlineTimer = $this->loop->addTimer(
+                $remaining,
+                fn () => $this->loop->stop(),
+            );
+            try {
+                // Every admitted websocket frame stops the loop. Continue
+                // until the exact book chain appears or the durable resync
+                // deadline wakes us, whichever happens first.
+                $this->runNetworkLoop();
+            } finally {
+                $this->loop->cancelTimer($deadlineTimer);
+            }
+            if ($this->filterQueuedBookOverlap($instrumentId, $snapshotSequence)) {
+                return;
+            }
+            $afterProgress = [
+                $this->connectionGeneration,
+                $this->checkpoint->phase,
+                $this->checkpoint->pendingTransition,
+                $this->publicQueue->count(),
+                $this->publicQueue->bytes(),
+                $this->businessQueue->count(),
+                $this->businessQueue->bytes(),
+            ];
+            if ($beforeProgress === $afterProgress) {
+                break;
+            }
         }
 
         $this->failTerminal('market_data_gap_unresolved');

@@ -7907,9 +7907,6 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         $business = new FakeOkxPaperPublicWebSocketTransport();
         $deterministic = new DeterministicLoop();
         $loop = new Task7ScriptedLoop($deterministic);
-        $reconnectBookCallOffset = count(Task7RestClient::expectedInitialCalls())
-            + count(Task7RestClient::expectedInitialCandleBridgeCalls());
-        $deliveredReconnectBooks = [];
         $ethApplied = Task7Transport::bookFrame('9003', '9002', '4');
         $ethApplied['arg']['instId'] = 'ETH-USDT-SWAP';
         $loop->scripts = [
@@ -7943,34 +7940,6 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             checkpointStore: $store,
             clock: $clock,
             loop: $loop,
-            loopPump: new Task7CountingLoopPump(static function () use (
-                $reconnectBookCallOffset,
-                &$deliveredReconnectBooks,
-                $rest,
-                $public,
-            ): void {
-                if (count($rest->calls) <= $reconnectBookCallOffset) {
-                    return;
-                }
-                $lastCall = $rest->calls[array_key_last($rest->calls)] ?? null;
-                if ($lastCall === ['orderBook', ['BTC-USDT-SWAP', 400]]
-                    && !isset($deliveredReconnectBooks['BTCUSDT'])
-                ) {
-                    $public->message(
-                        Task7Transport::bookFrame('9004', '9003', '5'),
-                        attempt: 1,
-                    );
-                    $deliveredReconnectBooks['BTCUSDT'] = true;
-                }
-                if ($lastCall === ['orderBook', ['ETH-USDT-SWAP', 400]]
-                    && !isset($deliveredReconnectBooks['ETHUSDT'])
-                ) {
-                    $ethQueued = Task7Transport::bookFrame('9005', '9004', '5');
-                    $ethQueued['arg']['instId'] = 'ETH-USDT-SWAP';
-                    $public->message($ethQueued, attempt: 1);
-                    $deliveredReconnectBooks['ETHUSDT'] = true;
-                }
-            }),
         );
         $events = $source->events();
         self::assertInstanceOf(\Generator::class, $events);
@@ -8044,6 +8013,12 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(PaperMarketDataChannel::CONNECTION_STATE, $btcReconnecting->channel);
         self::assertSame('reconnecting', $btcReconnecting->payload['state'] ?? null);
         $source->acknowledge($btcReconnecting->eventId);
+        $loop->scripts = [static function () use ($public): void {
+            $public->message(
+                Task7Transport::bookFrame('9004', '9003', '5'),
+                attempt: 1,
+            );
+        }];
         $events->next();
         $btcReplacement = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $btcReplacement);
@@ -8072,6 +8047,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(PaperMarketDataChannel::CONNECTION_STATE, $ethReconnecting->channel);
         self::assertSame('reconnecting', $ethReconnecting->payload['state'] ?? null);
         $source->acknowledge($ethReconnecting->eventId);
+        $loop->scripts = [static function () use ($public): void {
+            $ethQueued = Task7Transport::bookFrame('9005', '9004', '5');
+            $ethQueued['arg']['instId'] = 'ETH-USDT-SWAP';
+            $public->message($ethQueued, attempt: 1);
+        }];
         $events->next();
         $ethReplacement = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $ethReplacement);
