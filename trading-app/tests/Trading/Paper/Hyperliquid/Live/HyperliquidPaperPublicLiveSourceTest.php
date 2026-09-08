@@ -1179,7 +1179,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame($runsBeforeDurableBoundary, $loop->runCount());
     }
 
-    public function testPongTimeoutPersistsContinuityLossBeforeReconnectDelay(): void
+    public function testPongTimeoutFailsImmediatelyWhenPublicTradeContinuityCannotBeRecovered(): void
     {
         $loop = new HyperliquidDeterministicLoop();
         $transport = new DeterministicHyperliquidTransport([]);
@@ -1191,18 +1191,19 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
 
         $loop->fire(5.0);
         $loop->fire(10.0);
-        $transport->push(CanonicalJson::encode(['channel' => 'pong']));
-        $transport->push(self::tradeFrame());
-
         $checkpoint = $this->checkpoint();
         self::assertFalse($checkpoint->continuity);
-        self::assertSame('reconnecting', $checkpoint->phase);
-        self::assertSame(1, $checkpoint->reconnectAttempt);
-        self::assertSame([1.0], $loop->intervals());
+        self::assertSame('failed', $checkpoint->phase);
+        self::assertSame(0, $checkpoint->reconnectAttempt);
+        self::assertSame([], $loop->intervals());
+        self::assertSame(
+            'hyperliquid_public_trade_gap_unrecoverable',
+            $checkpoint->failureReason,
+        );
         self::assertTrue($transport->closed);
     }
 
-    public function testCloseWhileWaitingLetsTheScheduledReconnectRun(): void
+    public function testStreamingConnectionCloseFailsImmediatelyWithoutResubscription(): void
     {
         $loop = new HyperliquidDeterministicLoop();
         $transport = new DeterministicHyperliquidTransport([]);
@@ -1217,145 +1218,22 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
                 $events->next();
             }
         }
-        $loop->enqueue(static fn () => $transport->serverClose());
-        $loop->enqueue(static fn () => $loop->fire(1.0));
-
-        $events->next();
-
-        self::assertTrue($events->valid());
-        self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $events->current()->channel);
-        self::assertSame('reconnect', $events->current()->payload['reason']);
-        self::assertSame(2, $transport->connectCount);
-        self::assertFalse($this->checkpoint()->continuity);
-    }
-
-    public function testReconnectBuffersMarketFrameUntilAllSubscriptionsAreReady(): void
-    {
-        $loop = new HyperliquidDeterministicLoop();
-        $transport = new DeterministicHyperliquidTransport(
-            [],
-            reconnectPrematureFrame: self::tradeFrame(),
-        );
-        $source = $this->source($transport, loop: $loop);
-        $events = self::generator($source->events());
-        $events->rewind();
-        for ($index = 0; $index < 2; ++$index) {
-            $event = $events->current();
-            self::assertInstanceOf(PaperMarketEvent::class, $event);
-            $source->acknowledge($event->eventId);
-            if ($index === 0) {
-                $events->next();
-            }
-        }
-        $loop->enqueue(static fn () => $transport->serverClose());
-        $loop->enqueue(static fn () => $loop->fire(1.0));
-
-        $events->next();
-        $btcBoundary = $events->current();
-        self::assertInstanceOf(PaperMarketEvent::class, $btcBoundary);
-        self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $btcBoundary->channel);
-        self::assertSame('reconnect', $btcBoundary->payload['reason']);
-        $source->acknowledge($btcBoundary->eventId);
-        $events->next();
-        $ethBoundary = $events->current();
-        self::assertInstanceOf(PaperMarketEvent::class, $ethBoundary);
-        self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $ethBoundary->channel);
-        $source->acknowledge($ethBoundary->eventId);
-
-        $events->next();
-
-        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $events->current()->channel);
-        self::assertSame(2, $transport->connectCount);
-        self::assertFalse($this->checkpoint()->continuity);
-    }
-
-    public function testReconnectUsesBoundedDelaysAndThenFailsTerminally(): void
-    {
-        $loop = new HyperliquidDeterministicLoop();
-        $transport = new DeterministicHyperliquidTransport([]);
-        $source = $this->source($transport, loop: $loop);
-        self::generator($source->events())->rewind();
-        $loop->fire(5.0);
-        $loop->fire(10.0);
-
-        foreach ([1.0, 2.0, 4.0, 8.0, 15.0, 30.0] as $delay) {
-            self::assertSame($delay, $loop->fire($delay));
-            $transport->serverClose();
+        try {
+            $loop->enqueue(static fn () => $transport->serverClose());
+            $events->next();
+            self::fail('An unrecoverable public trade gap must abort the attempt.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame(
+                'hyperliquid_public_trade_gap_unrecoverable',
+                $exception->getMessage(),
+            );
         }
 
         $checkpoint = $this->checkpoint();
         self::assertSame('failed', $checkpoint->phase);
-        self::assertSame(
-            'hyperliquid_paper_public_reconnect_exhausted',
-            $checkpoint->failureReason,
-        );
+        self::assertFalse($checkpoint->continuity);
+        self::assertSame(1, $transport->connectCount);
         self::assertSame([], $loop->intervals());
-    }
-
-    public function testReconnectMetadataAndBoundariesPrecedeQueuedBookAndCannotCertify(): void
-    {
-        $loop = new HyperliquidDeterministicLoop();
-        $transport = new DeterministicHyperliquidTransport([]);
-        $source = $this->source(
-            $transport,
-            loop: $loop,
-            metadataClient: new StaticHyperliquidPaperMetadataClient(),
-        );
-        $events = self::generator($source->events());
-        $events->rewind();
-        for ($index = 0; $index < 4; ++$index) {
-            $event = $events->current();
-            self::assertInstanceOf(PaperMarketEvent::class, $event);
-            $source->acknowledge($event->eventId);
-            if ($index < 3) {
-                $events->next();
-            }
-        }
-
-        $loop->fire(5.0);
-        $loop->fire(10.0);
-        $loop->fire(1.0);
-        $transport->push(CanonicalJson::encode([
-            'channel' => 'l2Book',
-            'data' => [
-                'coin' => 'BTC',
-                'levels' => [
-                    [['px' => '1', 'sz' => '1', 'n' => 1]],
-                    [['px' => '2', 'sz' => '1', 'n' => 1]],
-                ],
-                'time' => 2_000,
-            ],
-        ]));
-
-        $events->next();
-        self::assertSame(PaperMarketDataChannel::INSTRUMENT_METADATA, $events->current()->channel);
-        self::assertSame('BTCUSDT', $events->current()->symbol);
-        self::assertSame(2, $events->current()->payload['source_epoch']);
-        $source->acknowledge($events->current()->eventId);
-        $events->next();
-        self::assertSame(PaperMarketDataChannel::INSTRUMENT_METADATA, $events->current()->channel);
-        self::assertSame('ETHUSDT', $events->current()->symbol);
-        self::assertSame(2, $events->current()->payload['source_epoch']);
-        $source->acknowledge($events->current()->eventId);
-        $events->next();
-        self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $events->current()->channel);
-        self::assertSame('reconnect', $events->current()->payload['reason']);
-        $source->acknowledge($events->current()->eventId);
-        $events->next();
-        self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $events->current()->channel);
-        $source->acknowledge($events->current()->eventId);
-        $events->next();
-        self::assertSame(PaperMarketDataChannel::TOP_OF_BOOK, $events->current()->channel);
-        self::assertFalse($source->isComplete());
-        try {
-            $source->requestHealthyOperatorStop();
-            self::fail('Continuity-lost capture cannot complete.');
-        } catch (\RuntimeException $exception) {
-            self::assertSame(
-                'hyperliquid_paper_public_healthy_stop_invalid',
-                $exception->getMessage(),
-            );
-        }
     }
 
     public function testBackpressureFailsWithStableReason(): void
@@ -1366,6 +1244,21 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('market_data_backpressure_exhausted');
         self::generator($source->events())->rewind();
+    }
+
+    public function testPreReadyByteAccountingRemainsExactAfterDequeue(): void
+    {
+        $source = $this->source(new DeterministicHyperliquidTransport([]));
+        $frame = self::tradeFrame();
+        $defer = new \ReflectionMethod($source, 'deferPreReadyFrame');
+        $dequeue = new \ReflectionMethod($source, 'dequeuePreReadyFrame');
+        $bytes = new \ReflectionProperty($source, 'preReadyFrameBytes');
+
+        $defer->invoke($source, $frame);
+        $defer->invoke($source, $frame);
+        self::assertSame($frame, $dequeue->invoke($source));
+
+        self::assertSame(\strlen($frame), $bytes->getValue($source));
     }
 
     public function testConflictingTradeIdentityFailsWithStableReason(): void

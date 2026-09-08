@@ -34,7 +34,6 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
     private bool $healthyStopRequested = false;
     private ?TimerInterface $heartbeatTimer = null;
     private ?TimerInterface $pongTimer = null;
-    private ?TimerInterface $reconnectTimer = null;
     private ?TimerInterface $fundingTimer = null;
     private bool $fundingRefreshDue = false;
 
@@ -238,10 +237,11 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
                     ),
                 ]);
             }
-        } elseif ($this->checkpoint->phase === 'streaming') {
-            $this->beginReconnect('hyperliquid_public_trade_gap_unrecoverable');
-        } elseif ($this->checkpoint->phase === 'reconnecting') {
-            $this->scheduleReconnect();
+        } elseif (
+            $this->checkpoint->phase === 'streaming'
+            || $this->checkpoint->phase === 'reconnecting'
+        ) {
+            $this->failUnrecoverableContinuity();
         }
 
         while (!$this->stopped) {
@@ -378,7 +378,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
                     return;
                 }
                 if (\in_array($this->checkpoint->phase, ['streaming', 'reconnecting'], true)) {
-                    $this->beginReconnect('hyperliquid_public_trade_gap_unrecoverable');
+                    $this->failUnrecoverableContinuity();
                 } else {
                     $this->transportFailure = new HyperliquidPaperLiveIntegrityException(
                         'hyperliquid_paper_public_connection_closed',
@@ -399,7 +399,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
                     return;
                 }
                 if (\in_array($this->checkpoint->phase, ['streaming', 'reconnecting'], true)) {
-                    $this->beginReconnect('hyperliquid_public_trade_gap_unrecoverable');
+                    $this->failUnrecoverableContinuity();
                 } else {
                     $this->transportFailure = new HyperliquidPaperLiveIntegrityException(
                         'hyperliquid_paper_public_protocol_error',
@@ -516,11 +516,6 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
             }
             if ($this->fundingRefreshDue) {
                 return null;
-            }
-            if ($this->checkpoint->phase === 'reconnecting'
-                && $this->reconnectTimer instanceof TimerInterface
-            ) {
-                continue;
             }
             if ($this->queue->count() === 0) {
                 throw new HyperliquidPaperLiveIntegrityException(
@@ -1291,7 +1286,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
                 ) {
                     return;
                 }
-                $this->beginReconnect('hyperliquid_public_trade_gap_unrecoverable');
+                $this->failUnrecoverableContinuity();
                 $this->loop->stop();
             },
         );
@@ -1348,56 +1343,25 @@ final class HyperliquidPaperPublicLiveSource implements PaperDurableBatchSourceI
         }
     }
 
-    private function beginReconnect(string $reason): void
+    private function failUnrecoverableContinuity(): void
     {
+        $reason = 'hyperliquid_public_trade_gap_unrecoverable';
         $this->cancelTimers();
         ++$this->activeGeneration;
         $this->transport->close();
         $this->transportReadingPaused = false;
         $this->queue->clear();
         $this->clearPreReadyFrames();
-        $this->transportFailure = null;
         $this->subscriptions->reset();
         $this->checkpoint = $this->checkpointStore->save(
-            $this->checkpoint->beginReconnect($reason),
+            $this->checkpoint->loseContinuity($reason)->fail($reason),
         );
-        if ($this->checkpoint->phase === 'failed') {
-            $this->transportFailure = new HyperliquidPaperLiveIntegrityException(
-                'hyperliquid_paper_public_reconnect_exhausted',
-            );
-
-            return;
-        }
-        $this->scheduleReconnect();
-    }
-
-    private function scheduleReconnect(): void
-    {
-        if ($this->reconnectTimer instanceof TimerInterface) {
-            return;
-        }
-        $attempt = $this->checkpoint->reconnectAttempt;
-        $delay = HyperliquidPaperLivePolicy::RECONNECT_DELAYS_SECONDS[$attempt - 1]
-            ?? throw new \LogicException();
-        $generation = $this->activeGeneration;
-        $this->reconnectTimer = $this->loop->addTimer(
-            $delay,
-            function () use ($generation): void {
-                if ($generation !== $this->activeGeneration
-                    || $this->stopped
-                    || $this->checkpoint->phase !== 'reconnecting'
-                ) {
-                    return;
-                }
-                $this->reconnectTimer = null;
-                $this->openTransport(reconnecting: true);
-            },
-        );
+        $this->transportFailure = new HyperliquidPaperLiveIntegrityException($reason);
     }
 
     private function cancelTimers(): void
     {
-        foreach (['heartbeatTimer', 'pongTimer', 'reconnectTimer', 'fundingTimer'] as $property) {
+        foreach (['heartbeatTimer', 'pongTimer', 'fundingTimer'] as $property) {
             $timer = $this->{$property};
             if ($timer instanceof TimerInterface) {
                 $this->loop->cancelTimer($timer);

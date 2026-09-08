@@ -300,6 +300,138 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         OkxPaperLiveCheckpoint::fromArray($state);
     }
 
+    public function testAcknowledgedIdentityHistoryIsStoredInAnAuthenticatedSidecarAndRestored(): void
+    {
+        $directory = $this->datasetDirectory('identity-history-sidecar');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $event = $this->tradeEvent('rest_recovery');
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $event,
+            'trade|242720721',
+            'BTCUSDT/rest/public_trade',
+        );
+
+        $persisted = json_decode(
+            (string) file_get_contents($this->checkpointPath($directory)),
+            true,
+            512,
+            \JSON_THROW_ON_ERROR,
+        );
+        self::assertIsArray($persisted);
+        self::assertArrayNotHasKey('acknowledged_identity_history', $persisted);
+        self::assertSame(
+            'okx_acknowledged_identity_history_v1',
+            $persisted['acknowledged_identity_history_ref']['format'] ?? null,
+        );
+        $sha256 = $persisted['acknowledged_identity_history_ref']['sha256'] ?? null;
+        self::assertIsString($sha256);
+        self::assertFileExists(
+            $directory . '/checkpoints/okx-live/acknowledged-identities-'
+                . $sha256 . '.bin',
+        );
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $this->tradeEvent('rest_recovery', tradeId: '242720722', sequence: '2'),
+            'trade|242720722',
+            'BTCUSDT/rest/public_trade',
+        );
+        self::assertFileDoesNotExist(
+            $directory . '/checkpoints/okx-live/acknowledged-identities-'
+                . $sha256 . '.bin',
+        );
+        self::assertCount(
+            1,
+            glob($directory . '/checkpoints/okx-live/acknowledged-identities-*.bin')
+                ?: [],
+        );
+        unset($store);
+
+        $restored = (new OkxPaperLiveCheckpointStore($directory))->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame(
+            $checkpoint->acknowledgedIdentityHistory,
+            $restored->acknowledgedIdentityHistory,
+        );
+    }
+
+    public function testTamperedAcknowledgedIdentityHistorySidecarFailsClosed(): void
+    {
+        $directory = $this->datasetDirectory('tampered-identity-history-sidecar');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $this->tradeEvent('rest_recovery'),
+            'trade|242720721',
+            'BTCUSDT/rest/public_trade',
+        );
+        $ref = $checkpoint->acknowledgedIdentityHistoryRef;
+        self::assertNotNull($ref);
+        $path = $directory . '/checkpoints/okx-live/acknowledged-identities-'
+            . $ref['sha256'] . '.bin';
+        unset($store);
+        self::assertNotFalse(file_put_contents($path, 'tampered'));
+        self::assertTrue(chmod($path, 0600));
+
+        $this->expectException(OkxPaperLiveIntegrityException::class);
+        $this->expectExceptionMessage('okx_paper_live_checkpoint_invalid');
+        (new OkxPaperLiveCheckpointStore($directory))->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+    }
+
+    public function testCheckpointWriteFailureKeepsThePreviouslyPublishedIdentitySidecar(): void
+    {
+        $directory = $this->datasetDirectory('identity-sidecar-checkpoint-failure');
+        $filesystem = new FailingOkxPaperLiveCheckpointFilesystem();
+        $store = new OkxPaperLiveCheckpointStore($directory, $filesystem);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $this->tradeEvent('rest_recovery'),
+            'trade|242720721',
+            'BTCUSDT/rest/public_trade',
+        );
+        $published = glob(
+            $directory . '/checkpoints/okx-live/acknowledged-identities-*.bin',
+        ) ?: [];
+        self::assertCount(1, $published);
+        $filesystem->failCheckpointSync = true;
+
+        try {
+            $this->acknowledgeEventForTest(
+                $store,
+                $checkpoint,
+                $this->tradeEvent('rest_recovery', tradeId: '242720722', sequence: '2'),
+                'trade|242720722',
+                'BTCUSDT/rest/public_trade',
+            );
+            self::fail('The injected checkpoint sync failure must interrupt publication.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('okx_paper_live_checkpoint_write_failed', $exception->getMessage());
+        }
+
+        self::assertSame(
+            $published,
+            glob($directory . '/checkpoints/okx-live/acknowledged-identities-*.bin')
+                ?: [],
+        );
+        self::assertNull($store->acknowledgedIdentityEntry(
+            $checkpoint,
+            'BTCUSDT/public_trade',
+            hash('sha256', 'okx|BTC-USDT-SWAP|public_trade|242720722'),
+        ));
+    }
+
     public function testEarlierCheckpointVersionsAreRejectedInsteadOfReusingOldDigestSemantics(): void
     {
         foreach ([3, 4, 5, 6, 7, 8] as $schemaVersion) {
@@ -1062,37 +1194,20 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
 
         self::assertSame($before, file_get_contents($path));
 
-        $snapshot = $this->bookEvent(
-            'rest_resync_snapshot',
-            '9002',
-            sourceEpoch: 2,
-            sequence: '3',
-        );
-        $pendingSnapshot = $store->savePending(
+        $checkpoint = $this->acknowledgeReconnectBook($store, $checkpoint, 'BTCUSDT');
+        $checkpoint = $this->advanceBookFirstRecoveryToStream(
+            $store,
             $checkpoint,
-            $snapshot,
-            $this->advanceOrdinal($checkpoint->ordinalState, $snapshot, 'book|9002'),
-            [
-                'stream' => 'BTCUSDT/rest/top_of_book',
-                'frontier' => OkxPaperStreamFrontier::fromEvent($snapshot)->toArray(),
-            ],
+            'BTCUSDT',
+            null,
         );
-        $checkpoint = $store->acknowledge($pendingSnapshot, $snapshot->eventId);
-        $checkpoint = $store->saveTransition($checkpoint, 'reconnecting', $boundary);
-        $boundaryEvent = PaperMarketEvent::create(
-            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
-            venue: PaperMarketDataVenue::OKX,
-            symbol: 'BTCUSDT',
-            channel: PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
-            exchangeTimestamp: new \DateTimeImmutable('2026-07-22T10:00:10.000000Z'),
-            receivedTimestamp: new \DateTimeImmutable('2026-07-22T10:00:10.000000Z'),
-            sequence: '2',
-            payload: [
-                'native_symbol' => 'BTC-USDT-SWAP',
-                'reason' => 'reconnect',
-                'source_epoch' => 2,
-                'source_seq_id' => '9002',
-            ],
+        self::assertSame($boundary, $checkpoint->pendingTransition);
+        $bookFrontier = $checkpoint->streamFrontiers['BTCUSDT/rest/top_of_book'] ?? null;
+        self::assertInstanceOf(OkxPaperStreamFrontier::class, $bookFrontier);
+        $boundaryEvent = $this->reconnectBoundaryEvent(
+            'BTCUSDT',
+            $checkpoint->sourceEpochs['BTCUSDT'],
+            $bookFrontier->sourceIdentity,
         );
         $pendingBoundary = $store->savePending(
             $checkpoint,
@@ -1100,7 +1215,11 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             $this->advanceOrdinal(
                 $checkpoint->ordinalState,
                 $boundaryEvent,
-                'boundary|2|9002|reconnect',
+                sprintf(
+                    'boundary|%d|%s|reconnect',
+                    $checkpoint->sourceEpochs['BTCUSDT'],
+                    $bookFrontier->sourceIdentity,
+                ),
             ),
             null,
         );
@@ -4119,7 +4238,6 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         ];
         $closedState = $active->toArray();
         $closedState['pending_transition'] = $nextTransition;
-        $closedState['resync_by_symbol']['BTCUSDT'] = null;
         $closedState['overlap_pagination_by_stream']['BTCUSDT/rest/public_trade'] = null;
         try {
             $closed = $store->saveTransition(
@@ -4131,7 +4249,10 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             self::fail('An exact overlap with no later row must close through its next durable transition: ' . $exception->getMessage());
         }
 
-        self::assertNull($closed->resyncBySymbol['BTCUSDT']);
+        self::assertSame(
+            'book_seq_overlap_v1',
+            $closed->resyncBySymbol['BTCUSDT']['policy'] ?? null,
+        );
         self::assertNull($closed->overlapPaginationByStream['BTCUSDT/rest/public_trade']);
         self::assertSame($nextTransition, $closed->pendingTransition);
         unset($store);
@@ -4197,10 +4318,10 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             paginatePublicTrade: true,
         );
         $expectedContinuation = [
-            'kind' => 'rest_fetch',
+            'kind' => 'emit_boundary',
             'symbol' => 'BTCUSDT',
-            'stream' => 'BTCUSDT/rest/top_of_book',
-            'stage' => 'order_book',
+            'stream' => 'BTCUSDT/control/snapshot_boundary',
+            'stage' => 'reconnect',
         ];
 
         self::assertSame($expectedContinuation, $checkpoint->pendingTransition);
@@ -4455,7 +4576,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
                 $closed->toArray()['overlap_pagination_by_stream']['BTCUSDT/ws/public_trade'],
             );
             self::assertSame(
-                $otherPaginationRemains ? $activeState['resync_by_symbol']['BTCUSDT'] : null,
+                $active->toArray()['resync_by_symbol']['BTCUSDT'],
                 $closed->toArray()['resync_by_symbol']['BTCUSDT'],
             );
             self::assertSame(
@@ -5469,19 +5590,22 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             $btcTransition = [
                 'kind' => 'rest_fetch',
                 'symbol' => 'BTCUSDT',
-                'stream' => 'BTCUSDT/rest/candle_15m',
-                'stage' => 'current_candles',
+                'stream' => 'BTCUSDT/rest/top_of_book',
+                'stage' => 'order_book',
             ];
-            $btcFrontier = $checkpoint->streamFrontiers[$btcTransition['stream']];
+            $btcFrontier = $checkpoint->streamFrontiers['BTCUSDT/ws/top_of_book']
+                ?? $checkpoint->streamFrontiers['BTCUSDT/rest/top_of_book']
+                ?? null;
             self::assertInstanceOf(OkxPaperStreamFrontier::class, $btcFrontier);
             $candidateState = $checkpoint->toArray();
             $candidateState['pending_transition'] = $btcTransition;
+            ++$candidateState['source_epochs']['BTCUSDT'];
             $candidateState['resync_by_symbol']['BTCUSDT'] = [
                 'attempt' => 1,
                 'frontier' => $btcFrontier->toArray(),
-                'source_sequence' => null,
+                'source_sequence' => $btcFrontier->sourceIdentity,
                 'deadline_at' => $recovery['deadline'],
-                'policy' => 'frontier_overlap_v1',
+                'policy' => 'book_seq_overlap_v1',
             ];
             $path = $this->checkpointPath($directory);
             $beforeBtcRecovery = file_get_contents($path);
@@ -5543,6 +5667,11 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
                 'reason' => 'reconnect',
             ]];
             $ethHeadState['resync_by_symbol']['BTCUSDT'] = null;
+            unset($ethHeadState['acknowledged_identity_history_ref']);
+            if ($checkpoint->acknowledgedIdentityHistory !== []) {
+                $ethHeadState['acknowledged_identity_history'] =
+                    $checkpoint->acknowledgedIdentityHistory;
+            }
             unset($store);
             $ethHeadDirectory = $this->datasetDirectory('eth-head-recovery-' . $case);
             $ethHeadStore = new OkxPaperLiveCheckpointStore($ethHeadDirectory);
@@ -5586,6 +5715,14 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $store = new OkxPaperLiveCheckpointStore($directory);
         $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
         $checkpoint = $this->completeInitialWarmupAndEnterStreaming($store, $checkpoint);
+        $wsBook = $this->bookEvent('ws_books', '9001', sourceEpoch: 1, sequence: '2');
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $wsBook,
+            'book|9001',
+            'BTCUSDT/ws/top_of_book',
+        );
         $checkpoint = $this->startReconnectAttempt($store, $checkpoint);
         foreach ([
             ['kind' => 'transport_connect', 'symbol' => null, 'stream' => 'public', 'stage' => 'connect'],
@@ -5617,19 +5754,22 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $expected = [
             'kind' => 'rest_fetch',
             'symbol' => 'BTCUSDT',
-            'stream' => 'BTCUSDT/rest/candle_15m',
-            'stage' => 'current_candles',
+            'stream' => 'BTCUSDT/rest/top_of_book',
+            'stage' => 'order_book',
         ];
-        $frontier = $checkpoint->streamFrontiers[$expected['stream']];
+        $frontier = $checkpoint->streamFrontiers['BTCUSDT/ws/top_of_book']
+            ?? $checkpoint->streamFrontiers['BTCUSDT/rest/top_of_book']
+            ?? null;
         self::assertInstanceOf(OkxPaperStreamFrontier::class, $frontier);
         $candidateState = $checkpoint->toArray();
         $candidateState['pending_transition'] = $expected;
+        ++$candidateState['source_epochs']['BTCUSDT'];
         $candidateState['resync_by_symbol']['BTCUSDT'] = [
             'attempt' => 1,
             'frontier' => $frontier->toArray(),
-            'source_sequence' => null,
-            'deadline_at' => '2026-07-22T10:00:20.000000Z',
-            'policy' => 'frontier_overlap_v1',
+            'source_sequence' => $frontier->sourceIdentity,
+            'deadline_at' => $checkpoint->reconnect['deadline_at'],
+            'policy' => 'book_seq_overlap_v1',
         ];
         $paginationBytes = CanonicalJson::encode($candidateState['overlap_pagination_by_stream']);
 
@@ -6551,6 +6691,42 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         if (!\is_string($symbol)) {
             throw new \InvalidArgumentException('Invalid frontier recovery symbol.');
         }
+        if (($checkpoint->pendingTransition['kind'] ?? null) === 'subscription_send'
+            && ($checkpoint->pendingTransition['stream'] ?? null) === 'business'
+        ) {
+            $checkpoint = $this->acknowledgeReconnectBook($store, $checkpoint, $symbol);
+        }
+        if (($checkpoint->resyncBySymbol[$symbol]['policy'] ?? null) === 'book_seq_overlap_v1') {
+            $checkpoint = $this->advanceBookFirstRecoveryToStream(
+                $store,
+                $checkpoint,
+                $symbol,
+                $stream,
+            );
+            if ($pagination === null) {
+                return $checkpoint;
+            }
+            $historyTransition = [
+                'kind' => 'rest_fetch',
+                'symbol' => $symbol,
+                'stream' => $stream,
+                'stage' => $pagination['endpoint'],
+            ];
+            $paginationState = $checkpoint->toArray();
+            $paginationState['pending_transition'] = $historyTransition;
+            $bookPagination = $pagination;
+            $bookPagination['deadline_at'] = $checkpoint->resyncBySymbol[$symbol]['deadline_at'];
+            $frontier = $checkpoint->streamFrontiers[$stream] ?? null;
+            self::assertInstanceOf(OkxPaperStreamFrontier::class, $frontier);
+            $bookPagination['target_frontier'] = $frontier->toArray();
+            $paginationState['overlap_pagination_by_stream'][$stream] = $bookPagination;
+
+            return $store->saveTransition(
+                OkxPaperLiveCheckpoint::fromArray($paginationState),
+                'reconnecting',
+                $historyTransition,
+            );
+        }
         $initialTransition = [
             'kind' => 'rest_fetch',
             'symbol' => $symbol,
@@ -6601,6 +6777,61 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             $symbol . '/rest/public_trade' => 'recent_trades',
         ];
         $streamNames = array_keys($streams);
+        if (($checkpoint->pendingTransition['kind'] ?? null) === 'subscription_send'
+            && ($checkpoint->pendingTransition['stream'] ?? null) === 'business'
+        ) {
+            $checkpoint = $this->acknowledgeReconnectBook($store, $checkpoint, $symbol);
+        }
+        if (($checkpoint->resyncBySymbol[$symbol]['policy'] ?? null) === 'book_seq_overlap_v1') {
+            foreach ($streamNames as $position => $stream) {
+                $transition = [
+                    'kind' => 'rest_fetch',
+                    'symbol' => $symbol,
+                    'stream' => $stream,
+                    'stage' => $streams[$stream],
+                ];
+                self::assertSame($transition, $checkpoint->pendingTransition);
+                if ($paginatePublicTrade && $stream === $symbol . '/rest/public_trade') {
+                    $frontier = $checkpoint->streamFrontiers[$stream] ?? null;
+                    self::assertInstanceOf(OkxPaperStreamFrontier::class, $frontier);
+                    $history = $transition;
+                    $history['stage'] = 'history_trades';
+                    $pagination = $checkpoint->toArray();
+                    $pagination['pending_transition'] = $history;
+                    $pagination['overlap_pagination_by_stream'][$stream] = [
+                        'endpoint' => 'history_trades',
+                        'pagination_type' => 2,
+                        'next_cursor' => '1784714400000',
+                        'pages_consumed' => 0,
+                        'pages_remaining' => 10,
+                        'target_frontier' => $frontier->toArray(),
+                        'deadline_at' => $deadline,
+                    ];
+                    $checkpoint = $store->saveTransition(
+                        OkxPaperLiveCheckpoint::fromArray($pagination),
+                        'reconnecting',
+                        $history,
+                    );
+                }
+                $nextStream = $streamNames[$position + 1] ?? $symbol . '/control/snapshot_boundary';
+                $next = [
+                    'kind' => $position + 1 < \count($streamNames) ? 'rest_fetch' : 'emit_boundary',
+                    'symbol' => $symbol,
+                    'stream' => $nextStream,
+                    'stage' => $position + 1 < \count($streamNames) ? $streams[$nextStream] : 'reconnect',
+                ];
+                $closed = $checkpoint->toArray();
+                $closed['pending_transition'] = $next;
+                $closed['overlap_pagination_by_stream'][$stream] = null;
+                $checkpoint = $store->saveTransition(
+                    OkxPaperLiveCheckpoint::fromArray($closed),
+                    'reconnecting',
+                    $next,
+                );
+            }
+
+            return $checkpoint;
+        }
         foreach ($streamNames as $position => $stream) {
             $frontier = $checkpoint->streamFrontiers[$stream] ?? null;
             self::assertInstanceOf(OkxPaperStreamFrontier::class, $frontier);
@@ -6673,6 +6904,40 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         string $symbol,
         string $deadline,
     ): OkxPaperLiveCheckpoint {
+        if (($checkpoint->resyncBySymbol[$symbol]['policy'] ?? null) !== 'frontier_overlap_v1') {
+            $checkpoint = $this->acknowledgeReconnectBook($store, $checkpoint, $symbol);
+            $checkpoint = $this->advanceBookFirstRecoveryToStream(
+                $store,
+                $checkpoint,
+                $symbol,
+                $symbol . '/rest/public_trade',
+            );
+            $frontier = $checkpoint->streamFrontiers[$symbol . '/rest/public_trade'] ?? null;
+            self::assertInstanceOf(OkxPaperStreamFrontier::class, $frontier);
+            $history = [
+                'kind' => 'rest_fetch',
+                'symbol' => $symbol,
+                'stream' => $symbol . '/rest/public_trade',
+                'stage' => 'history_trades',
+            ];
+            $pagination = $checkpoint->toArray();
+            $pagination['pending_transition'] = $history;
+            $pagination['overlap_pagination_by_stream'][$symbol . '/rest/public_trade'] = [
+                'endpoint' => 'history_trades',
+                'pagination_type' => 2,
+                'next_cursor' => '1784714400000',
+                'pages_consumed' => 0,
+                'pages_remaining' => 10,
+                'target_frontier' => $frontier->toArray(),
+                'deadline_at' => $deadline,
+            ];
+
+            return $store->saveTransition(
+                OkxPaperLiveCheckpoint::fromArray($pagination),
+                'reconnecting',
+                $history,
+            );
+        }
         $streamsBeforeTrade = [
             $symbol . '/rest/candle_15m',
             $symbol . '/rest/candle_1H',
@@ -6752,53 +7017,19 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         OkxPaperLiveCheckpoint $checkpoint,
         string $symbol,
     ): OkxPaperLiveCheckpoint {
-        $transition = [
-            'kind' => 'rest_fetch',
-            'symbol' => $symbol,
-            'stream' => $symbol . '/rest/top_of_book',
-            'stage' => 'order_book',
-        ];
-        self::assertSame($transition, $checkpoint->pendingTransition);
-        $wsFrontier = $checkpoint->streamFrontiers[$symbol . '/ws/top_of_book'] ?? null;
-        self::assertInstanceOf(OkxPaperStreamFrontier::class, $wsFrontier);
-        $sourceEpoch = $checkpoint->sourceEpochs[$symbol] + 1;
-        $sourceSequence = (string) (9000 + $sourceEpoch);
-        $reservation = $checkpoint->toArray();
-        $reservation['pending_transition'] = $transition;
-        $reservation['source_epochs'][$symbol] = $sourceEpoch;
-        $reservation['resync_by_symbol'][$symbol] = [
-            'attempt' => 1,
-            'frontier' => $wsFrontier->toArray(),
-            'source_sequence' => $wsFrontier->sourceIdentity,
-            'deadline_at' => $checkpoint->reconnect['deadline_at'],
-            'policy' => 'book_seq_overlap_v1',
-        ];
-        $checkpoint = $store->saveTransition(
-            OkxPaperLiveCheckpoint::fromArray($reservation),
-            'reconnecting',
-            $transition,
-        );
-        $snapshot = $this->bookEvent(
-            'rest_resync_snapshot',
-            $sourceSequence,
-            $symbol,
-            $sourceEpoch,
-            (string) ($sourceEpoch + 1),
-        );
-        $pending = $store->savePending(
-            $checkpoint,
-            $snapshot,
-            $this->advanceOrdinal(
-                $checkpoint->ordinalState,
-                $snapshot,
-                'book|' . $sourceSequence,
-            ),
-            [
-                'stream' => $symbol . '/rest/top_of_book',
-                'frontier' => OkxPaperStreamFrontier::fromEvent($snapshot)->toArray(),
-            ],
-        );
-        $checkpoint = $store->acknowledge($pending, $snapshot->eventId);
+        if (($checkpoint->pendingTransition['stage'] ?? null) !== 'reconnect') {
+            if (($checkpoint->pendingTransition['stage'] ?? null) === 'order_book'
+                || ($checkpoint->pendingTransition['kind'] ?? null) === 'subscription_send'
+            ) {
+                $checkpoint = $this->acknowledgeReconnectBook($store, $checkpoint, $symbol);
+            }
+            $checkpoint = $this->advanceBookFirstRecoveryToStream(
+                $store,
+                $checkpoint,
+                $symbol,
+                null,
+            );
+        }
         $boundaryTransition = [
             'kind' => 'emit_boundary',
             'symbol' => $symbol,
@@ -6806,19 +7037,176 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'stage' => 'reconnect',
         ];
         self::assertSame($boundaryTransition, $checkpoint->pendingTransition);
-        $boundary = $this->reconnectBoundaryEvent($symbol, $sourceEpoch, $sourceSequence);
+        $sourceEpoch = $checkpoint->sourceEpochs[$symbol];
+        $bookFrontier = $checkpoint->streamFrontiers[$symbol . '/rest/top_of_book'] ?? null;
+        self::assertInstanceOf(OkxPaperStreamFrontier::class, $bookFrontier);
+        $boundary = $this->reconnectBoundaryEvent($symbol, $sourceEpoch, $bookFrontier->sourceIdentity);
         $pending = $store->savePending(
             $checkpoint,
             $boundary,
             $this->advanceOrdinal(
                 $checkpoint->ordinalState,
                 $boundary,
-                sprintf('boundary|%d|%s|reconnect', $sourceEpoch, $sourceSequence),
+                sprintf('boundary|%d|%s|reconnect', $sourceEpoch, $bookFrontier->sourceIdentity),
             ),
             null,
         );
 
         return $store->acknowledge($pending, $boundary->eventId);
+    }
+
+    private function acknowledgeReconnectBook(
+        OkxPaperLiveCheckpointStore $store,
+        OkxPaperLiveCheckpoint $checkpoint,
+        string $symbol,
+    ): OkxPaperLiveCheckpoint {
+        $transition = [
+            'kind' => 'rest_fetch',
+            'symbol' => $symbol,
+            'stream' => $symbol . '/rest/top_of_book',
+            'stage' => 'order_book',
+        ];
+        $activeResync = $checkpoint->resyncBySymbol[$symbol] ?? null;
+        if (!\is_array($activeResync)) {
+            $frontier = $checkpoint->streamFrontiers[$symbol . '/ws/top_of_book']
+                ?? $checkpoint->streamFrontiers[$symbol . '/rest/top_of_book']
+                ?? null;
+            self::assertInstanceOf(OkxPaperStreamFrontier::class, $frontier);
+            $reservation = $checkpoint->toArray();
+            $reservation['pending_transition'] = $transition;
+            ++$reservation['source_epochs'][$symbol];
+            $reservation['resync_by_symbol'][$symbol] = [
+                'attempt' => 1,
+                'frontier' => $frontier->toArray(),
+                'source_sequence' => $frontier->sourceIdentity,
+                'deadline_at' => $checkpoint->reconnect['deadline_at'],
+                'policy' => 'book_seq_overlap_v1',
+            ];
+            $checkpoint = $store->saveTransition(
+                OkxPaperLiveCheckpoint::fromArray($reservation),
+                'reconnecting',
+                $transition,
+            );
+        }
+        self::assertSame($transition, $checkpoint->pendingTransition);
+        $sourceEpoch = $checkpoint->sourceEpochs[$symbol];
+        $sourceSequence = (string) (990000 + $sourceEpoch);
+        $snapshot = $this->bookEvent(
+            'rest_resync_snapshot',
+            $sourceSequence,
+            $symbol,
+            $sourceEpoch,
+            '1',
+        );
+        $naturalIdentity = 'book|' . $sourceSequence;
+        $assignmentDigest = OkxPaperSourceOrdinal::assignmentDigest(
+            $naturalIdentity,
+            $snapshot->exchangeTimestamp,
+            $snapshot->payload,
+        );
+        $assigned = OkxPaperSourceOrdinal::restore($checkpoint->ordinalState)->preview(
+            implode('/', [$snapshot->sourceVenue->value, $snapshot->symbol, $snapshot->channel->value]),
+            $naturalIdentity,
+            $assignmentDigest,
+        );
+        $snapshot = $this->bookEvent(
+            'rest_resync_snapshot',
+            $sourceSequence,
+            $symbol,
+            $sourceEpoch,
+            $assigned['sequence'],
+        );
+        $checkpoint = $store->saveBookRecoverySnapshotAndStreamingQueues(
+            $checkpoint,
+            $symbol,
+            [
+                'asks' => [['65000.1', '8', '0', '3']],
+                'bids' => [['65000.0', '10', '0', '2']],
+                'ts' => '1784714400123',
+                'seqId' => $sourceSequence,
+            ],
+            $transition,
+            [],
+            [],
+        );
+        $pending = $store->savePending(
+            $checkpoint,
+            $snapshot,
+            $this->advanceOrdinal(
+                $checkpoint->ordinalState,
+                $snapshot,
+                $naturalIdentity,
+            ),
+            [
+                'stream' => $symbol . '/rest/top_of_book',
+                'frontier' => OkxPaperStreamFrontier::fromEvent($snapshot)->toArray(),
+            ],
+        );
+        $checkpoint = $store->acknowledge($pending, $snapshot->eventId);
+
+        return $checkpoint;
+    }
+
+    private function advanceBookFirstRecoveryToStream(
+        OkxPaperLiveCheckpointStore $store,
+        OkxPaperLiveCheckpoint $checkpoint,
+        string $symbol,
+        ?string $targetStream,
+    ): OkxPaperLiveCheckpoint {
+        if (($checkpoint->pendingTransition['stream'] ?? null) === $targetStream
+            || ($targetStream === null
+                && ($checkpoint->pendingTransition['kind'] ?? null) === 'emit_boundary')
+        ) {
+            return $checkpoint;
+        }
+        $transitions = [];
+        foreach ($checkpoint->streamFrontiers as $stream => $frontier) {
+            if (!$frontier instanceof OkxPaperStreamFrontier
+                || !str_starts_with($stream, $symbol . '/')
+            ) {
+                continue;
+            }
+            $stage = match (true) {
+                str_ends_with($stream, '/public_trade') => 'recent_trades',
+                preg_match('/\/candle_(?:1m|5m|15m|1H)\z/D', $stream) === 1 => 'current_candles',
+                default => null,
+            };
+            if ($stage !== null) {
+                $transitions[] = [
+                    'kind' => 'rest_fetch',
+                    'symbol' => $symbol,
+                    'stream' => $stream,
+                    'stage' => $stage,
+                ];
+            }
+        }
+        $transitions[] = [
+            'kind' => 'emit_boundary',
+            'symbol' => $symbol,
+            'stream' => $symbol . '/control/snapshot_boundary',
+            'stage' => 'reconnect',
+        ];
+        foreach ($transitions as $transition) {
+            if (($targetStream !== null
+                    && ($checkpoint->pendingTransition['stream'] ?? null) === $targetStream)
+                || ($targetStream === null
+                    && ($checkpoint->pendingTransition['kind'] ?? null) === 'emit_boundary')
+            ) {
+                return $checkpoint;
+            }
+            if ($checkpoint->pendingTransition === $transition) {
+                continue;
+            }
+            $state = $checkpoint->toArray();
+            $state['pending_transition'] = $transition;
+            $checkpoint = $store->saveTransition(
+                OkxPaperLiveCheckpoint::fromArray($state),
+                'reconnecting',
+                $transition,
+            );
+        }
+
+        return $checkpoint;
     }
 
     private function acknowledgeInitialWarmupRestPrefix(
