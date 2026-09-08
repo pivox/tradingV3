@@ -3659,7 +3659,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             'asks' => [['102', '2', '0', '1']],
             'bids' => [['101', '3', '0', '2']],
             'ts' => '1784970301000',
-            'seqId' => '9003',
+            'seqId' => 9003,
         ]];
         $applied = $events->current();
         self::assertInstanceOf(PaperMarketEvent::class, $applied);
@@ -7972,7 +7972,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             'asks' => [['202', '2', '0', '1']],
             'bids' => [['201', '3', '0', '2']],
             'ts' => '1784970302000',
-            'seqId' => '9004',
+            'seqId' => 9004,
         ]];
         $loop->scripts = [
             static fn () => $public->open(attempt: 1),

@@ -5167,6 +5167,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         array $snapshot,
         array $transition,
     ): void {
+        foreach (['seqId', 'prevSeqId'] as $sequenceField) {
+            if (\is_int($snapshot[$sequenceField] ?? null)) {
+                $snapshot[$sequenceField] = (string) $snapshot[$sequenceField];
+            }
+        }
         try {
             $this->checkpoint =
                 $this->checkpointStore->saveBookRecoverySnapshotAndStreamingQueues(
