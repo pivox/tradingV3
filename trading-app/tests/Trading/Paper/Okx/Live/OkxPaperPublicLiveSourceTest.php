@@ -7493,6 +7493,129 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame('5100', OkxPaperRetainedTradeRow::expand($merged[5_099])['tradeId']);
     }
 
+    public function testHistoryTradeRecoveryMaterializesOneBoundedBatchFromLargeSuffix(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:02.000000Z');
+        $rows = [];
+        for ($tradeId = 100; $tradeId < 5_700; ++$tradeId) {
+            $rows[] = self::restTrade(
+                (string) $tradeId,
+                (string) (1784970100000 + $tradeId - 100),
+            );
+        }
+        $normalizer = new \App\Trading\Paper\Okx\Normalization\OkxPaperMarketEventNormalizer(
+            $clock,
+        );
+        $frontier = \App\Trading\Paper\Okx\Live\OkxPaperStreamFrontier::fromEvent(
+            $normalizer->recoveryTrade($rows[0]),
+        );
+        $siblingFrontier = \App\Trading\Paper\Okx\Live\OkxPaperStreamFrontier::fromEvent(
+            $normalizer->recoveryTrade($rows[2_910]),
+        );
+        $stream = 'BTCUSDT/rest/public_trade';
+        $state = OkxPaperLiveCheckpoint::fresh(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        )->toArray();
+        $state['phase'] = 'reconnecting';
+        $state['connection_epoch'] = 2;
+        $state['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
+        $state['remaining_boundaries'] = [
+            ['symbol' => 'BTCUSDT', 'reason' => 'reconnect'],
+            ['symbol' => 'ETHUSDT', 'reason' => 'reconnect'],
+        ];
+        $state['reconnect'] = [
+            'attempt' => 1,
+            'deadline_at' => '2026-07-25T10:00:03.000000Z',
+            'stable_since' => null,
+            'accepted_events' => 0,
+        ];
+        $state['stream_frontiers'][$stream] = $frontier->toArray();
+        $state['stream_frontiers']['BTCUSDT/ws/public_trade'] =
+            $siblingFrontier->toArray();
+        $state['resync_by_symbol']['BTCUSDT'] = [
+            'attempt' => 1,
+            'frontier' => $frontier->toArray(),
+            'source_sequence' => null,
+            'deadline_at' => '2026-07-25T10:00:10.000000Z',
+            'policy' => 'frontier_overlap_v1',
+        ];
+        $state['overlap_pagination_by_stream'][$stream] = [
+            'endpoint' => 'history_trades',
+            'pagination_type' => 1,
+            'next_cursor' => '99',
+            'pages_consumed' => 51,
+            'pages_remaining' => 199,
+            'target_frontier' => $frontier->toArray(),
+            'deadline_at' => '2026-07-25T10:00:10.000000Z',
+            'retained_rows' => array_map(
+                OkxPaperRetainedTradeRow::compact(...),
+                $rows,
+            ),
+        ];
+        $state['pending_transition'] = [
+            'kind' => 'rest_fetch',
+            'symbol' => 'BTCUSDT',
+            'stream' => $stream,
+            'stage' => 'history_trades',
+        ];
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $seed->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        unset($seed);
+        self::assertNotFalse(file_put_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+            CanonicalJson::encode(OkxPaperLiveCheckpoint::fromArray($state)->toArray()) . "\n",
+        ));
+
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = Task7Transport::acknowledgements(
+            self::publicArguments(),
+            'restartPublic',
+        );
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'restartBusiness',
+        );
+        $source = $this->source(
+            new Task7RestClient(),
+            $public,
+            $business,
+            clock: $clock,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+
+        $memoryBeforeRecovery = memory_get_usage(true);
+        $first = $events->current();
+
+        self::assertInstanceOf(PaperMarketEvent::class, $first);
+        self::assertSame('3011', $first->payload['trade_id'] ?? null);
+        self::assertLessThan(
+            16 * 1024 * 1024,
+            memory_get_usage(true) - $memoryBeforeRecovery,
+        );
+        self::assertCount(
+            2_691,
+            $this->checkpointState()['overlap_pagination_by_stream'][$stream][
+                'retained_rows'
+            ] ?? [],
+        );
+        self::assertSame(256, $source->pendingDurableBatchSize());
+        for ($tradeId = 3_011; $tradeId <= 3_266; ++$tradeId) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            self::assertSame((string) $tradeId, $event->payload['trade_id'] ?? null);
+            $source->acknowledge($event->eventId);
+            $events->next();
+        }
+        $nextBatch = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $nextBatch);
+        self::assertSame('3267', $nextBatch->payload['trade_id'] ?? null);
+        self::assertSame(256, $source->pendingDurableBatchSize());
+        self::assertNull($source->failureReason());
+    }
+
     public function testHistoryTradePaginationRecoversBeyondFormerFiftyPageBound(): void
     {
         $state = OkxPaperLiveCheckpoint::fresh(
