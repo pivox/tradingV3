@@ -8331,6 +8331,113 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(0, $reset['accepted_events']);
     }
 
+    public function testHealthyStopDuringReconnectBookWaitPreservesTerminalReason(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
+        $rest = Task7RestClient::withInitialDataset();
+        $public = new FakeOkxPaperPublicWebSocketTransport();
+        $business = new FakeOkxPaperPublicWebSocketTransport();
+        $deterministic = new DeterministicLoop();
+        $loop = new Task7ScriptedLoop($deterministic);
+        $ethApplied = Task7Transport::bookFrame('9003', '9002', '4');
+        $ethApplied['arg']['instId'] = 'ETH-USDT-SWAP';
+        $loop->scripts = [
+            static fn () => $public->open(),
+            static fn () => $business->open(),
+            static function () use ($public): void {
+                foreach (Task7Transport::acknowledgements(
+                    self::publicArguments(),
+                    'public',
+                ) as $acknowledgement) {
+                    $public->message($acknowledgement);
+                }
+            },
+            static function () use ($business): void {
+                foreach (Task7Transport::acknowledgements(
+                    self::businessArguments(),
+                    'business',
+                ) as $acknowledgement) {
+                    $business->message($acknowledgement);
+                }
+            },
+            static function () use ($public, $ethApplied): void {
+                $public->message(Task7Transport::bookFrame('9002', '9001', '4'));
+                $public->message($ethApplied);
+                $public->message(Task7Transport::tradeFrame(['110']));
+            },
+        ];
+        $source = $this->source(
+            $rest,
+            $public,
+            $business,
+            checkpointStore: $store,
+            clock: $clock,
+            loop: $loop,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+        for ($index = 0; $index < 3; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            if ($index < 2) {
+                $events->next();
+            }
+        }
+        $public->disconnect();
+
+        $rest->bookRows['BTC-USDT-SWAP'] = [[
+            'asks' => [['102', '2', '0', '1']],
+            'bids' => [['101', '3', '0', '2']],
+            'ts' => '1784970301000',
+            'seqId' => '9003',
+        ]];
+        $loop->scripts = [
+            static fn () => $public->open(attempt: 1),
+            static fn () => $business->open(attempt: 1),
+            static function () use ($public): void {
+                foreach (Task7Transport::acknowledgements(
+                    self::publicArguments(),
+                    'publicReconnect',
+                ) as $acknowledgement) {
+                    $public->message($acknowledgement, attempt: 1);
+                }
+            },
+            static function () use ($business): void {
+                foreach (Task7Transport::acknowledgements(
+                    self::businessArguments(),
+                    'businessReconnect',
+                ) as $acknowledgement) {
+                    $business->message($acknowledgement, attempt: 1);
+                }
+            },
+        ];
+        $clock->sleep(1);
+        $deterministic->fireTimerInterval(1.0);
+        $events->next();
+        $reconnecting = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $reconnecting);
+        self::assertSame('reconnecting', $reconnecting->payload['state'] ?? null);
+        $source->acknowledge($reconnecting->eventId);
+        $loop->scripts = [static fn () => $source->requestHealthyOperatorStop()];
+
+        try {
+            $events->next();
+            self::fail('A reconnect stop must fail with its authoritative reason.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame(
+                'okx_paper_public_healthy_stop_invalid',
+                $exception->getMessage(),
+            );
+        }
+        self::assertSame(
+            'okx_paper_public_healthy_stop_invalid',
+            $source->failureReason(),
+        );
+    }
+
     public function testReconnectBookOverlapWaitStopsWhenTheConnectionGenerationChanges(): void
     {
         $source = null;

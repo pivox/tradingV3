@@ -3032,6 +3032,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 try {
                     $events = $this->reconnectBookEvents($symbol, $transition);
                 } catch (\Throwable $exception) {
+                    if ($this->stopped) {
+                        throw $exception;
+                    }
                     if ($this->isIdentityConflict($exception)) {
                         $this->failTerminal('market_event_identity_conflict', $exception);
                     }

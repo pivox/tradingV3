@@ -1241,9 +1241,27 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
             ],
             self::checkpointState($replayRecorder->datasetDirectory())['pending_transition'],
         );
-        $replayLoop->onRun = static function () use ($replaySource): void {
-            $replaySource->requestHealthyOperatorStop();
-        };
+        $recoveryPublicFrames = self::recoveryPublicFrames();
+        $recoveryTradeFrame = $recoveryPublicFrames[array_key_last($recoveryPublicFrames)];
+        $replayLoop->scripts = [
+            static function () use ($replayPublic): void {
+                $replayPublic->message(self::bookFrame(
+                    'ETH-USDT-SWAP',
+                    'update',
+                    '9401',
+                    '9400',
+                    '1784970047000',
+                    '104',
+                    '103',
+                ));
+            },
+            static function () use ($replayPublic, $recoveryTradeFrame): void {
+                $replayPublic->message($recoveryTradeFrame);
+            },
+            static function () use ($replaySource): void {
+                $replaySource->requestHealthyOperatorStop();
+            },
+        ];
         for ($index = 0; $index < 100; ++$index) {
             $replayedEvents->next();
             if (!$replayedEvents->valid()) {
