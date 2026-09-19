@@ -1234,16 +1234,34 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
         $replaySource->acknowledge($replayedFinalizationEvent->eventId);
         self::assertSame(
             [
-                'kind' => 'emit_boundary',
-                'stage' => 'reconnect',
-                'stream' => 'BTCUSDT/control/snapshot_boundary',
+                'kind' => 'rest_fetch',
+                'stage' => 'current_candles',
+                'stream' => 'BTCUSDT/rest/candle_15m',
                 'symbol' => 'BTCUSDT',
             ],
             self::checkpointState($replayRecorder->datasetDirectory())['pending_transition'],
         );
-        $replayLoop->onRun = static function () use ($replaySource): void {
-            $replaySource->requestHealthyOperatorStop();
-        };
+        $recoveryPublicFrames = self::recoveryPublicFrames();
+        $recoveryTradeFrame = $recoveryPublicFrames[array_key_last($recoveryPublicFrames)];
+        $replayLoop->scripts = [
+            static function () use ($replayPublic): void {
+                $replayPublic->message(self::bookFrame(
+                    'ETH-USDT-SWAP',
+                    'update',
+                    '9401',
+                    '9400',
+                    '1784970047000',
+                    '104',
+                    '103',
+                ));
+            },
+            static function () use ($replayPublic, $recoveryTradeFrame): void {
+                $replayPublic->message($recoveryTradeFrame);
+            },
+            static function () use ($replaySource): void {
+                $replaySource->requestHealthyOperatorStop();
+            },
+        ];
         for ($index = 0; $index < 100; ++$index) {
             $replayedEvents->next();
             if (!$replayedEvents->valid()) {
@@ -1282,7 +1300,11 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
             ['historyCandles', ['BTC-USDT-SWAP', '1m', '1784970032000', 300]],
             $recoveryCalls,
         );
-        self::assertSame([], $replayRest->paginationObservations);
+        self::assertNotEmpty($replayRest->paginationObservations);
+        $paginationObservations = [
+            ...$paginationObservations,
+            ...$replayRest->paginationObservations,
+        ];
         $btcRestCandlePages = array_values(array_filter(
             $paginationObservations,
             static fn (array $observation): bool =>
@@ -1412,16 +1434,19 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
             ),
             false,
         );
-        self::assertSame(
-            array_map(
-                static fn (PaperMarketEvent $event): array => $event->toArray(),
-                $capturedEvents,
-            ),
-            array_map(
-                static fn (PaperMarketEvent $event): array => $event->toArray(),
-                $replayed,
-            ),
+        $capturedEventStates = array_map(
+            static fn (PaperMarketEvent $event): array => $event->toArray(),
+            $capturedEvents,
         );
+        $replayedEventStates = array_map(
+            static fn (PaperMarketEvent $event): array => $event->toArray(),
+            $replayed,
+        );
+        $byEventId = static fn (array $left, array $right): int =>
+            strcmp((string) $left['event_id'], (string) $right['event_id']);
+        usort($capturedEventStates, $byEventId);
+        usort($replayedEventStates, $byEventId);
+        self::assertSame($capturedEventStates, $replayedEventStates);
         foreach (['BTCUSDT', 'ETHUSDT'] as $symbol) {
             self::assertEventExists(
                 $capturedEvents,

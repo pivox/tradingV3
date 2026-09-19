@@ -12,6 +12,31 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(OkxPaperAcknowledgedIdentityEntry::class)]
 final class OkxPaperAcknowledgedIdentityEntryTest extends TestCase
 {
+    public function testExpandedEntriesAreCachedWithinABoundedProcessLocalWindow(): void
+    {
+        $cache = new \ReflectionProperty(
+            OkxPaperAcknowledgedIdentityEntry::class,
+            'expandedCache',
+        );
+        $cache->setValue(null, []);
+
+        for ($index = 0; $index < 8_300; ++$index) {
+            $entry = [
+                hash('sha256', 'identity-' . $index),
+                hash('sha256', 'overlap-' . $index),
+                hash('sha256', 'rest-' . $index),
+                OkxPaperLiveCheckpoint::MISSING_CANONICAL_DIGEST,
+            ];
+            $compact = OkxPaperAcknowledgedIdentityEntry::compact($entry);
+
+            self::assertSame($entry, OkxPaperAcknowledgedIdentityEntry::expand($compact));
+        }
+
+        $expanded = $cache->getValue();
+        self::assertIsArray($expanded);
+        self::assertLessThanOrEqual(8_192, \count($expanded));
+    }
+
     public function testCompactRoundTripPreservesSingleOriginEntry(): void
     {
         $entry = [

@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git curl zip unzip \
       libpng-dev libonig-dev libxml2-dev libpq-dev \
       $PHPIZE_DEPS \
-  && docker-php-ext-install pdo pdo_pgsql mbstring exif pcntl bcmath gd sockets \
+  && docker-php-ext-install pdo pdo_pgsql pdo_sqlite mbstring exif pcntl bcmath gd sockets \
   \
   # ---- Redis via PECL ----
   && pecl install redis-6.0.2 \

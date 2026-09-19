@@ -9,9 +9,12 @@ use Symfony\Component\Process\Process;
 
 final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPublicCaptureAttemptExecutorInterface
 {
+    private const OUTPUT_TAIL_BYTES = 8192;
+
     public function __construct(
         #[Autowire('%kernel.project_dir%')]
         private string $projectDirectory,
+        private ?PaperPublicCaptureOrphanFinalizer $orphanFinalizer = null,
     ) {
     }
 
@@ -20,6 +23,13 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
         string $datasetId,
         int $durationSeconds,
     ): PaperPublicCaptureAttemptResult {
+        $startedAt = self::now();
+        $stdoutTail = '';
+        $stderrTail = '';
+        $pid = null;
+        $operatorSignal = null;
+        $operatorSignalForwarded = false;
+        $process = null;
         try {
             $process = new Process([
                 \PHP_BINARY,
@@ -33,22 +43,114 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
                 'PAPER_EXECUTION_ENABLED' => '0',
             ]);
             $process->setTimeout(null);
+            // Symfony still forwards pipe chunks to the start callback when
+            // output storage is disabled; this prevents an unbounded internal
+            // buffer while the callback below retains only bounded tails.
             $process->disableOutput();
-            $signalState = $this->forwardSignalsTo($process);
+            $signalState = $this->forwardSignalsTo(
+                $process,
+                $operatorSignal,
+                $operatorSignalForwarded,
+            );
             try {
-                $process->run();
+                $captureOutput = static function (string $type, string $chunk) use (&$stdoutTail, &$stderrTail): void {
+                    $tail = $type === Process::OUT ? $stdoutTail : $stderrTail;
+                    $tail = substr($tail . $chunk, -self::OUTPUT_TAIL_BYTES);
+                    if ($type === Process::OUT) {
+                        $stdoutTail = $tail;
+                    } else {
+                        $stderrTail = $tail;
+                    }
+                };
+                $process->start($captureOutput);
+                $pid = $process->getPid();
+                $this->forwardRecordedSignal(
+                    $process,
+                    $operatorSignal,
+                    $operatorSignalForwarded,
+                );
+                $process->wait();
             } finally {
                 $this->restoreSignals($signalState);
             }
 
-            return new PaperPublicCaptureAttemptResult($process->getExitCode() ?? 1);
-        } catch (\Throwable) {
-            return new PaperPublicCaptureAttemptResult(127);
+            $exitCode = $process->getExitCode() ?? 1;
+
+            return new PaperPublicCaptureAttemptResult(
+                exitCode: $exitCode,
+                termSignal: $this->terminationSignal($process, $operatorSignal),
+                pid: $pid,
+                startedAt: $startedAt,
+                endedAt: self::now(),
+                stdoutTail: $this->redact($stdoutTail),
+                stderrTail: $this->redact($stderrTail),
+                orphanFinalized: $exitCode === 0
+                    ? null
+                    : $this->orphanFinalizer?->finalize($datasetId),
+                operatorSignal: $operatorSignal,
+            );
+        } catch (\Throwable $failure) {
+            $exitCode = $process?->getExitCode() ?? 127;
+            $stderrTail = substr(
+                $stderrTail . "\n" . $failure::class . ': ' . $failure->getMessage(),
+                -self::OUTPUT_TAIL_BYTES,
+            );
+
+            return new PaperPublicCaptureAttemptResult(
+                exitCode: $exitCode,
+                termSignal: $this->terminationSignal($process, $operatorSignal),
+                pid: $pid,
+                startedAt: $startedAt,
+                endedAt: self::now(),
+                stdoutTail: $this->redact($stdoutTail),
+                stderrTail: $this->redact($stderrTail),
+                orphanFinalized: $this->orphanFinalizer?->finalize($datasetId),
+                operatorSignal: $operatorSignal,
+            );
         }
     }
 
+    private function terminationSignal(?Process $process, ?int $operatorSignal): ?int
+    {
+        if ($operatorSignal !== null || !$process instanceof Process) {
+            return $operatorSignal;
+        }
+        try {
+            return $process->hasBeenSignaled() ? $process->getTermSignal() : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private static function now(): string
+    {
+        return (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+            ->format('Y-m-d\TH:i:s.u\Z');
+    }
+
+    private function redact(string $output): string
+    {
+        $output = str_replace($this->projectDirectory, '[project]', $output);
+        $output = preg_replace(
+            '#(?<![A-Za-z0-9])/(?:[^\s:/]+/)*[^\s:]*#',
+            '[path]',
+            $output,
+        ) ?? '';
+        $output = preg_replace(
+            '/\S*(?:secret|password|token|api[_-]?key|wallet)\S*/i',
+            '[redacted]',
+            $output,
+        ) ?? '';
+
+        return substr($output, -self::OUTPUT_TAIL_BYTES);
+    }
+
     /** @return array{async: bool, handlers: array<int, callable|int>}|null */
-    private function forwardSignalsTo(Process $process): ?array
+    private function forwardSignalsTo(
+        Process $process,
+        ?int &$operatorSignal,
+        bool &$operatorSignalForwarded,
+    ): ?array
     {
         if (!function_exists('pcntl_async_signals')
             || !function_exists('pcntl_signal')
@@ -63,12 +165,18 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
         ];
         foreach ([\SIGINT, \SIGTERM] as $signal) {
             $state['handlers'][$signal] = pcntl_signal_get_handler($signal);
-            pcntl_signal($signal, static function (int $received) use ($process): void {
+            pcntl_signal($signal, static function (int $received) use (
+                $process,
+                &$operatorSignal,
+                &$operatorSignalForwarded,
+            ): void {
+                $operatorSignal ??= $received;
                 if (!$process->isRunning()) {
                     return;
                 }
                 try {
                     $process->signal($received);
+                    $operatorSignalForwarded = true;
                 } catch (\Throwable) {
                     // The child may already have received the process-group signal.
                 }
@@ -76,6 +184,25 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
         }
 
         return $state;
+    }
+
+    private function forwardRecordedSignal(
+        Process $process,
+        ?int $operatorSignal,
+        bool &$operatorSignalForwarded,
+    ): void {
+        if ($operatorSignal === null
+            || $operatorSignalForwarded
+            || !$process->isRunning()
+        ) {
+            return;
+        }
+        try {
+            $process->signal($operatorSignal);
+            $operatorSignalForwarded = true;
+        } catch (\Throwable) {
+            // The child may have exited between isRunning() and signal().
+        }
     }
 
     /** @param array{async: bool, handlers: array<int, callable|int>}|null $state */

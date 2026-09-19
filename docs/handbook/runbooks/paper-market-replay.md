@@ -55,19 +55,25 @@ public-data venue. These commands have no execution dependency and do not need
 ```bash
 install -d -m 0700 /absolute/private/paper-market-data
 
+PAPER_EXECUTION_ENABLED=0 \
+PAPER_MARKET_ACQUISITION_ENABLED=1 \
+HYPERLIQUID_PAPER_PUBLIC_ACQUISITION_ENABLED=0 \
+PAPER_MARKET_DATA_ROOT=/absolute/private/paper-market-data \
+php bin/console app:paper-market:public-capture-supervise \
+  --venue=okx \
+  --dataset-prefix=first-baseline-okx-20260823 \
+  --duration-sec=86400 \
+  --attempts=8
+
+PAPER_EXECUTION_ENABLED=0 \
+HYPERLIQUID_PAPER_PUBLIC_ACQUISITION_ENABLED=1 \
 PAPER_MARKET_ACQUISITION_ENABLED=1 \
 PAPER_MARKET_DATA_ROOT=/absolute/private/paper-market-data \
-php bin/console app:paper-market:public-capture \
-  --venue=okx \
-  --dataset-id=first-baseline-okx-20260823-mainnet \
-  --duration-sec=86400
-
-HYPERLIQUID_PAPER_PUBLIC_ACQUISITION_ENABLED=1 \
-PAPER_MARKET_DATA_ROOT=/absolute/private/paper-market-data \
-php bin/console app:paper-market:public-capture \
+php bin/console app:paper-market:public-capture-supervise \
   --venue=hyperliquid \
-  --dataset-id=first-baseline-hyperliquid-20260823-mainnet \
-  --duration-sec=86400
+  --dataset-prefix=first-baseline-hyperliquid-20260823 \
+  --duration-sec=86400 \
+  --attempts=8
 ```
 
 The duration is explicit and bounded from 300 to 604800 seconds. BTC/ETH,
@@ -79,9 +85,28 @@ isolated.
 A timer, `SIGINT` or `SIGTERM` requests a healthy stop. The source completes
 only after its queues and pending acknowledgements are drained and continuity
 is proven. A protocol, continuity, durability or abnormal-stop failure freezes
-the dataset as `incomplete`; a terminal dataset is immutable. An abrupt process
-loss may leave `recording`, in which case the exact same command resumes from
-the durable recorder/source checkpoints.
+the dataset as `incomplete`; a terminal dataset is immutable. The supervisor
+records a bounded, redacted diagnostic for every child (dataset ID, PID, start/end,
+exit code, signal and stdout/stderr tails). After an abrupt child loss, it
+authenticates and freezes any orphaned `recording` dataset as `incomplete` before
+starting a fresh dataset ID. If that terminalization cannot be proven, supervision
+stops fail-closed instead of silently abandoning the manifest.
+An operator `SIGINT`/`SIGTERM` is recorded and stops the supervision loop after the
+current child has terminated; it never consumes another attempt.
+
+Hyperliquid public trades cannot be reconstructed exactly across a websocket
+disconnect. A close or pong timeout therefore ends the current attempt immediately
+with `hyperliquid_public_trade_gap_unrecoverable`; it is never resubscribed into a
+dataset whose continuity is already false.
+
+The recorder keeps an exact disk-backed identity index and an incremental SHA-256
+context on the hot append path. Full event-file scans remain limited to process
+open/recovery and terminal authentication. Reproduce the long-run throughput and
+128 MiB memory check with:
+
+```bash
+php -d memory_limit=128M scripts/benchmark_paper_dataset_recorder.php 150000 25000
+```
 
 New OKX captures warm up each BTC/ETH stream with a UTC-four-hour-aligned base
 of 1,000 confirmed, contiguous one-hour candles before publishing its initial

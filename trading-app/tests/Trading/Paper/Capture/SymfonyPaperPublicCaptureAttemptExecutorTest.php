@@ -5,6 +5,12 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Capture;
 
 use App\Trading\Paper\Capture\SymfonyPaperPublicCaptureAttemptExecutor;
+use App\Trading\Paper\Capture\PaperPublicCaptureOrphanFinalizer;
+use App\Trading\Paper\Capture\PaperPublicLiveManifestFactory;
+use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
+use App\Trading\Paper\Dataset\PaperDatasetRecorder;
+use App\Trading\Paper\Dataset\PaperDatasetState;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Process\Process;
@@ -67,7 +73,22 @@ PHP,
             86_400,
         );
 
-        self::assertSame(23, $result->exitCode);
+        self::assertSame(23, $result->exitCode, $result->stderrTail);
+        self::assertIsInt($result->pid);
+        self::assertGreaterThan(0, $result->pid);
+        self::assertNull($result->termSignal);
+        self::assertNotSame('', $result->startedAt);
+        self::assertNotSame('', $result->endedAt);
+        self::assertStringNotContainsString('/private/', $result->stdoutTail);
+        self::assertStringNotContainsString('secret', $result->stdoutTail);
+        self::assertStringNotContainsString('/private/', $result->stderrTail);
+        self::assertStringNotContainsString('secret', $result->stderrTail);
+        self::assertStringContainsString('[path]', $result->stdoutTail);
+        self::assertStringContainsString('[redacted]', $result->stdoutTail);
+        self::assertStringContainsString('[path]', $result->stderrTail);
+        self::assertStringContainsString('[redacted]', $result->stderrTail);
+        self::assertLessThanOrEqual(8192, \strlen($result->stdoutTail));
+        self::assertLessThanOrEqual(8192, \strlen($result->stderrTail));
         self::assertSame([
             'argv' => [
                 $this->root . '/bin/console',
@@ -95,7 +116,9 @@ PHP,
             <<<'PHP'
 <?php
 file_put_contents((string) getenv('PAPER_CAPTURE_SIGNAL_READY'), 'ready');
-sleep(30);
+pcntl_async_signals(true);
+pcntl_signal(SIGTERM, static function (): never { exit(0); });
+while (true) { usleep(10_000); }
 PHP,
         ));
         $autoload = \dirname(__DIR__, 4) . '/vendor/autoload.php';
@@ -107,7 +130,11 @@ PHP,
 require %s;
 $executor = new App\Trading\Paper\Capture\SymfonyPaperPublicCaptureAttemptExecutor($argv[1]);
 $attempt = $executor->execute('okx', 'signal-forwarding-okx-mainnet', 300);
-file_put_contents($argv[2], (string) $attempt->exitCode);
+file_put_contents($argv[2], json_encode([
+    'exit_code' => $attempt->exitCode,
+    'term_signal' => $attempt->termSignal,
+    'operator_signal' => $attempt->operatorSignal,
+], JSON_THROW_ON_ERROR));
 PHP,
                 var_export($autoload, true),
             ),
@@ -130,6 +157,107 @@ PHP,
 
         self::assertSame(0, $supervisor->getExitCode(), $supervisor->getErrorOutput());
         self::assertFileExists($result);
-        self::assertNotSame('0', trim(file_get_contents($result) ?: ''));
+        $attempt = json_decode((string) file_get_contents($result), true, 8, JSON_THROW_ON_ERROR);
+        self::assertSame(0, $attempt['exit_code'] ?? null);
+        self::assertSame(SIGTERM, $attempt['term_signal'] ?? null);
+        self::assertSame(SIGTERM, $attempt['operator_signal'] ?? null);
+    }
+
+    public function testForwardsSignalRecordedBeforeTheChildStarts(): void
+    {
+        if (!function_exists('pcntl_signal') || !function_exists('posix_kill')) {
+            self::markTestSkipped('Signal support is unavailable.');
+        }
+
+        $executor = new SymfonyPaperPublicCaptureAttemptExecutor($this->root);
+        $process = new Process([
+            \PHP_BINARY,
+            '-r',
+            'pcntl_async_signals(true); pcntl_signal(SIGTERM, static fn () => exit(0)); while (true) { usleep(10000); }',
+        ]);
+        $process->setTimeout(2.0);
+        $operatorSignal = null;
+        $signalForwarded = false;
+        $install = new \ReflectionMethod($executor, 'forwardSignalsTo');
+        $restore = new \ReflectionMethod($executor, 'restoreSignals');
+        $signalState = $install->invokeArgs($executor, [
+            $process,
+            &$operatorSignal,
+            &$signalForwarded,
+        ]);
+        try {
+            self::assertTrue(posix_kill(getmypid(), SIGTERM));
+            self::assertSame(SIGTERM, $operatorSignal);
+            self::assertFalse($signalForwarded);
+
+            $process->start();
+            $forwardRecorded = new \ReflectionMethod($executor, 'forwardRecordedSignal');
+            $forwardRecorded->invokeArgs($executor, [
+                $process,
+                $operatorSignal,
+                &$signalForwarded,
+            ]);
+            $process->wait();
+
+            self::assertTrue($signalForwarded);
+            self::assertSame(128 + SIGTERM, $process->getExitCode());
+        } finally {
+            if ($process->isRunning()) {
+                $process->stop(0.0, SIGKILL);
+            }
+            $restore->invoke($executor, $signalState);
+        }
+    }
+
+    public function testReportsAChildFatalSignalInsteadOfCollapsingItToExit127(): void
+    {
+        if (!function_exists('posix_kill')) {
+            self::markTestSkipped('Signal support is unavailable.');
+        }
+        self::assertNotFalse(file_put_contents(
+            $this->root . '/bin/console',
+            <<<'PHP'
+<?php
+posix_kill(getmypid(), SIGKILL);
+usleep(100_000);
+PHP,
+        ));
+
+        $result = (new SymfonyPaperPublicCaptureAttemptExecutor($this->root))->execute(
+            'okx',
+            'fatal-signal-okx-mainnet',
+            300,
+        );
+
+        self::assertSame(SIGKILL, $result->termSignal);
+        self::assertNull($result->operatorSignal);
+        self::assertNotSame(127, $result->exitCode);
+    }
+
+    public function testTerminalizesAnAuthenticatedRecordingManifestAfterFatalExit(): void
+    {
+        $dataRoot = $this->root . '/paper-data';
+        $datasetId = 'fatal-okx-attempt-mainnet';
+        $manifest = (new PaperPublicLiveManifestFactory())->create(
+            PaperMarketDataVenue::OKX,
+            $datasetId,
+        );
+        new PaperDatasetRecorder($dataRoot, $manifest);
+        self::assertNotFalse(file_put_contents(
+            $this->root . '/bin/console',
+            "<?php fwrite(STDERR, 'simulated fatal'); exit(137);\n",
+        ));
+
+        $result = (new SymfonyPaperPublicCaptureAttemptExecutor(
+            $this->root,
+            new PaperPublicCaptureOrphanFinalizer($dataRoot),
+        ))->execute('okx', $datasetId, 300);
+
+        self::assertSame(137, $result->exitCode);
+        self::assertTrue($result->orphanFinalized);
+        $stored = (new PaperDatasetManifestCodec())->decode(
+            (string) file_get_contents($dataRoot . '/' . $datasetId . '/manifest.json'),
+        );
+        self::assertSame(PaperDatasetState::INCOMPLETE, $stored->state);
     }
 }
