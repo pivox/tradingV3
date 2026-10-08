@@ -72,6 +72,7 @@ parameters:
     env(FAKE_EXCHANGE_DAILY_LOSS_CAP_USDT): '100.000000000000'
     env(FAKE_EXCHANGE_DETERMINISTIC_SEED): 'fake-paper-default-seed-v1'
     app.trade_entry_default_mode: 'scalper_micro'
+    app.okx_demo_max_notional: 1000.0
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
 
@@ -455,6 +456,7 @@ services:
             $simulatedTrading: '%env(bool:OKX_SIMULATED_TRADING)%'
             $demoTradingEnabled: '%env(bool:OKX_DEMO_TRADING_ENABLED)%'
             $liveEnabled: '%env(bool:OKX_LIVE_ENABLED)%'
+            $globalDemoTradingEnabled: '%env(bool:DEMO_TRADING_ENABLED)%'
 
     App\Exchange\Okx\OkxRestClient:
         arguments:

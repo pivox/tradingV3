@@ -22,6 +22,7 @@ use App\Provider\Context\ExchangeContext;
 use App\Provider\Fake\FakeRuntimeCheck;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface;
 use App\Provider\Okx\OkxAccountGateway;
+use App\Provider\Okx\OkxDemoWriteRuntimeCheck;
 use App\Provider\Okx\OkxRuntimeCheck;
 use App\Provider\Registry\ExchangeProviderBundle;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidMutationReadinessGate;
@@ -29,6 +30,7 @@ use Psr\Clock\ClockInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Clock\NativeClock;
@@ -51,6 +53,7 @@ final class ExchangeRuntimeCheckCommand extends Command
         private readonly OkxPrivateWebSocketObservabilityPolicy $okxPrivateWebSocketObservabilityPolicy = new OkxPrivateWebSocketObservabilityPolicy(),
         ?ClockInterface $clock = null,
         private readonly ?FakeRuntimeCheck $fakeRuntimeCheck = null,
+        private readonly ?OkxDemoWriteRuntimeCheck $okxDemoWriteRuntimeCheck = null,
     ) {
         $this->clock = $clock ?? new NativeClock(new \DateTimeZone('UTC'));
         parent::__construct();
@@ -60,7 +63,8 @@ final class ExchangeRuntimeCheckCommand extends Command
     {
         $this
             ->addArgument('exchange', InputArgument::REQUIRED, 'Exchange enum value')
-            ->addArgument('market_type', InputArgument::REQUIRED, 'Market type enum value');
+            ->addArgument('market_type', InputArgument::REQUIRED, 'Market type enum value')
+            ->addOption('json', null, InputOption::VALUE_NONE, 'Print the OKX demo write envelope check as JSON');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -77,6 +81,17 @@ final class ExchangeRuntimeCheckCommand extends Command
             $output->writeln(sprintf('Unsupported market type: %s', (string) $input->getArgument('market_type')));
 
             return Command::FAILURE;
+        }
+
+        if ($input->getOption('json')) {
+            if ($exchange !== Exchange::OKX || !$this->okxDemoWriteRuntimeCheck instanceof OkxDemoWriteRuntimeCheck) {
+                $output->writeln('JSON output is only supported for exchange okx');
+
+                return Command::FAILURE;
+            }
+            $output->writeln(json_encode($this->okxDemoWriteRuntimeCheck->check(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+
+            return Command::SUCCESS;
         }
 
         $context = new ExchangeContext($exchange, $marketType);
@@ -160,6 +175,11 @@ final class ExchangeRuntimeCheckCommand extends Command
             $output->writeln('Dry-run only: yes');
             $output->writeln('Live allowed: no');
             $output->writeln(sprintf('Demo trading enabled: %s', $this->okxConfig->demoTradingEnabled ? 'yes' : 'no'));
+            if ($this->okxDemoWriteRuntimeCheck instanceof OkxDemoWriteRuntimeCheck) {
+                $envelope = $this->okxDemoWriteRuntimeCheck->check();
+                $output->writeln(sprintf('Demo write envelope: %s', $envelope['write_ready'] === true ? 'ready' : 'blocked'));
+                $output->writeln(sprintf('Demo write blocking reasons: %s', $this->formatReasons($this->stringReasons($envelope['blocking_reasons']))));
+            }
             if ($okxReadinessReport instanceof ExchangeReadinessReport) {
                 $okxReadiness = $okxReadinessReport->toArray();
                 $output->writeln(sprintf('Readiness level: %s', $okxReadinessReport->readyLevel->value));

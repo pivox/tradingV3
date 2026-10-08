@@ -30,9 +30,7 @@ use App\Exchange\Okx\OkxInstrumentResolver;
 use App\Exchange\Okx\OkxRestClientInterface;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
 use Psr\Clock\ClockInterface;
-use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
-#[AutoconfigureTag('app.exchange_adapter')]
 final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, ExchangeRestSnapshotProviderInterface
 {
     public function __construct(
