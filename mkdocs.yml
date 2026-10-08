@@ -71,6 +71,7 @@ nav:
       - "Baseline bad trades #132": reports/bad-trades-baseline.md
       - "Récap 2026-10-08 OKX + Hyperliquid": recap-2026-10-08-okx-hyperliquid.md
       - "Diagnostic Paper zero-trade 2026-10-08": reports/paper-zero-trade-diagnostic-2026-10-08.md
+      - "Preuves des rejets de plan 2026-10-09": reports/paper-plan-rejection-evidence-2026-10-09.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 

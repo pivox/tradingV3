@@ -50,6 +50,7 @@ final readonly class PaperCanonicalOrderPlanEvidenceSource
     ) {
     }
 
+    /** @param array<string, mixed> $diagnosticContext */
     public function build(
         CanonicalExecutionPolicy $policy,
         CanonicalIndicatorProjection $projection,
