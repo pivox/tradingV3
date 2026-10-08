@@ -176,15 +176,25 @@ final class LimitFillWatchMessageHandler
     private function onFilled(LimitFillWatchMessage $message, \App\Exchange\Contract\ExchangeAdapterInterface $adapter, RestingEntryState $state): void
     {
         if ($state->remainderActive) {
-            try {
-                $this->watcher->cancel($adapter, $message->symbol, $message->exchangeOrderId, $message->clientOrderId, $message->decisionKey);
-            } catch (\Throwable $e) {
-                $this->positionsLogger->critical('limit_watch.remainder_cancel_failed', [
+            $confirmed = $this->confirmRemainderInactive($message, $adapter, $state);
+            if ($confirmed === null) {
+                $maxTriesBeforeCancel = (int) ceil((max(0, $message->cancelAfterSec) + self::GRACE_SECONDS) * 1000 / self::POLL_DELAY_MS);
+                $maxAllowedTries = $maxTriesBeforeCancel + self::CONFIRMATION_POLLS;
+                if ($message->tries + 1 <= $maxAllowedTries) {
+                    $this->rescheduleWatch($message, true, $maxTriesBeforeCancel, $maxAllowedTries);
+
+                    return;
+                }
+
+                $this->positionsLogger->critical('limit_watch.remainder_unconfirmed_residual_risk', [
                     'symbol' => $message->symbol,
                     'exchange_order_id' => $message->exchangeOrderId,
+                    'client_order_id' => $message->clientOrderId,
                     'decision_key' => $message->decisionKey,
-                    'error' => $e->getMessage(),
+                    'tries' => $message->tries,
                 ]);
+            } else {
+                $state = $confirmed;
             }
         }
 
@@ -200,6 +210,50 @@ final class LimitFillWatchMessageHandler
         }
 
         $this->logPositionOpenedLifecycle($message, $this->filledOrder($message, $state));
+    }
+
+    private function confirmRemainderInactive(LimitFillWatchMessage $message, \App\Exchange\Contract\ExchangeAdapterInterface $adapter, RestingEntryState $before): ?RestingEntryState
+    {
+        try {
+            $cancel = $this->watcher->cancel($adapter, $message->symbol, $message->exchangeOrderId, $message->clientOrderId, $message->decisionKey);
+            if (!$cancel->cancelled) {
+                $this->positionsLogger->warning('limit_watch.remainder_cancel_rejected', [
+                    'symbol' => $message->symbol,
+                    'exchange_order_id' => $message->exchangeOrderId,
+                    'decision_key' => $message->decisionKey,
+                    'cancel_status' => $cancel->status->value,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->positionsLogger->critical('limit_watch.remainder_cancel_failed', [
+                'symbol' => $message->symbol,
+                'exchange_order_id' => $message->exchangeOrderId,
+                'decision_key' => $message->decisionKey,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        try {
+            $after = $this->watcher->inspect(
+                $adapter,
+                $message->symbol,
+                $message->exchangeOrderId,
+                $message->clientOrderId,
+                $this->positionSide($message),
+                $message->positionBaseline,
+                isset($message->plan['size']) ? (float) $message->plan['size'] : null,
+            );
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if ($after->status === RestingEntryState::FILLED && !$after->remainderActive) {
+            return $after;
+        }
+
+        return $after->status === RestingEntryState::CLOSED
+            ? new RestingEntryState(RestingEntryState::FILLED, $before->filledQuantity, false, $before->order, $before->averagePrice)
+            : null;
     }
 
     private function protect(LimitFillWatchMessage $message, \App\Exchange\Contract\ExchangeAdapterInterface $adapter, RestingEntryState $state): void

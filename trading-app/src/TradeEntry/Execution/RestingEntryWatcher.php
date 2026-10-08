@@ -71,7 +71,7 @@ final readonly class RestingEntryWatcher
             foreach ($adapter->getOpenPositions($symbol) as $position) {
                 $increase = $position->size - $positionBaseline;
                 if ($position->side === $positionSide && $increase >= $orderQuantity * 0.99) {
-                    return new RestingEntryState(RestingEntryState::FILLED, $position->size, false, null, $position->entryPrice);
+                    return new RestingEntryState(RestingEntryState::FILLED, min($increase, $orderQuantity), false, null, $position->entryPrice);
                 }
             }
         }

@@ -128,6 +128,25 @@ final class ExchangeExecutionService
         $leverageSet = null;
         if ($capabilities->requiresSeparateLeverageSubmit || $capabilities->supportsPerSymbolLeverage) {
             $leverageSet = $adapter->setLeverage($plan->symbol, $plan->leverage, $plan->openType);
+            if ($leverageSet === false) {
+                $this->positionsLogger->error('exchange_execution.leverage_setup_failed', [
+                    'symbol' => $plan->symbol,
+                    'leverage' => $plan->leverage,
+                    'client_order_id' => $clientOrderId,
+                    'decision_key' => $decisionKey,
+                ]);
+
+                return new ExecutionResult(
+                    clientOrderId: $clientOrderId,
+                    exchangeOrderId: null,
+                    status: ExecutionResult::STATUS_ERROR,
+                    raw: [
+                        'reason' => 'leverage_setup_failed',
+                        'leverage' => $plan->leverage,
+                        'leverage_submit_success' => false,
+                    ],
+                );
+            }
         }
 
         $positionBaseline = null;

@@ -120,6 +120,19 @@ final class ExchangeExecutionRestingLimitTest extends TestCase
         self::assertSame(4.0, $this->dispatched[0]->getMessage()->positionBaseline);
     }
 
+    public function testFailedLeverageSetupSubmitsNoEntry(): void
+    {
+        $this->adapter->leverageResult = false;
+
+        $result = $this->service($this->bus())->execute($this->plan('limit', 1), 'decision-lev', 'unit');
+
+        self::assertSame(ExecutionResult::STATUS_ERROR, $result->status);
+        self::assertSame('leverage_setup_failed', $result->raw['reason']);
+        self::assertFalse($result->raw['leverage_submit_success']);
+        self::assertSame([], $this->adapter->placed);
+        self::assertSame([], $this->dispatched);
+    }
+
     public function testWithoutABusTheEntryRemainderIsCancelledAsBefore(): void
     {
         $result = $this->service(null)->execute($this->plan('limit', 1), 'decision-nobus', 'unit');

@@ -48,6 +48,17 @@ final class ScriptedExchangeAdapter implements ExchangeAdapterInterface, Exchang
 
     public bool $throwOnGetOrder = false;
 
+    public bool $leverageResult = true;
+
+    public bool $cancelAccepted = true;
+
+    public int $cancelEffectiveOnAttempt = 1;
+
+    private int $cancelAttempts = 0;
+
+    /** @var (callable(): void)|null */
+    public $onCancelEffective = null;
+
     public function exchange(): Exchange
     {
         return Exchange::OKX;
@@ -97,12 +108,19 @@ final class ScriptedExchangeAdapter implements ExchangeAdapterInterface, Exchang
     public function cancelOrder(CancelOrderRequest $request): CancelOrderResult
     {
         $this->cancelled[] = $request;
-        $this->openOrders = array_values(array_filter(
-            $this->openOrders,
-            static fn (ExchangeOrderDto $o): bool => $o->exchangeOrderId !== $request->exchangeOrderId,
-        ));
+        ++$this->cancelAttempts;
+        if ($this->cancelAccepted && $this->cancelAttempts >= $this->cancelEffectiveOnAttempt) {
+            $this->openOrders = array_values(array_filter(
+                $this->openOrders,
+                static fn (ExchangeOrderDto $o): bool => $o->exchangeOrderId !== $request->exchangeOrderId,
+            ));
+            if ($this->onCancelEffective !== null) {
+                ($this->onCancelEffective)();
+                $this->onCancelEffective = null;
+            }
+        }
 
-        return new CancelOrderResult(true, $request->symbol, $request->exchangeOrderId, $request->clientOrderId, ExchangeOrderStatus::CANCELLED);
+        return new CancelOrderResult($this->cancelAccepted, $request->symbol, $request->exchangeOrderId, $request->clientOrderId, $this->cancelAccepted ? ExchangeOrderStatus::CANCELLED : ExchangeOrderStatus::REJECTED);
     }
 
     public function getOrder(string $symbol, string $exchangeOrderId): ?ExchangeOrderDto
@@ -128,7 +146,7 @@ final class ScriptedExchangeAdapter implements ExchangeAdapterInterface, Exchang
     {
         $this->leverage[] = [$symbol, $leverage, $marginMode];
 
-        return true;
+        return $this->leverageResult;
     }
 
     public function reconcile(?string $symbol = null): ExchangeReconciliationResult

@@ -150,6 +150,11 @@ final class LimitFillWatchMessageHandlerLineageTest extends KernelTestCase
         return new TradeLineageManager($repository, $this->em, new NullLogger());
     }
 
+    private function firstPlaced(): \App\Exchange\Dto\PlaceOrderRequest
+    {
+        return $this->adapter->placed[0];
+    }
+
     private function handler(?\App\TradeEntry\Service\TakeProfitPlacerInterface $takeProfits = null): LimitFillWatchMessageHandler
     {
         $logger = new NullLogger();
@@ -276,6 +281,72 @@ final class LimitFillWatchMessageHandlerLineageTest extends KernelTestCase
         self::assertSame('ord-w', $this->adapter->cancelled[0]->exchangeOrderId);
         self::assertCount(1, $this->adapter->placed);
         self::assertSame(ExchangeOrderType::STOP_LOSS, $this->adapter->placed[0]->orderType);
+        self::assertSame([], $this->dispatched);
+    }
+
+    public function testRejectedRemainderCancelDoesNotFinalizeAndKeepsWatching(): void
+    {
+        $this->adapter->openOrders[] = $this->adapter->order('ord-w', ExchangeOrderStatus::PARTIALLY_FILLED, 1.0, 2.0, 'client-w');
+        $this->adapter->positions[] = $this->adapter->position(1.0);
+        $this->adapter->cancelAccepted = false;
+
+        $this->handler()($this->message(positionBaseline: 0.0));
+
+        self::assertSame([], $this->adapter->placed);
+        self::assertCount(1, $this->dispatched);
+        $next = $this->dispatched[0]->getMessage();
+        self::assertSame(1, $next->tries);
+        self::assertTrue($next->cancelIssued);
+        self::assertSame(0.0, $next->positionBaseline);
+        self::assertNull($this->em->getRepository(TradeLifecycleEvent::class)->findOneBy(['eventType' => 'position_opened']));
+    }
+
+    public function testRemainderCancelPendingThenConfirmedProtectsTheFinalPositionSize(): void
+    {
+        $this->adapter->openOrders[] = $this->adapter->order('ord-w', ExchangeOrderStatus::PARTIALLY_FILLED, 1.0, 2.0, 'client-w');
+        $this->adapter->positions[] = $this->adapter->position(1.0);
+        $this->adapter->placeStatus = ExchangeOrderStatus::OPEN;
+        $this->adapter->cancelEffectiveOnAttempt = 2;
+        $this->adapter->onCancelEffective = function (): void {
+            $this->adapter->positions = [$this->adapter->position(2.0)];
+        };
+        $handler = $this->handler();
+
+        $handler($this->message());
+        self::assertSame([], $this->adapter->placed);
+        self::assertCount(1, $this->dispatched);
+
+        $handler($this->dispatched[0]->getMessage());
+
+        self::assertCount(1, $this->adapter->placed);
+        self::assertEqualsWithDelta(2.0, $this->firstPlaced()->quantity, 0.000001);
+        self::assertCount(1, $this->dispatched);
+    }
+
+    public function testUnconfirmedRemainderAfterTheRetryBudgetRunsResidualRiskProtection(): void
+    {
+        $this->adapter->openOrders[] = $this->adapter->order('ord-w', ExchangeOrderStatus::PARTIALLY_FILLED, 1.0, 2.0, 'client-w');
+        $this->adapter->positions[] = $this->adapter->position(1.0);
+        $this->adapter->placeStatus = ExchangeOrderStatus::OPEN;
+        $this->adapter->cancelAccepted = false;
+
+        $this->handler()($this->message(tries: 99, cancelIssued: true));
+
+        self::assertSame([], $this->dispatched);
+        self::assertCount(1, $this->adapter->placed);
+        self::assertEqualsWithDelta(1.0, $this->adapter->placed[0]->quantity, 0.000001);
+    }
+
+    public function testBaselineFillReportsOnlyTheMeasuredIncrease(): void
+    {
+        $this->adapter->positions[] = $this->adapter->position(3.0);
+        $this->adapter->placeStatus = ExchangeOrderStatus::OPEN;
+        $watcher = new RestingEntryWatcher(new ProtectionEnforcer(new EmergencyCloseService(new TradeEntryMetricsService(), new NullLogger()), new TradeEntryMetricsService(), new NullLogger()), $this->fixedClock());
+
+        $state = $watcher->inspect($this->adapter, 'BTCUSDT', 'ord-w', 'client-w', \App\Exchange\Enum\ExchangePositionSide::LONG, 2.0, 1.0);
+
+        self::assertSame('filled', $state->status);
+        self::assertEqualsWithDelta(1.0, $state->filledQuantity, 0.000001);
     }
 
     public function testFillSeenOnlyInTheFillsSnapshotStillTriggersProtection(): void
