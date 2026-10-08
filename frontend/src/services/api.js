@@ -1,5 +1,6 @@
 // src/services/api.js
 import config from '../config';
+import { klinesWindows } from './klinesWindows';
 
 const handleResponse = async (response) => {
     if (!response.ok) {
@@ -84,10 +85,8 @@ const api = {
             return this.fetchKlines(symbol, interval, 500);
         }
         const stepMs = intervalToStepMinutes(interval) * 60 * 1000;
-        const windowMs = stepMs * KLINES_MAX_LIMIT;
         const byTimestamp = new Map();
-        for (let from = startMs; from < endMs; from += windowMs) {
-            const to = Math.min(from + windowMs, endMs);
+        for (const { from, to } of klinesWindows(startMs, endMs, stepMs, KLINES_MAX_LIMIT)) {
             const params = new URLSearchParams({
                 symbol: String(symbol).toUpperCase(),
                 interval,

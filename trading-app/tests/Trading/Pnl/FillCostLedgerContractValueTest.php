@@ -107,6 +107,43 @@ final class FillCostLedgerContractValueTest extends KernelTestCase
         self::assertViewInvariant($entry);
     }
 
+    public function testARealOkxProducerFillIsConvertedWithoutContractValueMissing(): void
+    {
+        $this->persistLineage('itd-okx-producer', 'cid-okx-producer', 'okx-producer-order', Exchange::OKX);
+        $client = new class implements \App\Exchange\Okx\OkxRestClientInterface {
+            public function publicGet(string $path, array $query = []): array
+            {
+                return ['code' => '0', 'data' => [['instId' => 'BTC-USDT-SWAP', 'ctVal' => '0.01']]];
+            }
+
+            public function privateGet(string $path, array $query = []): array
+            {
+                return ['code' => '0', 'data' => []];
+            }
+
+            public function privatePost(string $path, array $body = []): array
+            {
+                return ['code' => '0', 'data' => []];
+            }
+        };
+        $dto = (new \App\Provider\Okx\OkxPrivateReadMapper(
+            new \App\Exchange\Okx\OkxInstrumentResolver(),
+            new \App\Exchange\Okx\OkxContractValueResolver($client),
+        ))->fill([
+            'instId' => 'BTC-USDT-SWAP', 'ordId' => 'okx-producer-order', 'clOrdId' => 'cid-okx-producer',
+            'tradeId' => 'producer-trade', 'side' => 'buy', 'posSide' => 'long', 'fillSz' => '3',
+            'fillPx' => '30000', 'fee' => '-0.1', 'feeCcy' => 'USDT', 'ts' => '1767225600000',
+        ]);
+
+        $this->service->ingestExchangeFill(new ExchangeFillReceived($dto));
+
+        $entry = $this->em->getRepository(FillCostLedgerEntry::class)->findOneBy(['exchangeOrderId' => 'okx-producer-order']);
+        self::assertInstanceOf(FillCostLedgerEntry::class, $entry);
+        self::assertSame('0.030000000000', $entry->getQuantity());
+        self::assertSame('900.000000000000', $entry->getNotional());
+        self::assertNotContains('contract_value_missing', $entry->getQualityFlags());
+    }
+
     public function testARoundTripInContractsYieldsTheBaseAssetGrossAndNetPnl(): void
     {
         $this->persistLineage('itd-okx-round-trip', 'cid-okx-round-trip', 'OKX-ORDER-ENTRY', Exchange::FAKE);

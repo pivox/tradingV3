@@ -557,3 +557,21 @@ def test_set_read_effective_payload_null_when_not_materialized():
     # le front en déduit « set non matérialisé ».
     assert _set_read(symbols=[], contracts_limit=5).effective_payload is None
     assert _set_read(symbols=[" ", "\t"]).effective_payload is None
+
+
+def test_set_read_marks_removed_exchange_as_not_runnable():
+    legacy = _set_read(exchange="bitmart", symbols=["BTCUSDT"])
+    dumped = legacy.model_dump()
+
+    assert dumped["exchange"] == "bitmart"
+    assert dumped["runnable"] is False
+    assert dumped["unsupported_reason"] == "unsupported_exchange"
+    assert dumped["effective_payload"] is None
+
+
+def test_set_read_supported_exchange_is_runnable():
+    dumped = _set_read(symbols=["BTCUSDT"]).model_dump()
+
+    assert dumped["runnable"] is True
+    assert dumped["unsupported_reason"] is None
+    assert dumped["effective_payload"] is not None

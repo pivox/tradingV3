@@ -16,6 +16,7 @@ use App\Contract\Provider\Dto\PositionDto;
 use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangePositionSide;
+use App\Exchange\Okx\OkxContractValueResolver;
 use App\Exchange\Okx\OkxFillId;
 use App\Exchange\Okx\OkxInstrumentResolver;
 use Brick\Math\BigDecimal;
@@ -24,6 +25,7 @@ final readonly class OkxPrivateReadMapper
 {
     public function __construct(
         private OkxInstrumentResolver $instruments = new OkxInstrumentResolver(),
+        private ?OkxContractValueResolver $contractValues = null,
     ) {
     }
 
@@ -133,7 +135,10 @@ final readonly class OkxPrivateReadMapper
             fee: $this->floatOrNull($row['fee'] ?? null),
             feeCurrency: $this->stringOrNull($row['feeCcy'] ?? null),
             filledAt: $this->time($row['ts'] ?? null),
-            metadata: $this->redacted($row),
+            metadata: $this->redacted($row) + OkxContractValueResolver::fillMetadata(
+                $this->contractValues,
+                $this->string($row['instId'] ?? ''),
+            ),
         );
     }
 
