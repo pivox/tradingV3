@@ -487,6 +487,8 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         }
         $reasons = array_merge($reasons, $report->blockingErrors, $this->readinessGate->blockingReasons($report, $this->config));
         $plan->profile === $report->configProfile || $reasons[] = 'effective_config_profile_mismatch';
+        $identity = $this->identity($request);
+        $identity instanceof EffectiveTradingConfigRequest && $identity->side === $plan->side || $reasons[] = 'side_identity_mismatch';
         if (!is_string($plan->configHash)
             || preg_match('/^[a-f0-9]{64}$/D', $plan->configHash) !== 1
             || !is_string($report->configHash)

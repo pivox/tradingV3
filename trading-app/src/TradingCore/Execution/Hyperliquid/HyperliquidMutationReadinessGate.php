@@ -15,6 +15,13 @@ final class HyperliquidMutationReadinessGate
 {
     private const TESTNET_ENDPOINT = 'https://api.hyperliquid-testnet.xyz';
 
+    private readonly string $proofSecret;
+
+    public function __construct()
+    {
+        $this->proofSecret = random_bytes(32);
+    }
+
     /** @return list<string> */
     public function blockingReasons(ExchangeReadinessReport $report, HyperliquidConfig $config): array
     {
@@ -32,7 +39,21 @@ final class HyperliquidMutationReadinessGate
             return null;
         }
 
-        return HyperliquidMutationReadinessProof::issuedBy($this, (string) $report->configProfile, (string) $report->configHash);
+        $profile = (string) $report->configProfile;
+        $configHash = (string) $report->configHash;
+        $issuedAt = time();
+
+        return new HyperliquidMutationReadinessProof($profile, $configHash, $issuedAt, $this->mac($profile, $configHash, $issuedAt));
+    }
+
+    public function isGenuine(HyperliquidMutationReadinessProof $proof): bool
+    {
+        return hash_equals($this->mac($proof->profile, $proof->configHash, $proof->issuedAt), $proof->mac);
+    }
+
+    private function mac(string $profile, string $configHash, int $issuedAt): string
+    {
+        return hash_hmac('sha256', json_encode([$profile, $configHash, $issuedAt], JSON_THROW_ON_ERROR), $this->proofSecret);
     }
 
     /** @return array<string, bool> condition (the blocking reason it raises when failing) => passed */

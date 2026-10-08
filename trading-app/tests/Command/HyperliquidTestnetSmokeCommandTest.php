@@ -149,6 +149,25 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         self::assertSame(0, $port->calls);
     }
 
+    public function testPlanCarryingTheReadinessProfileOfTheCanonicalIdentityReachesThePort(): void
+    {
+        $identity = new \App\TradingCore\Config\EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.pullback.long', '1.1.0', 'hyperliquid', 'testnet', 'long',
+            \App\TradingCore\Execution\Enum\ShadowExecutionCapability::Paper,
+        );
+        $profile = \App\Provider\Hyperliquid\EffectiveTradingHyperliquidMutationReadinessConfigSource::profile($identity);
+        $envelope = $this->validEnvelope();
+        $envelope['order_plan']['profile'] = $profile;
+        $port = new SmokeTestPort($this->accepted());
+        $tester = $this->tester($port, new SmokeTestReadinessProbe($this->report(profile: $profile)));
+
+        $exitCode = $tester->execute($this->input($this->planFile($envelope)));
+
+        self::assertSame(Command::SUCCESS, $exitCode);
+        self::assertSame($profile, $port->request?->orderPlan->profile);
+        self::assertLessThanOrEqual(64, strlen($profile));
+    }
+
     public function testRefusesInvalidCanonicalIdentityBeforeReadiness(): void
     {
         $port = new SmokeTestPort($this->accepted());
@@ -701,7 +720,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
     }
 
     /** @param list<string> $blockingErrors */
-    private function report(bool $signerReady = true, array $blockingErrors = []): ExchangeReadinessReport
+    private function report(bool $signerReady = true, array $blockingErrors = [], string $profile = 'scalper_micro'): ExchangeReadinessReport
     {
         return new ExchangeReadinessReport(
             exchange: Exchange::HYPERLIQUID,
@@ -733,7 +752,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
             configHash: self::HASH,
             blockingErrors: $blockingErrors,
             warnings: [],
-            configProfile: 'scalper_micro',
+            configProfile: $profile,
         );
     }
 }

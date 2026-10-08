@@ -29,6 +29,7 @@ use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Hyperliquid\HyperliquidMutationReadinessProof;
 use App\Exchange\Hyperliquid\HyperliquidRestClientInterface;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidMutationReadinessGate;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
@@ -43,13 +44,14 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
         private HyperliquidActionFactory $actions,
         private HyperliquidConfig $config,
         private ClockInterface $clock,
+        private HyperliquidMutationReadinessGate $proofGate,
         private ?HyperliquidMutationReadinessProof $mutationProof = null,
     ) {
     }
 
     public function withMutationProof(HyperliquidMutationReadinessProof $proof): self
     {
-        return new self($this->client, $this->assets, $this->actions, $this->config, $this->clock, $proof);
+        return new self($this->client, $this->assets, $this->actions, $this->config, $this->clock, $this->proofGate, $proof);
     }
 
     public function exchange(): Exchange
@@ -558,7 +560,7 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
 
     private function assertMutationProven(): void
     {
-        if (!$this->mutationProof instanceof HyperliquidMutationReadinessProof) {
+        if (!$this->mutationProof instanceof HyperliquidMutationReadinessProof || !$this->proofGate->isGenuine($this->mutationProof)) {
             throw new \LogicException('hyperliquid_mutation_requires_testnet_port');
         }
     }

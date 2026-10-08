@@ -36,7 +36,7 @@ These values are placeholders chosen to be conservative. The owner tunes them.
 - `envelope_hash` is the sha256 of the canonical JSON (keys sorted recursively, `envelope_hash` removed). A file whose hash does not match is ignored and the source returns fail-closed. Recompute it with:
   `php -r 'require "vendor/autoload.php"; echo App\Provider\Hyperliquid\EffectiveTradingHyperliquidMutationReadinessConfigSource::envelopeHash(Symfony\Component\Yaml\Yaml::parseFile("config/trading/env/testnet.yaml"));'`
 - The config hash carried by the readiness report and compared with the order plan is `sha256(snapshot.config_hash ":" envelope_hash)`. It binds the resolver snapshot of the exact identity (mode, setup, exchange, environment, side, compiled setup, condition catalog) and the envelope. Changing either changes the hash, so plans built against an older version are rejected by the port (`effective_config_hash_mismatch`).
-- The profile string is `mode@version/setup@version/side`.
+- The profile is a decoder-compatible slug, e.g. `scalping_1_1_0.pullback.long_1_1_0.long` (`mode_modever.setup-without-mode-prefix_setupver.side`, at most 64 characters); the config hash binds the full identity.
 
 ## Eligible identities (all 1.1.0)
 
@@ -55,7 +55,7 @@ All 27 gate conditions plus `blocking_errors == []`: testnet environment, networ
 
 Also unchanged: attempt store, execution lock, nonce manager, margin and liquidation proof, compensation, operator confirmation of the smoke command, signer sidecar with broadcast disabled by default.
 
-The automatic MTF flow is not wired to the testnet port in this lot. `HyperliquidExchangeAdapter` write methods (`placeOrder`, `cancelOrder`, `setLeverage`) throw `hyperliquid_mutation_requires_testnet_port` unless the adapter was given a `HyperliquidMutationReadinessProof`, which only `HyperliquidMutationReadinessGate::issueProof()` issues, and only for a fully cleared gate. No production code issues a proof yet.
+The automatic MTF flow is not wired to the testnet port in this lot. `HyperliquidExchangeAdapter` write methods (`placeOrder`, `cancelOrder`, `setLeverage`) throw `hyperliquid_mutation_requires_testnet_port` unless the adapter was given a `HyperliquidMutationReadinessProof`, which only `HyperliquidMutationReadinessGate::issueProof()` can mint (HMAC with a per-instance secret, verified by `isGenuine()`), and only for a fully cleared gate. No production code issues a proof yet.
 
 ## Rollback to fail-closed by config alone
 

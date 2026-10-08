@@ -53,11 +53,19 @@ final class HyperliquidReadinessRuntimeConfigTest extends TestCase
         $config = $this->source()->forIdentity($this->identity($mode, $setup, $side));
 
         self::assertTrue($config->authorizesTestnetMutation());
-        self::assertSame(sprintf('%s@%s/%s@%s/%s', $mode, $modeVersion, $setup, $setupVersion, $side), $config->profile);
+        self::assertSame(sprintf('%s_1_1_0.%s_1_1_0.%s', $mode, substr($setup, strlen($mode) + 1), $side), $config->profile);
         self::assertSame(['BTCUSDT'], $config->allowedSymbols);
         self::assertSame(['perpetual'], $config->allowedMarkets);
         self::assertSame(25.0, $config->maxNotional);
         self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/D', (string) $config->configHash);
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('eligibleIdentities')]
+    public function testProfileIsADecoderCompatibleSlug(string $mode, string $setup, string $modeVersion, string $setupVersion, string $side): void
+    {
+        $profile = $this->source()->forIdentity($this->identity($mode, $setup, $side))->profile;
+
+        self::assertMatchesRegularExpression('/^[a-z0-9][a-z0-9_.-]{0,63}$/D', (string) $profile);
     }
 
     public function testConfigHashBindsTheResolvedSnapshotAndTheEnvelope(): void

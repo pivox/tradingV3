@@ -50,14 +50,7 @@ final readonly class EffectiveTradingHyperliquidMutationReadinessConfigSource im
         $execution = $envelope['execution'];
 
         return new HyperliquidMutationReadinessConfig(
-            profile: sprintf(
-                '%s@%s/%s@%s/%s',
-                $identity->modeId,
-                $identity->modeVersion,
-                $identity->setupId,
-                $identity->setupVersion,
-                $identity->side,
-            ),
+            profile: self::profile($identity),
             allowedSymbols: $envelope['allowed_symbols'],
             allowedMarkets: $envelope['allowed_markets'],
             maxNotional: (float) $envelope['max_notional'],
@@ -69,6 +62,22 @@ final readonly class EffectiveTradingHyperliquidMutationReadinessConfigSource im
             killSwitchEnabled: $execution['kill_switch_enabled'],
             requireStopLoss: $execution['require_stop_loss'],
             configHash: hash('sha256', $snapshot->configHash . ':' . $envelope['envelope_hash']),
+        );
+    }
+
+    public static function profile(EffectiveTradingConfigRequest $identity): string
+    {
+        $setup = str_starts_with($identity->setupId, $identity->modeId . '.')
+            ? substr($identity->setupId, strlen($identity->modeId) + 1)
+            : $identity->setupId;
+
+        return sprintf(
+            '%s_%s.%s_%s.%s',
+            $identity->modeId,
+            str_replace('.', '_', $identity->modeVersion),
+            $setup,
+            str_replace('.', '_', $identity->setupVersion),
+            $identity->side,
         );
     }
 
