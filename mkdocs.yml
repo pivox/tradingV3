@@ -57,6 +57,7 @@ nav:
   - Runbooks:
       - Exploitation: runbooks/operations.md
       - Paper market replay: runbooks/paper-market-replay.md
+      - Backtesting OKX / Hyperliquid: backtesting-okx-hl.md
       - Investigation: runbooks/investigation.md
       - Demo/Testnet kill switch: runbooks/demo-testnet-kill-switch.md
       - Demo/Testnet operations: runbooks/demo-testnet-operations.md
