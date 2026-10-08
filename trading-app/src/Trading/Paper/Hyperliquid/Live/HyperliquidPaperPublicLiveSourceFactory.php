@@ -16,6 +16,8 @@ use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterfac
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use React\EventLoop\Loop;
 use React\EventLoop\LoopInterface;
 use Symfony\Component\Clock\ClockInterface;
@@ -38,6 +40,8 @@ final readonly class HyperliquidPaperPublicLiveSourceFactory implements PaperPub
         private ?HyperliquidPaperInstrumentMetadataClientInterface $metadataClient = null,
         private ?HyperliquidPaperFundingRateClientInterface $fundingClient = null,
         private ?HyperliquidPaperPublicRestClientInterface $restClient = null,
+        private LoggerInterface $logger = new NullLogger(),
+        private float $connectionRotationSeconds = HyperliquidPaperLivePolicy::CONNECTION_ROTATION_SECONDS,
     ) {
     }
 
@@ -88,6 +92,9 @@ final readonly class HyperliquidPaperPublicLiveSourceFactory implements PaperPub
                 subscriptions: $subscriptions,
                 decoder: new HyperliquidPaperPublicFrameDecoder($subscriptions),
                 queue: new HyperliquidPaperPublicFrameQueue(),
+                logger: $this->logger,
+                rotationTransports: $this->transportFactory,
+                connectionRotationSeconds: $this->connectionRotationSeconds,
             );
         } finally {
             fclose($directoryHandle);

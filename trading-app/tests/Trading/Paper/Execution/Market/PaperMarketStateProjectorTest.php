@@ -169,6 +169,43 @@ final class PaperMarketStateProjectorTest extends TestCase
         self::assertSame(array_slice($events, 1), $projector->events());
     }
 
+    public function testMicroCompactionPlacesACandleAtItsCloseNotAtItsReception(): void
+    {
+        $trade = PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::OKX,
+            'BTCUSDT',
+            PaperMarketDataChannel::PUBLIC_TRADE,
+            new \DateTimeImmutable('2026-08-01T10:00:01.000000Z'),
+            new \DateTimeImmutable('2026-08-01T10:00:01.000000Z'),
+            '1',
+            ['trade_id' => '1', 'price' => '100', 'quantity' => '1', 'aggressor_side' => 'buy'],
+        );
+        // Closes at 10:01:00 and is received 6 s later: the replay observes it at its close.
+        $candle = PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::OKX,
+            'BTCUSDT',
+            PaperMarketDataChannel::CANDLE_1M,
+            new \DateTimeImmutable('2026-08-01T10:00:00.000000Z'),
+            new \DateTimeImmutable('2026-08-01T10:01:06.000000Z'),
+            '2',
+            [
+                'native_symbol' => 'BTC-USDT-SWAP', 'bar' => '1m',
+                'open' => '100', 'high' => '101', 'low' => '99', 'close' => '100',
+                'volume_contracts' => '10', 'volume_base' => '1', 'volume_quote' => '100',
+                'confirmed' => true, 'origin' => 'ws_candle',
+            ],
+        );
+        $projector = new PaperMarketStateProjector(new PaperKlineProvider());
+
+        $projector->apply($trade, false, 'micro_scalping');
+        $projector->apply($candle, false, 'micro_scalping');
+
+        // The 60 s microstructure window ends at the close (10:01:00), so the 10:00:01 trade stays.
+        self::assertSame([$trade, $candle], $projector->events());
+    }
+
     public function testMicroProjectionRetainsEveryBookInsideTheSixtySecondWindow(): void
     {
         $events = [];

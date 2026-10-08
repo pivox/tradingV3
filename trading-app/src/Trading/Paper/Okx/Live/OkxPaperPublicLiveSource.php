@@ -16,7 +16,10 @@ use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
 use App\Trading\Paper\Okx\OkxPaperInstrumentMap;
 use App\Trading\Paper\Okx\OkxPaperPublicConfig;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use Brick\Math\BigDecimal;
 use Brick\Math\BigInteger;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\TimerInterface;
 use Symfony\Component\Clock\ClockInterface;
@@ -26,6 +29,16 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     private const MAX_WARMUP_EVENT_BATCH = 100;
     private const MAX_DURABLE_FRAME_BATCH = 128;
     private const MAX_DURABLE_EVENT_BATCH = 256;
+    private const TRADE_JUNCTION_RETRY_DELAYS_SECONDS = [0.25, 0.5, 1.0, 2.0, 4.0];
+    private const BOOK_AUTHORITY_LOG_SECONDS = 10.0;
+    private const BOOK_AUTHORITY_RESUBSCRIBE_SECONDS = 15.0;
+    private const BOOK_AUTHORITY_MAX_WAIT_SECONDS = 60.0;
+    /** Covers a recovery, or draining a full inbound buffer before the stop. */
+    private const HEALTHY_STOP_MAX_DEFERRAL_SECONDS = 1_800.0;
+    private const INBOUND_BUFFER_LOG_SECONDS = 10.0;
+    private const MAX_REMEMBERED_REST_TRADES = 5_000;
+    private const MAX_READ_BACK_REST_TRADES = 1_000;
+    private const CANDLE_BAR_MILLISECONDS = ['1m' => 60_000, '5m' => 300_000, '15m' => 900_000, '1H' => 3_600_000];
 
     private readonly OkxPaperInstrumentMap $instruments;
     private readonly OkxPaperPublicSubscriptionSet $subscriptions;
@@ -82,6 +95,32 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     /** @var array{public: bool, business: bool} */
     private array $heartbeatDeferredForBacklog = ['public' => false, 'business' => false];
 
+    /** @var array<string, float> socket => when its heartbeat timer is due (clock seconds) */
+    private array $heartbeatDueAt = [];
+
+    /**
+     * Outstanding pings: when sent, how late the heartbeat ran, frames read since,
+     * whether admissions paused since (a backlog), when a deferral was last logged,
+     * event-loop polls since and the longest gap between two of them.
+     *
+     * @var array<string, array{sent_at: float, heartbeat_late_s: float, frames: int, backlog: bool, logged_at: float|null, polls: int, max_poll_gap_s: float}>
+     */
+    private array $pingProbes = [];
+
+    /**
+     * Since when each socket has been read without interruption: set when it opens,
+     * when we resume it, and when the event loop polls again after a gap (see
+     * noteNetworkPoll()). Silence proves a socket dead only from then on.
+     *
+     * @var array{public: float|null, business: float|null}
+     */
+    private array $readActiveSince = ['public' => null, 'business' => null];
+
+    private ?float $lastNetworkPollAt = null;
+
+    /** @var array<string, \DateTimeImmutable> */
+    private array $lastPongAt = [];
+
     /** @var array{public: int, business: int} */
     private array $pongGenerations = ['public' => 0, 'business' => 0];
 
@@ -109,8 +148,56 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 
     private ?OkxPaperLiveCheckpoint $durableEventBatchBase = null;
     private bool $durableFrameBatchingEnabled = false;
+    /**
+     * Symbols whose next websocket trade anchors the REST↔WS trade junction.
+     *
+     * @var array<string, true>
+     */
+    private array $tradeJunctions = [];
+    /**
+     * "SYMBOL/bar" whose next confirmed websocket candle anchors the candle junction.
+     *
+     * @var array<string, true>
+     */
+    private array $candleJunctions = [];
+    /**
+     * REST trade rows recently recorded per symbol (trade id => raw fields, the
+     * highest ids), to compare websocket aggregates dropped at a junction with
+     * their REST range.
+     *
+     * @var array<string, array<array-key, array<string, string>>>
+     */
+    private array $recentRestTrades = [];
+    /**
+     * The last REST history pages read back for such comparisons (trade id => raw
+     * fields), apart so that they never evict the recorded rows (see
+     * restTradesForRange()).
+     *
+     * @var array<string, array<array-key, array<string, string>>>
+     */
+    private array $readBackRestTrades = [];
+    private LoggerInterface $logger;
+    /** Set by an OKX service-upgrade notice: reconnect once the current batch is done. */
+    private bool $serviceNoticeReconnectRequested = false;
+    /** @var array<string, array<string, true>> instrument => acknowledgements still expected */
+    private array $bookResubscriptions = [];
+    /** @var array<string, true> pending symbols whose websocket book snapshot was dropped */
+    private array $discardedBookSnapshots = [];
+    /** @var array<string, true> pending symbols whose websocket book snapshot is kept in reserve */
+    private array $reservedBookSnapshots = [];
+    /** A healthy stop requested while a reconnect recovery is still in progress. */
+    private ?\DateTimeImmutable $healthyStopDeferredSince = null;
+    /** @var array{socket: string, frame: string|null, reason: string}|null */
+    private ?array $lastRejectedFrame = null;
     private bool $networkTickActive = false;
     private bool $streamingQueuesDirty = false;
+    private ?float $lastStreamingQueueSaveAt = null;
+    /** @var array{public: OkxPaperInboundFrameBuffer, business: OkxPaperInboundFrameBuffer} */
+    private array $inboundBuffers;
+    private int $inboundBufferMaxBytes;
+    /** @var array{public: bool, business: bool} paused because the inbound buffer is full */
+    private array $inboundBufferPaused = ['public' => false, 'business' => false];
+    private ?float $inboundBufferLoggedAt = null;
     private ?\Throwable $deferredQueuedFailure = null;
     private bool $preparingQueuedFrameBatch = false;
 
@@ -139,7 +226,16 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         private readonly ?OkxPaperFundingRateClientInterface $fundingClient = null,
         private readonly int $initialHourlyCandleTarget = 1,
         private readonly ?OkxPaperLoopPumpInterface $loopPump = null,
+        private readonly bool $anchoredTradeJunctions = false,
+        ?LoggerInterface $logger = null,
+        ?int $inboundBufferMaxBytes = null,
     ) {
+        $this->logger = $logger ?? new NullLogger();
+        $this->inboundBuffers = [
+            'public' => new OkxPaperInboundFrameBuffer(),
+            'business' => new OkxPaperInboundFrameBuffer(),
+        ];
+        $this->inboundBufferMaxBytes = $inboundBufferMaxBytes ?? OkxPaperLivePolicy::INBOUND_BUFFER_MAX_BYTES;
         if ($this->initialHourlyCandleTarget < 1
             || $this->initialHourlyCandleTarget > OkxPaperLivePolicy::INITIAL_HOURLY_CANDLE_TARGET
         ) {
@@ -247,6 +343,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     $this->failTerminal($reason, $exception);
                 }
             }
+            $this->logSourceFailure($exception);
 
             throw $exception;
         }
@@ -341,12 +438,17 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             );
         }
         if ($initialCandleBridgeRequired && $this->checkpoint->phase === 'streaming') {
+            $this->openTradeJunctions();
+            $this->openCandleJunctions();
+        }
+        if ($initialCandleBridgeRequired && $this->checkpoint->phase === 'streaming') {
             yield from $this->bridgeInitialCandles();
         }
         if ($this->checkpoint->phase === 'streaming') {
             $this->startHeartbeatTimers();
         }
         while (!$this->stopped) {
+            $this->resumeDeferredHealthyStop();
             if ($this->healthyStopRequested) {
                 $this->persistHealthyStopWhenDrained();
             }
@@ -354,6 +456,15 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 yield from $this->healthyStopFlow();
 
                 return;
+            }
+            if ($this->serviceNoticeReconnectRequested) {
+                $this->serviceNoticeReconnectRequested = false;
+                if ($this->checkpoint->phase === 'streaming') {
+                    $this->warn('okx_paper_public_planned_reconnect', ['trigger' => 'service_notice']);
+                    $this->beginPairedReconnect();
+
+                    continue;
+                }
             }
             if ($this->checkpoint->phase === 'reconnecting'
                 && !$this->subscriptions->isReady()
@@ -371,6 +482,31 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             }
             if ($this->hasAcknowledgedResyncSnapshot()) {
                 yield from $this->emitResyncBoundary();
+
+                continue;
+            }
+            $junctionEvents = $this->tradeJunctionRestEvents();
+            if ($junctionEvents !== []) {
+                // Recorded from REST: acknowledged on the REST trade stream.
+                $junctionStream = $junctionEvents[0]['event']->symbol . '/rest/public_trade';
+                yield from $this->yieldMarketEvents(
+                    $junctionEvents,
+                    $junctionStream,
+                    [],
+                    eventStreamOverride: $junctionStream,
+                );
+
+                continue;
+            }
+            $candleJunction = $this->candleJunctionRestEvents();
+            if ($candleJunction !== null) {
+                [$candleStream, $candleEvents] = $candleJunction;
+                yield from $this->yieldMarketEvents(
+                    $candleEvents,
+                    $candleStream,
+                    [],
+                    eventStreamOverride: $candleStream,
+                );
 
                 continue;
             }
@@ -512,17 +648,68 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         if ($this->healthyStopRequested) {
             return;
         }
+        $recovering = !$this->healthyStopStructuralPreconditionsHold() && $this->reconnectRecoveryInProgress();
+        if ($recovering || $this->inboundBufferedFrames() !== 0) {
+            // Never a complete dataset with an unrecovered gap: the bounded recovery
+            // finishes first, then the stop proceeds (see eventFlow()). Frames read
+            // but only in memory are drained first too: a stop resumes without
+            // reconnect after a restart, so its queue must be durable.
+            if ($this->healthyStopDeferredSince === null) {
+                $this->healthyStopDeferredSince = $this->clock->now();
+                $this->warn('okx_paper_public_healthy_stop_deferred', [
+                    'reason' => $recovering ? 'reconnect_recovery' : 'inbound_backlog',
+                    'inbound_buffered_frames' => $this->inboundBufferedFrames(),
+                ]);
+            }
+
+            return;
+        }
+        $this->healthyStopDeferredSince = null;
         if (!$this->healthyStopStructuralPreconditionsHold()
             || (!$this->socketLivenessProofCompleteForStop()
                 && !$this->canAwaitSocketFreshness())
         ) {
             $this->failTerminal('okx_paper_public_healthy_stop_invalid');
         }
+        $this->persistDirtyStreamingQueues(true);
         $this->checkpoint = $this->checkpointStore->requestHealthyStopDrain(
             $this->checkpoint,
         );
         $this->healthyStopRequested = true;
         $this->persistHealthyStopWhenDrained();
+    }
+
+    private function reconnectRecoveryInProgress(): bool
+    {
+        return \in_array($this->checkpoint->phase, ['reconnecting', 'resyncing'], true)
+            || $this->checkpoint->reconnect['attempt'] !== 0
+            || array_filter(
+                $this->checkpoint->resyncBySymbol,
+                static fn (mixed $resync): bool => $resync !== null,
+            ) !== [];
+    }
+
+    private function resumeDeferredHealthyStop(): void
+    {
+        if ($this->healthyStopDeferredSince === null || $this->healthyStopRequested) {
+            return;
+        }
+        if ($this->checkpoint->phase === 'streaming'
+            && $this->checkpoint->pendingEvent === null
+            && $this->checkpoint->pendingTransition === null
+            && $this->healthyStopStructuralPreconditionsHold()
+            && $this->inboundBufferedFrames() === 0
+        ) {
+            $this->warn('okx_paper_public_healthy_stop_resumed', []);
+            $this->requestHealthyOperatorStop();
+
+            return;
+        }
+        $deferred = (float) $this->clock->now()->format('U.u')
+            - (float) $this->healthyStopDeferredSince->format('U.u');
+        if ($deferred > self::HEALTHY_STOP_MAX_DEFERRAL_SECONDS) {
+            $this->failTerminal('okx_paper_public_healthy_stop_invalid');
+        }
     }
 
     private function persistHealthyStopWhenDrained(): void
@@ -727,6 +914,819 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
             $this->assertPendingWasAcknowledged();
         }
+    }
+
+    /**
+     * B1: once streaming, initially and after a reconnect recovery, the REST↔WS
+     * trade junction of each symbol is anchored on its first websocket trade
+     * (see tradeJunctionRestEvents()) instead of an exact overlap.
+     */
+    private function openTradeJunctions(): void
+    {
+        if (!$this->anchoredTradeJunctions) {
+            return;
+        }
+        foreach (['BTCUSDT', 'ETHUSDT'] as $symbol) {
+            $this->tradeJunctions[$symbol] = true;
+            $this->requiresOverlap[$symbol . '/ws/public_trade'] = false;
+        }
+    }
+
+    /** @param array<array-key, mixed> $message */
+    private function anchorsTradeJunction(array $message): bool
+    {
+        $argument = $message['arg'] ?? null;
+        if ($this->tradeJunctions === []
+            || !\is_array($argument)
+            || ($argument['channel'] ?? null) !== 'trades'
+            || !\is_string($argument['instId'] ?? null)
+        ) {
+            return false;
+        }
+
+        return isset($this->tradeJunctions[$this->instruments->normalizedSymbol($argument['instId'])]);
+    }
+
+    /**
+     * Records from REST, before the first websocket trade of a symbol whose
+     * junction is open, every trade between the newest recorded trade frontier
+     * and that websocket trade, by trade id: whether the websocket started
+     * before or after the REST snapshot, and when an aggregate straddles the
+     * frontier (its trades are then recorded from REST instead of it). Websocket
+     * trades already recorded are dropped by rowsAfterTradeJunction().
+     *
+     * @return list<array{
+     *     event: PaperMarketEvent,
+     *     frontier: OkxPaperStreamFrontier,
+     *     ordinal_state: array<string, mixed>
+     * }>
+     */
+    private function tradeJunctionRestEvents(): array
+    {
+        if ($this->tradeJunctions === [] || $this->publicQueue->count() === 0) {
+            return [];
+        }
+        try {
+            $message = $this->decoder->decodePublic($this->publicQueue->frames()[0]);
+            $instrumentId = $message['arg']['instId'] ?? null;
+            $rows = $message['data'] ?? null;
+            if (!$this->anchorsTradeJunction($message)
+                || !\is_string($instrumentId)
+                || !\is_array($rows)
+            ) {
+                return [];
+            }
+            $ranges = [];
+            foreach ($rows as $row) {
+                if (!\is_array($row)) {
+                    return [];
+                }
+                $ranges[] = $this->tradeRowRange($row);
+            }
+        } catch (\Throwable) {
+            // The queued frame path reports invalid frames.
+            return [];
+        }
+        $symbol = $this->instruments->normalizedSymbol($instrumentId);
+        $newest = $this->newestTradeFrontier($symbol);
+        if (!$newest instanceof OkxPaperStreamFrontier) {
+            return [];
+        }
+        foreach ($ranges as [$first, $last]) {
+            if (self::compareUnsigned($last, $newest->sourceIdentity) <= 0) {
+                continue;
+            }
+            if ($first === self::nextTradeId($newest->sourceIdentity)) {
+                return [];
+            }
+            $through = self::compareUnsigned($first, $newest->sourceIdentity) <= 0
+                ? $last
+                : (string) BigInteger::of($first)->minus(1);
+            $junctionRows = $this->junctionHistoryRows($instrumentId, $newest, $through);
+            if ($junctionRows === null) {
+                return [];
+            }
+            // junctionHistoryRows() proved the overlap with the newest frontier.
+            $restStream = $symbol . '/rest/public_trade';
+            $this->requiresOverlap[$restStream] = false;
+
+            return $this->acceptedEvents(
+                $restStream,
+                $junctionRows,
+                static fn (
+                    array $row,
+                    OkxPaperMarketEventNormalizer $normalizer,
+                ): PaperMarketEvent => $normalizer->recoveryTrade($row),
+                fn (array $row): OkxPaperStreamFrontier => $this->tradeFrontier($row),
+                false,
+                'rest',
+            );
+        }
+
+        return [];
+    }
+
+    /**
+     * Trades (newest, through] from history pages by trade id. The page reaching
+     * the newest frontier must hold it unchanged and every id in between must be
+     * served: ids REST does not serve yet (it can lag behind the websocket) are
+     * fetched again after a bounded backoff, never recorded as a gap.
+     *
+     * @return list<array<array-key, mixed>>|null null once the connection changed
+     */
+    private function junctionHistoryRows(
+        string $instrumentId,
+        OkxPaperStreamFrontier $newest,
+        string $through,
+    ): ?array {
+        $expected = BigInteger::of($through)->minus($newest->sourceIdentity);
+        if ($expected->isLessThan(1)
+            || $expected->isGreaterThan(OkxPaperLivePolicy::MAX_RETAINED_RECOVERY_ROWS)
+        ) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        $generation = $this->connectionGeneration;
+        /** @var array<array-key, array<array-key, mixed>> $rows */
+        $rows = [];
+        /** @var array<array-key, string> $digests */
+        $digests = [];
+        foreach ([0.0, ...self::TRADE_JUNCTION_RETRY_DELAYS_SECONDS] as $delay) {
+            if ($delay > 0.0) {
+                $this->clock->sleep($delay);
+                $this->pumpNetworkLoop();
+                if (!$this->junctionConnectionUnchanged($generation)) {
+                    return null;
+                }
+            }
+            $anchored = false;
+            $cursor = self::nextTradeId($through);
+            for ($page = 0; ; ++$page) {
+                if ($page >= OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES) {
+                    $this->failTerminal('market_data_gap_unresolved');
+                }
+                $older = $this->restClient->historyTrades($instrumentId, 1, $cursor, 100);
+                $this->pumpNetworkLoop();
+                if (!$this->junctionConnectionUnchanged($generation)) {
+                    return null;
+                }
+                if ($older === []) {
+                    break;
+                }
+                if (\count($older) > 100) {
+                    $this->failTerminal('market_data_gap_unresolved');
+                }
+                $cursor = $this->validatedOldestHistoryTradeId($older, $instrumentId, 1, $cursor);
+                foreach ($older as $row) {
+                    $candidate = $this->tradeFrontier($row);
+                    $tradeId = $candidate->sourceIdentity;
+                    if (hash_equals($newest->naturalIdentity, $candidate->naturalIdentity)) {
+                        if (!hash_equals($newest->overlapDigest, $candidate->overlapDigest)) {
+                            $this->failTerminal('market_event_identity_conflict');
+                        }
+                        $anchored = true;
+                    } elseif (self::compareUnsigned($tradeId, $newest->sourceIdentity) > 0) {
+                        if (isset($digests[$tradeId])
+                            && !hash_equals($digests[$tradeId], $candidate->canonicalDigest)
+                        ) {
+                            $this->failTerminal('market_event_identity_conflict');
+                        }
+                        $digests[$tradeId] = $candidate->canonicalDigest;
+                        $rows[$tradeId] = $row;
+                    }
+                }
+                if (self::compareUnsigned($cursor, $newest->sourceIdentity) <= 0) {
+                    break;
+                }
+            }
+            if ($anchored && $expected->isEqualTo(\count($rows))) {
+                $junctionRows = array_values($rows);
+                $this->sortTradeRows($junctionRows);
+
+                return $junctionRows;
+            }
+        }
+        $this->failTerminal('market_data_gap_unresolved');
+    }
+
+    /** @phpstan-impure */
+    private function junctionConnectionUnchanged(int $generation): bool
+    {
+        return !$this->stopped
+            && $this->checkpoint->phase === 'streaming'
+            && $this->connectionGeneration === $generation;
+    }
+
+    /**
+     * Drops websocket trades already recorded (through REST), then closes the
+     * junction on the first trade that directly follows the newest frontier;
+     * tradeJunctionRestEvents() recorded any trade in between beforehand.
+     *
+     * @param array<array-key, mixed> $rows
+     * @return array<array-key, mixed>
+     */
+    private function rowsAfterTradeJunction(string $symbol, array $rows): array
+    {
+        $newest = $this->newestTradeFrontier($symbol);
+        if (!$newest instanceof OkxPaperStreamFrontier) {
+            unset($this->tradeJunctions[$symbol]);
+
+            return $rows;
+        }
+        foreach (array_values($rows) as $index => $row) {
+            if (!\is_array($row)) {
+                throw new OkxPaperLiveIntegrityException('okx_paper_public_message_invalid');
+            }
+            [$first, $last] = $this->tradeRowRange($row);
+            if (self::compareUnsigned($last, $newest->sourceIdentity) <= 0) {
+                $this->assertDroppedTradeMatchesRest($symbol, $row, $first, $last);
+
+                continue;
+            }
+            if ($first !== self::nextTradeId($newest->sourceIdentity)) {
+                throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+            }
+            unset($this->tradeJunctions[$symbol]);
+
+            return \array_slice(array_values($rows), $index);
+        }
+
+        return [];
+    }
+
+    /** @param array<array-key, mixed> $rows */
+    private function rememberRestTradeRows(string $symbol, array $rows): void
+    {
+        $rowsById = self::restTradeFields($rows);
+        if (\count($rowsById) > self::MAX_REMEMBERED_REST_TRADES) {
+            // A long recovery accepts up to 25,500 rows at once: only its highest
+            // ids can stay, so the others are not even copied (memory stays bounded).
+            ksort($rowsById, \SORT_NUMERIC);
+            $rowsById = \array_slice($rowsById, -self::MAX_REMEMBERED_REST_TRADES, null, true);
+        }
+        foreach ($rowsById as $tradeId => $fields) {
+            $this->recentRestTrades[$symbol][$tradeId] = $fields;
+        }
+        if (\count($this->recentRestTrades[$symbol] ?? []) > self::MAX_REMEMBERED_REST_TRADES) {
+            // The highest ids: the websocket aggregates dropped after a recovery
+            // overlap its newest rows, whatever order the rows were recorded in.
+            ksort($this->recentRestTrades[$symbol], \SORT_NUMERIC);
+            $this->recentRestTrades[$symbol] = \array_slice(
+                $this->recentRestTrades[$symbol],
+                -self::MAX_REMEMBERED_REST_TRADES,
+                null,
+                true,
+            );
+        }
+    }
+
+    /** @param array<array-key, mixed> $rows */
+    private function rememberReadBackRestTradeRows(string $symbol, array $rows): void
+    {
+        foreach (self::restTradeFields($rows) as $tradeId => $fields) {
+            unset($this->readBackRestTrades[$symbol][$tradeId]);
+            $this->readBackRestTrades[$symbol][$tradeId] = $fields;
+        }
+        if (\count($this->readBackRestTrades[$symbol] ?? []) > self::MAX_READ_BACK_REST_TRADES) {
+            $this->readBackRestTrades[$symbol] = \array_slice(
+                $this->readBackRestTrades[$symbol],
+                -self::MAX_READ_BACK_REST_TRADES,
+                null,
+                true,
+            );
+        }
+    }
+
+    /**
+     * @param array<array-key, mixed> $rows
+     * @return array<array-key, array<string, string>> trade id => raw fields
+     */
+    private static function restTradeFields(array $rows): array
+    {
+        $trades = [];
+        foreach ($rows as $row) {
+            if (!\is_array($row)) {
+                continue;
+            }
+            $fields = [];
+            foreach (['tradeId', 'px', 'sz', 'side', 'ts', 'source'] as $key) {
+                if (!\is_string($row[$key] ?? null)) {
+                    continue 2;
+                }
+                $fields[$key] = $row[$key];
+            }
+            $trades[$fields['tradeId']] = $fields;
+        }
+
+        return $trades;
+    }
+
+    /**
+     * A websocket trade dropped at a junction is already recorded through REST.
+     * OKX aggregates the fills of one taker order at one price and timestamp under
+     * the id of its last fill (1,482 aggregates compared with REST: always one
+     * price, the same side and timestamp, sizes adding up exactly), so it is
+     * compared with every REST row of [first, last], never with the last one only.
+     * Any difference fails closed, the aggregate and its REST rows chained. `source`
+     * is not part of the identity: OKX websocket and REST can disagree on it for the
+     * same trade (production: 1 vs 0); a divergence is logged. The dataset keeps the
+     * `source` of the path that recorded the trade (REST rows for warmup, recovery
+     * and junctions, websocket rows while streaming); each trade is recorded once.
+     *
+     * @param array<array-key, mixed> $row
+     */
+    private function assertDroppedTradeMatchesRest(
+        string $symbol,
+        array $row,
+        string $first,
+        string $last,
+    ): void {
+        $restRows = $this->restTradesForRange($symbol, $first, $last);
+        $matches = $restRows !== null;
+        $size = BigDecimal::zero();
+        $sourceDivergences = [];
+        foreach ($restRows ?? [] as $restRow) {
+            $size = $size->plus($restRow['sz']);
+            $matches = $matches
+                && BigDecimal::of($restRow['px'])->isEqualTo((string) $row['px'])
+                && $restRow['side'] === $row['side']
+                && $restRow['ts'] === $row['ts'];
+            if ($restRow['source'] !== $row['source']) {
+                $sourceDivergences[] = ['trade_id' => $restRow['tradeId'], 'rest_source' => $restRow['source']];
+            }
+        }
+        if ($matches && $size->isEqualTo((string) $row['sz'])) {
+            if ($sourceDivergences !== []) {
+                $this->warn('okx_paper_public_trade_source_divergence', [
+                    'symbol' => $symbol,
+                    'trade_id' => $row['tradeId'] ?? null,
+                    'aggregate_count' => $row['count'] ?? null,
+                    'websocket_source' => $row['source'],
+                    'rest_sources' => $sourceDivergences,
+                ]);
+            }
+
+            return;
+        }
+
+        throw new OkxPaperLiveIntegrityException(
+            'market_event_identity_conflict',
+            0,
+            new \RuntimeException('okx_paper_junction_trade_mismatch ' . json_encode([
+                'websocket' => array_intersect_key(
+                    $row,
+                    array_flip(['tradeId', 'count', 'px', 'sz', 'side', 'ts', 'source']),
+                ),
+                'rest' => $restRows,
+            ], \JSON_THROW_ON_ERROR)),
+        );
+    }
+
+    /**
+     * REST rows [first, last] as recorded, read back from REST history when they
+     * were recorded before a restart (or beyond the remembered rows). The dropped
+     * aggregates come in increasing ids, so a read-back page starts at `first`
+     * and also covers the following ~99 ids: one REST request per ~100 ids, not
+     * one per aggregate (which drained ~3.5 aggregates/s after a long recovery).
+     *
+     * @return list<array<string, string>>|null null when REST does not serve them all
+     */
+    private function restTradesForRange(string $symbol, string $first, string $last): ?array
+    {
+        $count = BigInteger::of($last)->minus($first)->plus(1);
+        if ($count->isGreaterThan(1_000)) {
+            return null;
+        }
+        $rows = $this->rememberedRestTrades($symbol, $first, $count->toInt());
+        if ($rows !== null) {
+            return $rows;
+        }
+        $instrumentId = $this->instruments->nativeInstrumentId($symbol);
+        // History type 1 serves the 100 trades older than the cursor.
+        $cursor = (string) BigInteger::max(
+            BigInteger::of($first)->plus(100),
+            BigInteger::of($last)->plus(1),
+        );
+        for ($page = 0; $page <= intdiv($count->toInt(), 100) + 1; ++$page) {
+            $older = $this->restClient->historyTrades($instrumentId, 1, $cursor, 100);
+            if ($older === [] || \count($older) > 100) {
+                break;
+            }
+            $this->rememberReadBackRestTradeRows($symbol, $older);
+            $cursor = $this->validatedOldestHistoryTradeId($older, $instrumentId, 1, $cursor);
+            if (self::compareUnsigned($cursor, $first) <= 0) {
+                break;
+            }
+        }
+
+        return $this->rememberedRestTrades($symbol, $first, $count->toInt());
+    }
+
+    /** @return list<array<string, string>>|null */
+    private function rememberedRestTrades(string $symbol, string $first, int $count): ?array
+    {
+        $rows = [];
+        $tradeId = BigInteger::of($first);
+        for ($index = 0; $index < $count; ++$index) {
+            $row = $this->recentRestTrades[$symbol][(string) $tradeId]
+                ?? $this->readBackRestTrades[$symbol][(string) $tradeId]
+                ?? null;
+            if ($row === null) {
+                return null;
+            }
+            $rows[] = $row;
+            $tradeId = $tradeId->plus(1);
+        }
+
+        return $rows;
+    }
+
+    private function newestTradeFrontier(string $symbol): ?OkxPaperStreamFrontier
+    {
+        $newest = null;
+        foreach (['/rest/public_trade', '/ws/public_trade'] as $suffix) {
+            $frontier = $this->checkpoint->streamFrontiers[$symbol . $suffix] ?? null;
+            if ($frontier instanceof OkxPaperStreamFrontier
+                && (!$newest instanceof OkxPaperStreamFrontier
+                    || self::compareUnsigned($frontier->sourceIdentity, $newest->sourceIdentity) > 0)
+            ) {
+                $newest = $frontier;
+            }
+        }
+
+        return $newest;
+    }
+
+    /**
+     * C1: once streaming (initially and after a reconnect recovery), the REST↔WS
+     * candle junction of each symbol and bar is anchored on its first confirmed
+     * websocket candle: the websocket never sends an already confirmed candle
+     * again, so the exact overlap with the recovered frontier that the websocket
+     * stream required after a reconnect could never come (every reconnect failed
+     * at the next candle close).
+     */
+    private function openCandleJunctions(): void
+    {
+        if (!$this->anchoredTradeJunctions) {
+            return;
+        }
+        foreach (['BTCUSDT', 'ETHUSDT'] as $symbol) {
+            foreach (array_keys(self::CANDLE_BAR_MILLISECONDS) as $bar) {
+                $this->candleJunctions[$symbol . '/' . $bar] = true;
+                $this->requiresOverlap[$symbol . '/ws/candle_' . $bar] = false;
+            }
+        }
+    }
+
+    /** @param array<array-key, mixed> $message */
+    private function anchorsCandleJunction(array $message): bool
+    {
+        $argument = $message['arg'] ?? null;
+        if ($this->candleJunctions === []
+            || !\is_array($argument)
+            || !\is_string($argument['channel'] ?? null)
+            || !str_starts_with($argument['channel'], 'candle')
+            || !\is_string($argument['instId'] ?? null)
+        ) {
+            return false;
+        }
+
+        return isset($this->candleJunctions[
+            $this->instruments->normalizedSymbol($argument['instId'])
+            . '/' . substr($argument['channel'], \strlen('candle'))
+        ]);
+    }
+
+    /**
+     * Records from REST, before the first confirmed websocket candle of a symbol
+     * and bar whose junction is open, the confirmed candles between the newest
+     * recorded candle frontier and that candle (anchored on that frontier).
+     *
+     * @return array{string, list<array{
+     *     event: PaperMarketEvent,
+     *     frontier: OkxPaperStreamFrontier,
+     *     ordinal_state: array<string, mixed>
+     * }>}|null
+     */
+    private function candleJunctionRestEvents(): ?array
+    {
+        if ($this->candleJunctions === [] || $this->businessQueue->count() === 0) {
+            return null;
+        }
+        try {
+            $message = $this->decoder->decodeBusiness($this->businessQueue->frames()[0]);
+            $instrumentId = $message['arg']['instId'] ?? null;
+            $channel = $message['arg']['channel'] ?? null;
+            $rows = $message['data'] ?? null;
+            if (!$this->anchorsCandleJunction($message)
+                || !\is_string($instrumentId)
+                || !\is_string($channel)
+                || !\is_array($rows)
+            ) {
+                return null;
+            }
+            $confirmed = [];
+            foreach ($rows as $row) {
+                $frontier = \is_array($row) ? $this->candleFrontier($instrumentId, $channel, $row) : null;
+                if ($frontier instanceof OkxPaperStreamFrontier) {
+                    $confirmed[] = self::candleTimestamp($frontier);
+                }
+            }
+        } catch (\Throwable) {
+            // The queued frame path reports invalid frames.
+            return null;
+        }
+        $symbol = $this->instruments->normalizedSymbol($instrumentId);
+        $bar = substr($channel, \strlen('candle'));
+        $newest = $this->newestCandleFrontier($symbol, $bar);
+        if (!$newest instanceof OkxPaperStreamFrontier) {
+            return null;
+        }
+        $newestTimestamp = self::candleTimestamp($newest);
+        foreach ($confirmed as $timestamp) {
+            if (self::compareUnsigned($timestamp, $newestTimestamp) <= 0) {
+                continue;
+            }
+            if ($timestamp === self::nextCandleTimestamp($newestTimestamp, $bar)) {
+                return null;
+            }
+            $junctionRows = $this->candleJunctionRows($instrumentId, $bar, $newest, $timestamp);
+            if ($junctionRows === null) {
+                return null;
+            }
+            $restStream = $symbol . '/rest/candle_' . $bar;
+            // candleJunctionRows() proved the overlap with the newest frontier.
+            $this->requiresOverlap[$restStream] = false;
+            $events = $this->acceptedEvents(
+                $restStream,
+                $junctionRows,
+                fn (array $row, OkxPaperMarketEventNormalizer $normalizer): ?PaperMarketEvent => $normalizer
+                    ->warmupCandle($instrumentId, $bar, $row),
+                fn (array $row): ?OkxPaperStreamFrontier => $this->candleFrontier($instrumentId, $bar, $row),
+                false,
+                'rest',
+            );
+
+            return $events === [] ? null : [$restStream, $events];
+        }
+
+        return null;
+    }
+
+    /**
+     * Confirmed candles strictly between the newest frontier and $before, from
+     * the current candles (300 bars) anchored on that frontier; REST can lag
+     * behind the websocket, so missing bars are fetched again after a bounded
+     * backoff, never recorded as a gap. A junction wider than those 300 bars
+     * fails closed (market_data_gap_unresolved): it cannot happen after a
+     * recovery, which pages candle history back to the frontier and records up
+     * to the newest confirmed candle just before the websocket resumes.
+     *
+     * @return list<array<array-key, mixed>>|null null once the connection changed
+     */
+    private function candleJunctionRows(
+        string $instrumentId,
+        string $bar,
+        OkxPaperStreamFrontier $newest,
+        string $before,
+    ): ?array {
+        $newestTimestamp = self::candleTimestamp($newest);
+        $expected = intdiv(
+            (int) $before - (int) $newestTimestamp,
+            self::CANDLE_BAR_MILLISECONDS[$bar],
+        ) - 1;
+        if ($expected < 1 || $expected > 298) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        $generation = $this->connectionGeneration;
+        foreach ([0.0, ...self::TRADE_JUNCTION_RETRY_DELAYS_SECONDS] as $delay) {
+            if ($delay > 0.0) {
+                $this->clock->sleep($delay);
+                $this->pumpNetworkLoop();
+                if (!$this->junctionConnectionUnchanged($generation)) {
+                    return null;
+                }
+            }
+            $rows = $this->restClient->currentCandles($instrumentId, $bar, null, null, 300);
+            $this->pumpNetworkLoop();
+            if (!$this->junctionConnectionUnchanged($generation)) {
+                return null;
+            }
+            $anchored = false;
+            /** @var array<array-key, array<array-key, mixed>> $found */
+            $found = [];
+            foreach ($rows as $row) {
+                $candidate = $this->candleFrontier($instrumentId, $bar, $row);
+                if (!$candidate instanceof OkxPaperStreamFrontier) {
+                    continue;
+                }
+                $timestamp = self::candleTimestamp($candidate);
+                if (hash_equals($newest->naturalIdentity, $candidate->naturalIdentity)) {
+                    if (!hash_equals($newest->overlapDigest, $candidate->overlapDigest)) {
+                        $this->failTerminal('market_event_identity_conflict');
+                    }
+                    $anchored = true;
+                } elseif (self::compareUnsigned($timestamp, $newestTimestamp) > 0
+                    && self::compareUnsigned($timestamp, $before) < 0
+                ) {
+                    $found[$timestamp] = $row;
+                }
+            }
+            if ($anchored && \count($found) === $expected) {
+                $junctionRows = array_values($found);
+                $this->sortCandleRows($junctionRows);
+
+                return $junctionRows;
+            }
+        }
+        $this->failTerminal('market_data_gap_unresolved');
+    }
+
+    /**
+     * Drops confirmed websocket candles already recorded, then closes the
+     * junction on the confirmed candle that directly follows the newest frontier
+     * (candleJunctionRestEvents() recorded any candle in between beforehand).
+     *
+     * @param array<array-key, mixed> $rows
+     * @return list<mixed>
+     */
+    private function rowsAfterCandleJunction(
+        string $symbol,
+        string $bar,
+        string $instrumentId,
+        string $channel,
+        array $rows,
+    ): array {
+        $newest = $this->newestCandleFrontier($symbol, $bar);
+        if (!$newest instanceof OkxPaperStreamFrontier) {
+            unset($this->candleJunctions[$symbol . '/' . $bar]);
+
+            return array_values($rows);
+        }
+        $newestTimestamp = self::candleTimestamp($newest);
+        $kept = [];
+        foreach ($rows as $row) {
+            if (!\is_array($row)) {
+                throw new OkxPaperLiveIntegrityException('okx_paper_public_message_invalid');
+            }
+            $frontier = $this->candleFrontier($instrumentId, $channel, $row);
+            if ($frontier instanceof OkxPaperStreamFrontier
+                && isset($this->candleJunctions[$symbol . '/' . $bar])
+            ) {
+                $timestamp = self::candleTimestamp($frontier);
+                if (self::compareUnsigned($timestamp, $newestTimestamp) <= 0) {
+                    $this->assertDroppedJunctionRowMatches(
+                        $symbol . '/ws/candle_' . $bar,
+                        $frontier,
+                        $newest,
+                    );
+
+                    continue;
+                }
+                if ($timestamp !== self::nextCandleTimestamp($newestTimestamp, $bar)) {
+                    throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+                }
+                unset($this->candleJunctions[$symbol . '/' . $bar]);
+            }
+            $kept[] = $row;
+        }
+
+        return $kept;
+    }
+
+    /**
+     * A websocket row dropped at a junction was recorded from REST: it must match
+     * that record where it is still known (the newest frontier, or an identity of
+     * the acknowledged window); a REST row that differs fails closed.
+     */
+    private function assertDroppedJunctionRowMatches(
+        string $stream,
+        OkxPaperStreamFrontier $row,
+        OkxPaperStreamFrontier $newest,
+    ): void {
+        $recorded = hash_equals($newest->naturalIdentity, $row->naturalIdentity)
+            ? $newest->overlapDigest
+            : ($this->acknowledgedIdentity($stream, $row)['overlap_digest'] ?? null);
+        if (\is_string($recorded) && !hash_equals($recorded, $row->overlapDigest)) {
+            throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
+        }
+    }
+
+    private function newestCandleFrontier(string $symbol, string $bar): ?OkxPaperStreamFrontier
+    {
+        $newest = null;
+        foreach (['/rest/candle_', '/ws/candle_'] as $infix) {
+            $frontier = $this->checkpoint->streamFrontiers[$symbol . $infix . $bar] ?? null;
+            if ($frontier instanceof OkxPaperStreamFrontier
+                && (!$newest instanceof OkxPaperStreamFrontier
+                    || self::compareUnsigned(
+                        self::candleTimestamp($frontier),
+                        self::candleTimestamp($newest),
+                    ) > 0)
+            ) {
+                $newest = $frontier;
+            }
+        }
+
+        return $newest;
+    }
+
+    private static function candleTimestamp(OkxPaperStreamFrontier $frontier): string
+    {
+        $separator = strrpos($frontier->sourceIdentity, '|');
+        if ($separator === false) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
+        }
+
+        return substr($frontier->sourceIdentity, $separator + 1);
+    }
+
+    private static function nextCandleTimestamp(string $timestamp, string $bar): string
+    {
+        return (string) ((int) $timestamp + self::CANDLE_BAR_MILLISECONDS[$bar]);
+    }
+
+    /**
+     * Trade ids a trade row covers: OKX aggregates `count` trades of one taker
+     * order under the last trade id.
+     *
+     * @param array<array-key, mixed> $row
+     * @return array{string, string}
+     */
+    private function tradeRowRange(array $row): array
+    {
+        $last = $this->tradeFrontier($row)->sourceIdentity;
+        $count = $row['count'] ?? '1';
+        if (!\is_string($count) || preg_match('/\A[1-9][0-9]{0,8}\z/D', $count) !== 1) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_message_invalid');
+        }
+        $first = BigInteger::of($last)->minus((int) $count - 1);
+        if ($first->isLessThan(1)) {
+            throw new OkxPaperLiveIntegrityException('okx_paper_public_message_invalid');
+        }
+
+        return [(string) $first, $last];
+    }
+
+    private static function nextTradeId(string $tradeId): string
+    {
+        return (string) BigInteger::of($tradeId)->plus(1);
+    }
+
+    /** @param list<array<array-key, mixed>> $rows */
+    private function newestTradeId(array $rows): string
+    {
+        $newest = null;
+        foreach ($rows as $row) {
+            $tradeId = $row['tradeId'] ?? null;
+            if (!\is_string($tradeId)) {
+                $this->failTerminal('market_data_gap_unresolved');
+            }
+            if ($newest === null || self::compareUnsigned($tradeId, $newest) > 0) {
+                $newest = $tradeId;
+            }
+        }
+        if (!\is_string($newest)) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+
+        return $newest;
+    }
+
+    /**
+     * Recent-trade and timestamp-paginated OKX responses are time ordered, but when
+     * a response is cut by its limit its oldest millisecond can be incomplete: a
+     * capture recorded one trade of a millisecond while 13 trades of the same
+     * millisecond with higher ids were missing (OKX history-trades returns them).
+     * Dropping that millisecond keeps the snapshot gap free; the dropped trades
+     * are older than every kept trade and are recovered by trade-id pagination.
+     *
+     * @param list<array<array-key, mixed>> $rows
+     * @return list<array<array-key, mixed>>
+     */
+    private static function withoutPartialOldestMillisecond(array $rows, int $limit): array
+    {
+        if (\count($rows) < $limit) {
+            return $rows;
+        }
+        $oldest = null;
+        foreach ($rows as $row) {
+            $timestamp = $row['ts'] ?? null;
+            if (!\is_string($timestamp)) {
+                return $rows;
+            }
+            if ($oldest === null || self::compareUnsigned($timestamp, $oldest) < 0) {
+                $oldest = $timestamp;
+            }
+        }
+
+        $complete = array_values(array_filter(
+            $rows,
+            static fn (mixed $row): bool => \is_array($row) && ($row['ts'] ?? null) !== $oldest,
+        ));
+
+        // A response entirely within one millisecond has nothing to keep; callers
+        // then page by trade id, which is exact.
+        return $complete === [] ? $rows : $complete;
     }
 
     /** @return \Generator<int, PaperMarketEvent> */
@@ -1200,6 +2200,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         if (!\in_array($candidateSourceKind, ['rest', 'ws'], true)) {
             throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
         }
+        if ($candidateSourceKind === 'rest' && str_ends_with($stream, '/public_trade')) {
+            $this->rememberRestTradeRows(substr($stream, 0, (int) strpos($stream, '/')), $rows);
+        }
 
         $frontier = $this->checkpoint->streamFrontiers[$stream] ?? null;
         /** @var list<array{natural_identity: string, canonical_digest: string, overlap_digest: string, source_kind: string}> $requiredOverlaps */
@@ -1211,23 +2214,12 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         if ($frontier instanceof OkxPaperStreamFrontier
             && ($this->requiresOverlap[$stream] ?? false)
         ) {
-            $requiredFrontiers = [[
-                'frontier' => $frontier,
-                'source_kind' => self::identitySourceKind($stream),
-            ]];
-            if ($requireSiblingOverlap) {
-                $sibling = $this->siblingFrontier($stream);
-                if ($sibling instanceof OkxPaperStreamFrontier) {
-                    $requiredFrontiers[] = [
-                        'frontier' => $sibling,
-                        'source_kind' => self::identitySourceKind(
-                            str_contains($stream, '/rest/')
-                                ? str_replace('/rest/', '/ws/', $stream)
-                                : str_replace('/ws/', '/rest/', $stream),
-                        ),
-                    ];
-                }
-            }
+            $requiredFrontiers = $requireSiblingOverlap
+                ? $this->requiredRecoveryOverlaps($stream, $frontier)
+                : [[
+                    'frontier' => $frontier,
+                    'source_kind' => self::identitySourceKind($stream),
+                ]];
             foreach ($requiredFrontiers as $required) {
                 $requiredFrontier = $required['frontier'];
                 $existingDigest = $requiredOverlapByIdentity[
@@ -1462,6 +2454,50 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             null,
             true,
         );
+    }
+
+    /**
+     * Frontiers a REST recovery batch must overlap. A trade recovery only has to
+     * reach the newest of its stream and sibling frontiers (OKX trade ids are
+     * contiguous and increasing per instrument): the older frontier is already
+     * covered by the newer one, and events only start after the newest overlap.
+     * Otherwise the REST frontier, which stops moving once the websocket streams,
+     * would make every reconnect page back to the last REST recovery. Candles
+     * keep both overlaps (one page covers hours of candles).
+     *
+     * @return list<array{frontier: OkxPaperStreamFrontier, source_kind: string}>
+     */
+    private function requiredRecoveryOverlaps(
+        string $stream,
+        OkxPaperStreamFrontier $frontier,
+    ): array {
+        $own = [
+            'frontier' => $frontier,
+            'source_kind' => self::identitySourceKind($stream),
+        ];
+        $sibling = $this->siblingFrontier($stream);
+        if (!$sibling instanceof OkxPaperStreamFrontier) {
+            return [$own];
+        }
+        $siblingOverlap = [
+            'frontier' => $sibling,
+            'source_kind' => self::identitySourceKind(
+                str_contains($stream, '/rest/')
+                    ? str_replace('/rest/', '/ws/', $stream)
+                    : str_replace('/ws/', '/rest/', $stream),
+            ),
+        ];
+        if (str_ends_with($stream, '/public_trade')) {
+            $order = self::compareUnsigned($sibling->sourceIdentity, $frontier->sourceIdentity);
+            if ($order > 0) {
+                return [$siblingOverlap];
+            }
+            if ($order < 0) {
+                return [$own];
+            }
+        }
+
+        return [$own, $siblingOverlap];
     }
 
     private function siblingFrontier(string $stream): ?OkxPaperStreamFrontier
@@ -1949,6 +2985,27 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 }
             }
             $page = $pageRows[$pageIndex] ?? null;
+            if (\is_array($page)
+                && \is_array($retained)
+                && self::compareTradeRows($page, $retained) === 0
+            ) {
+                // The inclusive first history page overlaps the retained rows:
+                // keep one copy of an identical trade, reject a conflicting one.
+                try {
+                    $pageCompact = OkxPaperRetainedTradeRow::compact($page);
+                    $retainedCompact = \is_string($retainedRows[$retainedIndex])
+                        ? $retainedRows[$retainedIndex]
+                        : OkxPaperRetainedTradeRow::compact($retained);
+                } catch (\InvalidArgumentException $exception) {
+                    $this->failTerminal('market_data_gap_unresolved', $exception);
+                }
+                if (!hash_equals($retainedCompact, $pageCompact)) {
+                    throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
+                }
+                ++$pageIndex;
+
+                continue;
+            }
             $takePage = \is_array($page)
                 && ($retained === null || self::compareTradeRows($page, $retained) <= 0);
             if ($takePage) {
@@ -2001,21 +3058,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         if (!$frontier instanceof OkxPaperStreamFrontier) {
             return null;
         }
-        $required = [[
-            'frontier' => $frontier,
-            'source_kind' => self::identitySourceKind($stream),
-        ]];
-        $sibling = $this->siblingFrontier($stream);
-        if ($sibling instanceof OkxPaperStreamFrontier) {
-            $required[] = [
-                'frontier' => $sibling,
-                'source_kind' => self::identitySourceKind(
-                    str_contains($stream, '/rest/')
-                        ? str_replace('/rest/', '/ws/', $stream)
-                        : str_replace('/ws/', '/rest/', $stream),
-                ),
-            ];
-        }
+        $required = $this->requiredRecoveryOverlaps($stream, $frontier);
         /** @var list<array{natural_identity: string, digest: string, uses_canonical: bool}> $expected */
         $expected = [];
         /** @var array<string, string> $requiredOverlapDigests */
@@ -2066,6 +3109,13 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                         : OkxPaperRetainedTradeRow::compact($expanded),
                     'frontier' => $candidate,
                 ];
+            }
+            if (\count($found) === \count($expected)) {
+                // Only first occurrences are used. The retained rows were validated
+                // with the checkpoint, and every later row is expanded and checked
+                // against acknowledged identities when its batch is emitted, so the
+                // anchors kept at the head keep each resumed batch O(batch).
+                break;
             }
         }
 
@@ -2138,6 +3188,18 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
      * @param array<array-key, mixed> $left
      * @param array<array-key, mixed> $right
      */
+    /**
+     * OKX history-trades with type=2 returns trades strictly older than the cursor
+     * timestamp. When the oldest retained trade shares its millisecond with trades
+     * that were not retained (a burst), a cursor equal to that timestamp skips them.
+     * Starting one millisecond later makes the first page overlap the retained rows;
+     * identical rows are merged once by mergeRetainedTradePage().
+     */
+    private static function inclusiveHistoryTradeCursor(string $oldestTimestamp): string
+    {
+        return (string) BigInteger::of($oldestTimestamp)->plus(1);
+    }
+
     private static function compareTradeRows(array $left, array $right): int
     {
         $timestamp = self::compareUnsigned($left['ts'] ?? null, $right['ts'] ?? null);
@@ -2241,13 +3303,15 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $opened = true;
                 $this->socketOpen[$socket] = true;
                 $this->socketAdmissionsPaused[$socket] = false;
+                $this->markReadActive($socket);
                 $this->pauseSocketAdmissionsAtHighWatermark($socket, $queue);
                 $this->loop->stop();
             },
             function (string $frame) use ($queue, $generation, $socket): void {
                 $this->admitSocketFrame($frame, $queue, $generation, $socket);
             },
-            function () use (&$terminal, &$opened, $generation, $socket): void {
+            function (?int $code = null, ?string $reason = null) use (&$terminal, &$opened, $generation, $socket): void {
+                $this->logSocketClosed($socket, $code, $reason, $generation);
                 if ($generation !== $this->connectionGeneration) {
                     return;
                 }
@@ -2266,6 +3330,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $this->loop->stop();
             },
             function (\Throwable $error) use (&$terminal, &$opened, $generation, $socket): void {
+                $this->logSocketError($socket, $error, $generation);
                 if ($generation !== $this->connectionGeneration) {
                     return;
                 }
@@ -2339,10 +3404,15 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             return;
         }
         try {
-            $socket === 'public'
+            $decoded = $socket === 'public'
                 ? $this->decoder->decodePublic($frame)
                 : $this->decoder->decodeBusiness($frame);
             $this->refreshInboundFreshness($socket, $frame);
+            if ($socket === 'public' && $this->consumesBookResubscriptionAcknowledgement($decoded)) {
+                $this->loop->stop();
+
+                return;
+            }
             if ($this->healthyStopRequested
                 && !$this->healthyStopAdmissionQuiesced
             ) {
@@ -2354,19 +3424,27 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 return;
             }
         } catch (OkxPaperLiveIntegrityException $exception) {
+            // Control frames are decoded on admission: an unusable one is logged here.
+            $this->logRejectedFrame($socket, $frame, $exception);
             $reason = $this->terminalPublicFailureReason($exception);
             if ($reason !== null) {
-                $this->failTerminal($reason);
+                $this->failTerminal($reason, $exception);
             }
 
             throw $exception;
         }
         try {
-            $queue->enqueue($frame);
-            $this->streamingQueuesDirty = true;
-            $this->pauseSocketAdmissionsAtHighWatermark($socket, $queue);
-            if (!$this->networkTickActive) {
-                $this->persistDirtyStreamingQueues();
+            if ($this->inboundBufferingActive()
+                && ($this->inboundBuffers[$socket]->count() !== 0 || $queue->shouldPauseAdmissions())
+            ) {
+                $this->bufferInboundFrame($socket, $frame);
+            } else {
+                $queue->enqueue($frame);
+                $this->streamingQueuesDirty = true;
+                $this->pauseSocketAdmissionsAtHighWatermark($socket, $queue);
+                if (!$this->networkTickActive) {
+                    $this->persistDirtyStreamingQueues();
+                }
             }
         } catch (OkxPaperLiveIntegrityException $exception) {
             if ($exception->getMessage() === 'market_data_backpressure_exhausted') {
@@ -2589,6 +3667,144 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             ) === [];
     }
 
+    /** @param array<string, mixed> $context */
+    private function warn(string $message, array $context): void
+    {
+        try {
+            $this->logger->warning($message, $context + [
+                'phase' => $this->checkpoint->phase,
+                'connection_epoch' => $this->checkpoint->connectionEpoch,
+                'source_epochs' => $this->checkpoint->sourceEpochs,
+                'reconnect_attempt' => $this->checkpoint->reconnect['attempt'],
+                'connection_generation' => $this->connectionGeneration,
+            ]);
+        } catch (\Throwable) {
+            // Diagnostics never fail the capture.
+        }
+    }
+
+    private function logSourceFailure(\Throwable $exception): void
+    {
+        try {
+            $this->warn('okx_paper_public_source_failed', [
+                'public_reason' => $this->checkpoint->failureReason
+                    ?? $this->terminalPublicFailureReason($exception)
+                    ?? OkxPaperLiveDiagnostics::text($exception->getMessage()),
+                ...OkxPaperLiveDiagnostics::exception($exception),
+                'rejected_frame' => $this->lastRejectedFrame,
+            ]);
+        } catch (\Throwable) {
+            // Diagnostics never fail the capture.
+        }
+    }
+
+    /**
+     * A heartbeat decision on a missing pong (see livenessDecision()): a reconnect,
+     * or a deferral while frames prove the connection alive, logged when first
+     * deferred and then once a minute.
+     */
+    private function logLivenessReconnect(string $socket, string $trigger, string $decision): void
+    {
+        try {
+            $now = (float) $this->clock->now()->format('U.u');
+            $probe = $this->pingProbes[$socket] ?? null;
+            if (str_starts_with($decision, 'deferred_') && $probe !== null) {
+                if ($probe['logged_at'] !== null && $now - $probe['logged_at'] < 60.0) {
+                    return;
+                }
+                $this->pingProbes[$socket]['logged_at'] = $now;
+            }
+            $age = static fn (?\DateTimeImmutable $at): ?float => $at === null
+                ? null
+                : round($now - (float) $at->format('U.u'), 3);
+            $this->warn('okx_paper_public_liveness_reconnect', [
+                'socket' => $socket,
+                'trigger' => $trigger,
+                'decision' => $decision,
+                'backlog' => $probe['backlog'] ?? null,
+                'last_frame_age_s' => $age($this->lastInboundAt[$socket] ?? null),
+                'last_pong_age_s' => $age($this->lastPongAt[$socket] ?? null),
+                'ping_age_s' => $probe === null ? null : round($now - $probe['sent_at'], 3),
+                'frames_since_ping' => $probe['frames'] ?? null,
+                'loop_stall_s' => $probe['heartbeat_late_s'] ?? null,
+                'public_queue_frames' => $this->publicQueue->count(),
+                'business_queue_frames' => $this->businessQueue->count(),
+                // Whether the silence could be ours: our pause, our reading time,
+                // how often the event loop polled the sockets since the ping.
+                'paused_by_us' => $this->socketAdmissionsPaused[$socket] ?? null,
+                'read_active_s' => ($this->readActiveSince[$socket] ?? null) === null
+                    ? null
+                    : round($now - (float) $this->readActiveSince[$socket], 3),
+                'polls_since_ping' => $probe['polls'] ?? null,
+                'max_poll_gap_s' => $probe['max_poll_gap_s'] ?? null,
+                'inbound_buffered_frames' => $this->inboundBufferedFrames(),
+            ]);
+        } catch (\Throwable) {
+            // Diagnostics never fail the capture.
+        }
+    }
+
+    /**
+     * Every terminal failure, with the check that raised it: failures raised outside
+     * events() (by the stop controller's timer) never reach logSourceFailure().
+     */
+    private function logTerminalFailure(string $reason, ?\Throwable $previous): void
+    {
+        try {
+            $trace = debug_backtrace(\DEBUG_BACKTRACE_IGNORE_ARGS, 3);
+            $this->warn('okx_paper_public_terminal_failure', [
+                'public_reason' => $reason,
+                'failed_in' => ($trace[2]['function'] ?? '?')
+                    . '@' . basename($trace[1]['file'] ?? '?') . ':' . ($trace[1]['line'] ?? '?'),
+                'previous' => $previous === null ? null : OkxPaperLiveDiagnostics::exception($previous),
+            ]);
+        } catch (\Throwable) {
+            // Diagnostics never fail the capture.
+        }
+    }
+
+    private function logRejectedFrame(string $socket, string $frame, \Throwable $exception): void
+    {
+        try {
+            $this->lastRejectedFrame = [
+                'socket' => $socket,
+                'frame' => OkxPaperLiveDiagnostics::frame($frame),
+                'reason' => OkxPaperLiveDiagnostics::text($exception->getMessage()) ?? '',
+            ];
+            $this->warn('okx_paper_public_frame_rejected', [
+                'socket' => $socket,
+                'frame_bytes' => \strlen($frame),
+                'frame_excerpt' => $this->lastRejectedFrame['frame'],
+                ...OkxPaperLiveDiagnostics::exception($exception),
+            ]);
+        } catch (\Throwable) {
+            // Diagnostics never fail the capture.
+        }
+    }
+
+    private function logSocketClosed(string $socket, ?int $code, ?string $reason, int $generation): void
+    {
+        $this->warn('okx_paper_public_ws_closed', [
+            'socket' => $socket,
+            'ws_close_code' => $code,
+            'ws_close_reason' => OkxPaperLiveDiagnostics::text($reason),
+            'current_connection' => $generation === $this->connectionGeneration && !$this->stopped,
+        ]);
+    }
+
+    private function logSocketError(string $socket, \Throwable $error, int $generation): void
+    {
+        try {
+            $this->warn('okx_paper_public_ws_error', [
+                'socket' => $socket,
+                ...OkxPaperLiveDiagnostics::exception($error),
+                'current_connection' => $generation === $this->connectionGeneration && !$this->stopped,
+            ]);
+        } catch (\Throwable) {
+            // Diagnostics never fail the capture.
+        }
+    }
+
     private function beginPairedReconnect(): void
     {
         if ($this->checkpoint->phase === 'stopping'
@@ -2611,6 +3827,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         ) {
             $this->failTerminal('okx_paper_public_reconnect_exhausted');
         }
+        $this->serviceNoticeReconnectRequested = false;
+        $this->persistDirtyStreamingQueues(true);
         $this->discardQueuedBooksFromPreviousConnection();
         $this->subscriptions->reset();
         $this->publicAcknowledgements = [];
@@ -2791,6 +4009,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $opened = true;
                 $this->socketOpen[$socket] = true;
                 $this->socketAdmissionsPaused[$socket] = false;
+                $this->markReadActive($socket);
                 $this->pauseSocketAdmissionsAtHighWatermark($socket, $queue);
                 try {
                     $afterOpen();
@@ -2805,7 +4024,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             function (string $frame) use ($queue, $generation, $socket): void {
                 $this->admitSocketFrame($frame, $queue, $generation, $socket);
             },
-            function () use (&$opened, $generation, $socket): void {
+            function (?int $code = null, ?string $reason = null) use (&$opened, $generation, $socket): void {
+                $this->logSocketClosed($socket, $code, $reason, $generation);
                 if ($generation !== $this->connectionGeneration || $this->stopped) {
                     return;
                 }
@@ -2817,6 +4037,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 }
             },
             function (\Throwable $error) use (&$opened, $generation, $socket): void {
+                $this->logSocketError($socket, $error, $generation);
                 if ($generation !== $this->connectionGeneration || $this->stopped) {
                     return;
                 }
@@ -2974,6 +4195,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     'streaming',
                     null,
                 );
+                $this->openTradeJunctions();
+                $this->openCandleJunctions();
                 $this->startHeartbeatTimers();
                 $this->scheduleStabilityResetTimer();
 
@@ -3038,7 +4261,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     if ($this->isIdentityConflict($exception)) {
                         $this->failTerminal('market_event_identity_conflict', $exception);
                     }
-                    $this->failTerminal('market_data_gap_unresolved');
+                    // Keep the cause (REST failure, missing book authority...).
+                    $this->failTerminal('market_data_gap_unresolved', $exception);
                 }
                 if ($this->stopped || $this->connectionGeneration !== $recoveryGeneration) {
                     return;
@@ -3388,10 +4612,15 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             );
             if (\is_array($recoveryRows)) {
                 try {
-                    return $this->acceptedRecoveryTradeEvents(
+                    $events = $this->acceptedRecoveryTradeEvents(
                         $stream,
                         $recoveryRows,
                     );
+                    // A forward recovery goes on with its next page until the
+                    // frontier reaches forward_through.
+                    if ($events !== [] || !$this->forwardTradeRecoveryContinues($stream)) {
+                        return $events;
+                    }
                 } catch (OkxPaperLiveIntegrityException $exception) {
                     if ($exception->getMessage() !== 'market_data_gap_unresolved' || $this->stopped) {
                         throw $exception;
@@ -3451,7 +4680,10 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         if (($transition['stage'] ?? null) !== 'recent_trades') {
             $this->failTerminal('market_data_gap_unresolved');
         }
-        $rows = $this->restClient->recentTrades($instrumentId, 500);
+        $rows = self::withoutPartialOldestMillisecond(
+            $this->restClient->recentTrades($instrumentId, 500),
+            500,
+        );
         if ($this->reconnectRecoveryDeadlineExpired($symbol)) {
             $this->failTerminal('market_data_gap_unresolved');
         }
@@ -3604,6 +4836,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $oldestTimestamp = null;
         $retainedRows = [];
         $acceptedIndex = 0;
+        // The history stage proves the sibling overlap again, and its cursor
+        // starts below this snapshot: rows up to the sibling frontier are never
+        // fetched again, so retain the snapshot from that frontier on.
+        $siblingFrontier = $this->siblingFrontier($stream);
+        $retainFromSibling = false;
         foreach ($rows as $row) {
             $rowFrontier = $this->tradeFrontier($row);
             $timestamp = $row['ts'] ?? null;
@@ -3615,6 +4852,14 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             ) {
                 $oldestTimestamp = $timestamp;
             }
+            if ($siblingFrontier instanceof OkxPaperStreamFrontier
+                && hash_equals(
+                    $siblingFrontier->naturalIdentity,
+                    $rowFrontier->naturalIdentity,
+                )
+            ) {
+                $retainFromSibling = true;
+            }
             $acceptedFrontier = $events[$acceptedIndex]['frontier'] ?? null;
             if (!$acceptedFrontier instanceof OkxPaperStreamFrontier
                 || !hash_equals(
@@ -3622,6 +4867,10 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     $rowFrontier->naturalIdentity,
                 )
             ) {
+                if ($retainFromSibling) {
+                    $retainedRows[] = $row;
+                }
+
                 continue;
             }
             if (!hash_equals(
@@ -3647,7 +4896,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $state['overlap_pagination_by_stream'][$stream] = [
             'endpoint' => 'history_trades',
             'pagination_type' => 2,
-            'next_cursor' => $oldestTimestamp,
+            'next_cursor' => self::inclusiveHistoryTradeCursor($oldestTimestamp),
             'pages_consumed' => 0,
             'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
             'target_frontier' => $this->requiredRecoveryFrontier($stream)->toArray(),
@@ -3854,16 +5103,64 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $this->failTerminal('market_data_gap_unresolved');
             }
             $state = $this->checkpoint->toArray();
-            $state['overlap_pagination_by_stream'][$stream] = [
-                'endpoint' => 'history_trades',
-                'pagination_type' => 2,
-                'next_cursor' => $oldestTimestamp,
-                'pages_consumed' => 0,
-                'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
-                'target_frontier' => $this->requiredRecoveryFrontier($stream)->toArray(),
-                'deadline_at' => $resync['deadline_at'],
-                'retained_rows' => $this->compactRetainedTradeRows($newerRows),
-            ];
+            $anchor = $this->forwardRecoveryAnchorId($stream);
+            $newest = null;
+            foreach ($newerRows as $row) {
+                $tradeId = $this->tradeFrontier($row)->sourceIdentity;
+                if ($newest === null || self::compareUnsigned($tradeId, $newest) > 0) {
+                    $newest = $tradeId;
+                }
+            }
+            if (\is_string($newest)
+                && BigInteger::of($newest)->minus($anchor)
+                    ->isGreaterThan(OkxPaperLivePolicy::FORWARD_RECOVERY_MIN_TRADES)
+            ) {
+                // Forward from the frontier through the newest recent trade, one
+                // emitted page at a time (see FORWARD_RECOVERY_MIN_TRADES).
+                $state['overlap_pagination_by_stream'][$stream] = [
+                    'endpoint' => 'history_trades',
+                    'pagination_type' => 1,
+                    'next_cursor' => (string) BigInteger::of($anchor)->plus(100),
+                    'pages_consumed' => 0,
+                    'pages_remaining' => OkxPaperLivePolicy::MAX_FORWARD_RECOVERY_PAGES,
+                    'target_frontier' => $this->requiredRecoveryFrontier($stream)->toArray(),
+                    'deadline_at' => $resync['deadline_at'],
+                    'retained_rows' => [],
+                    'forward_through' => $newest,
+                ];
+            } else {
+                $state['overlap_pagination_by_stream'][$stream] = [
+                    'endpoint' => 'history_trades',
+                    'pagination_type' => 2,
+                    'next_cursor' => self::inclusiveHistoryTradeCursor($oldestTimestamp),
+                    'pages_consumed' => 0,
+                    'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
+                    'target_frontier' => $this->requiredRecoveryFrontier($stream)->toArray(),
+                    'deadline_at' => $resync['deadline_at'],
+                    'retained_rows' => $this->compactRetainedTradeRows($newerRows),
+                ];
+            }
+            $state['pending_transition'] = $historyTransition;
+            $this->checkpoint = $this->checkpointStore->saveTransition(
+                $this->recoveryCheckpointWithinBudget($state),
+                'reconnecting',
+                $historyTransition,
+            );
+        } elseif ($newerRows !== []
+            && \is_string($this->checkpoint->overlapPaginationByStream[$stream]['forward_through'] ?? null)
+        ) {
+            // A new connection attempt (OKX closed a socket paused during a long
+            // recovery) resumes the forward recovery from the advanced frontier:
+            // its target moves up to the newest recent trade of this attempt.
+            $through = $this->checkpoint->overlapPaginationByStream[$stream]['forward_through'];
+            foreach ($newerRows as $row) {
+                $tradeId = $this->tradeFrontier($row)->sourceIdentity;
+                if (self::compareUnsigned($tradeId, $through) > 0) {
+                    $through = $tradeId;
+                }
+            }
+            $state = $this->checkpoint->toArray();
+            $state['overlap_pagination_by_stream'][$stream]['forward_through'] = $through;
             $state['pending_transition'] = $historyTransition;
             $this->checkpoint = $this->checkpointStore->saveTransition(
                 $this->recoveryCheckpointWithinBudget($state),
@@ -3882,6 +5179,9 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 || !\is_int($pagination['pagination_type'])
             ) {
                 $this->failTerminal('market_data_gap_unresolved');
+            }
+            if (\array_key_exists('forward_through', $pagination)) {
+                return $this->forwardTradeRecoveryPage($stream, $instrumentId, $historyTransition);
             }
             $rows = $this->restClient->historyTrades(
                 $instrumentId,
@@ -3910,7 +5210,12 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             ++$next['pages_consumed'];
             --$next['pages_remaining'];
             $next['pagination_type'] = 1;
-            $next['next_cursor'] = $oldestTradeId;
+            // A timestamp page can hold only part of its oldest millisecond (see
+            // withoutPartialOldestMillisecond()): continue by trade id from above
+            // its newest trade, which re-covers the page exactly (rows are merged).
+            $next['next_cursor'] = $pagination['pagination_type'] === 2
+                ? (string) BigInteger::of($this->newestTradeId($rows))->plus(1)
+                : $oldestTradeId;
             $next['retained_rows'] = $retainedRows;
             $state['overlap_pagination_by_stream'][$stream] = $next;
             $this->checkpoint = $this->checkpointStore->saveTransition(
@@ -3936,6 +5241,156 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 }
             }
         }
+    }
+
+    /**
+     * One page of a forward trade recovery: the acknowledged frontier and the 99
+     * next ids (history-trades by id, `after` = frontier + 100), replacing the
+     * emitted page in the checkpoint, then its trades after the frontier. The
+     * cursor always derives from the acknowledged frontier, so a restart in the
+     * middle of a page fetches it again from there: no hole, no duplicate.
+     *
+     * @param array<string, mixed> $historyTransition
+     * @return list<array{
+     *     event: PaperMarketEvent,
+     *     frontier: OkxPaperStreamFrontier,
+     *     ordinal_state: array<string, mixed>
+     * }>
+     */
+    private function forwardTradeRecoveryPage(
+        string $stream,
+        string $instrumentId,
+        array $historyTransition,
+    ): array {
+        $this->extendForwardTargetToQueuedTrades($stream);
+        $pagination = $this->checkpoint->overlapPaginationByStream[$stream] ?? null;
+        if (!\is_array($pagination) || !\is_string($pagination['forward_through'] ?? null)) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        // The last page stops at the target, like the backward pagination.
+        $cursor = (string) BigInteger::min(
+            BigInteger::of($this->forwardRecoveryAnchorId($stream))->plus(100),
+            BigInteger::of($pagination['forward_through'])->plus(1),
+        );
+        $rows = $this->restClient->historyTrades($instrumentId, 1, $cursor, 100);
+        if (!\is_array($pagination)
+            || $this->clock->now() >= new \DateTimeImmutable($pagination['deadline_at'])
+            || $rows === []
+            || \count($rows) > 100
+        ) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        $this->validatedOldestHistoryTradeId($rows, $instrumentId, 1, $cursor);
+        $this->sortTradeRows($rows);
+        $state = $this->checkpoint->toArray();
+        $next = $state['overlap_pagination_by_stream'][$stream];
+        ++$next['pages_consumed'];
+        --$next['pages_remaining'];
+        $next['next_cursor'] = (string) BigInteger::of($this->newestTradeId($rows))->plus(100);
+        $next['retained_rows'] = $this->compactRetainedTradeRows($rows);
+        $state['overlap_pagination_by_stream'][$stream] = $next;
+        $this->checkpoint = $this->checkpointStore->saveTransition(
+            $this->recoveryCheckpointWithinBudget($state),
+            'reconnecting',
+            $historyTransition,
+        );
+        unset($this->observedFrontiers[$stream]);
+        $recoveryRows = $this->boundedRetainedTradeRecoveryRows($stream, $next['retained_rows']);
+        if (!\is_array($recoveryRows)) {
+            // history-trades serves every id below its cursor: the frontier is there.
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        $events = $this->acceptedRecoveryTradeEvents($stream, $recoveryRows);
+        if ($events === [] && $this->forwardTradeRecoveryContinues($stream)) {
+            // None of the 99 ids after the frontier exists: a hole OKX never showed.
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+
+        return $events;
+    }
+
+    /**
+     * A forward recovery ends where the websocket takes over. After a new connection
+     * attempt (OKX closes a socket paused during a long recovery), the first queued
+     * trade of this connection can lie beyond the target set by an earlier attempt:
+     * the target moves up to just before it, so the junction left to the websocket
+     * stays small whatever the number of attempts.
+     */
+    private function extendForwardTargetToQueuedTrades(string $stream): void
+    {
+        $pagination = $this->checkpoint->overlapPaginationByStream[$stream] ?? null;
+        if (!\is_array($pagination) || !\is_string($pagination['forward_through'] ?? null)) {
+            return;
+        }
+        $symbol = strstr($stream, '/', true);
+        $through = null;
+        foreach ($this->publicQueue->frames() as $frame) {
+            try {
+                $message = $this->decoder->decodePublic($frame);
+                $instrumentId = $message['arg']['instId'] ?? null;
+                if (($message['arg']['channel'] ?? null) !== 'trades'
+                    || !\is_string($instrumentId)
+                    || $this->instruments->normalizedSymbol($instrumentId) !== $symbol
+                    || !\is_array($message['data'] ?? null)
+                ) {
+                    continue;
+                }
+                foreach ($message['data'] as $row) {
+                    if (\is_array($row)) {
+                        $first = $this->tradeRowRange($row)[0];
+                        $through = (string) BigInteger::of($first)->minus(1);
+                        break 2;
+                    }
+                }
+            } catch (\Throwable) {
+                // The queued frame path reports invalid frames.
+                return;
+            }
+        }
+        if (!\is_string($through) || self::compareUnsigned($through, $pagination['forward_through']) <= 0) {
+            return;
+        }
+        $transition = $this->checkpoint->pendingTransition;
+        if (!\is_array($transition) || ($transition['stage'] ?? null) !== 'history_trades') {
+            return;
+        }
+        $state = $this->checkpoint->toArray();
+        $state['overlap_pagination_by_stream'][$stream]['forward_through'] = $through;
+        $this->checkpoint = $this->checkpointStore->saveTransition(
+            $this->recoveryCheckpointWithinBudget($state),
+            'reconnecting',
+            $transition,
+        );
+    }
+
+    /** The newest trade id every recovery overlap must reach (own or sibling frontier). */
+    private function forwardRecoveryAnchorId(string $stream): string
+    {
+        $anchor = null;
+        foreach ($this->requiredRecoveryOverlaps($stream, $this->requiredRecoveryFrontier($stream)) as $overlap) {
+            $tradeId = $overlap['frontier']->sourceIdentity;
+            if ($anchor === null || self::compareUnsigned($tradeId, $anchor) > 0) {
+                $anchor = $tradeId;
+            }
+        }
+        if (!\is_string($anchor) || preg_match('/\A[1-9][0-9]*\z/D', $anchor) !== 1) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+
+        return $anchor;
+    }
+
+    private function forwardTradeRecoveryContinues(string $stream): bool
+    {
+        $this->extendForwardTargetToQueuedTrades($stream);
+        $pagination = $this->checkpoint->overlapPaginationByStream[$stream] ?? null;
+
+        return \is_array($pagination)
+            && \is_string($pagination['forward_through'] ?? null)
+            && self::compareUnsigned(
+                $this->forwardRecoveryAnchorId($stream),
+                $pagination['forward_through'],
+            ) < 0;
     }
 
     /** @param list<array<array-key, mixed>> $rows */
@@ -4068,6 +5523,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 return [];
             }
         }
+        unset($this->discardedBookSnapshots[$symbol], $this->reservedBookSnapshots[$symbol]);
         $this->requiresOverlap[$symbol . '/ws/top_of_book'] = false;
         $this->persistDurableBookRecovery($symbol, $rows[0], $transition);
         $state = $this->books[$instrumentId]->replaceSnapshot($rows[0]);
@@ -4138,6 +5594,18 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $this->assertPendingWasAcknowledged();
     }
 
+    /**
+     * The book authority of a reconnect is a queued websocket snapshot (sent on
+     * subscription) or a queued delta chaining exactly from the REST snapshot.
+     * OKX samples its books pushes, so a REST sequence rarely lies on that chain,
+     * and a pending symbol's websocket snapshot can be dropped while an earlier
+     * symbol recovers (see discardRecoverablePublicFramesBeforeBookAuthority()):
+     * waiting for the chain could freeze the whole capture until the resync
+     * deadline. The wait is logged every 10 s and bounded: the books channel of
+     * the instrument is resubscribed (OKX pushes a full snapshot on subscription)
+     * at once when its snapshot was dropped, otherwise after 15 s; without any
+     * authority after 60 s the recovery fails closed.
+     */
     private function requireQueuedReconnectBookOverlap(
         string $symbol,
         string $instrumentId,
@@ -4162,7 +5630,35 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             return true;
         }
 
+        $startedAt = $this->clock->now();
+        $lastLoggedAt = null;
+        $resubscribed = false;
         while (!$this->reconnectRecoveryDeadlineExpired($symbol)) {
+            $now = $this->clock->now();
+            $waited = (float) $now->format('U.u') - (float) $startedAt->format('U.u');
+            if ($lastLoggedAt === null
+                || (float) $now->format('U.u') - (float) $lastLoggedAt->format('U.u')
+                    >= self::BOOK_AUTHORITY_LOG_SECONDS
+            ) {
+                $this->logBookAuthorityWait($symbol, $instrumentId, $snapshotSequence, $waited, $resubscribed);
+                $lastLoggedAt = $now;
+            }
+            if (!$resubscribed
+                && (isset($this->discardedBookSnapshots[$symbol])
+                    || $waited >= self::BOOK_AUTHORITY_RESUBSCRIBE_SECONDS)
+            ) {
+                $resubscribed = true;
+                $this->resubscribeBooks($symbol, $instrumentId);
+                if ($generation !== $this->connectionGeneration) {
+                    return false;
+                }
+                if ($this->hasQueuedReconnectBookAuthority($instrumentId, $snapshotSequence)) {
+                    return true;
+                }
+            }
+            if ($waited >= self::BOOK_AUTHORITY_MAX_WAIT_SECONDS) {
+                break;
+            }
             $this->discardRecoverablePublicFramesBeforeBookAuthority($instrumentId);
             $beforeProgress = [
                 $this->connectionGeneration,
@@ -4172,6 +5668,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $this->publicQueue->bytes(),
                 $this->businessQueue->count(),
                 $this->businessQueue->bytes(),
+                $this->clock->now()->format('U.u'),
             ];
             $resync = $this->checkpoint->resyncBySymbol[$symbol] ?? null;
             if (!\is_array($resync)) {
@@ -4180,8 +5677,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             $deadline = new \DateTimeImmutable($resync['deadline_at']);
             $remaining = max(
                 0.0,
-                (float) $deadline->format('U.u')
-                    - (float) $this->clock->now()->format('U.u'),
+                min(
+                    self::BOOK_AUTHORITY_LOG_SECONDS,
+                    (float) $deadline->format('U.u')
+                        - (float) $this->clock->now()->format('U.u'),
+                ),
             );
             $deadlineTimer = $this->loop->addTimer(
                 $remaining,
@@ -4189,9 +5689,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             );
             try {
                 $this->resumePublicAdmissionsForReconnectOverlap();
-                // Every admitted websocket frame stops the loop. Continue
-                // until the exact book chain appears or the durable resync
-                // deadline wakes us, whichever happens first.
+                // Every admitted websocket frame stops the loop; so does the
+                // periodic timer, which bounds and logs the wait.
                 $this->runNetworkLoop();
             } finally {
                 $this->loop->cancelTimer($deadlineTimer);
@@ -4210,23 +5709,133 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $this->publicQueue->bytes(),
                 $this->businessQueue->count(),
                 $this->businessQueue->bytes(),
+                $this->clock->now()->format('U.u'),
             ];
+            // Neither a frame nor time: a deterministic loop that cannot progress.
             if ($beforeProgress === $afterProgress) {
                 break;
             }
         }
+        $this->logBookAuthorityWait(
+            $symbol,
+            $instrumentId,
+            $snapshotSequence,
+            (float) $this->clock->now()->format('U.u') - (float) $startedAt->format('U.u'),
+            $resubscribed,
+            'okx_paper_public_book_authority_unavailable',
+        );
 
         $this->failTerminal('market_data_gap_unresolved');
     }
 
     /**
+     * OKX pushes a full books snapshot on subscription: unsubscribe then subscribe
+     * the instrument's books channel. Both acknowledgements are consumed on
+     * admission (consumesBookResubscriptionAcknowledgement()).
+     */
+    private function resubscribeBooks(string $symbol, string $instrumentId): void
+    {
+        $argument = ['channel' => 'books', 'instId' => $instrumentId];
+        $this->bookResubscriptions[$instrumentId] = ['unsubscribe' => true, 'subscribe' => true];
+        $this->warn('okx_paper_public_book_resubscribe', [
+            'symbol' => $symbol,
+            'snapshot_discarded' => isset($this->discardedBookSnapshots[$symbol]),
+        ]);
+        unset($this->discardedBookSnapshots[$symbol]);
+        $this->publicTransport->send(['op' => 'unsubscribe', 'args' => [$argument]]);
+        $this->publicTransport->send(['op' => 'subscribe', 'args' => [$argument]]);
+        $this->resumePublicAdmissionsForReconnectOverlap();
+        $this->pumpNetworkLoop();
+    }
+
+    /** @param array<string, mixed> $message */
+    private function consumesBookResubscriptionAcknowledgement(array $message): bool
+    {
+        $event = $message['event'] ?? null;
+        $argument = $message['arg'] ?? null;
+        if (($event !== 'subscribe' && $event !== 'unsubscribe')
+            || !\is_array($argument)
+            || ($argument['channel'] ?? null) !== 'books'
+            || !\is_string($argument['instId'] ?? null)
+            || !isset($this->bookResubscriptions[$argument['instId']][$event])
+        ) {
+            return false;
+        }
+        unset($this->bookResubscriptions[$argument['instId']][$event]);
+        if ($this->bookResubscriptions[$argument['instId']] === []) {
+            unset($this->bookResubscriptions[$argument['instId']]);
+        }
+
+        return true;
+    }
+
+    private function logBookAuthorityWait(
+        string $symbol,
+        string $instrumentId,
+        string $snapshotSequence,
+        float $waited,
+        bool $resubscribed,
+        string $message = 'okx_paper_public_book_authority_wait',
+    ): void {
+        try {
+            $frames = 0;
+            $snapshots = 0;
+            $sequences = [];
+            $previousSequences = [];
+            foreach ($this->publicQueue->frames() as $frame) {
+                $decoded = $this->decoder->decodePublic($frame);
+                if (($decoded['arg']['channel'] ?? null) !== 'books'
+                    || ($decoded['arg']['instId'] ?? null) !== $instrumentId
+                ) {
+                    continue;
+                }
+                ++$frames;
+                if (($decoded['action'] ?? null) === 'snapshot') {
+                    ++$snapshots;
+                }
+                foreach (\is_array($decoded['data'] ?? null) ? $decoded['data'] : [] as $row) {
+                    $sequence = \is_array($row) ? self::queuedBookSequence($row['seqId'] ?? null) : null;
+                    $previous = \is_array($row) ? self::queuedBookSequence($row['prevSeqId'] ?? null) : null;
+                    if ($sequence !== null) {
+                        $sequences[] = $sequence;
+                    }
+                    if ($previous !== null) {
+                        $previousSequences[] = $previous;
+                    }
+                }
+            }
+            $this->warn($message, [
+                'symbol' => $symbol,
+                'rest_snapshot_sequence' => $snapshotSequence,
+                'queued_book_frames' => $frames,
+                'queued_book_snapshots' => $snapshots,
+                'queued_seq_first' => $sequences[0] ?? null,
+                'queued_seq_last' => $sequences === [] ? null : $sequences[\count($sequences) - 1],
+                'queued_prev_seq_first' => $previousSequences[0] ?? null,
+                'public_queue_frames' => $this->publicQueue->count(),
+                'waited_s' => round($waited, 3),
+                'snapshot_discarded' => isset($this->discardedBookSnapshots[$symbol]),
+                'resubscribed' => $resubscribed,
+            ]);
+        } catch (\Throwable) {
+            // Diagnostics never fail the capture.
+        }
+    }
+
+    /**
      * While reconnect recovery is waiting for the exact book authority, queued
-     * trades are covered by the subsequent REST overlap pass. Book traffic for
-     * the current or a still-pending symbol has already failed to authorize the
-     * current REST snapshot and will receive its own fresh recovery. Frames for
-     * a symbol whose boundary is already durable must remain queued for normal
-     * streaming emission. Persist the reduced queue before reopening admissions
-     * so repeated high-watermark pauses cannot consume the hard queue budget.
+     * trades are covered by the subsequent REST overlap pass, and the current
+     * symbol's book traffic has already failed to authorize its REST snapshot.
+     * Frames for a symbol whose boundary is already durable must remain queued
+     * for normal streaming emission. A still-pending symbol keeps its last
+     * websocket snapshot and the deltas after it in reserve: its own recovery
+     * then has its authority at once, even after a long trade recovery of the
+     * current symbol (a sub-second wait used to drop it, and the resubscription
+     * snapshot then stayed behind minutes of TCP backlog). Reserves that would
+     * bring the queue to its pause threshold are dropped instead: those symbols
+     * resubscribe at their turn. Persist the reduced queue before reopening
+     * admissions so repeated high-watermark pauses cannot consume the hard
+     * queue budget.
      */
     private function discardRecoverablePublicFramesBeforeBookAuthority(
         string $instrumentId,
@@ -4235,8 +5844,10 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         if ($this->publicQueue->count() === 0) {
             return;
         }
-        $retained = [];
-        foreach ($this->publicQueue->frames() as $frame) {
+        /** @var array<int, array{string, string, bool}> $books offset => frame, symbol, pending */
+        $books = [];
+        $reserveFrom = [];
+        foreach ($this->publicQueue->frames() as $offset => $frame) {
             $message = $this->decoder->decodePublic($frame);
             if (($message['arg']['channel'] ?? null) !== 'books') {
                 continue;
@@ -4254,12 +5865,56 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     $exception,
                 );
             }
-            if ($frameInstrumentId !== $instrumentId
-                && !\in_array($frameSymbol, $this->checkpoint->remainingSymbols, true)
-            ) {
-                $retained[] = $frame;
+            if ($frameInstrumentId === $instrumentId) {
+                continue;
+            }
+            $pending = \in_array($frameSymbol, $this->checkpoint->remainingSymbols, true);
+            $books[$offset] = [$frame, $frameSymbol, $pending];
+            if ($pending && ($message['action'] ?? null) === 'snapshot') {
+                $reserveFrom[$frameSymbol] = $offset;
             }
         }
+        /** @var array<int, array{string, string|null}> $kept offset => frame, reserve symbol */
+        $kept = [];
+        $bytes = 0;
+        foreach ($books as $offset => [$frame, $frameSymbol, $pending]) {
+            if ($pending && $offset < ($reserveFrom[$frameSymbol] ?? \PHP_INT_MAX)) {
+                continue;
+            }
+            $kept[$offset] = [$frame, $pending ? $frameSymbol : null];
+            $bytes += \strlen($frame);
+        }
+        $recovering = $this->instruments->normalizedSymbol($instrumentId);
+        if (\count($kept) >= OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES
+            || $bytes >= OkxPaperLivePolicy::PAUSE_QUEUED_BYTES
+        ) {
+            foreach ($kept as $offset => [, $reserveSymbol]) {
+                if ($reserveSymbol === null) {
+                    continue;
+                }
+                unset($kept[$offset], $this->reservedBookSnapshots[$reserveSymbol]);
+                if (!isset($this->discardedBookSnapshots[$reserveSymbol])) {
+                    // Its recovery will resubscribe at once instead of waiting.
+                    $this->discardedBookSnapshots[$reserveSymbol] = true;
+                    $this->warn('okx_paper_public_book_snapshot_discarded', [
+                        'symbol' => $reserveSymbol,
+                        'while_recovering' => $recovering,
+                        'queued_book_frames' => \count($books),
+                    ]);
+                }
+            }
+        } else {
+            foreach (array_keys($reserveFrom) as $reserveSymbol) {
+                if (!isset($this->reservedBookSnapshots[$reserveSymbol])) {
+                    $this->reservedBookSnapshots[$reserveSymbol] = true;
+                    $this->warn('okx_paper_public_book_snapshot_reserved', [
+                        'symbol' => $reserveSymbol,
+                        'while_recovering' => $recovering,
+                    ]);
+                }
+            }
+        }
+        $retained = array_column($kept, 0);
         if (\count($retained) === $this->publicQueue->count()) {
             return;
         }
@@ -4276,6 +5931,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             return;
         }
         $this->socketAdmissionsPaused['public'] = false;
+        $this->markReadActive('public');
         $this->publicTransport->resume();
     }
 
@@ -4326,8 +5982,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 }
                 foreach ($rows as $row) {
                     if (!\is_array($row)
-                        || !\is_string($row['seqId'] ?? null)
-                        || !\is_string($row['prevSeqId'] ?? null)
+                        || self::queuedBookSequence($row['seqId'] ?? null) === null
+                        || self::queuedBookSequence($row['prevSeqId'] ?? null) === null
                     ) {
                         throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
                     }
@@ -4428,6 +6084,14 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 
     private function discardQueuedBooksFromPreviousConnection(): void
     {
+        // So do its pending books resubscriptions and dropped snapshots: the new
+        // connection's own books acknowledgements must reach the subscription set.
+        $this->bookResubscriptions = [];
+        $this->discardedBookSnapshots = [];
+        $this->reservedBookSnapshots = [];
+        // Buffered frames of the dead connection are recovered from REST (and books
+        // from a new authority), like those left in its socket buffer.
+        $this->discardInboundBuffers();
         $retained = [];
         foreach ($this->publicQueue->frames() as $frame) {
             $message = $this->decoder->decodePublic($frame);
@@ -4511,6 +6175,13 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
         $this->lastInboundAt[$socket] = $this->clock->now();
         $this->heartbeatDeferredForBacklog[$socket] = false;
+        if (isset($this->pingProbes[$socket])) {
+            ++$this->pingProbes[$socket]['frames'];
+        }
+        if ($frame === 'pong') {
+            $this->lastPongAt[$socket] = $this->lastInboundAt[$socket];
+            unset($this->pingProbes[$socket]);
+        }
         if ($frame === 'pong' && isset($this->pongTimers[$socket])) {
             $this->loop->cancelTimer($this->pongTimers[$socket]);
             unset($this->pongTimers[$socket]);
@@ -4529,6 +6200,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             $this->loop->cancelTimer($this->heartbeatTimers[$socket]);
         }
         $generation = ++$this->heartbeatGenerations[$socket];
+        $this->heartbeatDueAt[$socket] = (float) $this->clock->now()->format('U.u') + $delay;
         $this->heartbeatTimers[$socket] = $this->loop->addTimer(
             $delay,
             function () use ($socket, $generation): void {
@@ -4549,6 +6221,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 }
                 $lastInbound = $this->lastInboundAt[$socket];
                 if (!$lastInbound instanceof \DateTimeImmutable) {
+                    $this->logLivenessReconnect($socket, 'no_inbound', 'reconnect');
                     $this->beginPairedReconnect();
 
                     return;
@@ -4568,21 +6241,97 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                     ? $this->publicTransport
                     : $this->businessTransport;
                 $transport->send(['op' => 'ping']);
-                $pongGeneration = ++$this->pongGenerations[$socket];
-                $this->pongTimers[$socket] = $this->loop->addTimer(
-                    OkxPaperLivePolicy::PONG_TIMEOUT_SECONDS,
-                    function () use ($socket, $pongGeneration): void {
-                        if ($pongGeneration !== $this->pongGenerations[$socket]
-                            || $this->checkpoint->phase !== 'streaming'
-                        ) {
-                            return;
-                        }
-                        unset($this->pongTimers[$socket]);
-                        $this->beginPairedReconnect();
-                    },
-                );
+                $now = (float) $this->clock->now()->format('U.u');
+                $this->pingProbes[$socket] = [
+                    'sent_at' => $now,
+                    // How late the heartbeat ran: the time the event loop was blocked.
+                    'heartbeat_late_s' => round(max(0.0, $now - ($this->heartbeatDueAt[$socket] ?? $now)), 3),
+                    'frames' => 0,
+                    'backlog' => false,
+                    'logged_at' => null,
+                    'polls' => 0,
+                    'max_poll_gap_s' => 0.0,
+                ];
+                $this->armPongTimer($socket, ++$this->pongGenerations[$socket]);
             },
         );
+    }
+
+    private function armPongTimer(string $socket, int $pongGeneration): void
+    {
+        $this->pongTimers[$socket] = $this->loop->addTimer(
+            OkxPaperLivePolicy::PONG_TIMEOUT_SECONDS,
+            function () use ($socket, $pongGeneration): void {
+                if ($pongGeneration !== $this->pongGenerations[$socket]
+                    || $this->checkpoint->phase !== 'streaming'
+                ) {
+                    return;
+                }
+                unset($this->pongTimers[$socket]);
+                $decision = $this->livenessDecision($socket);
+                $this->logLivenessReconnect($socket, 'pong_timeout', $decision);
+                if ($decision === 'deferred_alive' || $decision === 'deferred_paused') {
+                    // Still waiting for the pong: the healthy stop keeps requiring it.
+                    $this->armPongTimer($socket, $pongGeneration);
+
+                    return;
+                }
+                $this->beginPairedReconnect();
+            },
+        );
+    }
+
+    /**
+     * The pong proves a round trip, but while it is missing, frames read from the
+     * socket still prove the connection alive: production (run7) had a pong 180 s
+     * late behind the backlog of a ~200 events/s burst, 256 frames read meanwhile,
+     * and the reconnect then triggered exceeded the recovery budget. The connection
+     * is dead only when nothing at all (data included) has been read for
+     * PONG_TIMEOUT_SECONDS. A broken upstream cannot keep frames coming: without
+     * our TCP acknowledgements OKX stops sending within one window, and the kernel
+     * fails the socket after its retransmissions; an OKX-side close arrives as a
+     * websocket close (1006 when abrupt). The remaining case, OKX ignoring our
+     * requests while streaming, is capped: without any backlog (no admission pause
+     * since the ping, queues below the resume threshold) a pong missing for
+     * LIVENESS_PONG_CAP_SECONDS reconnects. A backlog has no cap: the pong is
+     * legitimately behind it, and a reconnect could only lose it.
+     *
+     * Silence is ours, and proves nothing, while we do not read the socket: while
+     * it is paused (only a full inbound buffer pauses a streaming socket), and until
+     * it has been read again for PONG_TIMEOUT_SECONDS (readActiveSince: resumed,
+     * reopened, or polled again after an event-loop gap).
+     */
+    private function livenessDecision(string $socket): string
+    {
+        $probe = $this->pingProbes[$socket] ?? null;
+        if ($probe !== null && $this->socketAdmissionsPaused[$socket]) {
+            return 'deferred_paused';
+        }
+        $lastInbound = $this->lastInboundAt[$socket] ?? null;
+        $now = (float) $this->clock->now()->format('U.u');
+        $quietSince = max(
+            $lastInbound instanceof \DateTimeImmutable ? (float) $lastInbound->format('U.u') : 0.0,
+            $this->readActiveSince[$socket] ?? 0.0,
+        );
+        if ($probe === null || $now - $quietSince >= OkxPaperLivePolicy::PONG_TIMEOUT_SECONDS) {
+            return 'reconnect';
+        }
+        if ($probe['frames'] === 0) {
+            // Nothing read since the ping, but the socket has been read for less
+            // than PONG_TIMEOUT_SECONDS: wait for a full window of active reading.
+            return 'deferred_paused';
+        }
+        $backlog = $probe['backlog']
+            || $this->inboundBufferedFrames() !== 0
+            || $this->socketAdmissionsPaused['public']
+            || $this->socketAdmissionsPaused['business']
+            || $this->publicQueue->count() >= OkxPaperLivePolicy::RESUME_QUEUED_FRAMES
+            || $this->businessQueue->count() >= OkxPaperLivePolicy::RESUME_QUEUED_FRAMES;
+        if (!$backlog && $now - $probe['sent_at'] >= OkxPaperLivePolicy::LIVENESS_PONG_CAP_SECONDS) {
+            return 'pong_cap';
+        }
+
+        return 'deferred_alive';
     }
 
     private function cancelHeartbeatTimers(): void
@@ -4601,6 +6350,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $this->heartbeatDeferredForBacklog = ['public' => false, 'business' => false];
         ++$this->pongGenerations['public'];
         ++$this->pongGenerations['business'];
+        $this->pingProbes = [];
     }
 
     private function awaitReadiness(): void
@@ -4725,6 +6475,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
      */
     private function nextStreamingEvents(): array
     {
+        $this->refillFromInboundBuffers();
         if ($this->publicQueue->count() !== 0
             || $this->businessQueue->count() !== 0
         ) {
@@ -4820,6 +6571,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 $message = $business
                     ? $this->decoder->decodeBusiness($frame)
                     : $this->decoder->decodePublic($frame);
+                if ($framesConsumed > 0
+                    && ($this->anchorsTradeJunction($message) || $this->anchorsCandleJunction($message))
+                ) {
+                    break;
+                }
                 $messageRows = $message['data'] ?? null;
                 if ($framesConsumed > 0
                     && \is_array($messageRows)
@@ -4833,6 +6589,7 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 }
                 $frameEvents = $this->eventsFromMessage($message, $business);
             } catch (\Throwable $exception) {
+                $this->logRejectedFrame($business ? 'business' : 'public', $frame, $exception);
                 $bookGap = !$business
                     && $exception->getMessage() === 'okx_paper_book_sequence_gap'
                     && \is_array($message)
@@ -4916,6 +6673,8 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         if (!$this->socketReady($socket === 'business')
             || $this->socketAdmissionsPaused[$socket]
             || !$queue->shouldPauseAdmissions()
+            // While streaming, a full durable queue sends frames to the inbound buffer.
+            || $this->inboundBufferingActive()
         ) {
             return;
         }
@@ -4928,12 +6687,35 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 
         $transport->pause();
         $this->socketAdmissionsPaused[$socket] = true;
+        foreach (array_keys($this->pingProbes) as $probedSocket) {
+            // A pong waits behind this backlog: see livenessDecision().
+            $this->pingProbes[$probedSocket]['backlog'] = true;
+        }
     }
 
     private function resumeSocketAdmissionsAfterDrain(
         string $socket,
         OkxPaperPublicFrameQueue $queue,
     ): void {
+        $this->refillFromInboundBuffers();
+        if ($this->inboundBufferPaused[$socket]) {
+            // Paused by the inbound buffer bound: read again once it is half empty.
+            if ($this->inboundBufferedBytes() > intdiv($this->inboundBufferMaxBytes, 2)) {
+                return;
+            }
+            $this->inboundBufferPaused[$socket] = false;
+            $transport = $socket === 'public' ? $this->publicTransport : $this->businessTransport;
+            if ($this->socketAdmissionsPaused[$socket]
+                && $this->inboundBufferingActive()
+                && $transport instanceof OkxPaperPausableWebSocketTransportInterface
+            ) {
+                $this->socketAdmissionsPaused[$socket] = false;
+                $this->markReadActive($socket);
+                $transport->resume();
+
+                return;
+            }
+        }
         if ($this->healthyStopRequested
             || !$this->socketAdmissionsPaused[$socket]
             || !$queue->canResumeAdmissions()
@@ -4950,7 +6732,61 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
 
         $this->socketAdmissionsPaused[$socket] = false;
+        $this->markReadActive($socket);
         $transport->resume();
+    }
+
+    /**
+     * While streaming, only a full inbound buffer pauses a socket, and each socket
+     * alone: one still paused from before (its durable queue at the high watermark
+     * during a recovery, whose drain may not resume it) is read again at once,
+     * whatever its queue and the other socket's. Called before every poll.
+     */
+    private function resumeSocketsForInboundBuffering(): void
+    {
+        if (!$this->inboundBufferingActive()) {
+            return;
+        }
+        foreach (['public' => $this->publicTransport, 'business' => $this->businessTransport] as $socket => $transport) {
+            if (!$this->socketAdmissionsPaused[$socket]
+                || $this->inboundBufferPaused[$socket]
+                || !$transport instanceof OkxPaperPausableWebSocketTransportInterface
+            ) {
+                continue;
+            }
+            $this->socketAdmissionsPaused[$socket] = false;
+            $this->markReadActive($socket);
+            $transport->resume();
+        }
+    }
+
+    private function markReadActive(string $socket): void
+    {
+        if ($socket === 'public' || $socket === 'business') {
+            $this->readActiveSince[$socket] = (float) $this->clock->now()->format('U.u');
+        }
+    }
+
+    /**
+     * Before each event-loop poll: the pings' poll statistics, and after a gap
+     * longer than LIVENESS_POLL_GAP_SECONDS (the sockets were not read meanwhile)
+     * a new window of active reading for both sockets.
+     */
+    private function noteNetworkPoll(): void
+    {
+        $now = (float) $this->clock->now()->format('U.u');
+        $gap = $this->lastNetworkPollAt === null ? 0.0 : max(0.0, $now - $this->lastNetworkPollAt);
+        foreach ($this->pingProbes as $socket => $probe) {
+            $this->pingProbes[$socket]['polls'] = $probe['polls'] + 1;
+            $this->pingProbes[$socket]['max_poll_gap_s'] = max($probe['max_poll_gap_s'], round($gap, 3));
+        }
+        if ($gap > OkxPaperLivePolicy::LIVENESS_POLL_GAP_SECONDS) {
+            foreach ($this->readActiveSince as $socket => $since) {
+                if ($since !== null) {
+                    $this->readActiveSince[$socket] = $now;
+                }
+            }
+        }
     }
 
     private function rescheduleHeartbeatAfterQueueDrain(
@@ -4999,15 +6835,173 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             $this->reconcileAfterCheckpointWriteFailure($failure);
         }
         $this->streamingQueuesDirty = false;
+        $this->lastStreamingQueueSaveAt = (float) $this->clock->now()->format('U.u');
+    }
+
+    /**
+     * Plain streaming keeps reading the sockets during a backlog: frames that find
+     * the durable queue full wait in memory (OkxPaperInboundFrameBuffer) instead of
+     * pausing the socket, so OKX never sees a slow consumer (production: closed
+     * with 1006 after minutes of pause at ~400 s of lag), and pongs are read at
+     * once. The buffer refills the durable queue as it drains; above its bound the
+     * socket pauses as before. Recovery and healthy-stop phases keep the durable
+     * queue and its pause only.
+     */
+    private function inboundBufferingActive(): bool
+    {
+        return $this->checkpoint->phase === 'streaming'
+            && !$this->stopped
+            && !$this->healthyStopRequested
+            && !$this->checkpoint->healthyStop['requested'];
+    }
+
+    private function bufferInboundFrame(string $socket, string $frame): void
+    {
+        $this->inboundBuffers[$socket]->append($frame, (float) $this->clock->now()->format('U.u'));
+        foreach (array_keys($this->pingProbes) as $probedSocket) {
+            // A pong may wait behind this backlog: see livenessDecision().
+            $this->pingProbes[$probedSocket]['backlog'] = true;
+        }
+        if ($this->inboundBufferedBytes() > 2 * $this->inboundBufferMaxBytes) {
+            // Frames keep coming although the socket was paused at the bound: fail
+            // closed, like the durable queue at its hard limit.
+            throw new OkxPaperLiveIntegrityException('market_data_backpressure_exhausted');
+        }
+        if ($this->inboundBufferedBytes() >= $this->inboundBufferMaxBytes
+            && !$this->socketAdmissionsPaused[$socket]
+        ) {
+            $transport = $socket === 'public' ? $this->publicTransport : $this->businessTransport;
+            if ($transport instanceof OkxPaperPausableWebSocketTransportInterface) {
+                $transport->pause();
+                $this->socketAdmissionsPaused[$socket] = true;
+                $this->inboundBufferPaused[$socket] = true;
+                foreach (array_keys($this->pingProbes) as $probedSocket) {
+                    $this->pingProbes[$probedSocket]['backlog'] = true;
+                }
+                $this->logInboundBuffer('okx_paper_public_inbound_buffer_full');
+            }
+        }
+        $this->logInboundBuffer();
+    }
+
+    private function refillFromInboundBuffers(): void
+    {
+        foreach (['public' => $this->publicQueue, 'business' => $this->businessQueue] as $socket => $queue) {
+            $buffer = $this->inboundBuffers[$socket];
+            while ($buffer->count() !== 0 && !$queue->shouldPauseAdmissions()) {
+                $frame = $buffer->shift();
+                if ($frame === null) {
+                    break;
+                }
+                $queue->enqueue($frame);
+                $this->streamingQueuesDirty = true;
+            }
+        }
+        $this->logInboundBuffer();
+    }
+
+    private function discardInboundBuffers(): void
+    {
+        if ($this->inboundBufferedFrames() !== 0) {
+            $this->logInboundBuffer('okx_paper_public_inbound_buffer_discarded');
+        }
+        foreach ($this->inboundBuffers as $buffer) {
+            $buffer->clear();
+        }
+        $this->inboundBufferPaused = ['public' => false, 'business' => false];
+    }
+
+    private function inboundBufferedFrames(): int
+    {
+        return $this->inboundBuffers['public']->count() + $this->inboundBuffers['business']->count();
+    }
+
+    private function inboundBufferedBytes(): int
+    {
+        return $this->inboundBuffers['public']->bytes() + $this->inboundBuffers['business']->bytes();
+    }
+
+    /** Occupancy of the inbound buffer, every 10 s while it is not empty. */
+    private function logInboundBuffer(string $message = 'okx_paper_public_inbound_buffer'): void
+    {
+        try {
+            $now = (float) $this->clock->now()->format('U.u');
+            if ($message === 'okx_paper_public_inbound_buffer') {
+                if ($this->inboundBufferedFrames() === 0) {
+                    if ($this->inboundBufferLoggedAt !== null) {
+                        $this->inboundBufferLoggedAt = null;
+                        $this->warn('okx_paper_public_inbound_buffer_drained', []);
+                    }
+
+                    return;
+                }
+                if ($this->inboundBufferLoggedAt !== null
+                    && $now - $this->inboundBufferLoggedAt < self::INBOUND_BUFFER_LOG_SECONDS
+                ) {
+                    return;
+                }
+                $oldestAt = min(array_filter([
+                    $this->inboundBuffers['public']->oldestReceivedAt(),
+                    $this->inboundBuffers['business']->oldestReceivedAt(),
+                ], static fn (?float $at): bool => $at !== null) ?: [$now]);
+                if ($this->inboundBufferLoggedAt === null
+                    && $now - $oldestAt < self::INBOUND_BUFFER_LOG_SECONDS
+                    && $this->inboundBufferedBytes() < 1_048_576
+                ) {
+                    // A brief overflow of the durable queue: not a backlog worth a line.
+                    return;
+                }
+                $this->inboundBufferLoggedAt = $now;
+            }
+            $oldest = array_filter([
+                $this->inboundBuffers['public']->oldestReceivedAt(),
+                $this->inboundBuffers['business']->oldestReceivedAt(),
+            ], static fn (?float $at): bool => $at !== null);
+            $this->warn($message, [
+                'public_frames' => $this->inboundBuffers['public']->count(),
+                'business_frames' => $this->inboundBuffers['business']->count(),
+                'bytes' => $this->inboundBufferedBytes(),
+                'max_bytes' => $this->inboundBufferMaxBytes,
+                'oldest_age_s' => $oldest === [] ? null : round($now - min($oldest), 3),
+                'paused' => $this->inboundBufferPaused,
+            ]);
+        } catch (\Throwable) {
+            // Diagnostics never fail the capture.
+        }
+    }
+
+    /**
+     * While streaming, an admitted frame not yet persisted is in the position of a
+     * frame still in the socket buffer: a restart reconnects and recovers it (REST
+     * overlap for trades and candles, a new authority for books; see
+     * beginPairedReconnect() in eventFlow()). Its persistence is therefore batched:
+     * at most every STREAMING_QUEUE_SAVE_INTERVAL_SECONDS, and at once whenever a
+     * batch leaves the queue (completeActiveQueuedFrame()), so a persisted queue
+     * never holds frames of an acknowledged batch longer than before. Anything but
+     * plain streaming (recovery, a healthy stop, which resumes without reconnect)
+     * persists every admission, as before.
+     */
+    private function streamingQueueSaveDeferrable(): bool
+    {
+        return $this->checkpoint->phase === 'streaming'
+            && $this->checkpoint->pendingTransition === null
+            && !$this->healthyStopRequested
+            && !$this->checkpoint->healthyStop['requested']
+            && $this->lastStreamingQueueSaveAt !== null
+            && (float) $this->clock->now()->format('U.u') - $this->lastStreamingQueueSaveAt
+                < OkxPaperLivePolicy::STREAMING_QUEUE_SAVE_INTERVAL_SECONDS;
     }
 
     private function pumpNetworkLoop(): void
     {
         $this->networkTickActive = true;
         try {
+            $this->noteNetworkPoll();
+            $this->resumeSocketsForInboundBuffering();
             $this->loopPump?->pump();
         } finally {
             $this->networkTickActive = false;
+            $this->lastNetworkPollAt = (float) $this->clock->now()->format('U.u');
         }
         $this->persistDirtyStreamingQueues();
     }
@@ -5016,16 +7010,22 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
     {
         $this->networkTickActive = true;
         try {
+            $this->noteNetworkPoll();
             $this->loop->run();
         } finally {
             $this->networkTickActive = false;
+            $this->lastNetworkPollAt = (float) $this->clock->now()->format('U.u');
         }
         $this->persistDirtyStreamingQueues();
     }
 
-    private function persistDirtyStreamingQueues(): void
+    /**
+     * @param bool $force leaving plain streaming (a book resync, a reconnect, a
+     *                    healthy stop): the durable state holds every admitted frame again
+     */
+    private function persistDirtyStreamingQueues(bool $force = false): void
     {
-        if (!$this->streamingQueuesDirty) {
+        if (!$this->streamingQueuesDirty || (!$force && $this->streamingQueueSaveDeferrable())) {
             return;
         }
         try {
@@ -5074,6 +7074,18 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
         }
 
+        if ($this->inboundBufferedFrames() !== 0) {
+            // The resync would continue from the durable queue while newer frames
+            // wait in memory: recover everything through a paired reconnect.
+            $this->warn('okx_paper_public_book_gap_reconnect', [
+                'symbol' => $symbol,
+                'inbound_buffered_frames' => $this->inboundBufferedFrames(),
+            ]);
+            $this->beginPairedReconnect();
+
+            return [];
+        }
+        $this->persistDirtyStreamingQueues(true);
         $deadline = $this->clock->now()->modify(sprintf(
             '+%d seconds',
             (int) OkxPaperLivePolicy::RESYNC_ATTEMPT_TIMEOUT_SECONDS,
@@ -5330,11 +7342,15 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
 
     private function failTerminal(string $reason, ?\Throwable $previous = null): never
     {
+        $this->logTerminalFailure($reason, $previous);
         ++$this->connectionGeneration;
         $this->stopped = true;
         $this->checkpoint = $this->checkpointStore->fail($this->checkpoint, $reason);
         $this->publicQueue->clear();
         $this->businessQueue->clear();
+        foreach ($this->inboundBuffers as $buffer) {
+            $buffer->clear();
+        }
         $this->cancelHeartbeatTimers();
         while ($this->checkpoint->pendingTransition !== null) {
             $transition = $this->checkpoint->pendingTransition;
@@ -5619,20 +7635,21 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             }
             $retainedRows = [];
             foreach ($rows as $row) {
-                if (!\is_array($row)
-                    || !\is_string($row['seqId'] ?? null)
-                    || !\is_string($row['prevSeqId'] ?? null)
-                ) {
+                $sequence = \is_array($row) ? self::queuedBookSequence($row['seqId'] ?? null) : null;
+                $previousSequence = \is_array($row)
+                    ? self::queuedBookSequence($row['prevSeqId'] ?? null)
+                    : null;
+                if ($sequence === null || $previousSequence === null) {
                     throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
                 }
-                if (self::compareUnsigned($row['seqId'], $snapshotSequence) <= 0) {
+                if (self::compareUnsigned($sequence, $snapshotSequence) <= 0) {
                     continue;
                 }
-                if (!hash_equals($expectedPreviousSequence, $row['prevSeqId'])) {
+                if (!hash_equals($expectedPreviousSequence, $previousSequence)) {
                     return false;
                 }
                 $found = true;
-                $expectedPreviousSequence = $row['seqId'];
+                $expectedPreviousSequence = $sequence;
                 $retainedRows[] = $row;
             }
             if ($retainedRows !== []) {
@@ -5643,6 +7660,21 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         $this->publicQueue->replace($retainedFrames);
 
         return $found;
+    }
+
+    /**
+     * OKX pushes websocket book sequences as JSON integers (the REST snapshot and
+     * the test fixtures carry strings): both are accepted, as the materializer does.
+     */
+    private static function queuedBookSequence(mixed $value): ?string
+    {
+        if (\is_int($value) && $value >= 0) {
+            return (string) $value;
+        }
+
+        return \is_string($value) && preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $value) === 1
+            ? $value
+            : null;
     }
 
     private function hasAcknowledgedResyncSnapshot(): bool
@@ -5732,6 +7764,20 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
             if ($message['event'] === 'pong') {
                 return [];
             }
+            if ($message['event'] === 'notice') {
+                $this->warn('okx_paper_public_service_notice', [
+                    'socket' => $business ? 'business' : 'public',
+                    'notice_code' => $message['code'] ?? null,
+                    'notice_msg' => OkxPaperLiveDiagnostics::text(
+                        \is_string($message['msg'] ?? null) ? $message['msg'] : null,
+                    ),
+                ]);
+                // OKX closes this connection about 60 s later for a service
+                // upgrade: reconnect first, through the usual gap-free recovery.
+                $this->serviceNoticeReconnectRequested = true;
+
+                return [];
+            }
 
             throw new OkxPaperLiveIntegrityException('okx_paper_public_subscription_invalid');
         }
@@ -5756,6 +7802,12 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 }
             }
             $stream = $symbol . '/ws/public_trade';
+            if (isset($this->tradeJunctions[$symbol])) {
+                $rows = $this->rowsAfterTradeJunction($symbol, $rows);
+                if ($rows === []) {
+                    return [];
+                }
+            }
 
             return $this->acceptedEvents(
                 $stream,
@@ -5769,6 +7821,13 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
         }
         if (str_starts_with($channel, 'candle')) {
             $stream = $symbol . '/ws/' . str_replace('candle', 'candle_', $channel);
+            $bar = substr($channel, \strlen('candle'));
+            if (isset($this->candleJunctions[$symbol . '/' . $bar])) {
+                $rows = $this->rowsAfterCandleJunction($symbol, $bar, $instrumentId, $channel, $rows);
+                if ($rows === []) {
+                    return [];
+                }
+            }
 
             return $this->acceptedEvents(
                 $stream,
@@ -5913,10 +7972,11 @@ final class OkxPaperPublicLiveSource implements PaperDurableBatchSourceInterface
                 'trade_id' => $tradeId,
             ],
             $timestamp,
+            // Cross-origin identity (see OkxPaperStreamFrontier::fromEvent()): neither
+            // the size (aggregates) nor `source` (OKX endpoints can disagree on it).
             [
                 'exchange_timestamp_ms' => $timestamp,
                 'price' => $price,
-                'source' => $source,
                 'taker_side' => $side,
                 'trade_id' => $tradeId,
             ],

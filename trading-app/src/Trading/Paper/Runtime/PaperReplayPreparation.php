@@ -9,6 +9,7 @@ use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshot;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Replay\PaperReplayCheckpoint;
+use App\Trading\Paper\Replay\PaperReplayOrder;
 
 final readonly class PaperReplayPreparation
 {
@@ -22,6 +23,8 @@ final readonly class PaperReplayPreparation
         public string $consumerId,
         public ?PaperReplayCheckpoint $checkpoint,
         public ?string $blocker = null,
+        /** Replay order of this cell (candle availability, trigger channel last); null: exchange time. */
+        public ?PaperReplayOrder $replayOrder = null,
     ) {
     }
 

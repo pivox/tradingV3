@@ -393,6 +393,71 @@ final class HyperliquidPaperMarketEventNormalizer
         );
     }
 
+    /**
+     * The top of book from a bbo message (best bid and offer, pushed on every block where
+     * either changes). Same payload as an l2Book top of book; the source is one level per
+     * side and its hash covers the bbo message.
+     *
+     * @param array<array-key, mixed> $bbo
+     */
+    public function liveTopOfBookFromBbo(
+        #[\SensitiveParameter] array $bbo,
+        int $sourceEpoch,
+    ): PaperMarketEvent {
+        self::assertExactKeys($bbo, ['bbo', 'coin', 'time']);
+        $coin = $bbo['coin'] ?? null;
+        $time = $bbo['time'] ?? null;
+        $sides = $bbo['bbo'] ?? null;
+        if (!\is_string($coin)
+            || !\is_int($time)
+            || $time < 0
+            || $sourceEpoch < 1
+            || !\is_array($sides)
+            || !array_is_list($sides)
+            || \count($sides) !== 2
+        ) {
+            throw new \InvalidArgumentException('hyperliquid_paper_live_book_invalid');
+        }
+        $symbol = (new HyperliquidPaperInstrumentMap())->normalizedSymbol($coin);
+        [$bidPrice, $bidSize] = self::bestLevel([$sides[0]], bids: true);
+        [$askPrice, $askSize] = self::bestLevel([$sides[1]], bids: false);
+        if (BigDecimal::of($bidPrice)->isGreaterThanOrEqualTo($askPrice)) {
+            throw new \InvalidArgumentException('hyperliquid_paper_live_book_invalid');
+        }
+        $sourceBookHash = hash('sha256', CanonicalJson::encode($bbo));
+
+        return $this->event(
+            symbol: $symbol,
+            channel: PaperMarketDataChannel::TOP_OF_BOOK,
+            exchangeTimestamp: $this->timestamp($time),
+            naturalIdentity: implode('|', [
+                $this->network->value,
+                $coin,
+                'book',
+                (string) $time,
+                $sourceBookHash,
+            ]),
+            payload: [
+                'native_symbol' => $coin,
+                'bid_price' => $bidPrice,
+                'bid_size' => $bidSize,
+                'ask_price' => $askPrice,
+                'ask_size' => $askSize,
+                'bid_level_count' => '1',
+                'ask_level_count' => '1',
+                'source_time' => (string) $time,
+                'source_epoch' => (string) $sourceEpoch,
+                'source_book_hash_nibbles' => PaperMarketHexNibbles::fromHex(
+                    $sourceBookHash,
+                    64,
+                ),
+                'origin' => 'ws_bbo',
+                'synthetic' => false,
+            ],
+            receivedTimestamp: $this->receiptTimestamp(),
+        );
+    }
+
     public function connectionState(
         string $coin,
         string $state,

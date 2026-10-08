@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Trading\Lineage;
 
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
+
 /**
  * Contexte de lineage persistant et sérialisable.
  *
@@ -361,6 +363,36 @@ final readonly class LineageContext
     public function withExecution(string $orderId, ?string $positionId, ?string $tradeId): self
     {
         return $this->copy(orderId: $orderId, positionId: $positionId, tradeId: $tradeId);
+    }
+
+    /**
+     * Trade boundary of an EXECUTED order, fill or position (#132 decision g). A Paper lineage
+     * (effective config request capability "paper") names the public market-data venue as its
+     * exchange while its orders execute on the Fake exchange: its execution exchange must be
+     * "fake". Every other lineage keeps exactly the assertTradeBoundary() contract.
+     */
+    public function assertExecutionBoundary(
+        string $symbol,
+        string $side,
+        ?string $executionExchange,
+        ?string $marketType,
+    ): self {
+        if (!$this->isPaperExecution()) {
+            return $this->assertTradeBoundary($symbol, $side, $executionExchange, $marketType);
+        }
+        if (self::normalizeExchange($executionExchange) !== 'fake') {
+            throw new LineageContextException('canonical_identity_mismatch:exchange');
+        }
+
+        return $this->assertTradeBoundary($symbol, $side, null, $marketType);
+    }
+
+    private function isPaperExecution(): bool
+    {
+        $request = $this->effectiveConfigSnapshot?->toArray()['request'] ?? null;
+
+        return \is_array($request)
+            && ($request['execution_capability'] ?? null) === ShadowExecutionCapability::Paper->value;
     }
 
     public function assertTradeBoundary(

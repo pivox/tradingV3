@@ -13,6 +13,7 @@ use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\Replay\PaperReplayOrder;
 use App\Trading\Paper\Replay\PaperReplayClock;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidPriceStep;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderBookSnapshot;
@@ -130,7 +131,7 @@ final readonly class PaperCanonicalInstrumentSource
         }
 
         $now = $this->clock->now();
-        if ($trigger->exchangeTimestamp > $now || $trigger->receivedTimestamp > $now) {
+        if ($trigger->exchangeTimestamp > $now || PaperReplayOrder::availableAt($trigger) > $now) {
             return null;
         }
         $projectedEvents = array_values(array_filter(

@@ -12,8 +12,10 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Okx\Live\OkxPaperAcknowledgedIdentityEntry;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpoint;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
+use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointValidationMemo;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveIntegrityException;
 use App\Trading\Paper\Okx\Live\OkxPaperLivePolicy;
+use App\Trading\Paper\Okx\Live\OkxPaperRetainedTradeRow;
 use App\Trading\Paper\Okx\Live\OkxPaperStreamFrontier;
 use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -24,8 +26,75 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(OkxPaperAcknowledgedIdentityEntry::class)]
 #[CoversClass(OkxPaperLiveCheckpoint::class)]
 #[CoversClass(OkxPaperLiveCheckpointStore::class)]
+#[CoversClass(OkxPaperLiveCheckpointValidationMemo::class)]
 final class OkxPaperLiveCheckpointStoreTest extends TestCase
 {
+    public function testValidationMemoMatchesFullValidationAndRevalidatesAnyChangedInput(): void
+    {
+        [, , $active] = $this->reconnectingBtcTradePaginationReadyForAcknowledgement(
+            'validation-memo',
+            false,
+        );
+        $state = $active->toArray();
+        $stream = 'BTCUSDT/rest/public_trade';
+        $rows = [];
+        foreach (['242720716', '242720717', '242720718'] as $index => $tradeId) {
+            $rows[] = OkxPaperRetainedTradeRow::compact([
+                'instId' => 'BTC-USDT-SWAP',
+                'tradeId' => $tradeId,
+                'px' => '65000.1',
+                'sz' => (string) ($index + 1),
+                'side' => 'buy',
+                'source' => '0',
+                'ts' => '1784714399000',
+            ]);
+        }
+        $state['overlap_pagination_by_stream'][$stream]['retained_rows'] = $rows;
+        self::assertNotSame([], $active->acknowledgedIdentityHistory);
+        unset($state['acknowledged_identity_history_ref']);
+        $state['acknowledged_identity_history'] = $active->acknowledgedIdentityHistory;
+
+        $expected = OkxPaperLiveCheckpoint::fromArray($state)->toArray();
+        $memo = new OkxPaperLiveCheckpointValidationMemo();
+        self::assertSame($expected, OkxPaperLiveCheckpoint::fromArray($state, $memo)->toArray());
+        self::assertSame($expected, OkxPaperLiveCheckpoint::fromArray($state, $memo)->toArray());
+
+        $grown = $state;
+        $grown['overlap_pagination_by_stream'][$stream]['retained_rows'][] = OkxPaperRetainedTradeRow::compact([
+            'instId' => 'BTC-USDT-SWAP',
+            'tradeId' => '242720719',
+            'px' => '65000.2',
+            'sz' => '4',
+            'side' => 'sell',
+            'source' => '0',
+            'ts' => '1784714399001',
+        ]);
+        self::assertSame(
+            OkxPaperLiveCheckpoint::fromArray($grown)->toArray(),
+            OkxPaperLiveCheckpoint::fromArray($grown, $memo)->toArray(),
+        );
+
+        $invalidRow = $state;
+        $invalidRow['overlap_pagination_by_stream'][$stream]['retained_rows'][1] = '["BTC-USDT-SWAP"]';
+        $historyStream = array_key_first($state['acknowledged_identity_history']);
+        self::assertIsString($historyStream);
+        $duplicateIdentity = $state;
+        $duplicateIdentity['acknowledged_identity_history'][$historyStream][] =
+            $state['acknowledged_identity_history'][$historyStream][0];
+        $nonCanonicalRow = $state;
+        $nonCanonicalRow['overlap_pagination_by_stream'][$stream]['retained_rows'][0] =
+            str_replace(',', ', ', $rows[0]);
+        foreach ([$invalidRow, $duplicateIdentity, $nonCanonicalRow] as $invalid) {
+            try {
+                OkxPaperLiveCheckpoint::fromArray($invalid, $memo);
+                self::fail('A changed input must be validated in full.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
+            }
+        }
+        self::assertSame($expected, OkxPaperLiveCheckpoint::fromArray($state, $memo)->toArray());
+    }
+
     private const DATASET_ID = 'okx-live-checkpoint-001';
     private const CONFIGURATION_SHA256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 

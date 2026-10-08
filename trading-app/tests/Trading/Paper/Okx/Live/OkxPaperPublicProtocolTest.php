@@ -156,6 +156,49 @@ final class OkxPaperPublicProtocolTest extends TestCase
         $subscriptions->{$method}($argument);
     }
 
+    public function testDecoderAcceptsTheDocumentedServiceUpgradeNoticeOnBothSockets(): void
+    {
+        $decoder = self::decoder();
+        $frame = '{"event":"notice","code":"64008","msg":"The connection will soon be closed for a service upgrade. Please reconnect.","connId":"a4d3ae55"}';
+        $expected = [
+            'event' => 'notice',
+            'code' => '64008',
+            'msg' => 'The connection will soon be closed for a service upgrade. Please reconnect.',
+        ];
+
+        self::assertSame($expected, $decoder->decodePublic($frame));
+        self::assertSame($expected, $decoder->decodeBusiness($frame));
+    }
+
+    public function testDecoderAcceptsAnUnsubscribeAcknowledgement(): void
+    {
+        // A books resubscription's acknowledgement: the source only accepts the one
+        // it requested (see OkxPaperPublicLiveSourceTest).
+        self::assertSame(
+            ['event' => 'unsubscribe', 'arg' => ['channel' => 'books', 'instId' => 'ETH-USDT-SWAP']],
+            self::decoder()->decodePublic(
+                '{"event":"unsubscribe","arg":{"channel":"books","instId":"ETH-USDT-SWAP"},"connId":"a4d3ae55"}',
+            ),
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function unknownControlProvider(): iterable
+    {
+        yield 'notice with an undocumented code' => ['{"event":"notice","code":"64009","msg":"x","connId":"a4d3ae55"}'];
+        yield 'notice with extra metadata' => ['{"event":"notice","code":"64008","msg":"x","connId":"a4d3ae55","extra":"1"}'];
+        yield 'private channel connection count' => ['{"event":"channel-conn-count","channel":"orders","connCount":"2","connId":"a4d3ae55"}'];
+    }
+
+    #[DataProvider('unknownControlProvider')]
+    public function testDecoderKeepsUndocumentedOrUnexpectedControlsFailClosed(string $frame): void
+    {
+        $this->expectException(OkxPaperLiveIntegrityException::class);
+        $this->expectExceptionMessage('okx_paper_public_message_invalid');
+
+        self::decoder()->decodePublic($frame);
+    }
+
     public function testDecoderAcceptsRealisticSubscribeControlsAndDropsRoutingMetadata(): void
     {
         $decoder = self::decoder();

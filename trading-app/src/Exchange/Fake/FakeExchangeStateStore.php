@@ -46,6 +46,9 @@ class FakeExchangeStateStore
 
     private int $nextOrderSequence = 1;
 
+    /** Prefix of every issued order id (Paper: one per execution cell), null = historical format. */
+    private ?string $orderIdNamespace = null;
+
     private int $nextEventSequence = 1;
 
     private int $stateRevision = 1;
@@ -89,6 +92,13 @@ class FakeExchangeStateStore
     private array $privateWs = [];
 
     private bool $deferPersistence = false;
+
+    /**
+     * Single-writer replay mode: persist() keeps every logical revision but performs no
+     * file I/O, and transactions no longer reload the file; durable copies are taken
+     * explicitly with writeSnapshot() at points the caller commits atomically.
+     */
+    private bool $writeBehind = false;
 
     private bool $privateWsConsumptionActive = false;
 
@@ -211,9 +221,28 @@ class FakeExchangeStateStore
         }
     }
 
+    /**
+     * Prefixes every order id this store issues from now on. Paper runtimes use one namespace
+     * per execution cell: the order ids, and the position, fill and funding identities derived
+     * from them, then never collide between cells sharing the (fake, perpetual) context.
+     * Runtime configuration only (not persisted): the owner sets it again on every restart.
+     */
+    public function useOrderIdNamespace(string $namespace): void
+    {
+        if (preg_match('/\A[a-f0-9]{16}\z/D', $namespace) !== 1) {
+            throw new \InvalidArgumentException('fake_order_id_namespace_invalid');
+        }
+        if ($this->orderIdNamespace !== null && $this->orderIdNamespace !== $namespace) {
+            throw new \LogicException('fake_order_id_namespace_conflict');
+        }
+        $this->orderIdNamespace = $namespace;
+    }
+
     public function nextOrderId(): string
     {
-        return sprintf('fake-%06d', $this->nextOrderSequence++);
+        return $this->orderIdNamespace === null
+            ? sprintf('fake-%06d', $this->nextOrderSequence++)
+            : sprintf('fake-%s-%06d', $this->orderIdNamespace, $this->nextOrderSequence++);
     }
 
     public function saveOrder(ExchangeOrderDto $order): void
@@ -1502,7 +1531,7 @@ class FakeExchangeStateStore
         }
         ++$this->stateRevision;
 
-        if ($this->stateFile === null) {
+        if ($this->stateFile === null || $this->writeBehind) {
             return;
         }
 
@@ -1511,35 +1540,7 @@ class FakeExchangeStateStore
             throw new \RuntimeException('fake_exchange_state_directory_unavailable');
         }
 
-        $payload = [
-            'nextOrderSequence' => $this->nextOrderSequence,
-            'nextEventSequence' => $this->nextEventSequence,
-            'stateRevision' => $this->stateRevision,
-            'stateRevisionCertified' => $this->stateRevisionCertified,
-            'orders' => $this->orders,
-            'clientOrderIndex' => $this->clientOrderIndex,
-            'positions' => $this->positions,
-            'balances' => $this->balances,
-            'orderBooks' => $this->orderBooks,
-            'markPrices' => $this->markPrices,
-            'leverageSettings' => $this->leverageSettings,
-            'events' => $this->events,
-            'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
-            'pendingFaults' => $this->pendingFaults,
-            'privateWs' => $this->privateWs,
-        ];
-        $serialized = serialize([
-            'format_version' => self::STATE_FORMAT_VERSION,
-            'engine_version' => self::ENGINE_VERSION,
-            'scenario_config_hash' => self::scenarioConfigHash(),
-            'determinism' => [
-                'schema_version' => $this->deterministicSeed->schemaVersion(),
-                'seed_fingerprint' => $this->deterministicSeed->fingerprint(),
-                'certified' => $this->seedCertified,
-            ],
-            'payload_checksum' => hash('sha256', serialize($payload)),
-            'payload' => $payload,
-        ]);
+        $serialized = $this->serializedEnvelope();
         $temporaryFile = tempnam($directory, basename($this->stateFile) . '.tmp.');
         if ($temporaryFile === false) {
             throw new \RuntimeException('fake_exchange_state_temporary_file_unavailable');
@@ -1558,6 +1559,126 @@ class FakeExchangeStateStore
                 @unlink($temporaryFile);
             }
         }
+    }
+
+    /** The exact bytes persist() writes for the current state. */
+    private function serializedEnvelope(): string
+    {
+        $payload = [
+            'nextOrderSequence' => $this->nextOrderSequence,
+            'nextEventSequence' => $this->nextEventSequence,
+            'stateRevision' => $this->stateRevision,
+            'stateRevisionCertified' => $this->stateRevisionCertified,
+            'orders' => $this->orders,
+            'clientOrderIndex' => $this->clientOrderIndex,
+            'positions' => $this->positions,
+            'balances' => $this->balances,
+            'orderBooks' => $this->orderBooks,
+            'markPrices' => $this->markPrices,
+            'leverageSettings' => $this->leverageSettings,
+            'events' => $this->events,
+            'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
+            'pendingFaults' => $this->pendingFaults,
+            'privateWs' => $this->privateWs,
+        ];
+        return serialize([
+            'format_version' => self::STATE_FORMAT_VERSION,
+            'engine_version' => self::ENGINE_VERSION,
+            'scenario_config_hash' => self::scenarioConfigHash(),
+            'determinism' => [
+                'schema_version' => $this->deterministicSeed->schemaVersion(),
+                'seed_fingerprint' => $this->deterministicSeed->fingerprint(),
+                'certified' => $this->seedCertified,
+            ],
+            'payload_checksum' => hash('sha256', serialize($payload)),
+            'payload' => $payload,
+        ]);
+    }
+
+    /**
+     * Switches this store to single-writer replay mode (see $writeBehind). The current
+     * in-memory state stays authoritative; nothing is reloaded from or written to the
+     * state file until writeSnapshot() is called.
+     */
+    public function enableWriteBehind(): void
+    {
+        if ($this->deferPersistence) {
+            throw new \LogicException('fake_exchange_state_write_behind_inside_transaction');
+        }
+        $this->writeBehind = true;
+    }
+
+    /**
+     * Durably writes the exact persist() envelope of the current state to $path
+     * (private temporary file, fsync, atomic rename) and returns its SHA-256 and size.
+     *
+     * @return array{sha256: string, bytes: int, state_revision: int}
+     */
+    public function writeSnapshot(string $path): array
+    {
+        if (!$this->writeBehind || $this->deferPersistence) {
+            throw new \LogicException('fake_exchange_state_snapshot_requires_write_behind');
+        }
+        $serialized = $this->serializedEnvelope();
+        $directory = \dirname($path);
+        $temporaryFile = $directory . '/.' . basename($path) . '.tmp.' . bin2hex(random_bytes(8));
+        $previousUmask = umask(0077);
+        try {
+            $handle = @fopen($temporaryFile, 'xb');
+        } finally {
+            umask($previousUmask);
+        }
+        if ($handle === false) {
+            throw new \RuntimeException('fake_exchange_state_snapshot_write_failed');
+        }
+        try {
+            $written = fwrite($handle, $serialized);
+            if ($written !== strlen($serialized) || !fflush($handle) || !fsync($handle)) {
+                throw new \RuntimeException('fake_exchange_state_snapshot_write_failed');
+            }
+            fclose($handle);
+            $handle = null;
+            if (!rename($temporaryFile, $path)) {
+                throw new \RuntimeException('fake_exchange_state_snapshot_write_failed');
+            }
+        } finally {
+            if (\is_resource($handle)) {
+                fclose($handle);
+            }
+            if (is_file($temporaryFile)) {
+                @unlink($temporaryFile);
+            }
+        }
+
+        return [
+            'sha256' => hash('sha256', $serialized),
+            'bytes' => strlen($serialized),
+            'state_revision' => $this->stateRevision,
+        ];
+    }
+
+    /**
+     * Every part of the state except market data (order book tops, mark prices) and the
+     * revision counter, as identity-comparable values: unchanged parts compare in O(1).
+     *
+     * @return list<mixed>
+     */
+    public function materialStateProbe(): array
+    {
+        return [
+            $this->nextOrderSequence,
+            $this->nextEventSequence,
+            $this->stateRevisionCertified,
+            $this->orders,
+            $this->clientOrderIndex,
+            $this->positions,
+            $this->balances,
+            $this->leverageSettings,
+            $this->events,
+            $this->rejectNextProtectionOrder,
+            $this->pendingFaults,
+            $this->privateWs,
+        ];
     }
 
     /**
@@ -2262,10 +2383,10 @@ class FakeExchangeStateStore
             throw new \LogicException('fake_exchange_state_nested_transaction_not_supported');
         }
 
-        $lockHandle = $this->acquireTransactionLock();
+        $lockHandle = $this->writeBehind ? null : $this->acquireTransactionLock();
 
         try {
-            if ($this->stateFile !== null && !$this->restore()) {
+            if ($this->stateFile !== null && !$this->writeBehind && !$this->restore()) {
                 $this->initializeDefaults();
             }
 

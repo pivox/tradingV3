@@ -10,7 +10,12 @@ use Brick\Math\BigDecimal;
 final readonly class HyperliquidPaperPublicFrameDecoder
 {
     private const MAX_DECIMAL_BYTES = 128;
-    private const MAX_TRADE_ROWS = 1_000;
+    /**
+     * A sanity bound only: Hyperliquid sends all fills of a block in one trades message (a
+     * sweep produced more than 1000 on 2026-10-02), and the smallest valid row takes more
+     * than 64 bytes, so the frame byte limit is always reached first.
+     */
+    public const MAX_TRADE_ROWS = HyperliquidPaperLivePolicy::MAX_FRAME_BYTES >> 6;
     private const MAX_TID = 1_125_899_906_842_623;
 
     public function __construct(
@@ -18,49 +23,67 @@ final readonly class HyperliquidPaperPublicFrameDecoder
     ) {
     }
 
-    /** @return array{kind: string, data?: mixed} */
+    /**
+     * A rejected frame always fails as hyperliquid_paper_public_message_invalid; the previous
+     * exception names the failed check with the frame's channel, size, rows and digest, so a
+     * rejection can be diagnosed without the frame itself.
+     *
+     * @return array{kind: string, data?: mixed}
+     */
     public function decode(#[\SensitiveParameter] string $frame): array
     {
+        $channel = null;
+        $rows = null;
         try {
             if ($frame === ''
                 || \strlen($frame) > HyperliquidPaperLivePolicy::MAX_FRAME_BYTES
             ) {
-                self::invalid();
+                self::invalid('frame_size');
             }
             $message = json_decode($frame, true, 512, \JSON_THROW_ON_ERROR);
             if (!\is_array($message) || array_is_list($message)) {
-                self::invalid();
+                self::invalid('not_an_object');
             }
 
             $channel = $message['channel'] ?? null;
             if ($channel === 'pong') {
-                self::assertExactKeys($message, ['channel']);
+                self::assertExactKeys($message, ['channel'], 'pong_keys');
 
                 return ['kind' => 'pong'];
             }
-            self::assertExactKeys($message, ['channel', 'data']);
+            self::assertExactKeys($message, ['channel', 'data'], 'message_keys');
             if (!\is_array($message['data'] ?? null)) {
-                self::invalid();
+                self::invalid('data_not_array');
             }
             /** @var array<array-key, mixed> $data */
             $data = $message['data'];
+            $rows = \is_string($channel) && $channel === 'trades' ? \count($data) : null;
 
             return match ($channel) {
                 'subscriptionResponse' => $this->subscription($data),
                 'trades' => $this->trades($data),
                 'l2Book' => $this->book($data),
+                'bbo' => $this->bbo($data),
                 'candle' => $this->candle($data),
-                default => self::invalid(),
+                default => self::invalid('channel_unknown'),
             };
         } catch (\Throwable $exception) {
-            if ($exception instanceof HyperliquidPaperLiveIntegrityException
-                && $exception->getMessage() === 'hyperliquid_paper_public_message_invalid'
-            ) {
-                throw $exception;
-            }
+            $reason = $exception instanceof \UnexpectedValueException
+                && str_starts_with($exception->getMessage(), 'check:')
+                ? substr($exception->getMessage(), 6)
+                : 'unexpected ' . $exception::class . ' ' . $exception->getMessage();
 
             throw new HyperliquidPaperLiveIntegrityException(
                 'hyperliquid_paper_public_message_invalid',
+                0,
+                new \InvalidArgumentException(sprintf(
+                    '%s channel=%s bytes=%d rows=%s sha256=%s',
+                    $reason,
+                    \is_string($channel) ? substr(preg_replace('/[^A-Za-z0-9_]/', '?', $channel) ?? '', 0, 32) : '-',
+                    \strlen($frame),
+                    $rows === null ? '-' : (string) $rows,
+                    substr(hash('sha256', $frame), 0, 16),
+                )),
             );
         }
     }
@@ -83,20 +106,21 @@ final readonly class HyperliquidPaperPublicFrameDecoder
      */
     private function trades(array $data): array
     {
-        if (!array_is_list($data)
-            || $data === []
-            || \count($data) > self::MAX_TRADE_ROWS
-        ) {
-            self::invalid();
+        if (!array_is_list($data) || $data === []) {
+            self::invalid('trades_not_a_list');
+        }
+        if (\count($data) > self::MAX_TRADE_ROWS) {
+            self::invalid('trades_rows_exceeded');
         }
         $rows = [];
         foreach ($data as $row) {
             if (!\is_array($row) || array_is_list($row)) {
-                self::invalid();
+                self::invalid('trade_not_an_object');
             }
             self::assertExactKeys(
                 $row,
                 ['coin', 'side', 'px', 'sz', 'hash', 'time', 'tid', 'users'],
+                'trade_keys',
             );
             if (!\is_string($row['coin'] ?? null)
                 || !\in_array($row['coin'], ['BTC', 'ETH'], true)
@@ -113,19 +137,19 @@ final readonly class HyperliquidPaperPublicFrameDecoder
                 || !array_is_list($row['users'])
                 || \count($row['users']) !== 2
             ) {
-                self::invalid();
+                self::invalid('trade_fields');
             }
             foreach ($row['users'] as $user) {
                 if (!\is_string($user)
                     || preg_match('/\A0x[0-9a-fA-F]{1,128}\z/D', $user) !== 1
                 ) {
-                    self::invalid();
+                    self::invalid('trade_users');
                 }
             }
             if (!self::positiveDecimal($row['px'] ?? null)
                 || !self::positiveDecimal($row['sz'] ?? null)
             ) {
-                self::invalid();
+                self::invalid('trade_decimals');
             }
             /** @var array<string, mixed> $row */
             $rows[] = $row;
@@ -140,7 +164,7 @@ final readonly class HyperliquidPaperPublicFrameDecoder
      */
     private function book(array $data): array
     {
-        self::assertExactKeys($data, ['coin', 'levels', 'time']);
+        self::assertExactKeys($data, ['coin', 'levels', 'time'], 'book_keys');
         if (!\is_string($data['coin'] ?? null)
             || !\in_array($data['coin'], ['BTC', 'ETH'], true)
             || !\is_int($data['time'] ?? null)
@@ -149,7 +173,7 @@ final readonly class HyperliquidPaperPublicFrameDecoder
             || !array_is_list($data['levels'])
             || \count($data['levels']) !== 2
         ) {
-            self::invalid();
+            self::invalid('book_fields');
         }
 
         $best = [];
@@ -159,26 +183,15 @@ final readonly class HyperliquidPaperPublicFrameDecoder
                 || $levels === []
                 || \count($levels) > HyperliquidPaperLivePolicy::MAX_BOOK_LEVELS_PER_SIDE
             ) {
-                self::invalid();
+                self::invalid('book_side');
             }
             $prices = [];
             foreach ($levels as $level) {
-                if (!\is_array($level) || array_is_list($level)) {
-                    self::invalid();
-                }
-                self::assertExactKeys($level, ['px', 'sz', 'n']);
-                if (!self::positiveDecimal($level['px'] ?? null)
-                    || !self::positiveDecimal($level['sz'] ?? null)
-                    || !\is_int($level['n'] ?? null)
-                    || $level['n'] < 1
-                ) {
-                    self::invalid();
-                }
-                $prices[] = BigDecimal::of($level['px']);
+                $prices[] = self::level($level);
             }
             $selected = array_shift($prices);
             if (!$selected instanceof BigDecimal) {
-                self::invalid();
+                self::invalid('book_side');
             }
             foreach ($prices as $price) {
                 $selected = $sideIndex === 0
@@ -188,11 +201,59 @@ final readonly class HyperliquidPaperPublicFrameDecoder
             $best[] = $selected;
         }
         if ($best[0]->isGreaterThanOrEqualTo($best[1])) {
-            self::invalid();
+            self::invalid('book_crossed');
         }
 
         /** @var array<string, mixed> $data */
         return ['kind' => 'book', 'data' => $data];
+    }
+
+    /**
+     * The best bid and offer, pushed by Hyperliquid on every block where either changes. Both
+     * sides are required: an empty side cannot be recorded as a top of book.
+     *
+     * @param array<array-key, mixed> $data
+     * @return array{kind: 'book', data: array<string, mixed>}
+     */
+    private function bbo(array $data): array
+    {
+        self::assertExactKeys($data, ['bbo', 'coin', 'time'], 'bbo_keys');
+        if (!\is_string($data['coin'] ?? null)
+            || !\in_array($data['coin'], ['BTC', 'ETH'], true)
+            || !\is_int($data['time'] ?? null)
+            || $data['time'] < 0
+            || !\is_array($data['bbo'] ?? null)
+            || !array_is_list($data['bbo'])
+            || \count($data['bbo']) !== 2
+        ) {
+            self::invalid('bbo_fields');
+        }
+        if ($data['bbo'][0] === null || $data['bbo'][1] === null) {
+            self::invalid('bbo_side_empty');
+        }
+        if (self::level($data['bbo'][0])->isGreaterThanOrEqualTo(self::level($data['bbo'][1]))) {
+            self::invalid('book_crossed');
+        }
+
+        /** @var array<string, mixed> $data */
+        return ['kind' => 'book', 'data' => $data];
+    }
+
+    private static function level(mixed $level): BigDecimal
+    {
+        if (!\is_array($level) || array_is_list($level)) {
+            self::invalid('book_level');
+        }
+        self::assertExactKeys($level, ['px', 'sz', 'n'], 'book_level_keys');
+        if (!self::positiveDecimal($level['px'] ?? null)
+            || !self::positiveDecimal($level['sz'] ?? null)
+            || !\is_int($level['n'] ?? null)
+            || $level['n'] < 1
+        ) {
+            self::invalid('book_level');
+        }
+
+        return BigDecimal::of($level['px']);
     }
 
     /**
@@ -208,7 +269,7 @@ final readonly class HyperliquidPaperPublicFrameDecoder
             || !\is_string($interval)
             || !\in_array($interval, ['1m', '5m', '15m', '1h'], true)
         ) {
-            self::invalid();
+            self::invalid('candle_stream');
         }
         HyperliquidCandle::fromApiRow($data, $coin, $interval);
 
@@ -228,20 +289,18 @@ final readonly class HyperliquidPaperPublicFrameDecoder
      * @param array<array-key, mixed> $value
      * @param list<string>            $keys
      */
-    private static function assertExactKeys(array $value, array $keys): void
+    private static function assertExactKeys(array $value, array $keys, string $check): void
     {
         $actual = array_keys($value);
         sort($actual, \SORT_STRING);
         sort($keys, \SORT_STRING);
         if ($actual !== $keys) {
-            self::invalid();
+            self::invalid($check);
         }
     }
 
-    private static function invalid(): never
+    private static function invalid(string $check): never
     {
-        throw new HyperliquidPaperLiveIntegrityException(
-            'hyperliquid_paper_public_message_invalid',
-        );
+        throw new \UnexpectedValueException('check:' . $check);
     }
 }

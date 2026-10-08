@@ -19,6 +19,7 @@ use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPrudentBookModel;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpoint;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLivePolicy;
+use App\Trading\Paper\Hyperliquid\Live\HyperliquidTradeCountAudit;
 use Brick\Math\BigDecimal;
 use Brick\Math\BigInteger;
 
@@ -30,6 +31,14 @@ final class PaperDatasetVerifier
 
     private readonly PaperDatasetLineReader $lineReader;
     private readonly PaperDatasetSnapshotLimits $snapshotLimits;
+
+    /**
+     * Minutes of the last scanned Hyperliquid live dataset that recorded fewer trades than
+     * their closed 1m candles count; only the baseline paths reject them.
+     *
+     * @var list<array{coin: string, minute_start: int, rows: int, candle_trade_count: int}>
+     */
+    private array $lastHyperliquidTradeCountHoles = [];
 
     public function __construct(
         private readonly PaperDatasetManifestCodec $codec = new PaperDatasetManifestCodec(),
@@ -51,7 +60,7 @@ final class PaperDatasetVerifier
         #[\SensitiveParameter] string $datasetDirectory,
         ?int $eventLimit = null,
     ): PaperDatasetManifest {
-        $verified = $this->verifySnapshot($datasetDirectory, $eventLimit, false);
+        $verified = $this->verifySnapshot($datasetDirectory, $eventLimit, false, true);
         $this->assertBaselineManifest($verified['manifest']);
 
         return $verified['manifest'];
@@ -60,7 +69,7 @@ final class PaperDatasetVerifier
     public function verifyBaselineSnapshot(
         #[\SensitiveParameter] string $datasetDirectory,
     ): VerifiedPaperDatasetSnapshot {
-        $verified = $this->verifySnapshot($datasetDirectory, null, true);
+        $verified = $this->verifySnapshot($datasetDirectory, null, true, true);
         $this->assertBaselineManifest($verified['manifest']);
         if ($verified['events'] === null) {
             throw new \LogicException('paper_dataset_snapshot_events_unavailable');
@@ -74,6 +83,7 @@ final class PaperDatasetVerifier
         #[\SensitiveParameter] string $datasetDirectory,
         ?int $eventLimit,
         bool $collectEvents,
+        bool $requireOkxTradeContinuity = false,
     ): array {
         $this->assertNoSymlinkComponents($datasetDirectory);
         $unresolvedRoot = dirname($datasetDirectory);
@@ -140,7 +150,13 @@ final class PaperDatasetVerifier
                 throw new \RuntimeException('paper_dataset_snapshot_limit_exceeded');
             }
 
-            $facts = $this->scan($eventsPath, $manifest, $eventLimit, $collectEvents);
+            $facts = $this->scan(
+                $eventsPath,
+                $manifest,
+                $eventLimit,
+                $collectEvents,
+                $requireOkxTradeContinuity,
+            );
             $assertDirectories();
             if ($manifest->eventsFileSha256 === null
                 || !hash_equals($manifest->eventsFileSha256, $facts['events_checksum'])
@@ -197,12 +213,45 @@ final class PaperDatasetVerifier
         if (!$manifest->hasCertifiableNetworkProvenance()) {
             throw new \RuntimeException('paper_dataset_network_provenance_uncertifiable');
         }
+        if ($this->lastHyperliquidTradeCountHoles !== []) {
+            // A fully covered minute holds fewer trades than Hyperliquid counted for it.
+            throw new \RuntimeException('paper_dataset_hyperliquid_trade_count_below_candle');
+        }
         if ($manifest->quality === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
             && ($manifest->modelName !== 'hl_candle_atr_top_v1' || $manifest->modelVersion !== '1.0.0')
         ) {
             throw new \RuntimeException('paper_dataset_hyperliquid_model_invalid');
         }
         $this->assertHyperliquidHistoricalCoverageIdentity($manifest, true);
+    }
+
+    /**
+     * Feeds the trades and closed 1m candles of a Hyperliquid live dataset to the trade count
+     * cross-check (the same rule the capture logs against).
+     */
+    private function auditHyperliquidTradeCount(
+        HyperliquidTradeCountAudit $audit,
+        PaperMarketEvent $event,
+    ): void {
+        $payload = $event->payload;
+        $coin = $payload['native_symbol'] ?? null;
+        if (!\is_string($coin)) {
+            return;
+        }
+        if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE
+            && ($payload['origin'] ?? null) === 'ws_trades'
+        ) {
+            $audit->trade($coin, (int) $this->liveUnsignedString($payload['block_time'] ?? null));
+        } elseif ($event->channel === PaperMarketDataChannel::CANDLE_1M
+            && ($payload['origin'] ?? null) === 'ws_candle'
+            && ($payload['confirmed'] ?? null) === true
+        ) {
+            $audit->closedCandle(
+                $coin,
+                (int) $this->liveUnsignedString($payload['start_time'] ?? null),
+                (int) $this->liveUnsignedString($payload['trade_count'] ?? null),
+            );
+        }
     }
 
     private function assertHyperliquidHistoricalCoverageIdentity(
@@ -600,6 +649,7 @@ final class PaperDatasetVerifier
         #[\SensitiveParameter] PaperDatasetManifest $manifest,
         ?int $eventLimit,
         bool $collectEvents,
+        bool $requireOkxTradeContinuity = false,
     ): array {
         /** @var array<string, true> $identities */
         $identities = [];
@@ -628,6 +678,8 @@ final class PaperDatasetVerifier
         $liveOrdinals = $this->isHyperliquidLive($manifest)
             ? new HyperliquidPaperSourceOrdinal()
             : null;
+        $liveTradeCountAudit = $liveOrdinals === null ? null : new HyperliquidTradeCountAudit();
+        $this->lastHyperliquidTradeCountHoles = [];
         /** @var array<string, int> $liveSnapshotEpochs */
         $liveSnapshotEpochs = [];
         /** @var array<string, int> $liveMetadataEpochs */
@@ -646,6 +698,8 @@ final class PaperDatasetVerifier
         $okxFundingEpochs = [];
         /** @var array<string, int> $okxInitialSnapshotEpochs */
         $okxInitialSnapshotEpochs = [];
+        /** @var array<string, BigInteger> $okxLastTradeIds */
+        $okxLastTradeIds = [];
 
         $handle = $this->openRegularFile(
             $eventsPath,
@@ -732,6 +786,9 @@ final class PaperDatasetVerifier
                         $liveTradeIdentityHistory,
                     );
                     $liveEventIds[] = $event->eventId;
+                    if ($liveTradeCountAudit !== null) {
+                        $this->auditHyperliquidTradeCount($liveTradeCountAudit, $event);
+                    }
                 }
                 if ($this->isOkxLive($manifest)) {
                     if ($event->channel === PaperMarketDataChannel::INSTRUMENT_METADATA) {
@@ -752,6 +809,14 @@ final class PaperDatasetVerifier
                             throw new \RuntimeException('paper_dataset_okx_instrument_metadata_invalid');
                         }
                         $okxInitialSnapshotEpochs[$event->symbol] = $epoch;
+                    } elseif ($requireOkxTradeContinuity
+                        && $event->channel === PaperMarketDataChannel::PUBLIC_TRADE
+                    ) {
+                        $this->assertOkxTradeContinuity(
+                            $event,
+                            isset($okxInitialSnapshotEpochs[$event->symbol]),
+                            $okxLastTradeIds,
+                        );
                     }
                 }
                 if ($historicalCoverage !== null) {
@@ -874,6 +939,9 @@ final class PaperDatasetVerifier
                 $liveEventIds,
                 $liveTradeIdentityHistory,
             );
+            if ($liveTradeCountAudit !== null) {
+                $this->lastHyperliquidTradeCountHoles = $liveTradeCountAudit->settle();
+            }
         }
         if ($okxMetadataEpochs !== []) {
             $metadataSymbols = array_keys($okxMetadataEpochs);
@@ -916,6 +984,41 @@ final class PaperDatasetVerifier
         return $manifest->venue === PaperMarketDataVenue::HYPERLIQUID
             && $manifest->quality
                 === PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES;
+    }
+
+    /**
+     * OKX assigns one sequential trade id per public trade and instrument; a
+     * websocket trade aggregates the ids [trade_id - aggregate_count + 1, trade_id].
+     * Once a symbol's initial snapshot boundary is recorded, every trade must start
+     * right after the previous one: a jump is missing trades, a step back is a
+     * duplicate. Observed feeds are contiguous: 58,624 ids over 15 minutes of
+     * websocket trades, and every REST hole examined (13, 146, 423 and 535 ids) was
+     * served in full by OKX history-trades, i.e. a capture defect, not a source gap.
+     *
+     * @param array<string, BigInteger> $lastTradeIds
+     */
+    private function assertOkxTradeContinuity(
+        PaperMarketEvent $event,
+        bool $afterInitialBoundary,
+        array &$lastTradeIds,
+    ): void {
+        try {
+            $lastId = BigInteger::of($this->liveUnsignedString($event->payload['trade_id'] ?? null));
+            $count = $event->payload['aggregate_count'] ?? null;
+            $firstId = $count === null
+                ? $lastId
+                : $lastId->minus($this->livePositiveInt((int) $this->liveUnsignedString($count)))->plus(1);
+        } catch (\Throwable) {
+            throw new \RuntimeException('paper_dataset_okx_trade_invalid');
+        }
+        $previous = $lastTradeIds[$event->symbol] ?? null;
+        if ($afterInitialBoundary
+            && $previous instanceof BigInteger
+            && !$firstId->isEqualTo($previous->plus(1))
+        ) {
+            throw new \RuntimeException('paper_dataset_okx_trade_gap');
+        }
+        $lastTradeIds[$event->symbol] = $lastId;
     }
 
     private function isOkxLive(PaperDatasetManifest $manifest): bool
@@ -1272,7 +1375,9 @@ final class PaperDatasetVerifier
         array $snapshotEpochs,
     ): string {
         if (($payload['synthetic'] ?? null) !== false
-            || ($payload['origin'] ?? null) !== 'ws_l2_book'
+            || !\in_array($payload['origin'] ?? null, ['ws_l2_book', 'ws_bbo'], true)
+            || ($payload['origin'] === 'ws_bbo'
+                && ($payload['bid_level_count'] !== '1' || $payload['ask_level_count'] !== '1'))
             || !isset($snapshotEpochs[$event->symbol])
             || $this->liveUnsignedString($payload['source_epoch'] ?? null)
                 !== (string) $snapshotEpochs[$event->symbol]

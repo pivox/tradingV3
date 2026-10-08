@@ -7,6 +7,7 @@ namespace App\Trading\Paper\Runtime;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
+use App\Trading\Paper\Execution\Persistence\PaperReplayBatchingStoreInterface;
 use App\Trading\Paper\Replay\PaperReplayCheckpoint;
 
 final readonly class PaperReplayCheckpointResolver
@@ -39,6 +40,33 @@ final readonly class PaperReplayCheckpointResolver
                 && !hash_equals($dataset['source_build_version'], $manifest->recorderVersion))
         ) {
             throw new \LogicException('paper_execution_dataset_identity_conflict');
+        }
+        if ($pending === [] && $this->store instanceof PaperReplayBatchingStoreInterface) {
+            // Batched journals keep source identities, not payloads (see PaperReplayBatchJournal).
+            $last = $this->store->lastSourceIdentity($cell);
+            if ($last === null || $last['position'] !== $position - 1) {
+                throw new \LogicException('paper_execution_checkpoint_corrupt');
+            }
+            $exchangeTimestamp = \DateTimeImmutable::createFromFormat(
+                '!Y-m-d\\TH:i:s.u\\Z',
+                $last['exchange_timestamp'],
+                new \DateTimeZone('UTC'),
+            );
+            if ($exchangeTimestamp === false
+                || $exchangeTimestamp->format('Y-m-d\\TH:i:s.u\\Z') !== $last['exchange_timestamp']
+            ) {
+                throw new \LogicException('paper_execution_checkpoint_corrupt');
+            }
+
+            return new PaperReplayCheckpoint(
+                $manifest->network,
+                $dataset['dataset_id'],
+                $consumerId,
+                $last['event_id'],
+                $position - 1,
+                $exchangeTimestamp,
+                $dataset['events_file_sha256'],
+            );
         }
         $last = null;
         foreach ($this->store->acknowledgedSources($cell) as $index => $event) {

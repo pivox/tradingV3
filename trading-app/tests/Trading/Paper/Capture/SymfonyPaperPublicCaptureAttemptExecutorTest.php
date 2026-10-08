@@ -60,6 +60,7 @@ final class SymfonyPaperPublicCaptureAttemptExecutorTest extends TestCase
 file_put_contents((string) getenv('PAPER_CAPTURE_TEST_TRACE'), json_encode([
     'argv' => $argv,
     'execution_enabled' => getenv('PAPER_EXECUTION_ENABLED'),
+    'memory_limit' => ini_get('memory_limit'),
 ], JSON_THROW_ON_ERROR));
 fwrite(STDOUT, '/private/dataset-path wallet-secret');
 fwrite(STDERR, '/private/error-path api-secret');
@@ -99,7 +100,10 @@ PHP,
                 '--no-interaction',
             ],
             'execution_enabled' => '0',
+            // Explicit, whatever the host php.ini says.
+            'memory_limit' => SymfonyPaperPublicCaptureAttemptExecutor::CHILD_MEMORY_LIMIT,
         ], json_decode(file_get_contents($trace) ?: '', true, 16, JSON_THROW_ON_ERROR));
+        self::assertSame('1024M', SymfonyPaperPublicCaptureAttemptExecutor::CHILD_MEMORY_LIMIT);
     }
 
     public function testForwardsSupervisorSignalAndSurvivesToReturnChildFailure(): void

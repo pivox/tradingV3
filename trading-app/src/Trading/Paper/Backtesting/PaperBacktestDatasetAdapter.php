@@ -531,7 +531,9 @@ final class PaperBacktestDatasetAdapter
     ): NormalizedBacktestPublicBook {
         $payload = $event->payload;
         $this->assertExactKeys($payload, self::HYPERLIQUID_BOOK_KEYS);
-        if (($payload['origin'] ?? null) !== 'ws_l2_book'
+        if (!\in_array($payload['origin'] ?? null, ['ws_l2_book', 'ws_bbo'], true)
+            || ($payload['origin'] === 'ws_bbo'
+                && ($payload['bid_level_count'] !== '1' || $payload['ask_level_count'] !== '1'))
             || ($payload['synthetic'] ?? null) !== false
             || !$this->unsignedString($payload['source_time'] ?? null)
             || $payload['source_time'] !== $event->exchangeTimestamp->format('Uv')
@@ -555,7 +557,7 @@ final class PaperBacktestDatasetAdapter
             'base_asset',
             null,
             null,
-            'ws_l2_book',
+            $payload['origin'],
         );
     }
 

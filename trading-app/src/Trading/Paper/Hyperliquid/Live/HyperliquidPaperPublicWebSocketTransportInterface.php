@@ -6,6 +6,15 @@ namespace App\Trading\Paper\Hyperliquid\Live;
 
 interface HyperliquidPaperPublicWebSocketTransportInterface
 {
+    /**
+     * $onClose receives the WebSocket close code and reason when the peer or the
+     * socket provides them.
+     *
+     * @param callable(): void $onOpen
+     * @param callable(string): void $onMessage
+     * @param callable(?int, ?string): void $onClose
+     * @param callable(\Throwable): void $onError
+     */
     public function connect(
         callable $onOpen,
         callable $onMessage,

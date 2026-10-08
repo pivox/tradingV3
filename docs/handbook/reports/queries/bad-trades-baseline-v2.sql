@@ -38,6 +38,7 @@ WITH scoped AS (
     order_scope.order_intent_id,
     order_scope.client_order_id,
     order_scope.exchange_order_id,
+    order_scope.paper_eligibility,
     zone_scope.zone_match_status,
     zone_scope.zone_dev_pct,
     zone_scope.zone_max_dev_pct,
@@ -54,7 +55,10 @@ WITH scoped AS (
       END AS order_intent_match_status,
       CASE WHEN count(*) = 1 THEN min(oi.id) END AS order_intent_id,
       CASE WHEN count(*) = 1 THEN min(oi.client_order_id) END AS client_order_id,
-      CASE WHEN count(*) = 1 THEN min(oi.exchange_order_id) END AS exchange_order_id
+      CASE WHEN count(*) = 1 THEN min(oi.exchange_order_id) END AS exchange_order_id,
+      -- position_trade_analysis_v2 carries no eligibility: it is the one of the cell that
+      -- placed the order, recorded on its unique order intent (no unique intent: NULL, never certified).
+      CASE WHEN count(*) = 1 THEN min(oi.paper_eligibility) END AS paper_eligibility
     FROM order_intent oi
     WHERE pta.internal_trade_id IS NOT NULL
       AND oi.internal_trade_id = pta.internal_trade_id

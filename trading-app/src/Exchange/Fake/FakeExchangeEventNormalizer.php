@@ -247,6 +247,7 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
                 'cost_completeness' => 'complete',
                 ...$this->fillLineageMetadata($order),
                 ...$this->fillCostMetadata($event),
+                ...FakeFillQuantityUnit::metadata($order),
             ],
         );
     }

@@ -6,10 +6,14 @@ namespace App\Tests\Trading\Paper\Hyperliquid\Live;
 
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpoint;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpointStore;
+use App\Trading\Paper\Dataset\PaperDatasetRecorder;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLivePolicy;
+use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperMarketEventNormalizer;
+use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
+use App\Trading\Paper\MarketData\PaperMarketEvent;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
@@ -52,7 +56,7 @@ final class HyperliquidPaperLiveCheckpointStoreTest extends TestCase
     {
         $checkpoint = self::fresh();
 
-        self::assertSame(4, $checkpoint->policyVersion);
+        self::assertSame(8, $checkpoint->policyVersion);
         self::assertSame([
             'schema_version', 'policy_version', 'dataset_id', 'network',
             'configuration_sha256', 'phase', 'failure_reason', 'continuity',
@@ -62,8 +66,9 @@ final class HyperliquidPaperLiveCheckpointStoreTest extends TestCase
             'initial_candle_window_ends',
             'acknowledged_identities', 'trade_identity_history',
             'reconnect_attempt',
-            'heartbeat', 'healthy_stop',
+            'heartbeat', 'healthy_stop', 'rotation',
         ], array_keys($checkpoint->toArray()));
+        self::assertNull($checkpoint->rotation);
         self::assertSame(
             $checkpoint->toArray(),
             HyperliquidPaperLiveCheckpoint::fromArray($checkpoint->toArray())->toArray(),
@@ -207,6 +212,101 @@ final class HyperliquidPaperLiveCheckpointStoreTest extends TestCase
         self::assertLessThanOrEqual(
             250_000,
             strlen(CanonicalJson::encode($checkpoint->toArray())),
+        );
+    }
+
+    /**
+     * The largest state a book batch makes pending: full identity windows, the eight current
+     * candles, every ordinal scope holding its largest event, and a full batch of books (the
+     * first pending, the others in the continuation). It saves and reloads through the
+     * store's canonical budget, where the node count binds first, with room to spare; and a
+     * full batch stays one recorder batch.
+     */
+    public function testAFullBookBatchFitsThePendingCheckpointAtTheIdentityBounds(): void
+    {
+        $state = self::fresh()->toArray();
+        $state['acknowledged_identities'] = array_map(
+            static fn (int $index): string => hash('sha256', 'ack-' . $index),
+            range(1, HyperliquidPaperLiveCheckpoint::MAXIMUM_ACKNOWLEDGED_IDENTITIES),
+        );
+        $state['trade_identity_history'] = array_map(
+            static fn (int $index): array => [
+                'identity_hash' => hash('sha256', 'identity-' . $index),
+                'assignment_digest' => hash('sha256', 'assignment-' . $index),
+            ],
+            range(1, HyperliquidPaperLiveCheckpoint::MAXIMUM_TRADE_IDENTITIES),
+        );
+        $checkpoint = HyperliquidPaperLiveCheckpoint::fromArray($state);
+        $ordinals = HyperliquidPaperSourceOrdinal::restore($checkpoint->ordinalState);
+        $normalizer = new HyperliquidPaperMarketEventNormalizer(
+            PaperMarketDataNetwork::MAINNET,
+            $ordinals,
+            new MockClock('2026-07-29T10:00:00Z'),
+        );
+        foreach (['BTC' => 0, 'ETH' => 1] as $coin => $assetId) {
+            $normalizer->instrumentMetadata(
+                ['asset_id' => $assetId, 'coin' => $coin, 'max_leverage' => 50, 'sz_decimals' => 5],
+                1,
+            );
+            $normalizer->fundingRate(['coin' => $coin, 'funding_rate' => '0.0000125'], 1);
+            $normalizer->snapshotBoundary($coin, 'initial', 1);
+            $normalizer->liveTrade([
+                'coin' => $coin,
+                'side' => 'B',
+                'px' => '65000.5',
+                'sz' => '0.00123',
+                'hash' => '0x' . hash('sha256', 'block-' . $coin),
+                'time' => 1_785_319_199_000,
+                'tid' => 999_999_999_999_999,
+                'users' => ['0x' . str_repeat('a', 40), '0x' . str_repeat('b', 40)],
+            ]);
+            foreach (['1m', '5m', '15m', '1h'] as $interval) {
+                $row = self::candle(0, $coin, $interval);
+                $checkpoint = $checkpoint->withCurrentCandle($coin . '/' . $interval, $row);
+                $normalizer->closedLiveCandle(HyperliquidCandle::fromApiRow($row, $coin, $interval));
+            }
+        }
+        $books = [];
+        for ($index = 0; $index < HyperliquidPaperLivePolicy::MAX_BOOK_BATCH_EVENTS; ++$index) {
+            $books[] = $normalizer->liveTopOfBookFromBbo([
+                'bbo' => [
+                    ['n' => 12, 'px' => '65000.5', 'sz' => '12.34567'],
+                    ['n' => 34, 'px' => '65001.5', 'sz' => '76.54321'],
+                ],
+                'coin' => $index % 2 === 0 ? 'BTC' : 'ETH',
+                'time' => 1_785_319_199_000 + $index,
+            ], 1);
+        }
+        $first = array_shift($books);
+        $pending = $checkpoint->withOrdinals($ordinals)->withPending($first, [
+            'remaining_events' => array_map(static fn (PaperMarketEvent $book): array => $book->toArray(), $books),
+            'after_ack' => null,
+            'durable_batch' => true,
+        ]);
+
+        $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
+        $store->loadOrCreate('paper-hyperliquid-live-mainnet', PaperMarketDataNetwork::MAINNET, str_repeat('a', 64));
+        $saved = $store->save($pending);
+        $reloaded = (new HyperliquidPaperLiveCheckpointStore($this->directory))->loadOrCreate(
+            'paper-hyperliquid-live-mainnet',
+            PaperMarketDataNetwork::MAINNET,
+            str_repeat('a', 64),
+        );
+
+        self::assertSame(CanonicalJson::encode($saved->toArray()), CanonicalJson::encode($reloaded->toArray()));
+        self::assertCount(18, $reloaded->ordinalState['scopes'] ?? []);
+        self::assertCount(8, $reloaded->currentCandles);
+        self::assertCount(
+            HyperliquidPaperLivePolicy::MAX_BOOK_BATCH_EVENTS - 1,
+            $reloaded->pendingContinuation['remaining_events'] ?? [],
+        );
+        // Measured: 15 756 nodes, 5 656 keys, 332 427 bytes.
+        self::assertLessThan(0.85 * CanonicalJson::MAX_NODES, self::canonicalNodes($reloaded->toArray()));
+        self::assertLessThan(0.85 * CanonicalJson::MAX_KEYS, self::canonicalKeys($reloaded->toArray()));
+        self::assertLessThan(0.5 * HyperliquidPaperLiveCheckpoint::MAXIMUM_BYTES, strlen(CanonicalJson::encode($reloaded->toArray())));
+        self::assertLessThanOrEqual(
+            (new \ReflectionClassConstant(PaperDatasetRecorder::class, 'MAX_APPEND_BATCH_EVENTS'))->getValue(),
+            HyperliquidPaperLivePolicy::MAX_BOOK_BATCH_EVENTS,
         );
     }
 
@@ -380,13 +480,41 @@ final class HyperliquidPaperLiveCheckpointStoreTest extends TestCase
         self::assertFileDoesNotExist($temporary);
     }
 
+    /** Nodes counted by CanonicalJson: every array and every scalar. */
+    private static function canonicalNodes(mixed $value): int
+    {
+        if (!\is_array($value)) {
+            return 1;
+        }
+        $nodes = 1;
+        foreach ($value as $item) {
+            $nodes += self::canonicalNodes($item);
+        }
+
+        return $nodes;
+    }
+
+    /** Keys counted by CanonicalJson: the keys of every map. */
+    private static function canonicalKeys(mixed $value): int
+    {
+        if (!\is_array($value)) {
+            return 0;
+        }
+        $keys = array_is_list($value) ? 0 : \count($value);
+        foreach ($value as $item) {
+            $keys += self::canonicalKeys($item);
+        }
+
+        return $keys;
+    }
+
     /** @return array<string, mixed> */
     private static function candle(
         int $start,
         string $coin = 'BTC',
         string $interval = '1m',
     ): array {
-        $duration = $interval === '5m' ? 300_000 : 60_000;
+        $duration = ['1m' => 60_000, '5m' => 300_000, '15m' => 900_000, '1h' => 3_600_000][$interval];
 
         return [
             'T' => $start + $duration - 1,

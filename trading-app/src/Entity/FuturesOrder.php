@@ -166,7 +166,7 @@ class FuturesOrder
             throw new LineageContextException('canonical_identity_mismatch:exchange_order_id');
         }
 
-        $source->assertTradeBoundary(
+        $source->assertExecutionBoundary(
             $this->symbol,
             self::canonicalSide($this->side),
             $this->exchange,
@@ -190,7 +190,7 @@ class FuturesOrder
             throw new LineageContextException('canonical_identity_missing:order_intent_predecessor');
         }
 
-        $context->assertTradeBoundary(
+        $context->assertExecutionBoundary(
             $this->symbol,
             self::canonicalSide($this->side),
             $this->exchange,

@@ -16,9 +16,10 @@ use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\ExchangeEventInterface;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
 use App\TradeEntry\Dto\ExecutionResult;
+use App\Trading\Paper\Execution\Persistence\PaperCanonicalTradeIdentity;
+use App\Trading\Paper\Execution\PaperIdentifierAwareRedaction;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffect;
-use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
 use Psr\Clock\ClockInterface;
 
@@ -282,6 +283,10 @@ final readonly class PaperCanonicalFakeEffectDispatcher
             [
                 'order_intent_id' => $effect->orderIntentIdentity['order_intent_id'],
                 'client_order_id' => $effect->orderIntentIdentity['client_order_id'],
+                // The trade of the order intent (#132 o): the Fake exchange copies it to the
+                // protective orders and to every fill, so their fill_cost_ledger rows reach the
+                // trade lineage like the entry fill does.
+                'internal_trade_id' => PaperCanonicalTradeIdentity::internalTradeId($effect->lineage, $effect->decisionKey),
                 'plan_hash' => $plan->planHash,
                 'target_id' => $target->id,
                 'canonical_side' => strtoupper($plan->side),
@@ -294,7 +299,7 @@ final readonly class PaperCanonicalFakeEffectDispatcher
                 PaperCanonicalFakeReservationDescriptor::METADATA_KEY => $reservationDescriptor,
             ],
         );
-        PaperMarketEventRedactor::assertSafe($metadata);
+        PaperIdentifierAwareRedaction::assertSafe($metadata, PaperIdentifierAwareRedaction::SITE_FAKE_ORDER_METADATA);
 
         $price = $orderType === ExchangeOrderType::LIMIT ? $plan->entryPrice : null;
 
@@ -350,6 +355,6 @@ final readonly class PaperCanonicalFakeEffectDispatcher
             }
         }
 
-        return $normalized;
+        return PaperFakeEventCausalOrder::order($normalized);
     }
 }

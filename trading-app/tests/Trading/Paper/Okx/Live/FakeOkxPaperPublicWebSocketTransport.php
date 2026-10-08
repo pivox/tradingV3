@@ -19,6 +19,7 @@ final class FakeOkxPaperPublicWebSocketTransport implements OkxPaperPausableWebS
     public int $resumeCount = 0;
     public ?\Closure $afterResume = null;
     public ?\Throwable $sendError = null;
+    public ?\Closure $afterSend = null;
 
     /** @var list<array{open: \Closure, message: \Closure, close: \Closure, error: \Closure}> */
     private array $callbacks = [];
@@ -46,6 +47,7 @@ final class FakeOkxPaperPublicWebSocketTransport implements OkxPaperPausableWebS
         }
 
         $this->sent[] = $message;
+        ($this->afterSend ?? static function (): void {})($message);
     }
 
     public function close(): void

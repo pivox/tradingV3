@@ -12,6 +12,7 @@ use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
 use App\Trading\Paper\Okx\Normalization\OkxMaterializedBookState;
 use App\Trading\Paper\Okx\Normalization\OkxPaperMarketEventNormalizer;
 use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
+use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinalSnapshotMemo;
 use App\Trading\Paper\Okx\OkxPaperInstrumentMap;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -20,6 +21,7 @@ use Symfony\Component\Clock\MockClock;
 
 #[CoversClass(OkxPaperMarketEventNormalizer::class)]
 #[CoversClass(OkxPaperSourceOrdinal::class)]
+#[CoversClass(OkxPaperSourceOrdinalSnapshotMemo::class)]
 #[CoversClass(OkxMaterializedBookState::class)]
 #[CoversClass(OkxPaperInstrumentMap::class)]
 final class OkxPaperMarketEventNormalizerTest extends TestCase
@@ -546,6 +548,36 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
         $this->expectExceptionMessage('okx_paper_source_ordinal_state_invalid');
 
         OkxPaperSourceOrdinal::restore($state);
+    }
+
+    public function testValidatedSnapshotMemoOnlyReusesExactlyValidatedScopeStates(): void
+    {
+        $ordinals = new OkxPaperSourceOrdinal();
+        $normalizer = $this->normalizer(ordinals: $ordinals);
+        $rows = $this->fixture('history-trades.json')['data'];
+        $normalizer->historyTrade($rows[0]);
+        $ordinals->reserveGap('okx/BTCUSDT/public_trade');
+        $state = $ordinals->snapshot();
+        $memo = new OkxPaperSourceOrdinalSnapshotMemo();
+
+        $expected = OkxPaperSourceOrdinal::restore($state)->snapshot();
+        self::assertSame($expected, OkxPaperSourceOrdinal::validatedSnapshot($state));
+        self::assertSame($expected, OkxPaperSourceOrdinal::validatedSnapshot($state, $memo));
+        self::assertSame($expected, OkxPaperSourceOrdinal::validatedSnapshot($state, $memo));
+
+        $tampered = $state;
+        $tampered['scopes']['okx/BTCUSDT/public_trade']['latest']['natural_identity'] = 'trade|242720721';
+        $retyped = $state;
+        $retyped['scopes']['okx/BTCUSDT/public_trade']['gap_pending'] = 1;
+        foreach ([$tampered, $retyped, ['schema_version' => 2, 'scopes' => $state['scopes']]] as $invalid) {
+            try {
+                OkxPaperSourceOrdinal::validatedSnapshot($invalid, $memo);
+                self::fail('A state that differs from the memoized one must be validated in full.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('okx_paper_source_ordinal_state_invalid', $exception->getMessage());
+            }
+        }
+        self::assertSame($expected, OkxPaperSourceOrdinal::validatedSnapshot($state, $memo));
     }
 
     public function testGapReservationIsCheckpointableIdempotentAndConsumedByExactlyOneAcceptedEvent(): void

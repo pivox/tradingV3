@@ -35,17 +35,45 @@ final class PaperFakeRuntimeFactory
         return $this->runtimes[$cell->id] ??= $this->create($cell);
     }
 
-    private function create(PaperExecutionCell $cell): PaperFakeRuntime
+    /**
+     * Single-writer replay runtime: the fake exchange state lives in memory (every logical
+     * revision kept) and is made durable only through replaySnapshot(). $snapshotPath is the
+     * verified snapshot to resume from, or null for a cell that has not consumed anything.
+     */
+    public function forReplayCell(PaperExecutionCell $cell, ?string $snapshotPath): PaperFakeRuntime
     {
-        $root = $this->privateRoot();
-        $digest = substr($cell->id, 7);
-        if (!preg_match('/\A[a-f0-9]{64}\z/D', $digest)) {
-            throw new \InvalidArgumentException('paper_fake_state_cell_digest_invalid');
+        if (isset($this->runtimes[$cell->id])) {
+            throw new \LogicException('paper_fake_runtime_already_open');
         }
-        $statePath = $root . '/' . $digest . '.dat';
-        if (dirname($statePath) !== $root || basename($statePath) !== $digest . '.dat') {
-            throw new \RuntimeException('paper_fake_state_path_mismatch');
+        if ($snapshotPath !== null && (is_link($snapshotPath) || !is_file($snapshotPath))) {
+            throw new \RuntimeException('paper_fake_state_snapshot_missing');
         }
+
+        return $this->runtimes[$cell->id] = $this->create($cell, $snapshotPath ?? false);
+    }
+
+    /** Canonical durable state file of a cell (the latest committed replay snapshot). */
+    public function statePath(PaperExecutionCell $cell): string
+    {
+        return $this->cellStatePath($cell, '.dat');
+    }
+
+    /** Staging path of the snapshot recorded at a journal ordinal, before it is promoted. */
+    public function stagedSnapshotPath(PaperExecutionCell $cell, int $journalOrdinal): string
+    {
+        if ($journalOrdinal < 1) {
+            throw new \InvalidArgumentException('paper_fake_state_snapshot_ordinal_invalid');
+        }
+
+        return $this->cellStatePath($cell, '.' . $journalOrdinal . '.snapshot');
+    }
+
+    /**
+     * @param string|false|null $replaySnapshot false: replay runtime without durable state yet
+     */
+    private function create(PaperExecutionCell $cell, string|false|null $replaySnapshot = null): PaperFakeRuntime
+    {
+        $statePath = $this->cellStatePath($cell, '.dat');
         if (is_link($statePath)) {
             throw new \RuntimeException('paper_fake_state_symlink_forbidden');
         }
@@ -54,7 +82,14 @@ final class PaperFakeRuntimeFactory
             'paper-runtime.cell-seed.v1',
             ['cell_id' => $cell->id],
         );
-        $state = new FakeExchangeStateStore($statePath, $cellSeed);
+        if ($replaySnapshot === null) {
+            $state = new FakeExchangeStateStore($statePath, $cellSeed);
+        } else {
+            $state = new FakeExchangeStateStore($replaySnapshot === false ? null : $replaySnapshot, $cellSeed);
+            $state->enableWriteBehind();
+        }
+        // Order ids (and the position/fill/funding ids derived from them) are unique per cell.
+        $state->useOrderIdNamespace(substr($cell->id, 7, 16));
         $book = new FakeExchangeOrderBook($state);
         $clock = $this->serializableClock();
         $canonicalInstruments = $cell->isModern()
@@ -77,6 +112,21 @@ final class PaperFakeRuntimeFactory
             $adapter,
             $canonicalInstruments,
         );
+    }
+
+    private function cellStatePath(PaperExecutionCell $cell, string $suffix): string
+    {
+        $root = $this->privateRoot();
+        $digest = substr($cell->id, 7);
+        if (!preg_match('/\A[a-f0-9]{64}\z/D', $digest)) {
+            throw new \InvalidArgumentException('paper_fake_state_cell_digest_invalid');
+        }
+        $path = $root . '/' . $digest . $suffix;
+        if (dirname($path) !== $root || basename($path) !== $digest . $suffix) {
+            throw new \RuntimeException('paper_fake_state_path_mismatch');
+        }
+
+        return $path;
     }
 
     private function privateRoot(): string

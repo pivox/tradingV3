@@ -105,11 +105,16 @@ final class PaperOrderIntentRecorderTest extends KernelTestCase
         self::assertSame('hyperliquid', $intent->getMarketDataVenue());
         self::assertSame($cell->id, $intent->getPaperExecutionCellId());
         self::assertSame('reference_only', $intent->getPaperEligibility());
+        // #132 decision g: a legacy Paper intent is never projected as a canonical order.
+        self::assertFalse($intent->hasAnyCanonicalIdentity());
+        self::assertNull($intent->getConfigHash());
 
         $lineage = $lineageRepository->findOneByOrderIntentId($identity['order_intent_id']);
         self::assertInstanceOf(TradeLineage::class, $lineage);
         self::assertSame('paper-trade-1', $lineage->getInternalTradeId());
         self::assertSame('fake-order-1', $lineage->getExchangeOrderId());
         self::assertSame($cell->id, $lineage->getPaperExecutionCellId());
+        self::assertSame('sha256:' . str_repeat('a', 64), $lineage->getConfigurationSnapshotId());
+        self::assertNull($lineage->getConfigHash());
     }
 }

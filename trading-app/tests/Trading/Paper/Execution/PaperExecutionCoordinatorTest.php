@@ -115,6 +115,50 @@ final class PaperExecutionCoordinatorTest extends TestCase
         }
     }
 
+    /** #132: as with a live venue, the intent knows its exchange order before the order is projected. */
+    public function testAnIntentKnowsItsExchangeOrderBeforeTheOrderIsProjected(): void
+    {
+        $root = sys_get_temp_dir() . '/paper_coord_ack_order_' . bin2hex(random_bytes(5));
+        try {
+            $store = new InMemoryPaperExecutionStore();
+            $canonicalIntents = new RecordingCanonicalPaperOrderIntents();
+            $projection = new class($canonicalIntents) implements ExchangeLocalProjectionStoreInterface {
+                /** @var list<int> acknowledgements already recorded at each projection */
+                public array $acknowledgedAtProjection = [];
+
+                public function __construct(private readonly RecordingCanonicalPaperOrderIntents $intents) {}
+                public function hasOrder(\App\Exchange\Dto\ExchangeOrderDto $order): bool { return false; }
+                public function openOrders(Exchange $exchange, MarketType $marketType): array { return []; }
+                public function openPositions(Exchange $exchange, MarketType $marketType, ?string $symbol = null): array { return []; }
+                public function project(ExchangeEventInterface $event): void {}
+                public function projectAtomically(array $events): void
+                {
+                    $this->acknowledgedAtProjection[] = $this->intents->acknowledgements;
+                }
+            };
+            $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
+            $cell = self::modernCellFromEffect($effect);
+            $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64), 'paper-dataset-recorder.v2');
+            $coordinator = $this->coordinator(
+                $store,
+                $projection,
+                $root,
+                legacyIntents: new RecordingPaperOrderIntents(),
+                canonicalStrategy: new DeterministicCanonicalPaperStrategy($effect),
+                canonicalIntents: $canonicalIntents,
+                clock: new MockClock('2026-08-10T12:00:00Z'),
+            );
+
+            $coordinator->consumeAt($cell, PaperProfileEligibility::REFERENCE_ONLY, 'dataset-modern-1', 0, $this->modernEvent());
+
+            self::assertSame(1, $canonicalIntents->acknowledgements);
+            self::assertNotSame([], $projection->acknowledgedAtProjection);
+            self::assertSame([1], array_values(array_unique($projection->acknowledgedAtProjection)));
+        } finally {
+            $this->cleanup($root);
+        }
+    }
+
     public function testModernNoTradeObservationIsDurableAndReplaySafeWithoutIntent(): void
     {
         $root = sys_get_temp_dir() . '/paper_coord_modern_no_trade_' . bin2hex(random_bytes(5));
@@ -354,7 +398,7 @@ final class PaperExecutionCoordinatorTest extends TestCase
 
     private function coordinator(
         InMemoryPaperExecutionStore $store,
-        RecordingProjectionStore $projection,
+        ExchangeLocalProjectionStoreInterface $projection,
         string $root,
         ?PaperStrategyPreparationInterface $strategy = null,
         ?RecordingPaperOrderIntents $legacyIntents = null,

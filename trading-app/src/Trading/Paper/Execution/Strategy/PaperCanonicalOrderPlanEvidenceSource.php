@@ -99,7 +99,7 @@ final readonly class PaperCanonicalOrderPlanEvidenceSource
                     $book->source,
                     $candidate,
                     $book->observedAt,
-                    $book->inputHash,
+                    self::marketInputHash($book, $policy->riskPolicy->side),
                 ),
                 $instrument->tick,
             );
@@ -179,6 +179,24 @@ final readonly class PaperCanonicalOrderPlanEvidenceSource
 
             throw $exception;
         }
+    }
+
+    /**
+     * The entry-zone market input is the side's candidate price read from the order book. It
+     * gets its own input hash, derived from the book's, so that after the plan deduplicates
+     * its inputs the order book stays the LAST one, as the scalping and micro_scalping plan
+     * validators require (#132 decision c). The book itself keeps its own hash.
+     */
+    private static function marketInputHash(CanonicalOrderBookSnapshot $book, string $side): string
+    {
+        return 'sha256:' . hash(
+            'sha256',
+            CanonicalJson::encode([
+                'schema_version' => 'paper-canonical-entry-market-input.v1',
+                'order_book_input_hash' => $book->inputHash,
+                'side' => $side,
+            ]),
+        );
     }
 
     private function assertHyperliquidPricePrecision(

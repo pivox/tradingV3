@@ -1285,11 +1285,12 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
         self::assertSame(PaperDatasetState::COMPLETE, $manifest->state);
         self::assertSame($manifest->eventCount, $completedConsumer->effectCount);
         self::assertContains(
-            ['historyTrades', ['BTC-USDT-SWAP', 2, '1784970038000', 100]],
+            // Inclusive first page, then trade-id pages from above its newest trade.
+            ['historyTrades', ['BTC-USDT-SWAP', 2, '1784970038001', 100]],
             $recoveryCalls,
         );
         self::assertContains(
-            ['historyTrades', ['BTC-USDT-SWAP', 1, '220', 100]],
+            ['historyTrades', ['BTC-USDT-SWAP', 1, '226', 100]],
             $recoveryCalls,
         );
         self::assertContains(
@@ -1337,8 +1338,8 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
         self::assertCount(2, $btcRestTradePages);
         self::assertSame(
             [
-                [0, OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES, 2, '1784970038000'],
-                [1, OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES - 1, 1, '220'],
+                [0, OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES, 2, '1784970038001'],
+                [1, OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES - 1, 1, '226'],
             ],
             array_map(
                 static fn (array $observation): array => [

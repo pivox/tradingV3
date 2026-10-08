@@ -145,9 +145,16 @@ final readonly class OkxPaperLiveCheckpoint
         ]);
     }
 
-    /** @param array<string, mixed> $state */
-    public static function fromArray(#[\SensitiveParameter] array $state): self
-    {
+    /**
+     * A memo only skips sub-validations of inputs it already validated in exactly
+     * the same form; the result is the same with or without it.
+     *
+     * @param array<string, mixed> $state
+     */
+    public static function fromArray(
+        #[\SensitiveParameter] array $state,
+        ?OkxPaperLiveCheckpointValidationMemo $memo = null,
+    ): self {
         try {
             $expectedKeys = [
                 'schema_version',
@@ -222,7 +229,10 @@ final readonly class OkxPaperLiveCheckpoint
             $remainingBoundaries = self::boundaries($state['remaining_boundaries']);
             $healthyStop = self::healthyStop($state['healthy_stop']);
             $reconnect = self::reconnect($state['reconnect']);
-            $ordinalState = OkxPaperSourceOrdinal::restore($state['ordinal_state'])->snapshot();
+            $ordinalState = OkxPaperSourceOrdinal::validatedSnapshot(
+                $state['ordinal_state'],
+                $memo?->ordinals,
+            );
 
             $frontiers = [];
             foreach ($state['stream_frontiers'] as $stream => $frontier) {
@@ -246,7 +256,7 @@ final readonly class OkxPaperLiveCheckpoint
 
             $paginationByStream = [];
             foreach ($state['overlap_pagination_by_stream'] as $stream => $pagination) {
-                $paginationByStream[$stream] = self::pagination($pagination, $stream);
+                $paginationByStream[$stream] = self::pagination($pagination, $stream, $memo);
             }
             $streamingQueuesExplicit = array_key_exists('streaming_queues', $state);
             $streamingQueueRef = array_key_exists('streaming_queue_ref', $state)
@@ -278,9 +288,10 @@ final readonly class OkxPaperLiveCheckpoint
             }
             $acknowledgedIdentityHistory = self::acknowledgedIdentityHistory(
                 $state['acknowledged_identity_history'] ?? [],
+                $memo,
             );
 
-            $pendingEvent = self::pendingEvent($state['pending_event']);
+            $pendingEvent = self::pendingEvent($state['pending_event'], $memo);
             $pendingFrontier = self::pendingFrontier($state['pending_frontier'], $pendingEvent);
             if ($pendingEvent !== null
                 && $pendingFrontier === null
@@ -545,15 +556,17 @@ final readonly class OkxPaperLiveCheckpoint
     }
 
     /** @param array<string, list<array{string, string, string, string}|string>> $history */
-    public function withHydratedAcknowledgedIdentityHistory(array $history): self
-    {
+    public function withHydratedAcknowledgedIdentityHistory(
+        array $history,
+        ?OkxPaperLiveCheckpointValidationMemo $memo = null,
+    ): self {
         if ($this->acknowledgedIdentityHistoryRef === null
             || $this->acknowledgedIdentityHistory !== []
         ) {
             throw new \InvalidArgumentException('okx_paper_live_checkpoint_invalid');
         }
         try {
-            $history = self::acknowledgedIdentityHistory($history);
+            $history = self::acknowledgedIdentityHistory($history, $memo);
         } catch (\Throwable $exception) {
             throw new \InvalidArgumentException(
                 'okx_paper_live_checkpoint_invalid',
@@ -662,6 +675,9 @@ final readonly class OkxPaperLiveCheckpoint
                     if (array_key_exists('retained_rows', $pagination)) {
                         $state['retained_rows'] = $pagination['retained_rows'];
                     }
+                    if (array_key_exists('forward_through', $pagination)) {
+                        $state['forward_through'] = $pagination['forward_through'];
+                    }
 
                     return $state;
                 },
@@ -751,8 +767,10 @@ final readonly class OkxPaperLiveCheckpoint
     /**
      * @return array<string, list<array{string, string, string, string}|string>>
      */
-    private static function acknowledgedIdentityHistory(mixed $value): array
-    {
+    private static function acknowledgedIdentityHistory(
+        mixed $value,
+        ?OkxPaperLiveCheckpointValidationMemo $memo = null,
+    ): array {
         if (!\is_array($value) || ($value !== [] && array_is_list($value))) {
             throw new \InvalidArgumentException();
         }
@@ -768,20 +786,33 @@ final readonly class OkxPaperLiveCheckpoint
             ) {
                 throw new \InvalidArgumentException();
             }
-            $seen = [];
-            foreach ($entries as $entry) {
-                if (!\is_array($entry) && !\is_string($entry)) {
-                    throw new \InvalidArgumentException();
+            if ($memo === null || !$memo->identityEntriesValidated($stream, $entries)) {
+                // Expanding an entry is pure: only entries not already expanded
+                // for this stream are expanded again; uniqueness is re-checked.
+                $known = $memo?->validatedIdentityEntries($stream) ?? [];
+                $identities = [];
+                $seen = [];
+                foreach ($entries as $entry) {
+                    if (!\is_array($entry) && !\is_string($entry)) {
+                        throw new \InvalidArgumentException();
+                    }
+                    $identity = \is_string($entry) ? ($known[$entry] ?? null) : null;
+                    if ($identity === null) {
+                        try {
+                            [$identity] = OkxPaperAcknowledgedIdentityEntry::expand($entry);
+                        } catch (\InvalidArgumentException) {
+                            throw new \InvalidArgumentException();
+                        }
+                    }
+                    if (isset($seen[$identity])) {
+                        throw new \InvalidArgumentException();
+                    }
+                    $seen[$identity] = true;
+                    if (\is_string($entry)) {
+                        $identities[$entry] = $identity;
+                    }
                 }
-                try {
-                    [$identity] = OkxPaperAcknowledgedIdentityEntry::expand($entry);
-                } catch (\InvalidArgumentException) {
-                    throw new \InvalidArgumentException();
-                }
-                if (isset($seen[$identity])) {
-                    throw new \InvalidArgumentException();
-                }
-                $seen[$identity] = true;
+                $memo?->rememberIdentityEntries($stream, $entries, $identities);
             }
             $validated[$stream] = $entries;
         }
@@ -1652,8 +1683,11 @@ final readonly class OkxPaperLiveCheckpoint
     }
 
     /** @return array<string, mixed>|null */
-    private static function pagination(mixed $pagination, string $stream): ?array
-    {
+    private static function pagination(
+        mixed $pagination,
+        string $stream,
+        ?OkxPaperLiveCheckpointValidationMemo $memo = null,
+    ): ?array {
         if ($pagination === null) {
             return null;
         }
@@ -1673,7 +1707,16 @@ final readonly class OkxPaperLiveCheckpoint
         if ($hasRetainedRows) {
             $expectedKeys[] = 'retained_rows';
         }
+        // A forward trade recovery (pages from the frontier up to this trade id, each
+        // one emitted before the next) has its own page bound.
+        $forward = array_key_exists('forward_through', $pagination);
+        if ($forward) {
+            $expectedKeys[] = 'forward_through';
+        }
         self::assertExactKeys($pagination, $expectedKeys);
+        $maxPages = $forward
+            ? OkxPaperLivePolicy::MAX_FORWARD_RECOVERY_PAGES
+            : OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES;
         if (!\is_string($pagination['endpoint'])
             || ($pagination['pagination_type'] !== null && !\is_int($pagination['pagination_type']))
             || ($pagination['next_cursor'] !== null && !\is_string($pagination['next_cursor']))
@@ -1682,11 +1725,11 @@ final readonly class OkxPaperLiveCheckpoint
             || !\is_array($pagination['target_frontier'])
             || array_is_list($pagination['target_frontier'])
             || $pagination['pages_consumed'] < 0
-            || $pagination['pages_consumed'] > OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES
+            || $pagination['pages_consumed'] > $maxPages
             || $pagination['pages_remaining'] < 0
             || !\in_array(
                 $pagination['pages_consumed'] + $pagination['pages_remaining'],
-                [
+                $forward ? [$maxPages] : [
                     OkxPaperLivePolicy::LEGACY_MAX_OVERLAP_HISTORY_PAGES,
                     OkxPaperLivePolicy::PREVIOUS_MAX_OVERLAP_HISTORY_PAGES,
                     OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
@@ -1694,6 +1737,12 @@ final readonly class OkxPaperLiveCheckpoint
                 true,
             )
             || ($hasRetainedRows && !\is_array($pagination['retained_rows']))
+            || ($forward && (!\is_string($pagination['forward_through'])
+                || \strlen($pagination['forward_through']) > 128
+                || preg_match('/\A[1-9][0-9]*\z/D', $pagination['forward_through']) !== 1
+                || $pagination['endpoint'] !== 'history_trades'
+                || $pagination['pagination_type'] !== 1
+                || $pagination['next_cursor'] === null))
         ) {
             throw new \InvalidArgumentException();
         }
@@ -1716,7 +1765,7 @@ final readonly class OkxPaperLiveCheckpoint
                 throw new \InvalidArgumentException();
             }
             if ($pagination['pagination_type'] === 1
-                && ($pagination['pages_consumed'] < 1 || $pagination['next_cursor'] === null)
+                && (($pagination['pages_consumed'] < 1 && !$forward) || $pagination['next_cursor'] === null)
             ) {
                 throw new \InvalidArgumentException();
             }
@@ -1752,35 +1801,52 @@ final readonly class OkxPaperLiveCheckpoint
             ) {
                 throw new \InvalidArgumentException();
             }
-            foreach ($pagination['retained_rows'] as $row) {
-                if ($isTrade) {
+            $rows = $pagination['retained_rows'];
+            if ($memo === null || !$memo->retainedRowsValidated($stream, $rows)) {
+                // Each row is validated on its own and the check is pure, so a
+                // compact row already validated for this stream is not re-expanded.
+                $known = $memo?->validatedRetainedRows($stream) ?? [];
+                $validatedRows = [];
+                foreach ($rows as $row) {
                     if (!\is_array($row) && !\is_string($row)) {
                         throw new \InvalidArgumentException();
                     }
-                    OkxPaperRetainedTradeRow::expand($row);
+                    if (\is_string($row) && isset($known[$row])) {
+                        $validatedRows[$row] = true;
 
-                    continue;
+                        continue;
+                    }
+                    if ($isTrade) {
+                        OkxPaperRetainedTradeRow::expand($row);
+                    } else {
+                        OkxPaperRetainedCandleRow::expand($row);
+                    }
+                    if (\is_string($row)) {
+                        $validatedRows[$row] = true;
+                    }
                 }
-                if (!\is_array($row) && !\is_string($row)) {
-                    throw new \InvalidArgumentException();
-                }
-                OkxPaperRetainedCandleRow::expand($row);
+                $memo?->rememberRetainedRows($stream, $rows, $validatedRows);
             }
-            $validated['retained_rows'] = $pagination['retained_rows'];
+            $validated['retained_rows'] = $rows;
+        }
+        if ($forward) {
+            $validated['forward_through'] = $pagination['forward_through'];
         }
 
         return $validated;
     }
 
-    private static function pendingEvent(mixed $pendingEvent): ?PaperMarketEvent
-    {
+    private static function pendingEvent(
+        mixed $pendingEvent,
+        ?OkxPaperLiveCheckpointValidationMemo $memo = null,
+    ): ?PaperMarketEvent {
         if ($pendingEvent === null) {
             return null;
         }
         if (!\is_array($pendingEvent) || array_is_list($pendingEvent)) {
             throw new \InvalidArgumentException();
         }
-        $event = PaperMarketEvent::fromArray($pendingEvent);
+        $event = $memo?->event($pendingEvent) ?? PaperMarketEvent::fromArray($pendingEvent);
         if ($event->sourceVenue->value !== 'okx' || !\in_array($event->symbol, self::SYMBOLS, true)) {
             throw new \InvalidArgumentException();
         }

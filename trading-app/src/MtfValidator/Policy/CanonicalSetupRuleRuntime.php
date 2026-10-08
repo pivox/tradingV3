@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Policy;
 
+use App\Common\Enum\Timeframe;
 use App\Indicator\Condition\ConditionInterface;
 use App\Trading\Lineage\LineageContext;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
@@ -84,13 +85,23 @@ final class CanonicalSetupRuleRuntime
                         ],
                     ]);
                 }
-                $observedAt = $this->instant($indicatorsByTimeframe[$timeframe]['kline_time'] ?? null);
-                if ($observedAt === null) {
+                $klineOpen = $this->instant($indicatorsByTimeframe[$timeframe]['kline_time'] ?? null);
+                if ($klineOpen === null) {
                     return new CanonicalSetupRuleRuntimeResult(false, 'critical_timeframe_missing', [
                         ...$this->traceIdentity($identity, $evaluatedAt, $shadowTimeframes),
                         'rejection' => [
                             'timeframe' => $timeframe,
                             'cause' => 'kline_time_missing_or_invalid',
+                        ],
+                    ]);
+                }
+                $observedAt = $this->candleClose($klineOpen, (string) $timeframe);
+                if ($observedAt === null) {
+                    return new CanonicalSetupRuleRuntimeResult(false, 'critical_timeframe_missing', [
+                        ...$this->traceIdentity($identity, $evaluatedAt, $shadowTimeframes),
+                        'rejection' => [
+                            'timeframe' => $timeframe,
+                            'cause' => 'timeframe_duration_unknown',
                         ],
                     ]);
                 }
@@ -312,15 +323,18 @@ final class CanonicalSetupRuleRuntime
             if (!is_array($indicators)) {
                 continue;
             }
-            $observedAt = $this->instant($indicators['kline_time'] ?? null);
-            if ($observedAt === null) {
+            $klineOpen = $this->instant($indicators['kline_time'] ?? null);
+            if ($klineOpen === null) {
                 continue;
             }
+            $freshnessSeconds = $catalog->freshnessSeconds('indicator_snapshot', $timeframe);
+            $observedAt = $this->candleClose($klineOpen, (string) $timeframe)
+                ?? throw new ConditionCatalogException(sprintf('No candle duration for indicator_snapshot/%s.', $timeframe));
             $snapshots[] = new RuleInputSnapshot(
                 $timeframe,
                 'indicator_snapshot',
                 $observedAt,
-                $observedAt->modify('+' . $catalog->freshnessSeconds('indicator_snapshot', $timeframe) . ' seconds'),
+                $observedAt->modify('+' . $freshnessSeconds . ' seconds'),
                 $indicators,
             );
         }
@@ -336,6 +350,19 @@ final class CanonicalSetupRuleRuntime
         }
 
         return $snapshots;
+    }
+
+    /**
+     * kline_time is the OPEN of the newest closed candle (live IndicatorProviderService and
+     * the canonical projector alike). The candle only exists once it closes, so freshness is
+     * measured from open + timeframe duration; the catalog windows then mean "grace after
+     * close". Null for a timeframe without a known candle duration (fail-closed).
+     */
+    private function candleClose(\DateTimeImmutable $klineOpen, string $timeframe): ?\DateTimeImmutable
+    {
+        $seconds = Timeframe::tryFrom($timeframe)?->getStepInSeconds();
+
+        return $seconds === null ? null : $klineOpen->modify('+' . $seconds . ' seconds');
     }
 
     private function instant(mixed $value): ?\DateTimeImmutable

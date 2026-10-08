@@ -22,13 +22,13 @@ final class HyperliquidPaperPublicSubscriptionSetTest extends TestCase
 
         self::assertSame([
             self::subscription('trades', 'BTC'),
-            self::subscription('l2Book', 'BTC'),
+            self::subscription('bbo', 'BTC'),
             self::subscription('candle', 'BTC', '1m'),
             self::subscription('candle', 'BTC', '5m'),
             self::subscription('candle', 'BTC', '15m'),
             self::subscription('candle', 'BTC', '1h'),
             self::subscription('trades', 'ETH'),
-            self::subscription('l2Book', 'ETH'),
+            self::subscription('bbo', 'ETH'),
             self::subscription('candle', 'ETH', '1m'),
             self::subscription('candle', 'ETH', '5m'),
             self::subscription('candle', 'ETH', '15m'),
@@ -152,12 +152,18 @@ final class HyperliquidPaperPublicSubscriptionSetTest extends TestCase
         );
         self::assertSame(5.0, HyperliquidPaperLivePolicy::HEARTBEAT_IDLE_SECONDS);
         self::assertSame(10.0, HyperliquidPaperLivePolicy::PONG_TIMEOUT_SECONDS);
-        self::assertSame(1_048_576, HyperliquidPaperLivePolicy::MAX_FRAME_BYTES);
-        self::assertSame(256, HyperliquidPaperLivePolicy::MAX_QUEUED_FRAMES);
-        self::assertSame(2_097_152, HyperliquidPaperLivePolicy::MAX_QUEUED_BYTES);
-        self::assertSame(64, HyperliquidPaperLivePolicy::NETWORK_RESUME_FRAME_LOW_WATER);
-        self::assertSame(1_048_576, HyperliquidPaperLivePolicy::NETWORK_PUMP_BYTE_HIGH_WATER);
-        self::assertSame(524_288, HyperliquidPaperLivePolicy::NETWORK_RESUME_BYTE_LOW_WATER);
+        self::assertSame(8_388_608, HyperliquidPaperLivePolicy::MAX_FRAME_BYTES);
+        self::assertSame(4096, HyperliquidPaperLivePolicy::MAX_QUEUED_FRAMES);
+        self::assertSame(33_554_432, HyperliquidPaperLivePolicy::MAX_QUEUED_BYTES);
+        self::assertSame(2048, HyperliquidPaperLivePolicy::NETWORK_PUMP_FRAME_HIGH_WATER);
+        self::assertSame(1024, HyperliquidPaperLivePolicy::NETWORK_RESUME_FRAME_LOW_WATER);
+        self::assertSame(16_777_216, HyperliquidPaperLivePolicy::NETWORK_PUMP_BYTE_HIGH_WATER);
+        self::assertSame(8_388_608, HyperliquidPaperLivePolicy::NETWORK_RESUME_BYTE_LOW_WATER);
+        // Once ingress pauses at the byte high water, a frame still in flight fits.
+        self::assertLessThanOrEqual(
+            HyperliquidPaperLivePolicy::MAX_QUEUED_BYTES,
+            HyperliquidPaperLivePolicy::NETWORK_PUMP_BYTE_HIGH_WATER + HyperliquidPaperLivePolicy::MAX_FRAME_BYTES,
+        );
         self::assertSame(500, HyperliquidPaperLivePolicy::MAX_BOOK_LEVELS_PER_SIDE);
         self::assertSame(1_048_576, HyperliquidPaperLivePolicy::MAX_CHECKPOINT_BYTES);
         self::assertSame(256, HyperliquidPaperLivePolicy::MAX_PENDING_TRADE_ROWS);

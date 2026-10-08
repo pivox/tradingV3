@@ -11,9 +11,9 @@ use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Dto\PreparedTradeEntry;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Types\Side;
+use App\Trading\Paper\Execution\PaperIdentifierAwareRedaction;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use App\Trading\Paper\MarketData\CanonicalJson;
-use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
 
 final class PaperPreparedEffectCodec
 {
@@ -57,8 +57,8 @@ final class PaperPreparedEffectCodec
 
             $validatedProvenance = PaperExecutionProvenance::validate($provenance);
             $lifecycle = $prepared->lifecycle->toArray();
-            PaperMarketEventRedactor::assertSafe($lifecycle);
-            PaperMarketEventRedactor::assertSafe($orderIntentIdentity);
+            PaperIdentifierAwareRedaction::assertSafe($lifecycle, PaperIdentifierAwareRedaction::SITE_LEGACY_LIFECYCLE);
+            PaperIdentifierAwareRedaction::assertSafe($orderIntentIdentity, PaperIdentifierAwareRedaction::SITE_ORDER_INTENT_IDENTITY);
 
             $payload = [
                 'plan' => $this->encodePlan($prepared->plan),
@@ -115,9 +115,11 @@ final class PaperPreparedEffectCodec
             if (!is_int($payload['order_intent_identity']['order_intent_id']) || $payload['order_intent_identity']['order_intent_id'] < 1) {
                 throw new \InvalidArgumentException();
             }
-            PaperMarketEventRedactor::assertSafe($payload['lifecycle']);
-            PaperMarketEventRedactor::assertSafe($payload['order_intent_identity']);
-            $provenance = PaperExecutionProvenance::validate($payload['cell_provenance']);
+            PaperIdentifierAwareRedaction::assertSafe($payload['lifecycle'], PaperIdentifierAwareRedaction::SITE_LEGACY_LIFECYCLE);
+            PaperIdentifierAwareRedaction::assertSafe($payload['order_intent_identity'], PaperIdentifierAwareRedaction::SITE_ORDER_INTENT_IDENTITY);
+            $provenance = PaperExecutionProvenance::validate(
+                PaperExecutionProvenance::inCanonicalOrder($payload['cell_provenance']),
+            );
 
             $symbol = $payload['lifecycle']['symbol'] ?? null;
             if (!is_string($symbol) || $symbol === '') {
@@ -213,9 +215,11 @@ final class PaperPreparedEffectCodec
         }
         $exchangeContext = null;
         if ($plan['exchange_context'] !== null) {
-            if (!is_array($plan['exchange_context']) || array_keys($plan['exchange_context']) !== ['exchange', 'market_type']
-                || !is_string($plan['exchange_context']['exchange']) || !is_string($plan['exchange_context']['market_type'])
-            ) {
+            if (!is_array($plan['exchange_context'])) {
+                throw new \InvalidArgumentException();
+            }
+            $this->assertKeys($plan['exchange_context'], ['exchange', 'market_type']);
+            if (!is_string($plan['exchange_context']['exchange']) || !is_string($plan['exchange_context']['market_type'])) {
                 throw new \InvalidArgumentException();
             }
             $exchangeContext = new ExchangeContext(
@@ -239,12 +243,18 @@ final class PaperPreparedEffectCodec
     }
 
     /**
+     * Exact key SET (#132 decision h): a pending effect is read back from PostgreSQL jsonb,
+     * which returns object keys shorter-first, so the order is never part of the contract.
+     *
      * @param array<array-key, mixed> $value
      * @param list<string> $keys
      */
     private function assertKeys(array $value, array $keys): void
     {
-        if (array_keys($value) !== $keys) {
+        $actual = array_keys($value);
+        sort($actual, SORT_STRING);
+        sort($keys, SORT_STRING);
+        if ($actual !== $keys) {
             throw new \InvalidArgumentException();
         }
     }

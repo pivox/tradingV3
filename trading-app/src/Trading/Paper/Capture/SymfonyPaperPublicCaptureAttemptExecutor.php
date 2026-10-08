@@ -11,6 +11,15 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
 {
     private const OUTPUT_TAIL_BYTES = 8192;
 
+    /**
+     * The capture child's memory limit, whatever the host php.ini says (128M there
+     * killed OKX captures during a burst: fatal "Allowed memory size" in ~2 min).
+     * Measured under a burst: 139 MB peak (VmHWM); the OKX inbound buffer adds up
+     * to 256 MiB of frames (its hard limit, 512 MiB, fails closed), and encoding a
+     * recovery checkpoint (4 MiB of JSON) peaks at tens of MiB more.
+     */
+    public const CHILD_MEMORY_LIMIT = '1024M';
+
     public function __construct(
         #[Autowire('%kernel.project_dir%')]
         private string $projectDirectory,
@@ -33,6 +42,8 @@ final readonly class SymfonyPaperPublicCaptureAttemptExecutor implements PaperPu
         try {
             $process = new Process([
                 \PHP_BINARY,
+                '-d',
+                'memory_limit=' . self::CHILD_MEMORY_LIMIT,
                 $this->projectDirectory . '/bin/console',
                 'app:paper-market:public-capture',
                 '--venue=' . $venue,

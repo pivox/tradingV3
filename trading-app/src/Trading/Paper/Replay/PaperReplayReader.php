@@ -7,6 +7,8 @@ namespace App\Trading\Paper\Replay;
 use App\Trading\Paper\Dataset\PaperDatasetFormatLimits;
 use App\Trading\Paper\Dataset\PaperDatasetLineReader;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
+use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
+use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
 use App\Trading\Paper\MarketData\CanonicalJson;
@@ -15,11 +17,17 @@ use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalEventCoverage;
-use Brick\Math\BigInteger;
 
 final class PaperReplayReader
 {
-    public const DEFAULT_EVENT_LIMIT = 1_000_000;
+    /**
+     * About twice a 24 h OKX public capture (~3.7 M events). Replay keeps one compact
+     * order key per event in memory (~150 bytes, measured) and the verified events in a
+     * private temporary spill file (~1.3 KB each) instead of decoded events in memory
+     * (~2.9 KB each), so this bound stays well inside
+     * PaperCertificationCampaignRunner::CHILD_MEMORY_LIMIT.
+     */
+    public const DEFAULT_EVENT_LIMIT = 8_000_000;
 
     private const REGULAR_FILE_TYPE = 0100000;
     private const DIRECTORY_FILE_TYPE = 0040000;
@@ -27,6 +35,10 @@ final class PaperReplayReader
     private const FILE_TYPE_MASK = 0170000;
 
     private ?int $currentEventIndex = null;
+
+    private ?PaperReplayEventIndex $activeIndex = null;
+
+    private int $activeStartIndex = 0;
     private readonly PaperDatasetRecorderFilesystem $filesystem;
     private readonly PaperDatasetLineReader $lineReader;
 
@@ -55,13 +67,42 @@ final class PaperReplayReader
         return $this->eventLimit;
     }
 
-    /** @return \Generator<int, PaperMarketEvent> */
+    /**
+     * The events a resumed read() skipped (positions 0..resume-1, in replay order),
+     * re-materialized from the same verified load while that read() is active.
+     *
+     * @return \Generator<int, PaperMarketEvent>
+     */
+    public function replayedPrefix(): \Generator
+    {
+        $events = $this->activeIndex ?? throw new \LogicException('paper_replay_prefix_unavailable');
+        $count = $this->activeStartIndex;
+        for ($index = 0; $index < $count; ++$index) {
+            if ($this->activeIndex !== $events) {
+                throw new \LogicException('paper_replay_prefix_unavailable');
+            }
+            yield $index => $events->event($index);
+        }
+    }
+
+    /**
+     * @param bool $receiptVerified the caller validated a campaign verification receipt for
+     *        this dataset and $expectedManifest: the full verification pass is not repeated,
+     *        the manifest file must still equal $expectedManifest and the events checksum is
+     *        still recomputed while loading
+     * @param PaperReplayOrder|null $order replay order and observation instants (default:
+     *        exchange time); a Hyperliquid historical dataset always keeps its own order
+     *
+     * @return \Generator<int, PaperMarketEvent>
+     */
     public function read(
         #[\SensitiveParameter] string $datasetDirectory,
         string $consumerId,
         ?PaperReplayCheckpoint $checkpoint = null,
         ?PaperDatasetManifest $expectedManifest = null,
         bool $loadDatasetCheckpoint = true,
+        bool $receiptVerified = false,
+        ?PaperReplayOrder $order = null,
     ): \Generator {
         yield from $this->replay(
             $datasetDirectory,
@@ -70,6 +111,8 @@ final class PaperReplayReader
             $expectedManifest,
             true,
             $loadDatasetCheckpoint,
+            $receiptVerified,
+            $order,
         );
     }
 
@@ -78,6 +121,8 @@ final class PaperReplayReader
         string $consumerId,
         PaperReplayCheckpoint $checkpoint,
         PaperDatasetManifest $expectedManifest,
+        bool $receiptVerified = false,
+        ?PaperReplayOrder $order = null,
     ): void {
         $currentEventIndex = $this->currentEventIndex;
         $validation = $this->replay(
@@ -87,6 +132,8 @@ final class PaperReplayReader
             $expectedManifest,
             false,
             false,
+            $receiptVerified,
+            $order,
         );
         try {
             $validation->valid();
@@ -104,19 +151,29 @@ final class PaperReplayReader
         ?PaperDatasetManifest $expectedManifest,
         bool $advanceClock,
         bool $loadDatasetCheckpoint,
+        bool $receiptVerified = false,
+        ?PaperReplayOrder $order = null,
     ): \Generator {
         if ($advanceClock) {
             $this->currentEventIndex = null;
         }
         $datasetPin = $this->openPinnedDatasetDirectory($datasetDirectory);
         $datasetDirectory = $datasetPin['path'];
+        $events = null;
         try {
             $this->assertPinnedDatasetDirectory(
                 $datasetPin,
                 'paper_replay_dataset_before_verify',
             );
             try {
-                $manifest = $this->verifier->verify($datasetDirectory, $this->eventLimit);
+                if ($receiptVerified) {
+                    if ($expectedManifest === null) {
+                        throw new \LogicException('paper_replay_receipt_manifest_required');
+                    }
+                    $manifest = $this->pinnedManifest($datasetDirectory);
+                } else {
+                    $manifest = $this->verifier->verify($datasetDirectory, $this->eventLimit);
+                }
             } catch (\RuntimeException $failure) {
                 if ($failure->getMessage() === 'paper_dataset_event_limit_exceeded') {
                     throw new \RuntimeException('paper_replay_event_limit_exceeded');
@@ -137,19 +194,23 @@ final class PaperReplayReader
                 throw new \RuntimeException('paper_replay_event_limit_exceeded');
             }
 
-            $events = $this->readEvents($datasetDirectory, $manifest, $datasetPin);
+            $indexed = $this->indexEvents(
+                $datasetDirectory,
+                $manifest,
+                $datasetPin,
+                $receiptVerified,
+                $order ?? PaperReplayOrder::exchangeTime(),
+            );
+            $events = $indexed['index'];
+            $order = $indexed['order'];
             $this->assertPinnedDatasetDirectory(
                 $datasetPin,
                 'paper_replay_dataset_after_events_load',
             );
-            if ($manifest->venue === PaperMarketDataVenue::HYPERLIQUID
-                && $manifest->quality
-                    === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
-            ) {
-                $events = self::sortHyperliquidHistorical($events);
-            } else {
-                usort($events, self::compare(...));
+            if ($indexed['hyperliquid_interval_invalid']) {
+                throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid');
             }
+            $events->sort();
             $this->assertPinnedDatasetDirectory(
                 $datasetPin,
                 'paper_replay_dataset_after_sort',
@@ -173,18 +234,22 @@ final class PaperReplayReader
                 'paper_replay_dataset_after_resume',
             );
             if ($advanceClock && $startIndex > 0) {
-                $this->restoreObservationWatermark($events, $startIndex);
+                $this->restoreObservationWatermark($events, $startIndex, $order);
             }
-            $count = count($events);
+            if ($advanceClock) {
+                $this->activeIndex = $events;
+                $this->activeStartIndex = $startIndex;
+            }
+            $count = $events->count();
             $strictInitialObservation = $startIndex === 0;
             for ($index = $startIndex; $index < $count; ++$index) {
                 $this->assertPinnedDatasetDirectory(
                     $datasetPin,
                     'paper_replay_dataset_before_yield',
                 );
-                $event = $events[$index]['event'];
+                $event = $events->event($index);
                 if ($advanceClock) {
-                    $this->advanceClockToObservation($event, $strictInitialObservation);
+                    $this->advanceClockToObservation($event, $strictInitialObservation, $order);
                     $strictInitialObservation = false;
                     $this->currentEventIndex = $index;
                 }
@@ -197,26 +262,34 @@ final class PaperReplayReader
                 );
             }
         } finally {
+            if ($events !== null && $this->activeIndex === $events) {
+                $this->activeIndex = null;
+                $this->activeStartIndex = 0;
+            }
+            $events?->close();
             fclose($datasetPin['handle']);
         }
     }
 
-    private function advanceClockToObservation(PaperMarketEvent $event, bool $strictInitialObservation): void
-    {
-        $observedAt = $this->observationTimestamp($event);
+    private function advanceClockToObservation(
+        PaperMarketEvent $event,
+        bool $strictInitialObservation,
+        PaperReplayOrder $order,
+    ): void {
+        $observedAt = $order->observationTimestamp($event);
         if ($strictInitialObservation || $observedAt > $this->clock->now()) {
             $this->clock->advanceTo($observedAt);
         }
     }
 
-    /**
-     * @param list<array{event: PaperMarketEvent, input_index: int}> $events
-     */
-    private function restoreObservationWatermark(array $events, int $endExclusive): void
-    {
+    private function restoreObservationWatermark(
+        PaperReplayEventIndex $events,
+        int $endExclusive,
+        PaperReplayOrder $order,
+    ): void {
         $watermark = $this->clock->now();
         for ($index = 0; $index < $endExclusive; ++$index) {
-            $observedAt = $this->observationTimestamp($events[$index]['event']);
+            $observedAt = $order->observationTimestamp($events->event($index));
             if ($observedAt > $watermark) {
                 $watermark = $observedAt;
             }
@@ -226,22 +299,22 @@ final class PaperReplayReader
         }
     }
 
-    private function observationTimestamp(PaperMarketEvent $event): \DateTimeImmutable
-    {
-        return $event->receivedTimestamp > $event->exchangeTimestamp
-            ? $event->receivedTimestamp
-            : $event->exchangeTimestamp;
-    }
-
     /**
+     * Validates and hashes every events line exactly like the former full load, but
+     * keeps each validated event in a private spill file and only its order key in memory.
+     * With a campaign receipt ($receiptVerified) the payload redaction scan is not repeated:
+     * the bytes are accepted only if their checksum equals the receipt-pinned fingerprint.
+     *
      * @param array{handle: resource, identity: array{dev: int, ino: int}, path: string} $datasetPin
      *
-     * @return list<array{event: PaperMarketEvent, input_index: int}>
+     * @return array{index: PaperReplayEventIndex, hyperliquid_interval_invalid: bool, order: PaperReplayOrder}
      */
-    private function readEvents(
+    private function indexEvents(
         #[\SensitiveParameter] string $datasetDirectory,
         PaperDatasetManifest $manifest,
         array $datasetPin,
+        bool $receiptVerified,
+        PaperReplayOrder $order,
     ): array {
         $this->assertPinnedDatasetDirectory($datasetPin, 'paper_replay_dataset_before_events_open');
         $path = $datasetDirectory . DIRECTORY_SEPARATOR . 'events.ndjson';
@@ -260,8 +333,22 @@ final class PaperReplayReader
         if ($handle === false) {
             throw new \RuntimeException('paper_dataset_file_unreadable');
         }
+        try {
+            $spill = $this->openSpill();
+        } catch (\Throwable $failure) {
+            fclose($handle);
 
-        $events = [];
+            throw $failure;
+        }
+
+        $hyperliquidHistorical = $manifest->venue === PaperMarketDataVenue::HYPERLIQUID
+            && $manifest->quality === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK;
+        if ($hyperliquidHistorical) {
+            // Modelled historical candles keep their own (timestamp, symbol, interval) order.
+            $order = PaperReplayOrder::exchangeTime();
+        }
+        $events = new PaperReplayEventIndex($spill, $hyperliquidHistorical, $this->filesystem, $order);
+        $intervalInvalid = false;
         $checksum = hash_init('sha256');
         try {
             $opened = $this->filesystem->stat($handle, 'paper_replay_events_validation');
@@ -281,7 +368,7 @@ final class PaperReplayReader
                 if (trim($line) === '') {
                     continue;
                 }
-                if (count($events) >= $this->eventLimit) {
+                if ($events->count() >= $this->eventLimit) {
                     throw new \RuntimeException('paper_replay_event_limit_exceeded');
                 }
 
@@ -292,7 +379,10 @@ final class PaperReplayReader
                         throw new \InvalidArgumentException();
                     }
                     /** @var array<string, mixed> $data */
-                    $event = PaperMarketEvent::fromArray($data);
+                    // With a campaign receipt the redaction scan already passed on these exact
+                    // bytes: the checksum of this same pass is compared with the receipt-pinned
+                    // fingerprint below, before the index is sorted or any event is yielded.
+                    $event = PaperMarketEvent::fromArray($data, $receiptVerified);
                     if (CanonicalJson::encode($event->toArray()) !== $raw) {
                         throw new \InvalidArgumentException();
                     }
@@ -300,7 +390,18 @@ final class PaperReplayReader
                     throw new \RuntimeException('paper_replay_event_invalid');
                 }
 
-                $events[] = ['event' => $event, 'input_index' => count($events)];
+                $interval = null;
+                if ($hyperliquidHistorical) {
+                    // Deferred like the former post-load sort: every line is still
+                    // validated and hashed before this stable reason is raised.
+                    try {
+                        $interval = HyperliquidHistoricalEventCoverage::parse($event)->intervalMilliseconds;
+                    } catch (\Throwable) {
+                        $intervalInvalid = true;
+                        $interval = 0;
+                    }
+                }
+                $events->append($event, $interval);
             }
             if (!feof($handle)) {
                 throw new \RuntimeException('paper_replay_events_read_failed');
@@ -346,7 +447,56 @@ final class PaperReplayReader
             throw new \RuntimeException('paper_dataset_checksum_mismatch');
         }
 
-        return $events;
+        return ['index' => $events, 'hyperliquid_interval_invalid' => $intervalInvalid, 'order' => $order];
+    }
+
+    /**
+     * Private 0600 file in sys_get_temp_dir(), unlinked right after creation so that
+     * no process can reopen it and even a killed replay leaves nothing behind.
+     *
+     * @return resource
+     */
+    private function openSpill()
+    {
+        $path = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR)
+            . DIRECTORY_SEPARATOR . 'paper-replay-spill-' . bin2hex(random_bytes(16));
+        $spill = $this->filesystem->createPrivateFile($path, 'paper_replay_spill_create');
+        if ($spill === false) {
+            throw new \RuntimeException('paper_replay_spill_failed');
+        }
+        $unlinked = @unlink($path);
+        $statistics = $this->filesystem->stat($spill, 'paper_replay_spill_create');
+        if (!$unlinked
+            || $statistics === false
+            || !$this->isPrivateRegularFile($statistics)
+            || ($statistics['nlink'] ?? null) !== 0
+            || ($statistics['size'] ?? null) !== 0
+        ) {
+            fclose($spill);
+
+            throw new \RuntimeException('paper_replay_spill_failed');
+        }
+
+        return $spill;
+    }
+
+    private function pinnedManifest(#[\SensitiveParameter] string $datasetDirectory): PaperDatasetManifest
+    {
+        $path = $datasetDirectory . DIRECTORY_SEPARATOR . 'manifest.json';
+        $statistics = $this->filesystem->pathStat($path, 'paper_replay_manifest_validation');
+        if ($statistics === false || $this->isSymlink($statistics) || !$this->isPrivateRegularFile($statistics)) {
+            throw new \RuntimeException('paper_dataset_manifest_unreadable');
+        }
+        $contents = @file_get_contents($path, false, null, 0, PaperDatasetFormatLimits::MAX_MANIFEST_BYTES + 1);
+        if (!\is_string($contents) || $contents === '' || \strlen($contents) > PaperDatasetFormatLimits::MAX_MANIFEST_BYTES) {
+            throw new \RuntimeException('paper_dataset_manifest_unreadable');
+        }
+        $manifest = (new PaperDatasetManifestCodec())->decode($contents);
+        if ($manifest->state !== PaperDatasetState::COMPLETE) {
+            throw new \RuntimeException('paper_dataset_not_complete');
+        }
+
+        return $manifest;
     }
 
     /** @return array{handle: resource, identity: array{dev: int, ino: int}, path: string} */
@@ -437,123 +587,8 @@ final class PaperReplayReader
         }
     }
 
-    /**
-     * @param array{event: PaperMarketEvent, input_index: int} $left
-     * @param array{event: PaperMarketEvent, input_index: int} $right
-     */
-    private static function compare(array $left, array $right): int
-    {
-        $leftEvent = $left['event'];
-        $rightEvent = $right['event'];
-
-        $comparison = $leftEvent->exchangeTimestamp <=> $rightEvent->exchangeTimestamp;
-        if ($comparison !== 0) {
-            return $comparison;
-        }
-
-        $comparison = strcmp($leftEvent->channel->value, $rightEvent->channel->value);
-        if ($comparison !== 0) {
-            return $comparison;
-        }
-
-        if ($leftEvent->sequence === null || $rightEvent->sequence === null) {
-            if ($leftEvent->sequence !== $rightEvent->sequence) {
-                return $leftEvent->sequence === null ? 1 : -1;
-            }
-        } else {
-            $comparison = BigInteger::of($leftEvent->sequence)->compareTo(BigInteger::of($rightEvent->sequence));
-            if ($comparison !== 0) {
-                return $comparison;
-            }
-        }
-
-        $comparison = strcmp($leftEvent->eventId, $rightEvent->eventId);
-        if ($comparison !== 0) {
-            return $comparison;
-        }
-
-        return $left['input_index'] <=> $right['input_index'];
-    }
-
-    /**
-     * @param list<array{event: PaperMarketEvent, input_index: int}> $events
-     *
-     * @return list<array{event: PaperMarketEvent, input_index: int}>
-     */
-    private static function sortHyperliquidHistorical(
-        #[\SensitiveParameter] array $events,
-    ): array {
-        try {
-            /** @var array<string, int> $intervals */
-            $intervals = [];
-            foreach ($events as $entry) {
-                $event = $entry['event'];
-                $intervals[$event->eventId] = HyperliquidHistoricalEventCoverage::parse(
-                    $event,
-                )->intervalMilliseconds;
-            }
-            usort(
-                $events,
-                static fn (array $left, array $right): int => self::compareHyperliquidHistorical(
-                    $left,
-                    $right,
-                    $intervals,
-                ),
-            );
-        } catch (\Throwable) {
-            throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid');
-        }
-
-        return $events;
-    }
-
-    /**
-     * @param array{event: PaperMarketEvent, input_index: int} $left
-     * @param array{event: PaperMarketEvent, input_index: int} $right
-     * @param array<string, int>                                $intervals
-     */
-    private static function compareHyperliquidHistorical(
-        #[\SensitiveParameter] array $left,
-        #[\SensitiveParameter] array $right,
-        #[\SensitiveParameter] array $intervals,
-    ): int {
-        $leftEvent = $left['event'];
-        $rightEvent = $right['event'];
-
-        $comparison = $leftEvent->exchangeTimestamp <=> $rightEvent->exchangeTimestamp;
-        if ($comparison !== 0) {
-            return $comparison;
-        }
-
-        $comparison = strcmp($leftEvent->symbol, $rightEvent->symbol);
-        if ($comparison !== 0) {
-            return $comparison;
-        }
-
-        $comparison = $intervals[$leftEvent->eventId]
-            <=> $intervals[$rightEvent->eventId];
-        if ($comparison !== 0) {
-            return $comparison;
-        }
-
-        $comparison = strcmp($leftEvent->channel->value, $rightEvent->channel->value);
-        if ($comparison !== 0) {
-            return $comparison;
-        }
-
-        $comparison = strcmp($leftEvent->eventId, $rightEvent->eventId);
-        if ($comparison !== 0) {
-            return $comparison;
-        }
-
-        return $left['input_index'] <=> $right['input_index'];
-    }
-
-    /**
-     * @param list<array{event: PaperMarketEvent, input_index: int}> $events
-     */
     private function resumeIndex(
-        array $events,
+        PaperReplayEventIndex $events,
         PaperDatasetManifest $manifest,
         string $consumerId,
         ?PaperReplayCheckpoint $checkpoint,
@@ -577,18 +612,12 @@ final class PaperReplayReader
             throw new \RuntimeException('paper_replay_checkpoint_checksum_mismatch');
         }
 
-        $foundIndex = null;
-        foreach ($events as $index => $entry) {
-            if (hash_equals($checkpoint->eventId, $entry['event']->eventId)) {
-                $foundIndex = $index;
-                break;
-            }
-        }
+        $foundIndex = $events->positionOf($checkpoint->eventId);
         if ($foundIndex === null) {
             throw new \RuntimeException('paper_replay_checkpoint_event_not_found');
         }
 
-        $event = $events[$foundIndex]['event'];
+        $event = $events->event($foundIndex);
         if ($foundIndex !== $checkpoint->eventIndex
             || $event->exchangeTimestamp != $checkpoint->exchangeTimestamp
         ) {

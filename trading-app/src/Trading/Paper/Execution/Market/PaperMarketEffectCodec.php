@@ -11,10 +11,19 @@ final class PaperMarketEffectCodec
 {
     private const SCHEMA_VERSION = 1;
 
+    /**
+     * The event this codec encoded last, with its payload: decoding that exact payload
+     * returns the event instead of rebuilding an equal one through PaperMarketEvent::fromArray().
+     *
+     * @var array{event: PaperMarketEvent, payload: array<string, mixed>}|null
+     */
+    private ?array $lastEncoded = null;
+
     /** @return array<string, mixed> */
     public function encode(PaperMarketEvent $event): array
     {
         $payload = $event->toArray();
+        $this->lastEncoded = ['event' => $event, 'payload' => $payload];
 
         return [
             'effect_type' => 'market_event',
@@ -47,6 +56,10 @@ final class PaperMarketEffectCodec
                 || !hash_equals(hash('sha256', CanonicalJson::encode($encoded['payload'])), $encoded['payload_checksum'])
             ) {
                 throw new \InvalidArgumentException();
+            }
+
+            if ($this->lastEncoded !== null && $this->lastEncoded['payload'] === $encoded['payload']) {
+                return $this->lastEncoded['event'];
             }
 
             return PaperMarketEvent::fromArray($encoded['payload']);

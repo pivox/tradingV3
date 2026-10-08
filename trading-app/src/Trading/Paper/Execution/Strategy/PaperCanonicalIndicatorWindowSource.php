@@ -11,6 +11,7 @@ use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\Replay\PaperReplayOrder;
 use App\Trading\Paper\Replay\PaperReplayClock;
 
 final readonly class PaperCanonicalIndicatorWindowSource
@@ -60,7 +61,7 @@ final readonly class PaperCanonicalIndicatorWindowSource
         }
 
         $now = $this->clock->now();
-        if ($trigger->receivedTimestamp > $now) {
+        if (PaperReplayOrder::availableAt($trigger) > $now) {
             return null;
         }
         $latest = null;
@@ -74,7 +75,7 @@ final readonly class PaperCanonicalIndicatorWindowSource
             }
             $latest = $event;
             $eventTimeframe = $this->timeframe($event->channel);
-            if ($event->receivedTimestamp <= $now
+            if (PaperReplayOrder::availableAt($event) <= $now
                 && $eventTimeframe !== null
                 && in_array($eventTimeframe, $requestedNativeTimeframes, true)
             ) {
@@ -110,7 +111,10 @@ final readonly class PaperCanonicalIndicatorWindowSource
                 $required === 1000 ? 1003 : $required,
             );
             $candidates = array_values(array_filter(
-                $this->adapter->adaptCandleEvents($timeframeEvents),
+                array_map(
+                    self::availableAtClose(...),
+                    $this->adapter->adaptCandleEvents($timeframeEvents),
+                ),
                 static fn (NormalizedBacktestCandle $candle): bool => $candle->availableAt <= $availableThrough,
             ));
             if (count($candidates) < $required) {
@@ -136,6 +140,33 @@ final readonly class PaperCanonicalIndicatorWindowSource
         }
 
         return $triggerBound ? $windows : null;
+    }
+
+    /**
+     * A replayed candle is available at its close (#132 decision a), not at its reception:
+     * the projection never sees it later than the replay clock that consumed it.
+     */
+    private static function availableAtClose(NormalizedBacktestCandle $candle): NormalizedBacktestCandle
+    {
+        if ($candle->availableAt === $candle->closeAt) {
+            return $candle;
+        }
+
+        return new NormalizedBacktestCandle(
+            $candle->sourceRecordId,
+            $candle->sourceNetwork,
+            $candle->marketDataVenue,
+            $candle->symbol,
+            $candle->timeframe,
+            $candle->openAt,
+            $candle->closeAt,
+            $candle->closeAt,
+            $candle->open,
+            $candle->high,
+            $candle->low,
+            $candle->close,
+            $candle->volume,
+        );
     }
 
     /**

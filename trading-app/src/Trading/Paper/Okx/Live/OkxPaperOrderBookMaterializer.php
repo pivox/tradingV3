@@ -6,7 +6,6 @@ namespace App\Trading\Paper\Okx\Live;
 
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\Okx\Normalization\OkxMaterializedBookState;
-use Brick\Math\BigDecimal;
 use Brick\Math\BigInteger;
 
 final class OkxPaperOrderBookMaterializer
@@ -17,10 +16,20 @@ final class OkxPaperOrderBookMaterializer
     /** @var array<string, array{price: string, size: string, raw_field_3: string, order_count: string}> */
     private array $asks = [];
 
+    /** Keys of the best bid and ask in $bids and $asks, kept current across deltas. */
+    private ?string $bestBidPrice = null;
+    private ?string $bestAskPrice = null;
+
     private ?string $currentSequence = null;
     private ?string $lastDeltaPreviousSequence = null;
     private ?string $lastDeltaSequence = null;
-    private ?string $lastDeltaHash = null;
+    /**
+     * The last applied delta without its checksum: its canonical hash is computed
+     * only when OKX sends the same sequence again (see identityHash()).
+     *
+     * @var array<array-key, mixed>|null
+     */
+    private ?array $lastDeltaIdentity = null;
 
     /** @param array<array-key, mixed> $snapshot */
     public function replaceSnapshot(#[\SensitiveParameter] array $snapshot): OkxMaterializedBookState
@@ -44,10 +53,12 @@ final class OkxPaperOrderBookMaterializer
 
         $this->bids = $candidateBids;
         $this->asks = $candidateAsks;
+        $this->bestBidPrice = self::scannedBestPrice($candidateBids, highest: true);
+        $this->bestAskPrice = self::scannedBestPrice($candidateAsks, highest: false);
         $this->currentSequence = $sequence;
         $this->lastDeltaPreviousSequence = null;
         $this->lastDeltaSequence = null;
-        $this->lastDeltaHash = null;
+        $this->lastDeltaIdentity = null;
 
         return $state;
     }
@@ -66,11 +77,16 @@ final class OkxPaperOrderBookMaterializer
 
         $deltaIdentity = $delta;
         unset($deltaIdentity['checksum']);
-        $deltaHash = hash('sha256', CanonicalJson::encode($deltaIdentity));
+        if (!self::identityCannotFailToEncode($deltaIdentity, $bidUpdates, $askUpdates)) {
+            // Rejected by CanonicalJson as before: only unusual rows are encoded here.
+            self::identityHash($deltaIdentity);
+        }
         if ($previousSequence === $this->lastDeltaPreviousSequence
             && $sequence === $this->lastDeltaSequence
         ) {
-            if ($this->lastDeltaHash !== null && hash_equals($this->lastDeltaHash, $deltaHash)) {
+            if ($this->lastDeltaIdentity !== null
+                && hash_equals(self::identityHash($this->lastDeltaIdentity), self::identityHash($deltaIdentity))
+            ) {
                 return OkxPaperBookDeltaResult::replayed();
             }
 
@@ -89,21 +105,40 @@ final class OkxPaperOrderBookMaterializer
         }
         $candidateBids = self::applyLevelUpdates($this->bids, $bidUpdates);
         $candidateAsks = self::applyLevelUpdates($this->asks, $askUpdates);
-        $completeState = self::completeState(
+        // The complete book is neither re-sorted nor re-validated: every level entering it
+        // (the final value of each updated price) passes the complete-book rules here, and
+        // the best levels follow the updates.
+        foreach ([[$candidateBids, $bidUpdates], [$candidateAsks, $askUpdates]] as [$candidate, $updates]) {
+            foreach ($updates as $level) {
+                $entered = $candidate[$level['price']] ?? null;
+                if ($entered !== null && !OkxMaterializedBookState::acceptsLevel($entered)) {
+                    throw self::invalidBook();
+                }
+            }
+        }
+        $bestBidPrice = self::bestPriceAfter($this->bestBidPrice, $candidateBids, $bidUpdates, highest: true);
+        $bestAskPrice = self::bestPriceAfter($this->bestAskPrice, $candidateAsks, $askUpdates, highest: false);
+        if ($bestBidPrice === null || $bestAskPrice === null) {
+            throw self::invalidBook();
+        }
+        $state = OkxMaterializedBookState::fromIncrementalDelta(
             $candidateBids,
             $candidateAsks,
+            $candidateBids[$bestBidPrice],
+            $candidateAsks[$bestAskPrice],
             $delta['ts'] ?? null,
-            $previousSequence,
             $sequence,
+            $previousSequence,
         );
-        $state = OkxMaterializedBookState::fromAppliedDelta($completeState);
 
         $this->bids = $candidateBids;
         $this->asks = $candidateAsks;
+        $this->bestBidPrice = $bestBidPrice;
+        $this->bestAskPrice = $bestAskPrice;
         $this->currentSequence = $sequence;
         $this->lastDeltaPreviousSequence = $previousSequence;
         $this->lastDeltaSequence = $sequence;
-        $this->lastDeltaHash = $deltaHash;
+        $this->lastDeltaIdentity = $deltaIdentity;
 
         return OkxPaperBookDeltaResult::applied($state);
     }
@@ -164,16 +199,9 @@ final class OkxPaperOrderBookMaterializer
         $size = self::decimal($rawLevel[1] ?? null);
         $rawField3 = self::unsignedInteger($rawLevel[2] ?? null);
         $orderCount = self::unsignedInteger($rawLevel[3] ?? null);
-        if (!BigDecimal::of($price)->isGreaterThan(BigDecimal::zero())) {
-            throw self::invalidBook();
-        }
-
-        $decimalSize = BigDecimal::of($size);
-        if ($allowZeroSize) {
-            if ($decimalSize->isLessThan(BigDecimal::zero())) {
-                throw self::invalidBook();
-            }
-        } elseif (!$decimalSize->isGreaterThan(BigDecimal::zero())) {
+        // decimal() accepts canonical unsigned decimals only: never negative, and
+        // positive iff a digit is not zero (no BigDecimal parse per level).
+        if (!self::isPositive($price) || (!$allowZeroSize && !self::isPositive($size))) {
             throw self::invalidBook();
         }
 
@@ -195,7 +223,7 @@ final class OkxPaperOrderBookMaterializer
     {
         $candidate = $current;
         foreach ($updates as $level) {
-            if (BigDecimal::of($level['size'])->isZero()) {
+            if (!self::isPositive($level['size'])) {
                 unset($candidate[$level['price']]);
             } else {
                 $candidate[$level['price']] = $level;
@@ -203,6 +231,59 @@ final class OkxPaperOrderBookMaterializer
         }
 
         return $candidate;
+    }
+
+    /**
+     * The best price of a side after a delta, as a full sort would find it: the numeric
+     * best, and between numerically equal prices of different scales the earliest in book
+     * insertion order. A deletion of the previous best (even re-inserted, which moves it to
+     * the end of that order) rescans the side; otherwise only the updated levels can win.
+     *
+     * @param array<string, array{price: string, size: string, raw_field_3: string, order_count: string}> $candidate
+     * @param list<array{price: string, size: string, raw_field_3: string, order_count: string}>          $updates
+     */
+    private static function bestPriceAfter(?string $previousBest, array $candidate, array $updates, bool $highest): ?string
+    {
+        if ($previousBest === null || !isset($candidate[$previousBest])) {
+            return self::scannedBestPrice($candidate, $highest);
+        }
+        foreach ($updates as $level) {
+            if ($level['price'] === $previousBest && !self::isPositive($level['size'])) {
+                return self::scannedBestPrice($candidate, $highest);
+            }
+        }
+        $best = $previousBest;
+        foreach ($updates as $level) {
+            if (!isset($candidate[$level['price']]) || $level['price'] === $best) {
+                continue;
+            }
+            $comparison = OkxMaterializedBookState::comparePrices($level['price'], $best);
+            if ($highest ? $comparison > 0 : $comparison < 0) {
+                $best = $level['price'];
+            }
+        }
+
+        return $best;
+    }
+
+    /** @param array<string, array{price: string, size: string, raw_field_3: string, order_count: string}> $levels */
+    private static function scannedBestPrice(array $levels, bool $highest): ?string
+    {
+        $best = null;
+        foreach ($levels as $price => $level) {
+            $price = (string) $price;
+            if ($best === null) {
+                $best = $price;
+
+                continue;
+            }
+            $comparison = OkxMaterializedBookState::comparePrices($price, $best);
+            if ($highest ? $comparison > 0 : $comparison < 0) {
+                $best = $price;
+            }
+        }
+
+        return $best;
     }
 
     /**
@@ -244,24 +325,92 @@ final class OkxPaperOrderBookMaterializer
      */
     private static function sortedRows(array $levels, bool $descending): array
     {
-        uasort(
-            $levels,
-            static function (array $left, array $right) use ($descending): int {
-                $comparison = BigDecimal::of($left['price'])->compareTo(BigDecimal::of($right['price']));
+        // Prices were validated as canonical unsigned decimals by decimal(). Padding
+        // integer parts left and fractions right to common widths yields keys whose
+        // byte order is exactly the numeric order, so the native stable sort replaces
+        // thousands of BigDecimal parses per full-book delta.
+        $integerWidth = 0;
+        $fractionWidth = 0;
+        $parts = [];
+        foreach ($levels as $key => $level) {
+            $dot = strpos($level['price'], '.');
+            $integer = $dot === false ? $level['price'] : substr($level['price'], 0, $dot);
+            $fraction = $dot === false ? '' : substr($level['price'], $dot + 1);
+            $parts[$key] = [$integer, $fraction];
+            $integerWidth = max($integerWidth, \strlen($integer));
+            $fractionWidth = max($fractionWidth, \strlen($fraction));
+        }
+        $sortKeys = [];
+        foreach ($parts as $key => [$integer, $fraction]) {
+            $sortKeys[$key] = str_pad($integer, $integerWidth, '0', \STR_PAD_LEFT)
+                . str_pad($fraction, $fractionWidth, '0', \STR_PAD_RIGHT);
+        }
+        if ($descending) {
+            arsort($sortKeys, \SORT_STRING);
+        } else {
+            asort($sortKeys, \SORT_STRING);
+        }
 
-                return $descending ? -$comparison : $comparison;
-            },
-        );
-
-        return array_values(array_map(
-            static fn (array $level): array => [
+        $rows = [];
+        foreach ($sortKeys as $key => $_sortKey) {
+            $level = $levels[$key];
+            $rows[] = [
                 $level['price'],
                 $level['size'],
                 $level['raw_field_3'],
                 $level['order_count'],
-            ],
-            $levels,
-        ));
+            ];
+        }
+
+        return $rows;
+    }
+
+    /** A canonical unsigned decimal (decimal()) is positive iff it has a non-zero digit. */
+    private static function isPositive(string $value): bool
+    {
+        return strspn($value, '0.') !== \strlen($value);
+    }
+
+    /** @param array<array-key, mixed> $identity */
+    private static function identityHash(#[\SensitiveParameter] array $identity): string
+    {
+        return hash('sha256', CanonicalJson::encode($identity));
+    }
+
+    /**
+     * Whether CanonicalJson::encode() of this delta identity cannot fail (so it may
+     * be hashed only if ever needed): the books keys only, levels validated by
+     * deltaLevels(), and nodes and bytes far below CanonicalJson's budgets.
+     *
+     * @param array<array-key, mixed>                                                   $identity
+     * @param list<array{price: string, size: string, raw_field_3: string, order_count: string}> $bids
+     * @param list<array{price: string, size: string, raw_field_3: string, order_count: string}> $asks
+     */
+    private static function identityCannotFailToEncode(
+        #[\SensitiveParameter] array $identity,
+        array $bids,
+        array $asks,
+    ): bool {
+        if (\count($bids) + \count($asks) > 3_000
+            || array_diff_key($identity, ['asks' => true, 'bids' => true, 'ts' => true, 'seqId' => true, 'prevSeqId' => true]) !== []
+        ) {
+            return false;
+        }
+        foreach (['ts', 'seqId', 'prevSeqId'] as $key) {
+            $value = $identity[$key] ?? null;
+            if ($value !== null && !\is_int($value) && !(\is_string($value) && \strlen($value) <= 64)) {
+                return false;
+            }
+        }
+        foreach ([...$bids, ...$asks] as $level) {
+            if (\strlen($level['price']) + \strlen($level['size'])
+                + \strlen($level['raw_field_3']) + \strlen($level['order_count']) > 160
+            ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static function decimal(#[\SensitiveParameter] mixed $value): string

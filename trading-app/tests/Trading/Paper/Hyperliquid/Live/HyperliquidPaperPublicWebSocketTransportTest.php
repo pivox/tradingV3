@@ -99,7 +99,7 @@ final class HyperliquidPaperPublicWebSocketTransportTest extends TestCase
 
         $connection->emit(
             'message',
-            str_repeat('wallet=secret', HyperliquidPaperLivePolicy::MAX_FRAME_BYTES),
+            str_repeat('wallet=secret', intdiv(HyperliquidPaperLivePolicy::MAX_FRAME_BYTES, 13) + 1),
         );
 
         self::assertSame([], $messages);
@@ -111,6 +111,38 @@ final class HyperliquidPaperPublicWebSocketTransportTest extends TestCase
             $errors[0]->getMessage(),
         );
         self::assertStringNotContainsString('secret', $errors[0]->getMessage());
+    }
+
+    public function testCloseForwardsTheWebSocketCodeAndReason(): void
+    {
+        $closes = [];
+        foreach ([
+            [[1001, 'going away'], [1001, 'going away']],
+            [[1006, 'Underlying connection closed'], [1006, 'Underlying connection closed']],
+            [[], [null, null]],
+            [['1000', 42], [null, null]],
+        ] as [$emitted, $expected]) {
+            $connection = new HyperliquidFakePawlConnection();
+            $transport = new PawlHyperliquidPaperPublicWebSocketTransport(
+                loop: new StreamSelectLoop(),
+                config: self::config(PaperMarketDataNetwork::MAINNET),
+                connector: static fn (string $uri): PromiseInterface => resolve($connection),
+            );
+            $transport->connect(
+                static function (): void {},
+                static function (string $frame): void {},
+                static function (?int $code, ?string $reason) use (&$closes): void {
+                    $closes[] = [$code, $reason];
+                },
+                static function (\Throwable $error): void {},
+            );
+
+            $connection->emit('close', ...$emitted);
+            $connection->emit('close', 1000, 'ignored after the connection is gone');
+
+            self::assertSame($expected, array_pop($closes));
+            self::assertSame([], $closes);
+        }
     }
 
     public function testSocketErrorInvalidatesConnectionBeforeReportingIt(): void

@@ -431,6 +431,97 @@ final class OkxPaperOrderBookMaterializerTest extends TestCase
         }];
     }
 
+    public function testMixedWidthAndScalePricesKeepExactNumericBookOrder(): void
+    {
+        $materializer = new OkxPaperOrderBookMaterializer();
+        $materializer->replaceSnapshot([
+            'asks' => [
+                ['100.5', '1', '0', '1'],
+                ['11', '1', '0', '1'],
+                ['100.05', '1', '0', '1'],
+                ['10.9', '1', '0', '1'],
+                ['99.999', '1', '0', '1'],
+                ['1000', '1', '0', '1'],
+            ],
+            'bids' => [
+                ['9.5', '1', '0', '1'],
+                ['10.1', '1', '0', '1'],
+                ['0.95', '1', '0', '1'],
+                ['10.10', '2', '0', '1'],
+                ['9.49999', '1', '0', '1'],
+            ],
+            'ts' => '1784595704123',
+            'seqId' => 10,
+        ]);
+        $state = $materializer->applyDelta([
+            'asks' => [['10.90', '3', '0', '2'], ['100.5', '0', '0', '0']],
+            'bids' => [['10.2', '4', '0', '3'], ['0.95', '0', '0', '0']],
+            'ts' => '1784595705123',
+            'prevSeqId' => 10,
+            'seqId' => 11,
+        ])->materializedState();
+
+        self::assertSame(
+            ['10.2', '10.1', '10.10', '9.5', '9.49999'],
+            array_column($this->materializedLevels($state, 'bids'), 'price'),
+        );
+        self::assertSame(
+            ['10.9', '10.90', '11', '99.999', '100.05', '1000'],
+            array_column($this->materializedLevels($state, 'asks'), 'price'),
+        );
+        self::assertSame(['price' => '10.2', 'size' => '4', 'order_count' => '3'], $state->bestBid());
+        self::assertSame(['price' => '10.9', 'size' => '1', 'order_count' => '1'], $state->bestAsk());
+    }
+
+    public function testNumericallyEqualCrossedPricesWithDifferentScaleFailClosed(): void
+    {
+        $materializer = new OkxPaperOrderBookMaterializer();
+        $materializer->replaceSnapshot([
+            'asks' => [['3526', '1.000', '0', '1']],
+            'bids' => [['3525.1', '1.000', '0', '1']],
+            'ts' => '1784595704123',
+            'seqId' => 323456,
+        ]);
+
+        try {
+            $materializer->applyDelta([
+                'asks' => [['3525.25', '1.000', '0', '1']],
+                'bids' => [['3525.2500', '1.000', '0', '1']],
+                'ts' => '1784595705123',
+                'prevSeqId' => 323456,
+                'seqId' => 323457,
+            ]);
+            self::fail('A crossed book must fail closed.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('okx_paper_materialized_order_book_invalid', $exception->getMessage());
+        }
+        self::assertSame('323456', $materializer->sourceSequence());
+    }
+
+    public function testZeroDecimalLevelsAreRejectedWhateverTheirScale(): void
+    {
+        foreach ([['0.000', '1.0', '0', '1'], ['3525.1', '0.000', '0', '1'], ['3525.1', '1.0', '0', '0']] as $level) {
+            try {
+                OkxMaterializedBookState::fromSnapshot([
+                    'asks' => [['3526', '1', '0', '1']],
+                    'bids' => [$level],
+                    'ts' => '1784595704123',
+                    'seqId' => '1',
+                ]);
+                self::fail('A non-positive level must be rejected.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('okx_paper_materialized_order_book_invalid', $exception->getMessage());
+            }
+        }
+    }
+
+    /** @return list<array{price: string, size: string, order_count: string}> */
+    private function materializedLevels(OkxMaterializedBookState $state, string $side): array
+    {
+        // The complete side, sorted on demand (the materializer keeps it incremental).
+        return $side === 'bids' ? $state->bids() : $state->asks();
+    }
+
     /**
      * @param \ReflectionClass<object> $class
      *

@@ -239,6 +239,35 @@ services:
             $canonicalDispatcher: '@App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher'
             $canonicalOrderIntents: '@App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorderInterface'
 
+    # #132 j: Paper trade lifecycle. Paper-only instances of live services, used by
+    # App\Trading\Paper\Execution\Lifecycle\PaperTradeLifecycleEmitter; no live definition changes.
+    # The Paper listener instance is NOT an event listener (autoconfigure: false): the Paper
+    # lifecycle calls it directly, with the replay clock and klines from the replayed dataset only.
+    paper.execution.lifecycle_logger:
+        class: App\Logging\TradeLifecycleLogger
+        autoconfigure: false
+        arguments:
+            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
+
+    paper.execution.lifecycle_listener:
+        class: App\Trading\Listener\TradeLifecycleLoggerListener
+        autoconfigure: false
+        arguments:
+            $tradeLifecycleLogger: '@paper.execution.lifecycle_logger'
+            $mainProvider: '@App\Trading\Paper\Execution\Lifecycle\PaperLifecycleMainProvider'
+
+    paper.execution.fill_cost_ledger:
+        class: App\Trading\Pnl\FillCostLedgerIngestionService
+        autoconfigure: false
+        arguments:
+            $evidenceRefresher: '@paper.execution.lifecycle_listener'
+
+    paper.execution.exchange_projection:
+        class: App\Exchange\Event\DoctrineExchangeLocalProjectionStore
+        autoconfigure: false
+        arguments:
+            $fillCostLedger: '@paper.execution.fill_cost_ledger'
+
     App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReaderInterface:
         alias: App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReader
 

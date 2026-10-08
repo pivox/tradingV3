@@ -15,12 +15,23 @@ use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\DBAL\ParameterType;
 
-final class DoctrinePaperExecutionStore implements PaperExecutionStoreInterface
+final class DoctrinePaperExecutionStore implements PaperExecutionStoreInterface, PaperReplayBatchingStoreInterface
 {
     private const EMPTY_JOURNAL_CHECKSUM = '0000000000000000000000000000000000000000000000000000000000000000';
 
     /** @var array<string, string> */
     private array $verifiedCheckpointFingerprints = [];
+
+    /** @var array<string, array{journal_ordinal: int, sha256: string, bytes: int, next_source_position: int, fake_event_cursor: int}|null> */
+    private array $verifiedSnapshots = [];
+
+    /** @var array<string, array{position: int, event_id: string, exchange_timestamp: string}|null> */
+    private array $verifiedLastSources = [];
+
+    /** @var array<string, bool> */
+    private array $verifiedBatchedJournals = [];
+
+    private ?PaperReplayBatchJournal $batch = null;
 
     public function __construct(private readonly Connection $connection)
     {
@@ -28,6 +39,7 @@ final class DoctrinePaperExecutionStore implements PaperExecutionStoreInterface
 
     public function registerSnapshot(PaperConfigurationSnapshot $snapshot): void
     {
+        $this->assertNoReplayBatch();
         $this->atomic(function () use ($snapshot): void {
             $existing = $this->connection->fetchAssociative('SELECT schema_version, canonical_json::text AS canonical_json, content_checksum FROM paper_configuration_snapshot WHERE id = ?', [$snapshot->id]);
             if ($existing !== false) {
@@ -55,6 +67,7 @@ final class DoctrinePaperExecutionStore implements PaperExecutionStoreInterface
 
     public function registerCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): void
     {
+        $this->assertNoReplayBatch();
         if (!$cell->isModern()
             && (new PaperProfileRegistry())->require($cell->strategyProfile) !== $eligibility
         ) {
@@ -111,6 +124,7 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
         ?string $sourceBuildVersion = null,
     ): void
     {
+        $this->assertNoReplayBatch();
         if (preg_match('/\A[a-z0-9][a-z0-9._-]{2,127}\z/D', $datasetId) !== 1
             || preg_match('/\A[a-f0-9]{64}\z/D', $eventsFileSha256) !== 1
             || ($sourceBuildVersion !== null
@@ -159,6 +173,7 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
 
     public function inspectCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): PaperExecutionCellState
     {
+        $this->assertNoReplayBatch();
         $storedCell = $this->connection->fetchAssociative('SELECT * FROM paper_execution_cell WHERE id = ?', [$cell->id]);
         if ($storedCell === false) {
             return PaperExecutionCellState::absent();
@@ -192,6 +207,9 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
 
     public function datasetIdentity(PaperExecutionCell $cell): array
     {
+        if ($this->batch?->owns($cell) === true) {
+            return $this->batch->datasetIdentity;
+        }
         $identity = $this->connection->fetchAssociative('SELECT dataset_id, dataset_events_sha256, dataset_source_build_version FROM paper_execution_cell WHERE id = ?', [$cell->id]);
         if ($identity === false || !is_string($identity['dataset_id']) || !is_string($identity['dataset_events_sha256'])) {
             throw new \LogicException('paper_execution_dataset_identity_missing');
@@ -217,6 +235,11 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
 
     public function transactional(callable $operation): mixed
     {
+        if ($this->batch !== null) {
+            // The whole batch is one database transaction, committed by flushReplayBatch().
+            return $operation();
+        }
+
         return $this->connection->transactional(static fn (): mixed => $operation());
     }
 
@@ -224,6 +247,9 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
     {
         if ($position < 0) {
             throw new \InvalidArgumentException('paper_execution_source_position_invalid');
+        }
+        if ($this->batch !== null) {
+            return $this->sessionFor($cell)->claimSource($position, $event);
         }
 
         return $this->atomic(function () use ($cell, $position, $event): PaperSourceClaim {
@@ -272,6 +298,11 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
     public function appendEffect(PaperExecutionCell $cell, int $position, string $effectKey, array $payload): void
     {
         $this->assertEffectKey($effectKey);
+        if ($this->batch !== null) {
+            $this->sessionFor($cell)->appendEffect($position, $effectKey, $payload);
+
+            return;
+        }
         $this->atomic(function () use ($cell, $position, $effectKey, $payload): void {
             $checkpoint = $this->lockCheckpoint($cell);
             $this->verifyCheckpoint($checkpoint);
@@ -306,6 +337,11 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
     ): void {
         if ($position < 0 || !hash_equals($cell->id, $observation->cellId)) {
             throw new \InvalidArgumentException('paper_strategy_observation_identity_invalid');
+        }
+        if ($this->batch !== null) {
+            $this->sessionFor($cell)->appendStrategyObservation($position, $observation);
+
+            return;
         }
 
         $this->atomic(function () use ($cell, $position, $observation): void {
@@ -354,6 +390,9 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
 
     public function pendingEffects(PaperExecutionCell $cell): array
     {
+        if ($this->batch !== null) {
+            return $this->sessionFor($cell)->pendingEffects();
+        }
         $rows = $this->connection->fetchAllAssociative(<<<'SQL'
 SELECT requested.source_position, requested.effect_key, requested.payload::text AS payload, requested.journal_ordinal
 FROM paper_execution_event requested
@@ -380,6 +419,9 @@ SQL, [$cell->id]);
     {
         if ($sourcePosition < 0) {
             throw new \InvalidArgumentException('paper_execution_source_position_invalid');
+        }
+        if ($this->batch !== null) {
+            return $this->sessionFor($cell)->pendingEffects($sourcePosition);
         }
         $rows = $this->connection->fetchAllAssociative(<<<'SQL'
 SELECT requested.source_position, requested.effect_key, requested.payload::text AS payload, requested.journal_ordinal
@@ -409,6 +451,11 @@ SQL, [$cell->id, $sourcePosition]);
         $this->assertEffectKey($effectKey);
         if ($fakeEventCursor < 0) {
             throw new \InvalidArgumentException('paper_execution_fake_event_cursor_invalid');
+        }
+        if ($this->batch !== null) {
+            $this->sessionFor($cell)->acknowledge($position, $effectKey, $payload, $fakeEventCursor);
+
+            return;
         }
 
         $this->atomic(function () use ($cell, $position, $effectKey, $payload, $fakeEventCursor): void {
@@ -455,6 +502,11 @@ SQL, [$cell->id, $sourcePosition]);
     private function recordEffectOutcome(PaperExecutionCell $cell, int $position, string $effectKey, string $eventType, array $payload): void
     {
         $this->assertEffectKey($effectKey);
+        if ($this->batch !== null) {
+            $this->sessionFor($cell)->recordEffectOutcome($position, $effectKey, $eventType, $payload);
+
+            return;
+        }
         $this->atomic(function () use ($cell, $position, $effectKey, $eventType, $payload): void {
             $checkpoint = $this->lockCheckpoint($cell);
             $this->verifyCheckpoint($checkpoint);
@@ -469,6 +521,9 @@ SQL, [$cell->id, $sourcePosition]);
 
     public function checkpoint(PaperExecutionCell $cell): PaperExecutionCheckpoint
     {
+        if ($this->batch !== null) {
+            return $this->sessionFor($cell)->checkpoint();
+        }
         $row = $this->connection->fetchAssociative('SELECT * FROM paper_execution_checkpoint WHERE cell_id = ?', [$cell->id]);
         if ($row === false) {
             throw new \LogicException('paper_execution_cell_unknown');
@@ -480,6 +535,22 @@ SQL, [$cell->id, $sourcePosition]);
 
     public function acknowledgedSources(PaperExecutionCell $cell): iterable
     {
+        if ($this->batch !== null) {
+            $session = $this->sessionFor($cell);
+            if ($session->pendingEffects() !== []) {
+                throw new \LogicException('paper_execution_effect_pending');
+            }
+
+            // The batched journal keeps source identities, not payloads: the consumed prefix
+            // is re-read from the verified dataset in the same replay order. This method is a
+            // generator: the prefix must be yielded (a `return` would only set its return value).
+            yield from ($session->replayedPrefix)();
+
+            return;
+        }
+        if ($this->journalIsBatched($cell)) {
+            throw new \LogicException('paper_execution_batched_journal_requires_replay_session');
+        }
         $rows = $this->connection->iterateColumn(<<<'SQL'
 WITH unresolved_positions AS MATERIALIZED (
     SELECT requested.source_position
@@ -522,11 +593,13 @@ SQL, [$cell->id, $cell->id]);
 
     public function kill(PaperExecutionCell $cell): void
     {
+        $this->assertNoReplayBatch();
         $this->changeKillState($cell, true, 'cell_killed');
     }
 
     public function resume(PaperExecutionCell $cell): void
     {
+        $this->assertNoReplayBatch();
         $this->changeKillState($cell, false, 'cell_resumed');
     }
 
@@ -614,6 +687,9 @@ SQL, [$checkpoint['cell_id'], $ordinal, $eventType, $sourcePosition, $sourceEven
         $expectedNextSourcePosition = 0;
         $expectedFakeEventCursor = 0;
         $expectedKilled = false;
+        $snapshot = null;
+        $lastSource = null;
+        $batched = false;
         $rows = $this->connection->iterateAssociative('SELECT cell_id, journal_ordinal, event_type, source_position, source_event_id, effect_key, payload::text AS payload, payload_checksum FROM paper_execution_event WHERE cell_id = ? ORDER BY journal_ordinal', [$checkpoint['cell_id']]);
         foreach ($rows as $row) {
             ++$expectedOrdinal;
@@ -643,6 +719,52 @@ SQL, [$checkpoint['cell_id'], $ordinal, $eventType, $sourcePosition, $sourceEven
                     throw new \LogicException('paper_execution_checkpoint_corrupt');
                 }
                 ++$expectedNextSourcePosition;
+                $lastSource = [
+                    'position' => $sourcePosition,
+                    'event_id' => (string) $row['source_event_id'],
+                    'exchange_timestamp' => \is_string($payload['exchange_timestamp'] ?? null) ? $payload['exchange_timestamp'] : '',
+                ];
+            } elseif ($eventType === PaperReplayBatchJournal::BATCH_EVENT_TYPE) {
+                $from = $payload['from_position'] ?? null;
+                $to = $payload['to_position'] ?? null;
+                if (($payload['schema_version'] ?? null) !== PaperReplayBatchJournal::BATCH_SCHEMA
+                    || $from !== $expectedNextSourcePosition
+                    || !\is_int($to)
+                    || $to <= $from
+                    || ($payload['event_count'] ?? null) !== $to - $from
+                    || ($row['source_position'] === null ? null : (int) $row['source_position']) !== $from
+                    || ($payload['fake_event_cursor'] ?? null) !== $expectedFakeEventCursor
+                    || !\is_string($payload['last_source_event_id'] ?? null)
+                    || $row['source_event_id'] !== $payload['last_source_event_id']
+                    || !\is_string($payload['last_source_exchange_timestamp'] ?? null)
+                ) {
+                    throw new \LogicException('paper_execution_checkpoint_corrupt');
+                }
+                $expectedNextSourcePosition = $to;
+                $lastSource = [
+                    'position' => $to - 1,
+                    'event_id' => $payload['last_source_event_id'],
+                    'exchange_timestamp' => $payload['last_source_exchange_timestamp'],
+                ];
+                $batched = true;
+            } elseif ($eventType === PaperReplayBatchJournal::SNAPSHOT_EVENT_TYPE) {
+                if (($payload['schema_version'] ?? null) !== PaperReplayBatchJournal::SNAPSHOT_SCHEMA
+                    || ($payload['next_source_position'] ?? null) !== $expectedNextSourcePosition
+                    || ($payload['fake_event_cursor'] ?? null) !== $expectedFakeEventCursor
+                    || !\is_string($payload['sha256'] ?? null)
+                    || preg_match('/\A[a-f0-9]{64}\z/D', $payload['sha256']) !== 1
+                    || !\is_int($payload['bytes'] ?? null)
+                ) {
+                    throw new \LogicException('paper_execution_checkpoint_corrupt');
+                }
+                $snapshot = [
+                    'journal_ordinal' => $expectedOrdinal,
+                    'sha256' => $payload['sha256'],
+                    'bytes' => $payload['bytes'],
+                    'next_source_position' => $expectedNextSourcePosition,
+                    'fake_event_cursor' => $expectedFakeEventCursor,
+                ];
+                $batched = true;
             } elseif ($eventType === 'effect_acknowledged') {
                 $cursor = $payload['fake_event_cursor'] ?? null;
                 if (!is_int($cursor) || $cursor < $expectedFakeEventCursor) {
@@ -673,6 +795,9 @@ SQL, [$checkpoint['cell_id'], $ordinal, $eventType, $sourcePosition, $sourceEven
         }
 
         $this->verifiedCheckpointFingerprints[$cellId] = $fingerprint;
+        $this->verifiedSnapshots[$cellId] = $snapshot;
+        $this->verifiedLastSources[$cellId] = $lastSource;
+        $this->verifiedBatchedJournals[$cellId] = $batched;
     }
 
     private function rememberCheckpoint(string $cellId): void
@@ -823,5 +948,184 @@ SQL, [$cellId, $sourcePosition]);
         }
 
         return $this->transactional($operation);
+    }
+
+    public function beginReplayBatch(PaperExecutionCell $cell, \Closure $replayedPrefix): array
+    {
+        $this->assertNoReplayBatch();
+        if ($this->connection->getTransactionNestingLevel() !== 0) {
+            throw new \LogicException('paper_execution_replay_batch_nested');
+        }
+        $dataset = $this->datasetIdentity($cell);
+        $this->connection->beginTransaction();
+        try {
+            $row = $this->lockCheckpoint($cell);
+            $this->verifyCheckpoint($row);
+            $checkpoint = $this->checkpointFromRow($row);
+            $snapshot = $this->verifiedSnapshots[$cell->id] ?? null;
+            if ($checkpoint->nextSourcePosition > 0) {
+                // Only a journal whose last row is the durable snapshot of the committed
+                // position can be resumed in a batch session (legacy journals fail closed).
+                if ($snapshot === null
+                    || $snapshot['journal_ordinal'] !== $checkpoint->journalOrdinal
+                    || $snapshot['next_source_position'] !== $checkpoint->nextSourcePosition
+                ) {
+                    throw new \LogicException('paper_execution_batched_resume_requires_snapshot');
+                }
+            } elseif ($snapshot !== null || $checkpoint->journalOrdinal !== 0) {
+                throw new \LogicException('paper_execution_batched_resume_requires_snapshot');
+            }
+            $this->batch = new PaperReplayBatchJournal(
+                $this->connection,
+                $cell,
+                $this->nextJournalChecksum(...),
+                $replayedPrefix,
+                $dataset,
+                $checkpoint->nextSourcePosition,
+                $checkpoint->journalOrdinal,
+                $checkpoint->journalChecksum,
+                $checkpoint->fakeEventCursor,
+                $checkpoint->killed,
+            );
+        } catch (\Throwable $failure) {
+            $this->connection->rollBack();
+
+            throw $failure;
+        }
+
+        return [
+            'next_source_position' => $checkpoint->nextSourcePosition,
+            'snapshot' => $snapshot === null ? null : [
+                'journal_ordinal' => $snapshot['journal_ordinal'],
+                'sha256' => $snapshot['sha256'],
+                'bytes' => $snapshot['bytes'],
+            ],
+        ];
+    }
+
+    public function replayBatchActive(): bool
+    {
+        return $this->batch !== null;
+    }
+
+    public function recordMarketEffectMateriality(
+        PaperExecutionCell $cell,
+        int $sourcePosition,
+        string $effectKey,
+        bool $material,
+    ): void {
+        $this->sessionFor($cell)->recordMarketEffectMateriality($sourcePosition, $effectKey, $material);
+    }
+
+    public function pendingReplayBatchSize(): int
+    {
+        return $this->batch?->size() ?? 0;
+    }
+
+    public function flushReplayBatch(\Closure $writeSnapshot): array
+    {
+        $batch = $this->batch ?? throw new \LogicException('paper_execution_replay_batch_inactive');
+        try {
+            $committed = $batch->commit($writeSnapshot);
+        } catch (\Throwable $failure) {
+            $this->abortReplayBatch();
+
+            throw $failure;
+        }
+        $cellId = $batch->cell->id;
+        $this->verifiedSnapshots[$cellId] = [
+            'journal_ordinal' => $committed['journal_ordinal'],
+            'sha256' => $committed['snapshot_sha256'],
+            'bytes' => $committed['snapshot_bytes'],
+            'next_source_position' => $committed['next_source_position'],
+            'fake_event_cursor' => $committed['fake_event_cursor'],
+        ];
+        $this->verifiedBatchedJournals[$cellId] = true;
+        $lastClaim = $batch->lastClaim();
+        if ($lastClaim !== null) {
+            $this->verifiedLastSources[$cellId] = $lastClaim;
+        }
+        $this->connection->beginTransaction();
+        try {
+            $row = $this->lockCheckpoint($batch->cell);
+            if ((int) $row['journal_ordinal'] !== $committed['journal_ordinal']
+                || (string) $row['journal_checksum'] !== $committed['journal_checksum']
+            ) {
+                throw new \LogicException('paper_execution_checkpoint_conflict');
+            }
+            $this->verifiedCheckpointFingerprints[$cellId] = $this->checkpointFingerprint($row);
+        } catch (\Throwable $failure) {
+            $this->abortReplayBatch();
+
+            throw $failure;
+        }
+
+        return $committed;
+    }
+
+    public function endReplayBatch(): void
+    {
+        $batch = $this->batch ?? throw new \LogicException('paper_execution_replay_batch_inactive');
+        if ($batch->size() !== 0 || $batch->pendingEffects() !== []) {
+            $this->abortReplayBatch();
+
+            throw new \LogicException('paper_execution_replay_batch_uncommitted');
+        }
+        $this->batch = null;
+        $this->connection->rollBack();
+    }
+
+    public function abortReplayBatch(): void
+    {
+        if ($this->batch === null) {
+            return;
+        }
+        $cellId = $this->batch->cell->id;
+        $this->batch = null;
+        unset($this->verifiedCheckpointFingerprints[$cellId], $this->verifiedSnapshots[$cellId]);
+        while ($this->connection->getTransactionNestingLevel() > 0) {
+            $this->connection->rollBack();
+        }
+    }
+
+    public function lastSourceIdentity(PaperExecutionCell $cell): ?array
+    {
+        $this->checkpoint($cell);
+
+        return $this->verifiedLastSources[$cell->id] ?? null;
+    }
+
+    private function sessionFor(PaperExecutionCell $cell): PaperReplayBatchJournal
+    {
+        $batch = $this->batch ?? throw new \LogicException('paper_execution_replay_batch_inactive');
+        if (!$batch->owns($cell)) {
+            throw new \LogicException('paper_execution_replay_batch_cell_mismatch');
+        }
+
+        return $batch;
+    }
+
+    private function assertNoReplayBatch(): void
+    {
+        if ($this->batch !== null) {
+            throw new \LogicException('paper_execution_replay_batch_active');
+        }
+    }
+
+    /**
+     * Whether the journal holds light batch rows (their sources are not stored as payloads).
+     * A direct probe, so that reading acknowledged sources keeps its former single query.
+     */
+    private function journalIsBatched(PaperExecutionCell $cell): bool
+    {
+        if (($this->verifiedBatchedJournals[$cell->id] ?? false) === true) {
+            return true;
+        }
+        $found = $this->connection->fetchOne(
+            "SELECT 1 FROM paper_execution_event WHERE cell_id = ? AND event_type IN ('replay_batch', 'fake_state_snapshot') LIMIT 1",
+            [$cell->id],
+        );
+
+        return $found !== false && $found !== null;
     }
 }

@@ -21,6 +21,9 @@ final class PaperCanonicalStrategyEvidenceProvider implements PaperCanonicalStra
         'micro_scalping' => ['1m', '5m'],
     ];
 
+    /** RFC 4122 name space of Paper canonical decision ids: uuid5(NAMESPACE_URL, 'urn:tradingv3:paper:canonical-decision'). */
+    private const DECISION_ID_NAMESPACE = 'ca0e15d6-b3d4-59e5-9ab2-e87035e41756';
+
     /** @var array<string, \App\TradingCore\Config\EffectiveTradingConfigSnapshot> */
     private array $snapshots = [];
 
@@ -100,6 +103,10 @@ final class PaperCanonicalStrategyEvidenceProvider implements PaperCanonicalStra
             'orchestration_run_id' => $cell->runId,
             'correlation_run_id' => $cell->runId,
             'orchestration_set_id' => 'paper-set:' . substr($digest, 0, 48),
+            // One "dashboard" per Paper run (#132 m): position_trade_analysis_v2 requires a dashboard
+            // id on a canonical lifecycle. The run id is not hexadecimal, unlike a digest that the
+            // redactor heuristic could refuse at random (#132 e).
+            'orchestration_dashboard_id' => $cell->runId,
             'mode_id' => $identity->modeId,
             'mode_version' => $identity->modeVersion,
             'setup_id' => $identity->setupId,
@@ -112,6 +119,7 @@ final class PaperCanonicalStrategyEvidenceProvider implements PaperCanonicalStra
             'market_type' => 'perpetual',
             'symbol' => $event->symbol,
             'decision_key' => $decisionKey,
+            'decision_id' => self::decisionId($digest),
             'dry_run' => true,
             'effective_config_reference' => 'effective-config-snapshot:' . $snapshotData['snapshot_hash'],
             'effective_config_snapshot' => $snapshotData,
@@ -132,6 +140,27 @@ final class PaperCanonicalStrategyEvidenceProvider implements PaperCanonicalStra
             $inputs->orderBook->spreadBps,
             $costs->entrySlippageRate === null ? null : $costs->entrySlippageRate * 10_000.0,
             $inputs->orderBook,
+        );
+    }
+
+    /**
+     * Deterministic decision id (#132 decision d): a name-based UUID (version 5) of the decision
+     * digest, i.e. of the cell, the source event, the dataset and the configuration. A replay,
+     * a resume or another instance of the same cell always derives the same id.
+     */
+    private static function decisionId(string $digest): string
+    {
+        $namespace = hex2bin(str_replace('-', '', self::DECISION_ID_NAMESPACE));
+        $hash = sha1($namespace . 'paper-canonical-decision:' . $digest);
+
+        return sprintf(
+            '%s-%s-5%s-%02x%s-%s',
+            substr($hash, 0, 8),
+            substr($hash, 8, 4),
+            substr($hash, 13, 3),
+            (hexdec(substr($hash, 16, 2)) & 0x3f) | 0x80,
+            substr($hash, 18, 2),
+            substr($hash, 20, 12),
         );
     }
 

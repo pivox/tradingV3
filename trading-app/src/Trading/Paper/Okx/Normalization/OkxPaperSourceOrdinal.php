@@ -135,16 +135,7 @@ final class OkxPaperSourceOrdinal
     {
         $scopes = [];
         foreach ($this->scopes as $scope => $state) {
-            $latest = $state['latest'];
-            $scopes[$scope] = [
-                'last_sequence' => (string) $state['last_sequence'],
-                'gap_pending' => $state['gap_pending'],
-                'latest' => $latest === null ? null : [
-                    'natural_identity' => $latest['natural_identity'],
-                    'assignment_digest' => $latest['assignment_digest'],
-                    'event' => $latest['event']->toArray(),
-                ],
-            ];
+            $scopes[$scope] = self::snapshotScope($state);
         }
         ksort($scopes, SORT_STRING);
 
@@ -158,87 +149,185 @@ final class OkxPaperSourceOrdinal
     public static function restore(#[\SensitiveParameter] array $state): self
     {
         try {
-            self::assertExactKeys($state, ['schema_version', 'scopes']);
-            if ($state['schema_version'] !== self::SCHEMA_VERSION
-                || !\is_array($state['scopes'])
-                || (array_is_list($state['scopes']) && $state['scopes'] !== [])
-            ) {
-                throw new \InvalidArgumentException();
-            }
-
             $instance = new self();
-            $maximumScopes = \count(PaperMarketDataChannel::cases())
-                * \count((new OkxPaperInstrumentMap())->nativeInstrumentIds());
-            if (\count($state['scopes']) > $maximumScopes) {
-                throw new \InvalidArgumentException();
-            }
-
-            foreach ($state['scopes'] as $scope => $scopeState) {
-                if (!\is_string($scope) || !\is_array($scopeState) || array_is_list($scopeState)) {
-                    throw new \InvalidArgumentException();
-                }
-                $instance->assertScope($scope);
-                self::assertExactKeys($scopeState, ['last_sequence', 'gap_pending', 'latest']);
-                if (!\is_bool($scopeState['gap_pending'])) {
-                    throw new \InvalidArgumentException();
-                }
-
-                $lastSequence = self::restoredSequence($scopeState['last_sequence']);
-                $gapPending = $scopeState['gap_pending'];
-                $latest = $scopeState['latest'];
-                if ($latest === null) {
-                    throw new \InvalidArgumentException();
-                }
-                if (!\is_array($latest) || array_is_list($latest)) {
-                    throw new \InvalidArgumentException();
-                }
-                self::assertExactKeys($latest, ['natural_identity', 'assignment_digest', 'event']);
-                if (!\is_string($latest['natural_identity'])
-                    || !\is_string($latest['assignment_digest'])
-                    || !\is_array($latest['event'])
-                    || array_is_list($latest['event'])
-                ) {
-                    throw new \InvalidArgumentException();
-                }
-
-                $instance->assertNaturalIdentity($latest['natural_identity']);
-                $instance->assertAssignmentDigest($latest['assignment_digest']);
-                /** @var array<string, mixed> $eventState */
-                $eventState = $latest['event'];
-                $event = PaperMarketEvent::fromArray($eventState);
-                $instance->assertEventScope($scope, $event);
-                if ($event->sequence === null) {
-                    throw new \InvalidArgumentException();
-                }
-                $eventSequence = self::restoredSequence($event->sequence);
-                if (!$eventSequence->isEqualTo($lastSequence)
-                    || !hash_equals(
-                        self::assignmentDigest(
-                            $latest['natural_identity'],
-                            $event->exchangeTimestamp,
-                            $event->payload,
-                        ),
-                        $latest['assignment_digest'],
-                    )
-                ) {
-                    throw new \InvalidArgumentException();
-                }
-
-                $instance->scopes[$scope] = [
-                    'last_sequence' => $lastSequence,
-                    'gap_pending' => $gapPending,
-                    'latest' => [
-                        'natural_identity' => $latest['natural_identity'],
-                        'assignment_digest' => $latest['assignment_digest'],
-                        'event' => $event,
-                    ],
-                ];
+            foreach (self::validatedScopeStates($state) as $scope => $scopeState) {
+                $instance->scopes[$scope] = $instance->restoredScope($scope, $scopeState);
             }
 
             return $instance;
         } catch (\Throwable) {
             throw new \InvalidArgumentException('okx_paper_source_ordinal_state_invalid');
         }
+    }
+
+    /**
+     * Returns restore($state)->snapshot() with the same validation and failure.
+     *
+     * The memo only lets a scope skip its validation when the memo recorded the
+     * canonical snapshot of an identical serialized scope state that passed it.
+     *
+     * @param array<string, mixed> $state
+     * @return array{schema_version: int, scopes: array<string, array<string, mixed>>}
+     */
+    public static function validatedSnapshot(
+        #[\SensitiveParameter] array $state,
+        ?OkxPaperSourceOrdinalSnapshotMemo $memo = null,
+    ): array {
+        try {
+            $instance = new self();
+            $scopes = [];
+            foreach (self::validatedScopeStates($state) as $scope => $scopeState) {
+                $digest = $memo === null ? null : OkxPaperSourceOrdinalSnapshotMemo::digest($scopeState);
+                $snapshot = $digest === null ? null : $memo->snapshotScope($scope, $digest);
+                if ($snapshot === null) {
+                    $snapshot = self::snapshotScope($instance->restoredScope($scope, $scopeState));
+                    if ($digest !== null) {
+                        $memo->remember($scope, $digest, $snapshot);
+                    }
+                }
+                $scopes[$scope] = $snapshot;
+            }
+            ksort($scopes, SORT_STRING);
+
+            return [
+                'schema_version' => self::SCHEMA_VERSION,
+                'scopes' => $scopes,
+            ];
+        } catch (\Throwable) {
+            throw new \InvalidArgumentException('okx_paper_source_ordinal_state_invalid');
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $state
+     * @return array<string, array<array-key, mixed>>
+     */
+    private static function validatedScopeStates(#[\SensitiveParameter] array $state): array
+    {
+        self::assertExactKeys($state, ['schema_version', 'scopes']);
+        if ($state['schema_version'] !== self::SCHEMA_VERSION
+            || !\is_array($state['scopes'])
+            || (array_is_list($state['scopes']) && $state['scopes'] !== [])
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        $maximumScopes = \count(PaperMarketDataChannel::cases())
+            * \count((new OkxPaperInstrumentMap())->nativeInstrumentIds());
+        if (\count($state['scopes']) > $maximumScopes) {
+            throw new \InvalidArgumentException();
+        }
+        foreach ($state['scopes'] as $scope => $scopeState) {
+            if (!\is_string($scope) || !\is_array($scopeState) || array_is_list($scopeState)) {
+                throw new \InvalidArgumentException();
+            }
+        }
+
+        /** @var array<string, array<array-key, mixed>> $scopes */
+        $scopes = $state['scopes'];
+
+        return $scopes;
+    }
+
+    /**
+     * @param array{
+     *     last_sequence: BigInteger,
+     *     gap_pending: bool,
+     *     latest: array{
+     *         natural_identity: string,
+     *         assignment_digest: string,
+     *         event: PaperMarketEvent
+     *     }|null
+     * } $state
+     * @return array<string, mixed>
+     */
+    private static function snapshotScope(array $state): array
+    {
+        $latest = $state['latest'];
+
+        return [
+            'last_sequence' => (string) $state['last_sequence'],
+            'gap_pending' => $state['gap_pending'],
+            'latest' => $latest === null ? null : [
+                'natural_identity' => $latest['natural_identity'],
+                'assignment_digest' => $latest['assignment_digest'],
+                'event' => $latest['event']->toArray(),
+            ],
+        ];
+    }
+
+    /**
+     * Pure validation of one serialized scope state.
+     *
+     * @param array<array-key, mixed> $scopeState
+     * @return array{
+     *     last_sequence: BigInteger,
+     *     gap_pending: bool,
+     *     latest: array{
+     *         natural_identity: string,
+     *         assignment_digest: string,
+     *         event: PaperMarketEvent
+     *     }
+     * }
+     */
+    private function restoredScope(string $scope, #[\SensitiveParameter] array $scopeState): array
+    {
+        $this->assertScope($scope);
+        self::assertExactKeys($scopeState, ['last_sequence', 'gap_pending', 'latest']);
+        if (!\is_bool($scopeState['gap_pending'])) {
+            throw new \InvalidArgumentException();
+        }
+
+        $lastSequence = self::restoredSequence($scopeState['last_sequence']);
+        $gapPending = $scopeState['gap_pending'];
+        $latest = $scopeState['latest'];
+        if ($latest === null) {
+            throw new \InvalidArgumentException();
+        }
+        if (!\is_array($latest) || array_is_list($latest)) {
+            throw new \InvalidArgumentException();
+        }
+        self::assertExactKeys($latest, ['natural_identity', 'assignment_digest', 'event']);
+        if (!\is_string($latest['natural_identity'])
+            || !\is_string($latest['assignment_digest'])
+            || !\is_array($latest['event'])
+            || array_is_list($latest['event'])
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        $this->assertNaturalIdentity($latest['natural_identity']);
+        $this->assertAssignmentDigest($latest['assignment_digest']);
+        /** @var array<string, mixed> $eventState */
+        $eventState = $latest['event'];
+        $event = PaperMarketEvent::fromArray($eventState);
+        $this->assertEventScope($scope, $event);
+        if ($event->sequence === null) {
+            throw new \InvalidArgumentException();
+        }
+        $eventSequence = self::restoredSequence($event->sequence);
+        if (!$eventSequence->isEqualTo($lastSequence)
+            || !hash_equals(
+                self::assignmentDigest(
+                    $latest['natural_identity'],
+                    $event->exchangeTimestamp,
+                    $event->payload,
+                ),
+                $latest['assignment_digest'],
+            )
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        return [
+            'last_sequence' => $lastSequence,
+            'gap_pending' => $gapPending,
+            'latest' => [
+                'natural_identity' => $latest['natural_identity'],
+                'assignment_digest' => $latest['assignment_digest'],
+                'event' => $event,
+            ],
+        ];
     }
 
     /** @param array<array-key, mixed> $payload */

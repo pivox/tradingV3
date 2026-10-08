@@ -8,9 +8,12 @@ use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidOrderNotionalLimits;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperMarketEventNormalizer;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
+use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
+use App\Trading\Paper\MarketData\PaperMarketHexNibbles;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
 
@@ -226,6 +229,69 @@ final class HyperliquidPaperMarketEventLiveNormalizerTest extends TestCase
             self::assertLessThanOrEqual(15, $nibble);
         }
         self::assertArrayNotHasKey('source_book_hash', $event->payload);
+    }
+
+    public function testBestBidAndOfferBecomesAnLevelOneTopOfBookWithBothPricesAndSizes(): void
+    {
+        $bbo = [
+            'coin' => 'BTC',
+            'time' => 1_785_319_199_778,
+            'bbo' => [
+                ['px' => '85937.0', 'sz' => '20.3216', 'n' => 55],
+                ['px' => '85938.0', 'sz' => '0.0004', 'n' => 2],
+            ],
+        ];
+        $event = self::normalizer()->liveTopOfBookFromBbo($bbo, sourceEpoch: 2);
+
+        self::assertSame(PaperMarketDataChannel::TOP_OF_BOOK, $event->channel);
+        self::assertSame('BTCUSDT', $event->symbol);
+        self::assertSame('2026-07-29T09:59:59.778000Z', $event->exchangeTimestamp->format('Y-m-d\TH:i:s.u\Z'));
+        $payload = $event->payload;
+        unset($payload['source_book_hash_nibbles']);
+        ksort($payload);
+        self::assertSame([
+            'ask_level_count' => '1',
+            'ask_price' => '85938',
+            'ask_size' => '0.0004',
+            'bid_level_count' => '1',
+            'bid_price' => '85937',
+            'bid_size' => '20.3216',
+            'native_symbol' => 'BTC',
+            'origin' => 'ws_bbo',
+            'source_epoch' => '2',
+            'source_time' => '1785319199778',
+            'synthetic' => false,
+        ], $payload);
+        self::assertSame(
+            hash('sha256', CanonicalJson::encode($bbo)),
+            PaperMarketHexNibbles::toFixedHex($event->payload['source_book_hash_nibbles'], 64),
+        );
+    }
+
+    /** @return iterable<string, array{array<string, mixed>, string}> */
+    public static function unrecordableBestBidAndOffers(): iterable
+    {
+        yield 'empty bid side' => [
+            ['coin' => 'BTC', 'time' => 1, 'bbo' => [null, ['px' => '2', 'sz' => '1', 'n' => 1]]],
+            'hyperliquid_paper_live_book_invalid',
+        ];
+        yield 'crossed' => [
+            ['coin' => 'BTC', 'time' => 1, 'bbo' => [['px' => '2', 'sz' => '1', 'n' => 1], ['px' => '2', 'sz' => '1', 'n' => 1]]],
+            'hyperliquid_paper_live_book_invalid',
+        ];
+        yield 'extra key' => [
+            ['coin' => 'BTC', 'time' => 1, 'levels' => [], 'bbo' => [['px' => '1', 'sz' => '1', 'n' => 1], ['px' => '2', 'sz' => '1', 'n' => 1]]],
+            'hyperliquid_paper_live_shape_invalid',
+        ];
+    }
+
+    /** @param array<string, mixed> $bbo */
+    #[DataProvider('unrecordableBestBidAndOffers')]
+    public function testAnUnrecordableBestBidAndOfferIsRejected(array $bbo, string $reason): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage($reason);
+        self::normalizer()->liveTopOfBookFromBbo($bbo, sourceEpoch: 1);
     }
 
     public function testClosedLiveCandleUsesLiveOriginWithoutChangingHistoricalCandle(): void

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Execution;
 
 use App\Config\TradeEntryConfigResolver;
+use App\Exchange\Event\ExchangeLocalProjectionStoreInterface;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
 use App\Exchange\Registry\ExchangeAdapterRegistry;
 use App\TradeEntry\Execution\EmergencyCloseService;
@@ -19,6 +20,8 @@ use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
+use App\Trading\Paper\Execution\Lifecycle\PaperLifecycleSubmission;
+use App\Trading\Paper\Execution\Lifecycle\PaperTradeLifecycleSinkInterface;
 use App\Trading\Paper\Execution\Market\PaperKlineProvider;
 use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
 use App\Trading\Paper\Execution\PaperCrashPoint;
@@ -237,6 +240,65 @@ final class PaperExecutionCoordinatorRecoveryTest extends TestCase
         }
     }
 
+    /**
+     * #132 j: the trade lifecycle of a projected batch is recorded once whatever the crash point,
+     * after the batch is projected and before its effect is acknowledged (same transaction), and
+     * through the projection store of the lifecycle.
+     */
+    #[DataProvider('crashPoints')]
+    public function testTheTradeLifecycleOfEveryBatchIsRecordedOnceAcrossACrash(PaperCrashPoint $target): void
+    {
+        $root = sys_get_temp_dir() . '/paper_lifecycle_recovery_' . bin2hex(random_bytes(5));
+        $store = new InMemoryPaperExecutionStore();
+        $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
+        $cell = $this->modernCell($effect);
+        $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64), 'paper-dataset-recorder.v2');
+        $event = $this->modernEvent();
+        $sink = new RecordingLifecycleSink($store, $cell);
+        $ownProjection = new RecordingProjectionStore();
+        $thrown = false;
+        try {
+            $first = $this->modernCoordinator(
+                $store,
+                $ownProjection,
+                $root,
+                $effect,
+                static function (PaperCrashPoint $point) use ($target, &$thrown): void {
+                    if (!$thrown && $point === $target) {
+                        $thrown = true;
+                        throw new \RuntimeException('injected_crash');
+                    }
+                },
+                lifecycle: $sink,
+            );
+            try {
+                $first->consumeAt($cell, PaperProfileEligibility::REFERENCE_ONLY, 'dataset-modern-1', 0, $event);
+                self::fail('Crash point was not reached.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('injected_crash', $exception->getMessage());
+            }
+            $this->modernCoordinator($store, $ownProjection, $root, $effect, lifecycle: $sink)
+                ->consumeAt($cell, PaperProfileEligibility::REFERENCE_ONLY, 'dataset-modern-1', 0, $event);
+
+            self::assertSame([], $store->pendingEffects($cell));
+            self::assertSame([null, 'canonical'], array_column($sink->calls, 'submission'), 'one market batch, one canonical order');
+            $orders = array_values(array_filter(array_column($sink->calls, 'order')));
+            self::assertCount(1, $orders);
+            self::assertStringStartsWith('fake-', (string) $orders[0]);
+            foreach ($sink->calls as $call) {
+                self::assertTrue($call['effect_pending'], 'Recorded before the effect is acknowledged.');
+                self::assertTrue($call['projected'], 'Recorded after its batch is projected.');
+            }
+            self::assertNotSame([], $sink->store->events);
+            self::assertSame([], $ownProjection->events, 'The projection store of the lifecycle replaces the coordinator one.');
+        } finally {
+            if (is_dir($root)) {
+                foreach (glob($root . '/*') ?: [] as $file) { @unlink($file); }
+                @rmdir($root);
+            }
+        }
+    }
+
     /** @return iterable<string, array{PaperCrashPoint}> */
     public static function crashPoints(): iterable
     {
@@ -258,6 +320,7 @@ final class PaperExecutionCoordinatorRecoveryTest extends TestCase
         PaperCanonicalPreparedEffect $effect,
         ?callable $crash = null,
         ?RecordingCanonicalPaperOrderIntents $canonicalIntents = null,
+        ?PaperTradeLifecycleSinkInterface $lifecycle = null,
     ): PaperExecutionCoordinator {
         $clock = new MockClock('2026-08-10T12:00:00Z');
 
@@ -281,6 +344,7 @@ final class PaperExecutionCoordinatorRecoveryTest extends TestCase
             canonicalCodec: new PaperCanonicalPreparedEffectCodec(),
             canonicalDispatcher: new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer(), $clock),
             canonicalOrderIntents: $canonicalIntents ?? new RecordingCanonicalPaperOrderIntents(),
+            lifecycle: $lifecycle,
         );
     }
 
@@ -338,5 +402,37 @@ final class PaperExecutionCoordinatorRecoveryTest extends TestCase
     private function event(): PaperMarketEvent
     {
         return PaperMarketEvent::create(PaperMarketDataNetwork::TESTNET, PaperMarketDataVenue::HYPERLIQUID, 'BTCUSDT', PaperMarketDataChannel::CANDLE_1M, new \DateTimeImmutable('2026-08-01T10:00:59Z'), new \DateTimeImmutable('2026-08-01T10:01:00Z'), '1', ['interval' => '1m', 'start_time' => '1785578400000', 'open' => '25000', 'high' => '25100', 'low' => '24900', 'close' => '25000', 'volume' => '5', 'confirmed' => true]);
+    }
+}
+
+/** #132 j: records what the coordinator hands to the trade lifecycle, and when. */
+final class RecordingLifecycleSink implements PaperTradeLifecycleSinkInterface
+{
+    /** @var list<array{submission: ?string, order: ?string, events: int, effect_pending: bool, projected: bool}> */
+    public array $calls = [];
+
+    public RecordingProjectionStore $store;
+
+    public function __construct(
+        private readonly InMemoryPaperExecutionStore $journal,
+        private readonly PaperExecutionCell $cell,
+    ) {
+        $this->store = new RecordingProjectionStore();
+    }
+
+    public function projection(): ?ExchangeLocalProjectionStoreInterface
+    {
+        return $this->store;
+    }
+
+    public function afterProjection(PaperExecutionCell $cell, array $events, ?PaperLifecycleSubmission $submission): void
+    {
+        $this->calls[] = [
+            'submission' => $submission === null ? null : ($submission->canonical !== null ? 'canonical' : 'legacy'),
+            'order' => $submission?->execution->exchangeOrderId,
+            'events' => \count($events),
+            'effect_pending' => $this->journal->pendingEffects($this->cell) !== [],
+            'projected' => $events === [] || \array_slice($this->store->events, -\count($events)) === $events,
+        ];
     }
 }

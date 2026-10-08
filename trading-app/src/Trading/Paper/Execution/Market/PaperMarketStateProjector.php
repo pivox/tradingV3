@@ -8,6 +8,7 @@ use App\Common\Enum\Timeframe;
 use App\Contract\Provider\Dto\KlineDto;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\Replay\PaperReplayOrder;
 use Brick\Math\BigDecimal;
 use Brick\Math\Exception\MathException;
 
@@ -65,12 +66,13 @@ final class PaperMarketStateProjector
         if ($modernModeId !== null && $compactModern) {
             $compacted = false;
             if ($modernModeId === 'micro_scalping') {
+                $observedAt = self::observedAt($event);
                 $bucket = intdiv(
-                    (int) $event->receivedTimestamp->format('U'),
+                    (int) $observedAt->format('U'),
                     self::MICRO_COMPACTION_INTERVAL_SECONDS,
                 );
                 if ($bucket !== $this->lastMicroCompactionBucket) {
-                    $this->compactModern($modernModeId, $event->receivedTimestamp);
+                    $this->compactModern($modernModeId, $observedAt);
                     $this->lastMicroCompactionBucket = $bucket;
                     $compacted = true;
                 }
@@ -160,7 +162,7 @@ final class PaperMarketStateProjector
             throw new \LogicException('paper_market_modern_mode_invalid');
         }
         if ($through === null && $this->eventLog !== []) {
-            $through = $this->eventLog[array_key_last($this->eventLog)]->receivedTimestamp;
+            $through = self::observedAt($this->eventLog[array_key_last($this->eventLog)]);
         }
         $microstructureWindowStart = $modeId === 'micro_scalping' && $through !== null
             ? $through->modify('-' . self::MICROSTRUCTURE_WINDOW_SECONDS . ' seconds')
@@ -196,6 +198,12 @@ final class PaperMarketStateProjector
             $key = $event->symbol . '/' . $event->channel->value;
             $this->eventLogCounts[$key] = ($this->eventLogCounts[$key] ?? 0) + 1;
         }
+    }
+
+    /** Replay instant of an event: a candle at its close (#132 decision a), anything else at its reception. */
+    private static function observedAt(PaperMarketEvent $event): \DateTimeImmutable
+    {
+        return PaperReplayOrder::candleClose($event) ?? $event->receivedTimestamp;
     }
 
     private function modernRetentionLimit(string $modeId, PaperMarketDataChannel $channel): int

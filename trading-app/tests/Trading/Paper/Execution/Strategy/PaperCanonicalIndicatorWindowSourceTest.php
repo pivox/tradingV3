@@ -40,6 +40,34 @@ final class PaperCanonicalIndicatorWindowSourceTest extends TestCase
         self::assertSame('2026-08-01T04:10:00.000000Z', $windows['1m'][249]['available_at']);
     }
 
+    public function testACandleReceivedAfterItsCloseIsAvailableAtItsClose(): void
+    {
+        $events = $this->candles(250);
+        $last = $events[249];
+        $events[249] = PaperMarketEvent::create(
+            $last->sourceNetwork,
+            $last->sourceVenue,
+            $last->symbol,
+            $last->channel,
+            $last->exchangeTimestamp,
+            $last->receivedTimestamp->modify('+6 seconds'),
+            $last->sequence,
+            $last->payload,
+        );
+        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        $market->restore($events);
+        $source = new PaperCanonicalIndicatorWindowSource(
+            $market,
+            new PaperReplayClock(new \DateTimeImmutable('2026-08-01T04:10:00.000000Z')),
+        );
+
+        $windows = $source->windowsFor($this->cell(), $events[249], ['1m']);
+
+        self::assertNotNull($windows);
+        self::assertSame($events[249]->eventId, $windows['1m'][249]['source_record_id']);
+        self::assertSame('2026-08-01T04:10:00.000000Z', $windows['1m'][249]['available_at']);
+    }
+
     public function testNotYetReceivedTriggerReturnsNoEvidence(): void
     {
         $events = $this->candles(250);
@@ -179,9 +207,10 @@ final class PaperCanonicalIndicatorWindowSourceTest extends TestCase
 
         $market = new PaperMarketStateProjector(new PaperKlineProvider());
         $market->restore($events);
+        // The candle has closed (projected receipt); only the forged envelope differs.
         $source = new PaperCanonicalIndicatorWindowSource(
             $market,
-            new PaperReplayClock($forged->receivedTimestamp),
+            new PaperReplayClock($projected->receivedTimestamp),
         );
 
         $this->expectException(\LogicException::class);

@@ -98,6 +98,8 @@ final class OkxPaperPublicServiceWiringTest extends KernelTestCase
             PaperDatasetRecorderFilesystem::class,
             \App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface::class,
             OkxPaperFundingRateClientInterface::class,
+            // Diagnostics only: failures, rejected frames and socket closes.
+            \Psr\Log\LoggerInterface::class,
         ], $dependencyTypes);
         foreach ($dependencyTypes as $dependencyType) {
             self::assertDoesNotMatchRegularExpression(

@@ -169,9 +169,13 @@ final class PaperExecutionReplayCommandTest extends TestCase
             file_put_contents($configuration, '{"strategy":{"mode":"day_trading"}}');
             chmod($configuration, 0600);
             $store = new InMemoryPaperExecutionStore();
-            $coordinator = new class implements PaperEventCoordinatorInterface {
+            $coordinator = new class($store) implements PaperEventCoordinatorInterface {
                 public int $consumed = 0;
                 public ?PaperProfileEligibility $eligibility = null;
+
+                public function __construct(private readonly InMemoryPaperExecutionStore $store)
+                {
+                }
 
                 public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void
                 {
@@ -180,6 +184,8 @@ final class PaperExecutionReplayCommandTest extends TestCase
 
                 public function consumeAt(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, string $datasetId, int $sourcePosition, PaperMarketEvent $event): void
                 {
+                    // A consumed source is claimed, as the real coordinator does: completion is proven by the checkpoint.
+                    $this->store->claimSource($cell, $sourcePosition, $event);
                     ++$this->consumed;
                 }
             };
@@ -201,6 +207,12 @@ final class PaperExecutionReplayCommandTest extends TestCase
             self::assertSame(PaperProfileEligibility::BASELINE_ELIGIBLE, $coordinator->eligibility);
             self::assertSame(3, $store->registrationWrites);
             self::assertStringContainsString('profile=day_trading', $tester->getDisplay());
+            $lines = preg_split('/\R/', trim($tester->getDisplay())) ?: [];
+            $proof = json_decode((string) end($lines), true, 16, JSON_THROW_ON_ERROR);
+            self::assertSame(PaperExecutionReplayCommand::COMPLETION_SCHEMA, $proof['schema_version']);
+            self::assertTrue($proof['completed']);
+            self::assertSame($coordinator->consumed, $proof['event_count']);
+            self::assertSame($proof['event_count'], $proof['next_source_position']);
         } finally {
             foreach (glob($dataset . '/*') ?: [] as $file) { @unlink($file); }
             @rmdir($dataset);
@@ -223,8 +235,12 @@ final class PaperExecutionReplayCommandTest extends TestCase
             file_put_contents($configuration, '{"strategy":{}}');
             chmod($configuration, 0600);
             $store = new InMemoryPaperExecutionStore();
-            $coordinator = new class implements PaperEventCoordinatorInterface {
+            $coordinator = new class($store) implements PaperEventCoordinatorInterface {
                 public ?PaperExecutionCell $cell = null;
+
+                public function __construct(private readonly InMemoryPaperExecutionStore $store)
+                {
+                }
 
                 public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void
                 {
@@ -233,6 +249,7 @@ final class PaperExecutionReplayCommandTest extends TestCase
 
                 public function consumeAt(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, string $datasetId, int $sourcePosition, PaperMarketEvent $event): void
                 {
+                    $this->store->claimSource($cell, $sourcePosition, $event);
                 }
             };
             $verifier = new PaperDatasetVerifier();

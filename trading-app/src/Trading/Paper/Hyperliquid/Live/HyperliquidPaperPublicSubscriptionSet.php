@@ -9,7 +9,7 @@ use App\Trading\Paper\MarketData\CanonicalJson;
 final class HyperliquidPaperPublicSubscriptionSet
 {
     private const COINS = ['BTC', 'ETH'];
-    private const SIMPLE_TYPES = ['trades', 'l2Book'];
+    private const SIMPLE_TYPES = ['trades', 'bbo'];
     private const CANDLE_INTERVALS = ['1m', '5m', '15m', '1h'];
 
     /** @var list<array{method: string, subscription: array<string, string>}> */

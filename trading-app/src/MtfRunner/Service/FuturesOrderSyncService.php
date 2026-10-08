@@ -344,7 +344,7 @@ class FuturesOrderSyncService
                 if ($clientOrderId !== null && $futuresOrder->getClientOrderId() !== $clientOrderId) {
                     throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:client_order_id');
                 }
-                $futuresOrder->requireLineageContext()->assertTradeBoundary(
+                $futuresOrder->requireLineageContext()->assertExecutionBoundary(
                     $symbol,
                     self::canonicalTradeSide($side),
                     $context->exchange->value,

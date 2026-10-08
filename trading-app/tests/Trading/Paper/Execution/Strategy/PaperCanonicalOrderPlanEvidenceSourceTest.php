@@ -11,11 +11,15 @@ use App\Trading\Paper\Execution\Strategy\PaperCanonicalInstrumentEvidence;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalOrderPlanEvidenceSource;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjection;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderBookSnapshot;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
 use App\TradingCore\OrderPlan\Canonical\CanonicalTickSnapshot;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -61,6 +65,55 @@ final class PaperCanonicalOrderPlanEvidenceSourceTest extends TestCase
         self::assertSame($book, $request->orderBook);
         self::assertSame($fixture['costs'], $request->costs);
         self::assertNotEmpty($request->netR->targets);
+    }
+
+    /** #132 decision c: the order book must stay the last plan input of a scalping plan. */
+    public function testScalpingPlanKeepsTheOrderBookAsItsLastInput(): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+        $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
+        $fixture = CanonicalOrderPlanPipelineFixture::accepted(executionPolicy: $policy);
+        $bid = 100.1;
+        $ask = $bid * 20001.0 / 19999.0;
+        $book = new CanonicalOrderBookSnapshot(
+            'fake', 'test', 'BTCUSDT', 'perpetual', 'order_book',
+            $bid, $ask, 10_000.0 * ($ask - $bid) / (($ask + $bid) / 2.0),
+            new \DateTimeImmutable('2026-08-10T11:59:30Z'),
+            'sha256:' . str_repeat('4', 64),
+        );
+        $clock = new MockClock('2026-08-10T12:00:00Z');
+        $source = new PaperCanonicalOrderPlanEvidenceSource($clock);
+
+        $request = $source->build(
+            $policy,
+            $this->projection(),
+            $this->instrument($fixture),
+            $book,
+            $fixture['costs'],
+            $this->portfolio('scalping'),
+        );
+
+        self::assertNotNull($request);
+        $marketHash = $request->zoneRequest->market->inputHash;
+        self::assertNotSame($book->inputHash, $marketHash);
+        self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $marketHash);
+        self::assertSame($marketHash, $source->build(
+            $policy,
+            $this->projection(),
+            $this->instrument($fixture),
+            $book,
+            $fixture['costs'],
+            $this->portfolio('scalping'),
+        )?->zoneRequest->market->inputHash);
+
+        $plan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))->build($request);
+
+        self::assertSame($book->inputHash, $plan->orderBookInputHash);
+        self::assertSame($book->inputHash, $plan->inputHashes[array_key_last($plan->inputHashes)]);
+        self::assertContains($marketHash, $plan->inputHashes);
     }
 
     public function testReturnsNoPlanWhenTheMakerPriceIsOutsideTheConfiguredZone(): void

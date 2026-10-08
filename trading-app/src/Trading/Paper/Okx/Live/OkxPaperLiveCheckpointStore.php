@@ -59,6 +59,7 @@ final class OkxPaperLiveCheckpointStore
     private readonly PaperDatasetRecorderFilesystem $filesystem;
     private readonly ClockInterface $clock;
     private readonly string $checkpointPath;
+    private readonly OkxPaperLiveCheckpointValidationMemo $validationMemo;
 
     /** @var array{handle: resource, identity: array{dev: int, ino: int}, path: string, private: bool} */
     private array $datasetPin;
@@ -93,6 +94,7 @@ final class OkxPaperLiveCheckpointStore
     ) {
         $this->filesystem = $filesystem ?? new PaperDatasetRecorderFilesystem();
         $this->clock = $clock ?? new NativeClock(new \DateTimeZone('UTC'));
+        $this->validationMemo = new OkxPaperLiveCheckpointValidationMemo();
         $this->assertNoSymlinkComponents($datasetDirectory);
         $resolved = realpath($datasetDirectory);
         if ($resolved === false) {
@@ -757,10 +759,8 @@ final class OkxPaperLiveCheckpointStore
             ) {
                 throw new \InvalidArgumentException();
             }
-            $expected = $checkpoint === $this->preparedOrdinalCheckpoint
-                && $this->preparedOrdinals instanceof OkxPaperSourceOrdinal
-                ? clone $this->preparedOrdinals
-                : OkxPaperSourceOrdinal::restore($checkpoint->ordinalState);
+            $expected = $this->preparedOrdinalsFor($checkpoint)
+                ?? OkxPaperSourceOrdinal::restore($checkpoint->ordinalState);
             $expected->commit(
                 $scope,
                 $latest['natural_identity'],
@@ -775,6 +775,28 @@ final class OkxPaperLiveCheckpointStore
         } catch (\Throwable $exception) {
             throw self::invalidCheckpoint($exception);
         }
+    }
+
+    /**
+     * The prepared ordinal instance is, by construction, exactly the one that
+     * restore() would rebuild from the prepared checkpoint's ordinal state. It
+     * therefore also stands for any checkpoint whose ordinal state is identical
+     * (=== compares every key, value, type and order), such as the checkpoints
+     * derived from it by acknowledgements, queue saves or persistence, which
+     * spares a full restore (one PaperMarketEvent validation per scope).
+     */
+    private function preparedOrdinalsFor(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+    ): ?OkxPaperSourceOrdinal {
+        $prepared = $this->preparedOrdinalCheckpoint;
+        if (!$this->preparedOrdinals instanceof OkxPaperSourceOrdinal
+            || !$prepared instanceof OkxPaperLiveCheckpoint
+            || ($checkpoint !== $prepared && $checkpoint->ordinalState !== $prepared->ordinalState)
+        ) {
+            return null;
+        }
+
+        return clone $this->preparedOrdinals;
     }
 
     /**
@@ -989,10 +1011,8 @@ final class OkxPaperLiveCheckpointStore
             $eventId,
             $state['acknowledged_identity_history'],
         );
-        $ordinals = $checkpoint === $this->preparedOrdinalCheckpoint
-            && $this->preparedOrdinals instanceof OkxPaperSourceOrdinal
-            ? $this->preparedOrdinals
-            : OkxPaperSourceOrdinal::restore($checkpoint->ordinalState);
+        $ordinals = $this->preparedOrdinalsFor($checkpoint)
+            ?? OkxPaperSourceOrdinal::restore($checkpoint->ordinalState);
         $this->rememberPreparedOrdinals($next, $ordinals);
 
         return $next;
@@ -1790,7 +1810,7 @@ final class OkxPaperLiveCheckpointStore
             if (!\is_array($latestEventState) || array_is_list($latestEventState)) {
                 throw new \InvalidArgumentException();
             }
-            $latestEvent = PaperMarketEvent::fromArray($latestEventState);
+            $latestEvent = $this->validationMemo->event($latestEventState);
             $latestFrontier = OkxPaperStreamFrontier::fromEvent($latestEvent);
         } catch (\Throwable) {
             return false;
@@ -1881,13 +1901,14 @@ final class OkxPaperLiveCheckpointStore
     private function validatedCheckpoint(#[\SensitiveParameter] array $state): OkxPaperLiveCheckpoint
     {
         try {
-            $checkpoint = OkxPaperLiveCheckpoint::fromArray($state);
+            $checkpoint = OkxPaperLiveCheckpoint::fromArray($state, $this->validationMemo);
             $sha256 = $checkpoint->acknowledgedIdentityHistoryRef['sha256'] ?? null;
             if ($sha256 !== null
                 && isset($this->acknowledgedIdentityHistoriesBySha256[$sha256])
             ) {
                 $checkpoint = $checkpoint->withHydratedAcknowledgedIdentityHistory(
                     $this->acknowledgedIdentityHistoriesBySha256[$sha256],
+                    $this->validationMemo,
                 );
             }
 
@@ -2732,6 +2753,19 @@ final class OkxPaperLiveCheckpointStore
         $this->assertBoundIdentity($checkpoint);
         $previousIdentityRef = $this->currentCheckpoint?->acknowledgedIdentityHistoryRef;
         $publishedIdentityRef = $checkpoint->acknowledgedIdentityHistoryRef;
+        $currentIdentityRef = $this->currentCheckpoint?->acknowledgedIdentityHistoryRef;
+        if ($publishedIdentityRef === null
+            && $currentIdentityRef !== null
+            && $checkpoint->acknowledgedIdentityHistory !== []
+            && $checkpoint->acknowledgedIdentityHistory
+                === $this->currentCheckpoint?->acknowledgedIdentityHistory
+        ) {
+            // Unchanged history (a batch without trades nor candles): its blob is
+            // already published and was verified when written; no re-encoding,
+            // hashing nor read-back.
+            $publishedIdentityRef = $currentIdentityRef;
+            $checkpoint = $checkpoint->withAcknowledgedIdentityHistoryRef($publishedIdentityRef);
+        }
         if ($publishedIdentityRef === null
             && $checkpoint->acknowledgedIdentityHistory !== []
         ) {
@@ -2853,8 +2887,14 @@ final class OkxPaperLiveCheckpointStore
     private function assertCurrent(#[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint): void
     {
         $this->assertBoundIdentity($checkpoint);
-        if ($this->currentStateHash === null
-            || !hash_equals($this->currentStateHash, $this->stateHash($checkpoint))
+        if ($this->currentStateHash === null) {
+            throw self::invalidCheckpoint();
+        }
+        // currentStateHash is always computed from the canonical encoding of
+        // currentCheckpoint itself (loadOrCreate() and adoptCurrentCheckpoint()),
+        // and checkpoints are immutable, so the adopted object needs no re-encoding.
+        if ($checkpoint !== $this->currentCheckpoint
+            && !hash_equals($this->currentStateHash, $this->stateHash($checkpoint))
         ) {
             throw self::invalidCheckpoint();
         }
@@ -4897,13 +4937,31 @@ final class OkxPaperLiveCheckpointStore
             throw self::invalidCheckpoint();
         }
         $consumed = $next['pages_consumed'] - $current['pages_consumed'];
-        if ($consumed < 0 || $consumed > 1) {
+        $currentThrough = $current['forward_through'] ?? null;
+        $nextThrough = $next['forward_through'] ?? null;
+        if ($consumed < 0
+            || $consumed > 1
+            || ($currentThrough === null) !== ($nextThrough === null)
+            // A new connection attempt only moves a forward target up.
+            || (\is_string($currentThrough) && \is_string($nextThrough)
+                && BigInteger::of($nextThrough)->isLessThan($currentThrough))
+        ) {
             throw self::invalidCheckpoint();
         }
         if ($consumed === 0) {
             if ($next['pagination_type'] !== $current['pagination_type']
                 || $next['next_cursor'] !== $current['next_cursor']
             ) {
+                throw self::invalidCheckpoint();
+            }
+
+            return;
+        }
+        if (\array_key_exists('forward_through', $current)) {
+            // A forward trade recovery fetches each page from the acknowledged
+            // frontier (not from the saved cursor, which a restart may have left
+            // ahead): its cursor has no direction to check.
+            if ($next['pagination_type'] !== 1) {
                 throw self::invalidCheckpoint();
             }
 
@@ -4931,6 +4989,12 @@ final class OkxPaperLiveCheckpointStore
 
     private function sameCanonicalValue(#[\SensitiveParameter] mixed $left, #[\SensitiveParameter] mixed $right): bool
     {
+        // Identical values (same keys, values, types and order, same objects)
+        // have the same canonical encoding: no need to encode them (twice per
+        // pending event for the ordinal state).
+        if ($left === $right) {
+            return true;
+        }
         try {
             return hash_equals(
                 CanonicalJson::encode($this->canonicalizableValue($left)),

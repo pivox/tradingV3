@@ -15,9 +15,12 @@ use App\Trading\Paper\Execution\Fake\PaperFakeEffectDispatcher;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntime;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
+use App\Trading\Paper\Execution\Lifecycle\PaperLifecycleSubmission;
+use App\Trading\Paper\Execution\Lifecycle\PaperTradeLifecycleSinkInterface;
 use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
 use App\Trading\Paper\Execution\Market\PaperMarketEffectCodec;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
+use App\Trading\Paper\Execution\Persistence\PaperReplayBatchingStoreInterface;
 use App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorderInterface;
 use App\Trading\Paper\Execution\Persistence\PaperOrderIntentRecorderInterface;
 use App\Trading\Paper\Execution\Persistence\PaperSourceClaim;
@@ -66,6 +69,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         private readonly ?PaperCanonicalPreparedEffectCodec $canonicalCodec = null,
         private readonly ?PaperCanonicalFakeEffectDispatcher $canonicalDispatcher = null,
         private readonly ?PaperCanonicalOrderIntentRecorderInterface $canonicalOrderIntents = null,
+        private readonly ?PaperTradeLifecycleSinkInterface $lifecycle = null,
     ) {
         $this->crashInjector = $crashInjector === null ? null : \Closure::fromCallable($crashInjector);
         $this->marketCodec = $marketCodec ?? new PaperMarketEffectCodec();
@@ -273,11 +277,21 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
                 if ($retry) {
                     $this->store->recordEffectRetry($cell, $pending->sourcePosition, $pending->effectKey);
                 }
+                $batching = $this->store instanceof PaperReplayBatchingStoreInterface && $this->store->replayBatchActive();
+                $materialBefore = $batching ? $runtime->stateStore->materialStateProbe() : null;
                 try {
                     $this->dispatcher->dispatchMarket($runtime, $event);
                 } catch (\Throwable $exception) {
                     $this->store->recordEffectFailure($cell, $pending->sourcePosition, $pending->effectKey, 'fake_market_dispatch_failed');
                     throw $exception;
+                }
+                if ($batching && $this->store instanceof PaperReplayBatchingStoreInterface) {
+                    $this->store->recordMarketEffectMateriality(
+                        $cell,
+                        $pending->sourcePosition,
+                        $pending->effectKey,
+                        $materialBefore !== $runtime->stateStore->materialStateProbe(),
+                    );
                 }
                 $this->crash(PaperCrashPoint::AFTER_FAKE_EFFECT);
                 $this->completeMarketEffect($cell, $pending->sourcePosition, $pending->effectKey, $runtime, $cursor);
@@ -326,7 +340,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
 
         $this->crash(PaperCrashPoint::BEFORE_PHASE_3_COMMIT);
         $this->store->transactional(function () use ($cell, $sourcePosition, $effectKey, $runtime, $events, $acknowledgement): void {
-            $this->exchangeProjection->projectAtomically($events);
+            $this->project($cell, $events, null);
             $this->store->acknowledge($cell, $sourcePosition, $effectKey, $acknowledgement, $runtime->eventCursor());
         });
         $this->crash(PaperCrashPoint::AFTER_PHASE_3_COMMIT);
@@ -389,8 +403,10 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
 
         $this->crash(PaperCrashPoint::BEFORE_PHASE_3_COMMIT);
         $this->store->transactional(function () use ($cell, $sourcePosition, $effectKey, $runtime, $decision, $dispatch, $events, $acknowledgement): void {
-            $this->exchangeProjection->projectAtomically($events);
+            // The intent learns its exchange order id before the order is projected, as with a
+            // live venue: every later projection of that order then sees the same lineage (#132).
             $this->orderIntents->acknowledge($decision->orderIntentIdentity, $dispatch->execution);
+            $this->project($cell, $events, PaperLifecycleSubmission::legacy($decision, $dispatch->execution));
             $this->store->acknowledge($cell, $sourcePosition, $effectKey, $acknowledgement, $runtime->eventCursor());
         });
         $this->crash(PaperCrashPoint::AFTER_PHASE_3_COMMIT);
@@ -410,8 +426,10 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
 
         $this->crash(PaperCrashPoint::BEFORE_PHASE_3_COMMIT);
         $this->store->transactional(function () use ($cell, $sourcePosition, $effectKey, $runtime, $effect, $dispatch, $events, $acknowledgement): void {
-            $this->exchangeProjection->projectAtomically($events);
+            // The intent learns its exchange order id before the order is projected, as with a
+            // live venue: every later projection of that order then sees the same lineage (#132).
             $this->canonicalOrderIntents()->acknowledge($effect->orderIntentIdentity, $dispatch->execution);
+            $this->project($cell, $events, PaperLifecycleSubmission::canonical($effect, $dispatch->execution));
             $this->store->acknowledge(
                 $cell,
                 $sourcePosition,
@@ -421,6 +439,21 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
             );
         });
         $this->crash(PaperCrashPoint::AFTER_PHASE_3_COMMIT);
+    }
+
+    /**
+     * Projects a batch of Fake exchange events, then records its trade lifecycle (#132 j), inside the
+     * transaction of the caller, before the effect is acknowledged: a crash rolls both back, and
+     * the resumed replay projects and records them once.
+     *
+     * @param list<ExchangeEventInterface> $events
+     */
+    private function project(PaperExecutionCell $cell, array $events, ?PaperLifecycleSubmission $submission): void
+    {
+        if ($events !== []) {
+            ($this->lifecycle?->projection() ?? $this->exchangeProjection)->projectAtomically($events);
+        }
+        $this->lifecycle?->afterProjection($cell, $events, $submission);
     }
 
     private function restoreAcknowledgedMarket(PaperExecutionCell $cell, bool $force = false): void

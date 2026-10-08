@@ -6,6 +6,7 @@ namespace App\Trading\Listener;
 
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\MainProviderInterface;
+use App\Entity\TradeLineage;
 use App\Logging\TradeLifecycleLogger;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\TradeLifecycleEventRepository;
@@ -16,6 +17,8 @@ use App\Trading\Event\OrderStateChangedEvent;
 use App\Trading\Event\PositionClosedEvent;
 use App\Trading\Event\PositionOpenedEvent;
 use App\Trading\Event\SymbolSkippedEvent;
+use App\Trading\Lineage\LineageContext;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 
 final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresherInterface
@@ -77,6 +80,7 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
         private readonly ?MainProviderInterface $mainProvider = null,
         private readonly ?TradeLineageManager $tradeLineageManager = null,
         private readonly ?CanonicalTradeFillWindowResolverInterface $fillWindowResolver = null,
+        private readonly ?LoggerInterface $logger = null,
     ) {}
 
     // --- POSITION OUVERTE ----------------------------------------------------
@@ -112,6 +116,7 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
             accountId: $event->accountId,
             extra: $extra,
             marketType: $marketType,
+            lineageContext: $this->canonicalPositionContext($lineage, $position->symbol, $rawPositionId, 'position_opened'),
         );
     }
 
@@ -362,6 +367,7 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
                 ],
             ),
             marketType: $marketType,
+            lineageContext: $this->canonicalPositionContext($lineage, $history->symbol, $rawPositionId, 'position_closed'),
         );
     }
 
@@ -482,6 +488,60 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
         try {
             return $this->resolveLineageFromPositionPayload($raw, $extra, $marketType, $positionId);
         } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Structured identity of a CANONICAL trade for its position events (#132 j): the execution
+     * identity of the trade's order intent, with order_id = its opening exchange order (the order_id
+     * of its order_submitted event), position_id = this position and trade_id = its internal trade
+     * id. position_trade_analysis_v2 classifies a trade "canonical" only when its position events
+     * carry the same identity as its order_submitted event.
+     *
+     * A legacy lineage gets none, exactly as before. This method never throws: when the identity of
+     * a canonical lineage cannot be rebuilt, the event is written without it, as before #132 j (the
+     * trade then stays "incomplete"), and a warning is logged.
+     */
+    private function canonicalPositionContext(
+        ?TradeLineage $lineage,
+        string $symbol,
+        mixed $positionId,
+        string $eventType,
+    ): ?LineageContext {
+        try {
+            $intent = $lineage?->getOrderIntent();
+            // Canonical contract markers only: a legacy intent may carry a decision key or a config hash.
+            if ($lineage === null
+                || ($lineage->getModeId() === null && ($intent === null || !$intent->hasCanonicalContractMarkers()))
+            ) {
+                return null;
+            }
+            if ($intent === null) {
+                throw new \UnexpectedValueException('canonical_identity_missing:order_intent');
+            }
+            $positionId = $this->stringValue($positionId)
+                ?? throw new \UnexpectedValueException('canonical_identity_missing:position_id');
+            $identity = $intent->requireExecutionLineageContext();
+            $orderId = $identity->orderId
+                ?? throw new \UnexpectedValueException('canonical_identity_missing:order_id');
+            $identity = $identity->withExecution($orderId, $positionId, $lineage->getInternalTradeId());
+            // The check TradeLifecycleEvent::applyLineageContext() makes, made here so that it cannot throw there.
+            $identity->assertTradeBoundary(strtoupper($symbol), $identity->side ?? '', $identity->exchange, $identity->marketType);
+
+            return $identity;
+        } catch (\Throwable $exception) {
+            try {
+                $this->logger?->warning('trade_lifecycle.canonical_position_identity_unavailable', [
+                    'event_type' => $eventType,
+                    'symbol' => $symbol,
+                    'internal_trade_id' => $lineage?->getInternalTradeId(),
+                    'reason' => $exception->getMessage(),
+                ]);
+            } catch (\Throwable) {
+                // The lifecycle row is written in any case.
+            }
+
             return null;
         }
     }

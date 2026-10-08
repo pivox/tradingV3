@@ -358,7 +358,7 @@ final class OkxPaperPublicRestClientTest extends TestCase
         }
     }
 
-    public function testNormalizesTransportExceptionFromRequestWithoutRetryingOrLeakingItsMessage(): void
+    public function testNormalizesTransportExceptionFromRequestAfterBoundedRetriesWithoutLeakingItsMessage(): void
     {
         $http = new MockHttpClient(static function (): never {
             throw new TransportException('api-key=request-secret');
@@ -367,7 +367,7 @@ final class OkxPaperPublicRestClientTest extends TestCase
         $this->assertTransportFailureIsNormalized($http);
     }
 
-    public function testNormalizesTransportExceptionFromStatusCodeWithoutRetryingOrLeakingItsMessage(): void
+    public function testNormalizesTransportExceptionFromStatusCodeAfterBoundedRetriesWithoutLeakingItsMessage(): void
     {
         $http = new MockHttpClient(new ThrowingStatusResponse(
             new TransportException('api-key=status-secret'),
@@ -376,7 +376,7 @@ final class OkxPaperPublicRestClientTest extends TestCase
         $this->assertTransportFailureIsNormalized($http);
     }
 
-    public function testNormalizesTimeoutExceptionFromStreamWithoutRetryingOrLeakingItsMessage(): void
+    public function testNormalizesTimeoutExceptionFromStreamAfterBoundedRetriesWithoutLeakingItsMessage(): void
     {
         $http = new ThrowingStreamHttpClient(
             new MockHttpClient(new MockResponse('{"code":"0","data":[]}')),
@@ -386,7 +386,7 @@ final class OkxPaperPublicRestClientTest extends TestCase
         $this->assertTransportFailureIsNormalized($http);
     }
 
-    public function testNormalizesTransportExceptionFromChunkContentWithoutRetryingOrLeakingItsMessage(): void
+    public function testNormalizesTransportExceptionFromChunkContentAfterBoundedRetriesWithoutLeakingItsMessage(): void
     {
         $body = (static function (): \Generator {
             yield new TransportException('api-key=chunk-secret');
@@ -394,6 +394,86 @@ final class OkxPaperPublicRestClientTest extends TestCase
         $http = new MockHttpClient(new MockResponse($body));
 
         $this->assertTransportFailureIsNormalized($http);
+    }
+
+    public function testTransientTransportFailureIsRetriedWithinTheBoundedBudgetThenSucceeds(): void
+    {
+        $requests = 0;
+        $http = new MockHttpClient(static function () use (&$requests): MockResponse {
+            if (++$requests === 1) {
+                throw new TransportException('connection reset');
+            }
+
+            return new MockResponse('{"code":"0","data":[{"tradeId":"1"}]}');
+        });
+        $snapshotLimiter = new CountingLimiter();
+        $clock = new RecordingClock();
+        $client = $this->client($http, snapshotLimiter: $snapshotLimiter, clock: $clock);
+
+        self::assertSame([['tradeId' => '1']], $client->recentTrades('BTC-USDT-SWAP'));
+        self::assertSame(2, $requests);
+        self::assertSame(2, $snapshotLimiter->reservationCount);
+        self::assertSame([0.25], $clock->sleeps);
+    }
+
+    public function testServerErrorsAndTransientOkxCodesAreRetriedThenSucceed(): void
+    {
+        $historyLimiter = new CountingLimiter();
+        $clock = new RecordingClock();
+        $client = $this->client(new MockHttpClient([
+            new MockResponse('{"code":"0","data":[]}', ['http_code' => 503]),
+            new MockResponse('', ['http_code' => 502]),
+            new MockResponse('{"code":"50013","msg":"Systems are busy","data":[]}'),
+            new MockResponse('{"code":"0","data":[{"tradeId":"1"}]}'),
+        ]), $historyLimiter, clock: $clock);
+
+        self::assertSame([['tradeId' => '1']], $client->historyTrades('BTC-USDT-SWAP'));
+        self::assertSame(4, $historyLimiter->reservationCount);
+        self::assertSame([0.25, 0.5, 1.0], $clock->sleeps);
+    }
+
+    public function testTransientFailureBecomesDefinitiveOnlyOnceTheRetryBudgetIsExhausted(): void
+    {
+        $requests = 0;
+        $http = new MockHttpClient(static function () use (&$requests): MockResponse {
+            ++$requests;
+
+            return new MockResponse('', ['http_code' => 504]);
+        });
+        $clock = new RecordingClock();
+        $client = $this->client($http, clock: $clock);
+
+        try {
+            $client->recentTrades('BTC-USDT-SWAP');
+            self::fail('Expected retry exhaustion.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('okx_paper_public_http_error_504', $exception->getMessage());
+        }
+
+        self::assertSame(6, $requests);
+        self::assertSame([0.25, 0.5, 1.0, 2.0, 4.0], $clock->sleeps);
+    }
+
+    public function testCoherentButInvalidResponseIsAnIntegrityFailureWithoutRetry(): void
+    {
+        $requests = 0;
+        $http = new MockHttpClient(static function () use (&$requests): MockResponse {
+            ++$requests;
+
+            return new MockResponse('{"code":"0","data":{"row":[]}}');
+        });
+        $clock = new RecordingClock();
+        $client = $this->client($http, clock: $clock);
+
+        try {
+            $client->recentTrades('BTC-USDT-SWAP');
+            self::fail('Expected an integrity failure.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('okx_paper_public_response_invalid', $exception->getMessage());
+        }
+
+        self::assertSame(1, $requests);
+        self::assertSame([], $clock->sleeps);
     }
 
     public function testPreservesNonTransportApplicationExceptionsFromHttpClient(): void
@@ -424,7 +504,7 @@ final class OkxPaperPublicRestClientTest extends TestCase
         yield 'object data' => [new MockResponse('{"code":"0","data":{"row":[]}}'), 'okx_paper_public_response_invalid'];
         yield 'scalar row' => [new MockResponse('{"code":"0","data":["row"]}'), 'okx_paper_public_response_invalid'];
         yield 'other OKX error' => [new MockResponse('{"code":"51000","msg":"invalid","data":[]}'), 'okx_paper_public_api_error_51000'];
-        yield 'non-200 HTTP' => [new MockResponse('{"code":"0","data":[]}', ['http_code' => 503]), 'okx_paper_public_http_error_503'];
+        yield 'non-200 HTTP' => [new MockResponse('{"code":"0","data":[]}', ['http_code' => 404]), 'okx_paper_public_http_error_404'];
     }
 
     #[DataProvider('invalidResponses')]
@@ -529,7 +609,8 @@ final class OkxPaperPublicRestClientTest extends TestCase
     private function assertTransportFailureIsNormalized(HttpClientInterface $httpClient): void
     {
         $snapshotLimiter = new CountingLimiter();
-        $client = $this->client($httpClient, snapshotLimiter: $snapshotLimiter);
+        $clock = new RecordingClock();
+        $client = $this->client($httpClient, snapshotLimiter: $snapshotLimiter, clock: $clock);
 
         try {
             $client->recentTrades('BTC-USDT-SWAP');
@@ -539,7 +620,9 @@ final class OkxPaperPublicRestClientTest extends TestCase
             self::assertNull($exception->getPrevious());
         }
 
-        self::assertSame(1, $snapshotLimiter->reservationCount);
+        // Retried within the bounded budget, one limiter token per attempt.
+        self::assertSame(6, $snapshotLimiter->reservationCount);
+        self::assertSame([0.25, 0.5, 1.0, 2.0, 4.0], $clock->sleeps);
     }
 }
 
