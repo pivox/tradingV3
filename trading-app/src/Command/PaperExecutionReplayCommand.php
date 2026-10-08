@@ -11,6 +11,7 @@ use App\Trading\Paper\Execution\PaperEventCoordinatorInterface;
 use App\Trading\Paper\Execution\PaperExecutionConsumer;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
 use App\Trading\Paper\Execution\Persistence\PaperReplayBatchingStoreInterface;
+use App\Trading\Paper\Execution\Strategy\PaperPlanRejectionDiagnostics;
 use App\Trading\Paper\Replay\PaperReplayReader;
 use App\Trading\Paper\Runtime\PaperReplayReadinessService;
 use App\Trading\Paper\Runtime\PaperReplayStrategySelection;
@@ -40,6 +41,7 @@ final class PaperExecutionReplayCommand extends Command implements SignalableCom
         private readonly PaperEventCoordinatorInterface $coordinator,
         private readonly ?PaperFakeRuntimeFactory $runtimeFactory = null,
         private readonly ?PaperDatasetCandleWindow $lifecycleCandles = null,
+        private readonly ?PaperPlanRejectionDiagnostics $diagnostics = null,
     ) {
         parent::__construct();
     }
@@ -59,7 +61,8 @@ final class PaperExecutionReplayCommand extends Command implements SignalableCom
             ->addOption('dataset-receipt', null, InputOption::VALUE_REQUIRED, 'Absolute private campaign receipt of the verified dataset')
             ->addOption('batch-events', null, InputOption::VALUE_REQUIRED, 'Source events per committed batch', (string) self::DEFAULT_BATCH_EVENTS)
             ->addOption('batch-seconds', null, InputOption::VALUE_REQUIRED, 'Also commit when a batch is older than this (0 = never; makes the journal load-dependent)', (string) self::DEFAULT_BATCH_SECONDS)
-            ->addOption('per-event-commits', null, InputOption::VALUE_NONE, 'Former journal: one set of commits and full rows per source event');
+            ->addOption('per-event-commits', null, InputOption::VALUE_NONE, 'Former journal: one set of commits and full rows per source event')
+            ->addOption('plan-rejection-diagnostics', null, InputOption::VALUE_REQUIRED, 'Create a private NDJSON file of expected canonical plan rejections');
     }
 
     /** @return list<int> */
@@ -87,6 +90,13 @@ final class PaperExecutionReplayCommand extends Command implements SignalableCom
             $batchEvents = $this->positiveIntOption($input, 'batch-events');
             $batchSeconds = $this->nonNegativeIntOption($input, 'batch-seconds');
             $datasetPath = $this->requiredOption($input, 'dataset');
+            $diagnosticPath = $this->optionalOption($input, 'plan-rejection-diagnostics');
+            if ($diagnosticPath !== null) {
+                if ($this->diagnostics === null) {
+                    throw new \LogicException('paper_plan_diagnostics_unavailable');
+                }
+                $this->diagnostics->start($diagnosticPath);
+            }
             $receipt = $this->optionalOption($input, 'dataset-receipt');
             $preparation = $this->readiness->prepare(
                 $datasetPath,
@@ -185,6 +195,7 @@ final class PaperExecutionReplayCommand extends Command implements SignalableCom
             if ($state->killed || $state->nextSourcePosition !== $manifest->eventCount) {
                 throw new \LogicException('paper_replay_incomplete');
             }
+            $this->diagnostics?->close();
             $output->writeln(json_encode([
                 'schema_version' => self::COMPLETION_SCHEMA,
                 'completed' => true,
@@ -210,6 +221,8 @@ final class PaperExecutionReplayCommand extends Command implements SignalableCom
             $output->writeln('<error>' . $exception->getMessage() . '</error>');
 
             return Command::INVALID;
+        } finally {
+            $this->diagnostics?->close();
         }
     }
 

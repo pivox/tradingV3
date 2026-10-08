@@ -9,6 +9,7 @@ use App\Tests\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanPipelineFixture;
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalInstrumentEvidence;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalOrderPlanEvidenceSource;
+use App\Trading\Paper\Execution\Strategy\PaperPlanRejectionDiagnostics;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjection;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
@@ -136,6 +137,74 @@ final class PaperCanonicalOrderPlanEvidenceSourceTest extends TestCase
             $fixture['costs'],
             $this->portfolio($fixture['policy']->riskPolicy->modeId),
         ));
+    }
+
+    public function testExpectedZoneRejectionRecordsOnlySafeContextAndInputs(): void
+    {
+        $fixture = CanonicalOrderPlanPipelineFixture::accepted();
+        $book = new CanonicalOrderBookSnapshot(
+            'fake', 'test', 'BTCUSDT', 'perpetual', 'order_book',
+            120.0, 120.1, 8.329862557268, new \DateTimeImmutable('2026-08-10T11:59:30Z'),
+            'sha256:' . str_repeat('3', 64),
+        );
+        $path = sys_get_temp_dir() . '/paper-plan-source-' . bin2hex(random_bytes(8)) . '.ndjson';
+        $diagnostics = new PaperPlanRejectionDiagnostics();
+        try {
+            $diagnostics->start($path);
+            $result = (new PaperCanonicalOrderPlanEvidenceSource(
+                new MockClock('2026-08-10T12:00:00Z'),
+                diagnostics: $diagnostics,
+            ))->build(
+                $fixture['policy'], $this->projection(), $this->instrument($fixture),
+                $book, $fixture['costs'], $this->portfolio($fixture['policy']->riskPolicy->modeId),
+                ['cell_id' => 'cell-1', 'run_id' => 'run-1', 'event_id' => 'event-1', 'secret_token' => 'never-log-me'],
+            );
+            self::assertNull($result);
+            $record = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+            self::assertSame('canonical_entry_zone_candidate_outside', $record['reason_code']);
+            self::assertSame('event-1', $record['event_id']);
+            self::assertSame('cell-1', $record['cell_id']);
+            self::assertEquals(120.0, $record['zone']['candidate_price']);
+            self::assertSame(null, $record['zone']['lower_price']);
+            self::assertSame(null, $record['zone']['upper_price']);
+            self::assertSame(null, $record['zone']['entry_price']);
+            self::assertArrayNotHasKey('book', $record);
+            self::assertArrayNotHasKey('exception', $record);
+            self::assertStringNotContainsString('never-log-me', (string) file_get_contents($path));
+        } finally {
+            $diagnostics->close();
+            @unlink($path);
+        }
+    }
+
+    public function testUnexpectedIdentityFailurePropagatesWithoutDiagnostic(): void
+    {
+        $fixture = CanonicalOrderPlanPipelineFixture::accepted();
+        $book = new CanonicalOrderBookSnapshot(
+            'fake', 'test', 'WRONGSYMBOL', 'perpetual', 'order_book',
+            100.0, 100.1, 9.99500249875, new \DateTimeImmutable('2026-08-10T11:59:30Z'),
+            'sha256:' . str_repeat('3', 64),
+        );
+        $path = sys_get_temp_dir() . '/paper-plan-unexpected-' . bin2hex(random_bytes(8)) . '.ndjson';
+        $diagnostics = new PaperPlanRejectionDiagnostics();
+        try {
+            $diagnostics->start($path);
+            try {
+                (new PaperCanonicalOrderPlanEvidenceSource(
+                    new MockClock('2026-08-10T12:00:00Z'), diagnostics: $diagnostics,
+                ))->build(
+                    $fixture['policy'], $this->projection(), $this->instrument($fixture),
+                    $book, $fixture['costs'], $this->portfolio($fixture['policy']->riskPolicy->modeId),
+                );
+                self::fail('Expected identity failure');
+            } catch (\LogicException $exception) {
+                self::assertSame('paper_canonical_order_plan_identity_mismatch', $exception->getMessage());
+            }
+            self::assertSame('', file_get_contents($path));
+        } finally {
+            $diagnostics->close();
+            @unlink($path);
+        }
     }
 
     public function testHyperliquidPlanFailsClosedWhenATargetCrossesAPriceMagnitudeBoundary(): void
