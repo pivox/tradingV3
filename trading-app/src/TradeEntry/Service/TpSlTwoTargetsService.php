@@ -686,7 +686,7 @@ final class TpSlTwoTargetsService implements TakeProfitPlacerInterface
             $options = ['client_order_id' => $baseCid . '-SL'];
             if (!$isDryRun) {
                 // Submit SL as a stop-limit (triggered) by using stopPrice; keep limit price equal to stop for determinism
-                $dto = $this->placeClosingOrder($adapter, $symbol, $closeSide, $positionSide, ExchangeOrderType::STOP_LOSS, (float)$slSize, (float)$stop, (float)$stop, $options['client_order_id']);
+                $dto = $this->placeClosingOrder($adapter, $symbol, $closeSide, $positionSide, ExchangeOrderType::STOP_LOSS, (float)$slSize, (float)$stop, (float)$stop, $options['client_order_id'], (float) $contractSize);
                 if ($dto !== null) {
                     $submitted[] = [
                         'order_id' => $dto,
@@ -716,7 +716,7 @@ final class TpSlTwoTargetsService implements TakeProfitPlacerInterface
         if ($size1 > 0) {
             $options = ['client_order_id' => $baseCid . '-TP1'];
             if (!$isDryRun) {
-                $dto = $this->placeClosingOrder($adapter, $symbol, $closeSide, $positionSide, ExchangeOrderType::TAKE_PROFIT, (float)$size1, (float)$tp1, (float)$tp1, $options['client_order_id']);
+                $dto = $this->placeClosingOrder($adapter, $symbol, $closeSide, $positionSide, ExchangeOrderType::TAKE_PROFIT, (float)$size1, (float)$tp1, (float)$tp1, $options['client_order_id'], (float) $contractSize);
                 if ($dto !== null) {
                     $submitted[] = [
                         'order_id' => $dto,
@@ -746,7 +746,7 @@ final class TpSlTwoTargetsService implements TakeProfitPlacerInterface
         if ($size2 > 0) {
             $options = ['client_order_id' => $baseCid . '-TP2'];
             if (!$isDryRun) {
-                $dto = $this->placeClosingOrder($adapter, $symbol, $closeSide, $positionSide, ExchangeOrderType::TAKE_PROFIT, (float)$size2, (float)$tp2, (float)$tp2, $options['client_order_id']);
+                $dto = $this->placeClosingOrder($adapter, $symbol, $closeSide, $positionSide, ExchangeOrderType::TAKE_PROFIT, (float)$size2, (float)$tp2, (float)$tp2, $options['client_order_id'], (float) $contractSize);
                 if ($dto !== null) {
                     $submitted[] = [
                         'order_id' => $dto,
@@ -817,6 +817,7 @@ final class TpSlTwoTargetsService implements TakeProfitPlacerInterface
         float $price,
         float $triggerPrice,
         string $clientOrderId,
+        ?float $contractSize = null,
     ): ?string {
         $result = $adapter->placeOrder(new PlaceOrderRequest(
             exchange: $adapter->exchange(),
@@ -834,7 +835,7 @@ final class TpSlTwoTargetsService implements TakeProfitPlacerInterface
             leverage: null,
             marginMode: 'isolated',
             clientOrderId: $clientOrderId,
-            metadata: ['source' => 'tp_sl_two_targets'],
+            metadata: ['source' => 'tp_sl_two_targets', 'contract_size' => $contractSize],
         ));
 
         return $result->accepted ? $result->exchangeOrderId : null;

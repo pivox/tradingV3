@@ -30,7 +30,7 @@ final class OkxDemoWriteRuntimeCheckTest extends TestCase
             ['api_key_present' => true, 'api_secret_present' => true, 'api_passphrase_present' => true, 'all_present' => true],
             $report['credentials'],
         );
-        self::assertSame(['clear' => true, 'tripped' => false, 'reasons' => []], $report['kill_switch']);
+        self::assertSame(['clear' => true, 'tripped' => false, 'trip_reason' => null, 'reasons' => []], $report['kill_switch']);
         self::assertSame(['rest_allowed' => true, 'ws_private_allowed' => true], $report['endpoint_guard']);
         self::assertTrue($report['write_ready']);
         self::assertSame([], $report['blocking_reasons']);

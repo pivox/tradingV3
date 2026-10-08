@@ -41,6 +41,20 @@ final readonly class OkxDemoWriteGate
         }
     }
 
+    public function tripReason(): ?string
+    {
+        try {
+            return $this->trip->isTripped() ? $this->trip->reason() : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    public function trip(string $reason): void
+    {
+        $this->trip->trip($reason);
+    }
+
     /**
      * @return array{OKX_ENV: string, OKX_SIMULATED_TRADING: bool, OKX_DEMO_TRADING_ENABLED: bool, DEMO_TRADING_ENABLED: bool, OKX_LIVE_ENABLED: bool}
      */
@@ -106,6 +120,7 @@ final readonly class OkxDemoWriteGate
         string $clientOrderId,
         array $correlationIds = [],
         bool $reduceOnly = true,
+        ?bool $stopLossPresent = null,
     ): OkxDemoWriteDecision {
         if ($this->isTripped()) {
             return OkxDemoWriteDecision::refuse(['okx_demo_tripped'], $kind);
@@ -114,11 +129,14 @@ final readonly class OkxDemoWriteGate
         if ($kind === OkxDemoWriteKind::PROTECTIVE && !$reduceOnly) {
             $reasons[] = 'protective_requires_reduce_only';
         }
+        if ($kind === OkxDemoWriteKind::ENTRY && $stopLossPresent === false) {
+            $reasons[] = 'stop_loss_required';
+        }
         if ($reasons !== []) {
             return OkxDemoWriteDecision::refuse($reasons, $kind);
         }
 
-        $decision = $this->killSwitchDecision($action, $symbol, $notional, $clientOrderId, $correlationIds);
+        $decision = $this->killSwitchDecision($action, $symbol, $notional, $clientOrderId, $correlationIds, $kind === OkxDemoWriteKind::ENTRY ? ($stopLossPresent ?? true) : true);
         if ($decision->allowed) {
             return OkxDemoWriteDecision::allow($kind);
         }
@@ -157,6 +175,7 @@ final readonly class OkxDemoWriteGate
         ?float $notional,
         string $clientOrderId,
         array $correlationIds = [],
+        bool $stopLossPresent = true,
     ): DemoTradingKillSwitchDecision {
         return $this->killSwitch->evaluate(new DemoTradingMutationAttempt(
             exchange: Exchange::OKX,
@@ -172,7 +191,7 @@ final readonly class OkxDemoWriteGate
             demoTestnetWriteEnabled: true,
             effectiveKillSwitchEnabled: false,
             requireStopLoss: true,
-            stopLossPresent: true,
+            stopLossPresent: $stopLossPresent,
             allowedMarkets: [self::MARKET],
             maxNotional: $this->maxNotional,
             correlationIds: $correlationIds,

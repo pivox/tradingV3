@@ -130,6 +130,14 @@ final class ExchangeExecutionService
             $leverageSet = $adapter->setLeverage($plan->symbol, $plan->leverage, $plan->openType);
         }
 
+        $positionBaseline = null;
+        if ($this->restingEntryBus instanceof MessageBusInterface) {
+            try {
+                $positionBaseline = $this->positionSize($adapter, $plan);
+            } catch (\Throwable) {
+            }
+        }
+
         try {
             $entryResult = $adapter->placeOrder($this->entryRequest(
                 plan: $plan,
@@ -175,7 +183,7 @@ final class ExchangeExecutionService
         }
 
         if (!$this->entryFilled($entryResult) && $this->entryActive($entryResult)) {
-            $resting = $this->seedRestingEntryWatch($plan, $context, $entryResult, $clientOrderId, $decisionKey, $mode, $contextBuilder, $leverageSet);
+            $resting = $this->seedRestingEntryWatch($plan, $context, $entryResult, $clientOrderId, $decisionKey, $mode, $contextBuilder, $leverageSet, $positionBaseline);
             if ($resting instanceof ExecutionResult) {
                 return $resting;
             }
@@ -282,11 +290,13 @@ final class ExchangeExecutionService
         ?string $mode,
         ?LifecycleContextBuilder $contextBuilder,
         ?bool $leverageSet,
+        ?float $positionBaseline,
     ): ?ExecutionResult {
         if (!$this->restingEntryBus instanceof MessageBusInterface
             || $plan->orderType !== 'limit'
             || !\in_array($plan->orderMode, [1, 4], true)
             || $entryResult->exchangeOrderId === null
+            || $positionBaseline === null
         ) {
             return null;
         }
@@ -309,6 +319,7 @@ final class ExchangeExecutionService
                     lifecycleContext: $lifecycle,
                     mode: $mode,
                     plan: $plan->toWatchSnapshot(),
+                    positionBaseline: $positionBaseline,
                 ),
                 [new DelayStamp(self::LIMIT_WATCH_INITIAL_DELAY_MS)],
             );
@@ -412,6 +423,8 @@ final class ExchangeExecutionService
                 'decision_key' => $decisionKey,
                 'order_intent_id' => $orderIntentId,
                 'source' => 'exchange_execution_service',
+                'contract_size' => $plan->contractSize,
+                'stop_loss_price' => $plan->stop,
             ] + $executionMetadata,
         );
     }

@@ -148,13 +148,27 @@ final class OkxDemoWriteGateTest extends TestCase
         $trip = new FilesystemOkxDemoTrip($path);
         try {
             self::assertFalse($trip->isTripped());
-            $trip->trip();
+            $trip->trip('audit_after_failed');
             self::assertTrue($trip->isTripped());
+            self::assertSame('audit_after_failed', $trip->reason());
             self::assertTrue((new FilesystemOkxDemoTrip($path))->isTripped());
         } finally {
             @unlink($path);
         }
         self::assertFalse($trip->isTripped());
+    }
+
+    public function testEntryWithoutStopEvidenceIsRefusedButOtherKindsAreNotAffected(): void
+    {
+        $gate = (new OkxDemoWriteHarness(OkxDemoWriteHarness::config()))->gate();
+
+        $entry = $gate->evaluate(OkxDemoWriteKind::ENTRY, 'place_order', 'BTCUSDT', 5.0, 'OKX1', [], false, false);
+        self::assertFalse($entry->allowed);
+        self::assertSame(['stop_loss_required'], $entry->reasons);
+
+        self::assertTrue($gate->evaluate(OkxDemoWriteKind::ENTRY, 'place_order', 'BTCUSDT', 5.0, 'OKX1', [], false, true)->allowed);
+        self::assertTrue($gate->evaluate(OkxDemoWriteKind::TAKE_PROFIT, 'place_order', 'BTCUSDT', 5.0, 'OKX1', [], true, null)->allowed);
+        self::assertTrue($gate->evaluate(OkxDemoWriteKind::PROTECTIVE, 'place_order', 'BTCUSDT', 5.0, 'OKX1', [], true, null)->allowed);
     }
 
     private function evaluate(OkxDemoWriteHarness $harness, OkxDemoWriteKind $kind, float $notional = 5.0): \App\Exchange\Okx\Demo\OkxDemoWriteDecision

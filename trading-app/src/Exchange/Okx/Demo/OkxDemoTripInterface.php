@@ -8,5 +8,7 @@ interface OkxDemoTripInterface
 {
     public function isTripped(): bool;
 
-    public function trip(): void;
+    public function reason(): ?string;
+
+    public function trip(string $reason): void;
 }

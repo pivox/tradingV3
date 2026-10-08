@@ -84,6 +84,7 @@ final class ExchangeExecutionRestingLimitTest extends TestCase
         self::assertSame(24800.0, $message->plan['stop'] ?? null);
         self::assertSame('long', $message->plan['side'] ?? null);
         self::assertSame($orderMode, $message->plan['order_mode'] ?? null);
+        self::assertSame(0.0, $message->positionBaseline);
 
         $delay = $this->dispatched[0]->last(DelayStamp::class);
         self::assertSame(5000, $delay?->getDelay());
@@ -108,6 +109,15 @@ final class ExchangeExecutionRestingLimitTest extends TestCase
         self::assertSame([], $this->dispatched);
         self::assertCount(1, $this->adapter->cancelled);
         self::assertSame('protective', $this->adapter->cancelled[0]->metadata['write_kind']);
+    }
+
+    public function testBaselineCapturesTheExistingSameSidePosition(): void
+    {
+        $this->adapter->positions[] = $this->adapter->position(4.0);
+
+        $this->service($this->bus())->execute($this->plan('limit', 1), 'decision-base', 'unit', null, 'client-base');
+
+        self::assertSame(4.0, $this->dispatched[0]->getMessage()->positionBaseline);
     }
 
     public function testWithoutABusTheEntryRemainderIsCancelledAsBefore(): void

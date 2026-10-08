@@ -56,7 +56,7 @@ final readonly class OkxDemoWriteRuntimeCheck
             'exchange' => 'okx',
             'flags' => $this->gate->flags(),
             'credentials' => $credentials + ['all_present' => $credentialsPresent],
-            'kill_switch' => ['clear' => $killSwitch->allowed && !$tripped, 'tripped' => $tripped, 'reasons' => $killSwitch->reasons],
+            'kill_switch' => ['clear' => $killSwitch->allowed && !$tripped, 'tripped' => $tripped, 'trip_reason' => $this->gate->tripReason(), 'reasons' => $killSwitch->reasons],
             'endpoint_guard' => ['rest_allowed' => $restAllowed, 'ws_private_allowed' => $wsAllowed],
             'write_ready' => $blocking === [],
             'blocking_reasons' => array_values(array_unique($blocking)),

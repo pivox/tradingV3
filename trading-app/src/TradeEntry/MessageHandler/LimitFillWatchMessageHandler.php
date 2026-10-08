@@ -78,6 +78,8 @@ final class LimitFillWatchMessageHandler
                 $message->exchangeOrderId,
                 $message->clientOrderId,
                 $this->positionSide($message),
+                $message->positionBaseline,
+                isset($message->plan['size']) ? (float) $message->plan['size'] : null,
             );
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('limit_watch.order_fetch_failed', [
@@ -487,6 +489,7 @@ final class LimitFillWatchMessageHandler
                 cancelIssued: $cancelIssued,
                 mode: $message->mode ?? null,
                 plan: $message->plan,
+                positionBaseline: $message->positionBaseline,
             ),
             [new DelayStamp(self::POLL_DELAY_MS)]
         );

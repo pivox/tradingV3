@@ -354,7 +354,144 @@ final class OkxDemoGuardedExchangeAdapterTest extends TestCase
             leverage: 3,
             marginMode: 'isolated',
             clientOrderId: $clientOrderId,
+            metadata: ['contract_size' => 1.0],
         );
+    }
+
+    public function testNotionalUsesTheContractSizeSoCtValDecidesTheCap(): void
+    {
+        [$small, $smallClient] = $this->build(OkxDemoWriteHarness::config(), maxNotional: 300.0);
+        $small->placeOrder($this->limitRequest(metadata: ['contract_size' => 0.01, 'stop_loss_price' => 24800.0, 'quantity_note' => 'x']));
+        self::assertCount(1, $smallClient->posts);
+
+        [$big, $bigClient, $harness] = $this->build(OkxDemoWriteHarness::config(), maxNotional: 300.0);
+        try {
+            $big->placeOrder($this->limitRequest(metadata: ['contract_size' => 10.0, 'stop_loss_price' => 24800.0]));
+            self::fail('refused');
+        } catch (OkxDemoWriteRefusedException $e) {
+            self::assertContains('max_notional_exceeded', $e->reasons);
+        }
+        self::assertSame([], $bigClient->posts);
+        self::assertEqualsWithDelta(0.01 * 10.0 * 25000.0, $this->adapterEvents($harness)[0]['notional'], 0.0001);
+    }
+
+    public function testMissingContractSizeIsRefusedUnlessTheContractReadPathResolvesIt(): void
+    {
+        [$adapter, $client] = $this->build(OkxDemoWriteHarness::config());
+        try {
+            $adapter->placeOrder($this->limitRequest(metadata: ['stop_loss_price' => 24800.0]));
+            self::fail('refused');
+        } catch (OkxDemoWriteRefusedException $e) {
+            self::assertSame(['contract_size_unavailable'], $e->reasons);
+        }
+        self::assertSame([], $client->posts);
+
+        [$resolved, $resolvedClient, $harness] = $this->build(OkxDemoWriteHarness::config(), maxNotional: 300.0, contracts: $this->contracts('0.01'));
+        $resolved->placeOrder($this->limitRequest(metadata: ['stop_loss_price' => 24800.0]));
+        self::assertCount(1, $resolvedClient->posts);
+        self::assertEqualsWithDelta(0.01 * 0.01 * 25000.0, $this->adapterEvents($harness)[0]['notional'], 0.0001);
+    }
+
+    public function testProtectiveWriteDoesNotNeedAContractSize(): void
+    {
+        [$adapter, $client] = $this->build(OkxDemoWriteHarness::config());
+        $request = $this->reduceOnly(ExchangeOrderType::STOP_LOSS, 'OKXSL', stopPrice: 24800.0);
+
+        $adapter->placeOrder(new PlaceOrderRequest(
+            $request->exchange, $request->marketType, $request->symbol, $request->side, $request->positionSide, $request->orderType,
+            $request->timeInForce, $request->quantity, $request->price, $request->stopPrice, true, false, 3, 'isolated', 'OKXSL2',
+        ));
+
+        self::assertCount(1, $client->posts);
+    }
+
+    public function testEntryNeedsStopEvidenceAndAuditRecordsTheRealValue(): void
+    {
+        [$adapter, $client, $harness] = $this->build(OkxDemoWriteHarness::config());
+
+        try {
+            $adapter->placeOrder($this->limitRequest(metadata: ['contract_size' => 1.0]));
+            self::fail('refused');
+        } catch (OkxDemoWriteRefusedException $e) {
+            self::assertSame(['stop_loss_required'], $e->reasons);
+        }
+        self::assertSame([], $client->posts);
+        self::assertFalse($this->adapterEvents($harness)[0]['stop_loss_present']);
+
+        $adapter->placeOrder($this->limitRequest(metadata: ['contract_size' => 1.0, 'stop_loss_price' => 24800.0]));
+        $events = $this->adapterEvents($harness);
+        self::assertTrue($events[1]['stop_loss_present']);
+        self::assertTrue($events[2]['stop_loss_present']);
+    }
+
+    public function testStopRequirementIsNotApplicableToProtectiveAndTakeProfitWrites(): void
+    {
+        [$adapter, , $harness] = $this->build(OkxDemoWriteHarness::config());
+
+        $adapter->placeOrder($this->reduceOnly(ExchangeOrderType::STOP_LOSS, 'OKXSL', stopPrice: 24800.0));
+
+        self::assertNull($this->adapterEvents($harness)[0]['stop_loss_present']);
+    }
+
+    public function testAfterAuditFailureKeepsTheResultButTripsTheDurableQuarantine(): void
+    {
+        [$adapter, $client, $harness] = $this->build(OkxDemoWriteHarness::config());
+        $harness->failAuditAfter = 1;
+
+        $result = $adapter->placeOrder($this->limitRequest());
+
+        self::assertTrue($result->accepted);
+        self::assertCount(1, $client->posts);
+        self::assertTrue($harness->tripped);
+        self::assertSame('audit_after_failed', $harness->tripReason);
+
+        try {
+            $adapter->placeOrder($this->reduceOnly(ExchangeOrderType::STOP_LOSS, 'OKXSL', stopPrice: 24800.0));
+            self::fail('refused');
+        } catch (OkxDemoWriteRefusedException $e) {
+            self::assertSame(['okx_demo_tripped'], $e->reasons);
+        }
+    }
+
+    private function contracts(string $ctVal): \App\Contract\Provider\ContractProviderInterface
+    {
+        $dto = new \App\Contract\Provider\Dto\ContractDto(
+            symbol: 'BTCUSDT',
+            productType: 1,
+            openTimestamp: new \DateTimeImmutable('@0'),
+            expireTimestamp: new \DateTimeImmutable('@0'),
+            settleTimestamp: new \DateTimeImmutable('@0'),
+            baseCurrency: 'BTC',
+            quoteCurrency: 'USDT',
+            lastPrice: \Brick\Math\BigDecimal::of('0'),
+            volume24h: \Brick\Math\BigDecimal::of('0'),
+            turnover24h: \Brick\Math\BigDecimal::of('0'),
+            indexPrice: \Brick\Math\BigDecimal::of('0'),
+            indexName: 'x',
+            contractSize: \Brick\Math\BigDecimal::of($ctVal),
+            minLeverage: \Brick\Math\BigDecimal::of('1'),
+            maxLeverage: \Brick\Math\BigDecimal::of('1'),
+            pricePrecision: \Brick\Math\BigDecimal::of('2'),
+            volPrecision: \Brick\Math\BigDecimal::of('2'),
+            maxVolume: \Brick\Math\BigDecimal::of('0'),
+            minVolume: \Brick\Math\BigDecimal::of('0'),
+            fundingRate: \Brick\Math\BigDecimal::of('0'),
+            expectedFundingRate: \Brick\Math\BigDecimal::of('0'),
+            openInterest: \Brick\Math\BigDecimal::of('0'),
+            openInterestValue: \Brick\Math\BigDecimal::of('0'),
+            high24h: \Brick\Math\BigDecimal::of('0'),
+            low24h: \Brick\Math\BigDecimal::of('0'),
+            change24h: \Brick\Math\BigDecimal::of('0'),
+            fundingTime: new \DateTimeImmutable('@0'),
+            marketMaxVolume: \Brick\Math\BigDecimal::of('0'),
+            fundingIntervalHours: 0,
+            status: 'live',
+            delistTime: new \DateTimeImmutable('@0'),
+        );
+        $provider = $this->createMock(\App\Contract\Provider\ContractProviderInterface::class);
+        $provider->method('getContractDetails')->willReturn($dto);
+
+        return $provider;
     }
 
     /**
@@ -368,16 +505,19 @@ final class OkxDemoGuardedExchangeAdapterTest extends TestCase
     /**
      * @return array{0: OkxDemoGuardedExchangeAdapter, 1: RecordingOkxClient, 2: OkxDemoWriteHarness}
      */
-    private function build(\App\Exchange\Okx\OkxConfig $config, bool $killSwitchOkx = true, float $maxNotional = 1000.0): array
+    private function build(\App\Exchange\Okx\OkxConfig $config, bool $killSwitchOkx = true, float $maxNotional = 1000.0, ?\App\Contract\Provider\ContractProviderInterface $contracts = null): array
     {
         $harness = new OkxDemoWriteHarness($config, true, $killSwitchOkx, $maxNotional);
         $client = new RecordingOkxClient();
         $inner = new OkxExchangeAdapter($client, new OkxInstrumentResolver(), new OkxActionFactory(), $config, $harness->clock());
 
-        return [new OkxDemoGuardedExchangeAdapter($inner, $harness->gate(), $harness->sink()), $client, $harness];
+        return [new OkxDemoGuardedExchangeAdapter($inner, $harness->gate(), $harness->sink(), $contracts), $client, $harness];
     }
 
-    private function limitRequest(ExchangeOrderType $type = ExchangeOrderType::LIMIT, ?float $price = 25000.0): PlaceOrderRequest
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function limitRequest(ExchangeOrderType $type = ExchangeOrderType::LIMIT, ?float $price = 25000.0, array $metadata = ['contract_size' => 1.0, 'stop_loss_price' => 24800.0]): PlaceOrderRequest
     {
         return new PlaceOrderRequest(
             exchange: Exchange::OKX,
@@ -395,7 +535,7 @@ final class OkxDemoGuardedExchangeAdapterTest extends TestCase
             leverage: 3,
             marginMode: 'isolated',
             clientOrderId: 'OKX1',
-            metadata: ['decision_key' => 'decision-1', 'order_intent_id' => 42],
+            metadata: ['decision_key' => 'decision-1', 'order_intent_id' => 42] + $metadata,
         );
     }
 

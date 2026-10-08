@@ -180,7 +180,7 @@ final class LimitFillWatchMessageHandlerLineageTest extends KernelTestCase
     /**
      * @param array<string,mixed>|null $plan
      */
-    private function message(int $tries = 0, bool $cancelIssued = false, int $cancelAfterSec = 30, ?array $plan = null): LimitFillWatchMessage
+    private function message(int $tries = 0, bool $cancelIssued = false, int $cancelAfterSec = 30, ?array $plan = null, ?float $positionBaseline = 0.0): LimitFillWatchMessage
     {
         return new LimitFillWatchMessage(
             symbol: 'BTCUSDT',
@@ -193,6 +193,7 @@ final class LimitFillWatchMessageHandlerLineageTest extends KernelTestCase
             lifecycleContext: ['exchange' => 'okx', 'market_type' => 'perpetual', 'run_id' => 'run-w'],
             cancelIssued: $cancelIssued,
             plan: $plan ?? self::planSnapshot(),
+            positionBaseline: $positionBaseline,
         );
     }
 
@@ -291,7 +292,7 @@ final class LimitFillWatchMessageHandlerLineageTest extends KernelTestCase
         self::assertCount(1, $this->adapter->placed);
     }
 
-    public function testPositionWithoutOrderOrFillEvidenceIsStillProtectedRatherThanReportedExpired(): void
+    public function testPositionIncreaseOverBaselineByTheOrderQuantityIsProtectedRatherThanReportedExpired(): void
     {
         $this->adapter->positions[] = $this->adapter->position(3.0);
         $this->adapter->placeStatus = ExchangeOrderStatus::OPEN;
@@ -300,6 +301,41 @@ final class LimitFillWatchMessageHandlerLineageTest extends KernelTestCase
 
         self::assertCount(1, $this->adapter->placed);
         self::assertNull($this->em->getRepository(TradeLifecycleEvent::class)->findOneBy(['eventType' => 'order_expired']));
+    }
+
+    public function testPreExistingPositionDoesNotMakeACancelledOrderLookFilled(): void
+    {
+        $this->adapter->positions[] = $this->adapter->position(5.0);
+        $this->adapter->placeStatus = ExchangeOrderStatus::OPEN;
+
+        $this->handler()($this->message(tries: 9, cancelIssued: true, positionBaseline: 5.0));
+
+        self::assertSame([], $this->adapter->placed);
+        self::assertNotNull($this->em->getRepository(TradeLifecycleEvent::class)->findOneBy(['eventType' => 'order_expired']));
+        self::assertNull($this->em->getRepository(TradeLifecycleEvent::class)->findOneBy(['eventType' => 'position_opened']));
+    }
+
+    public function testPositionEvidenceNeedsAnIncreaseOfTheOrderQuantityOverTheBaseline(): void
+    {
+        $this->adapter->positions[] = $this->adapter->position(6.0);
+        $this->adapter->placeStatus = ExchangeOrderStatus::OPEN;
+
+        $this->handler()($this->message(positionBaseline: 5.0));
+        self::assertSame([], $this->adapter->placed);
+
+        $this->adapter->positions = [$this->adapter->position(8.0)];
+        $this->handler()($this->message(positionBaseline: 5.0));
+        self::assertCount(1, $this->adapter->placed);
+    }
+
+    public function testMessagesWithoutABaselineNeverUsePositionEvidence(): void
+    {
+        $this->adapter->positions[] = $this->adapter->position(3.0);
+        $this->adapter->placeStatus = ExchangeOrderStatus::OPEN;
+
+        $this->handler()($this->message(tries: 9, cancelIssued: true, positionBaseline: null));
+
+        self::assertSame([], $this->adapter->placed);
     }
 
     public function testStillRestingInsideTheWindowIsRescheduledWithoutCancel(): void

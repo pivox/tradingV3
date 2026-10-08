@@ -30,8 +30,8 @@ final class TpSlTwoTargetsAdapterMigrationTest extends TestCase
         [$adapter, $client, $harness] = $this->guarded();
         $service = (new \ReflectionClass(TpSlTwoTargetsService::class))->newInstanceWithoutConstructor();
 
-        $tp = $this->invoke($service, 'placeClosingOrder', $adapter, 'BTCUSDT', ExchangeOrderSide::SELL, ExchangePositionSide::LONG, ExchangeOrderType::TAKE_PROFIT, 0.02, 26000.0, 26000.0, 'cid-TP1');
-        $sl = $this->invoke($service, 'placeClosingOrder', $adapter, 'BTCUSDT', ExchangeOrderSide::SELL, ExchangePositionSide::LONG, ExchangeOrderType::STOP_LOSS, 0.03, 24800.0, 24800.0, 'cid-SL');
+        $tp = $this->invoke($service, 'placeClosingOrder', $adapter, 'BTCUSDT', ExchangeOrderSide::SELL, ExchangePositionSide::LONG, ExchangeOrderType::TAKE_PROFIT, 0.02, 26000.0, 26000.0, 'cid-TP1', 1.0);
+        $sl = $this->invoke($service, 'placeClosingOrder', $adapter, 'BTCUSDT', ExchangeOrderSide::SELL, ExchangePositionSide::LONG, ExchangeOrderType::STOP_LOSS, 0.03, 24800.0, 24800.0, 'cid-SL', 1.0);
 
         self::assertSame('algo:90001', $tp);
         self::assertSame('algo:90001', $sl);
@@ -50,12 +50,12 @@ final class TpSlTwoTargetsAdapterMigrationTest extends TestCase
         $harness->healthyPrivateStream = false;
         $service = (new \ReflectionClass(TpSlTwoTargetsService::class))->newInstanceWithoutConstructor();
 
-        $sl = $this->invoke($service, 'placeClosingOrder', $adapter, 'BTCUSDT', ExchangeOrderSide::SELL, ExchangePositionSide::LONG, ExchangeOrderType::STOP_LOSS, 0.03, 24800.0, 24800.0, 'cid-SL');
+        $sl = $this->invoke($service, 'placeClosingOrder', $adapter, 'BTCUSDT', ExchangeOrderSide::SELL, ExchangePositionSide::LONG, ExchangeOrderType::STOP_LOSS, 0.03, 24800.0, 24800.0, 'cid-SL', 1.0);
         self::assertSame('algo:90001', $sl);
 
         $this->expectException(OkxDemoWriteRefusedException::class);
         try {
-            $this->invoke($service, 'placeClosingOrder', $adapter, 'BTCUSDT', ExchangeOrderSide::SELL, ExchangePositionSide::LONG, ExchangeOrderType::TAKE_PROFIT, 0.02, 26000.0, 26000.0, 'cid-TP1');
+            $this->invoke($service, 'placeClosingOrder', $adapter, 'BTCUSDT', ExchangeOrderSide::SELL, ExchangePositionSide::LONG, ExchangeOrderType::TAKE_PROFIT, 0.02, 26000.0, 26000.0, 'cid-TP1', 1.0);
         } finally {
             self::assertCount(1, $client->posts);
         }

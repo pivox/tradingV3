@@ -25,9 +25,13 @@ final class OkxDemoWriteHarness
 
     public bool $failAudit = false;
 
+    public int $failAuditAfter = 0;
+
     public bool $healthyPrivateStream = true;
 
     public bool $tripped = false;
+
+    public ?string $tripReason = null;
 
     public function __construct(
         public readonly OkxConfig $config,
@@ -82,6 +86,10 @@ final class OkxDemoWriteHarness
                 if ($this->harness->failAudit) {
                     throw new \RuntimeException('sink down');
                 }
+                if (($event['phase'] ?? null) === 'after' && $this->harness->failAuditAfter > 0) {
+                    --$this->harness->failAuditAfter;
+                    throw new \RuntimeException('sink down after');
+                }
                 $this->harness->events[] = $event;
             }
         };
@@ -101,9 +109,15 @@ final class OkxDemoWriteHarness
                 return $this->harness->tripped;
             }
 
-            public function trip(): void
+            public function reason(): ?string
+            {
+                return $this->harness->tripped ? $this->harness->tripReason : null;
+            }
+
+            public function trip(string $reason): void
             {
                 $this->harness->tripped = true;
+                $this->harness->tripReason = $reason;
             }
         };
     }

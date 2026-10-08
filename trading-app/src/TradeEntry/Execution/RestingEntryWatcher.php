@@ -30,6 +30,8 @@ final readonly class RestingEntryWatcher
         string $exchangeOrderId,
         ?string $clientOrderId,
         ?ExchangePositionSide $positionSide = null,
+        ?float $positionBaseline = null,
+        ?float $orderQuantity = null,
     ): RestingEntryState {
         $order = $adapter->getOrder($symbol, $exchangeOrderId);
         if ($order !== null) {
@@ -65,9 +67,10 @@ final readonly class RestingEntryWatcher
             return new RestingEntryState(RestingEntryState::FILLED, $filled, false, null, $notional / $filled);
         }
 
-        if ($positionSide !== null) {
+        if ($positionSide !== null && $positionBaseline !== null && $orderQuantity !== null && $orderQuantity > self::EPSILON) {
             foreach ($adapter->getOpenPositions($symbol) as $position) {
-                if ($position->side === $positionSide && $position->size > self::EPSILON) {
+                $increase = $position->size - $positionBaseline;
+                if ($position->side === $positionSide && $increase >= $orderQuantity * 0.99) {
                     return new RestingEntryState(RestingEntryState::FILLED, $position->size, false, null, $position->entryPrice);
                 }
             }

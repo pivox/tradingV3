@@ -6,7 +6,7 @@ namespace App\Exchange\Okx\Demo;
 
 final readonly class FilesystemOkxDemoTrip implements OkxDemoTripInterface
 {
-    private const MARKER_CONTENT = "OKX_DEMO_EXECUTION_QUARANTINED\n";
+    private const MARKER_HEADER = "OKX_DEMO_EXECUTION_QUARANTINED\n";
 
     public function __construct(private string $markerPath)
     {
@@ -19,9 +19,21 @@ final readonly class FilesystemOkxDemoTrip implements OkxDemoTripInterface
         return @lstat($this->markerPath) !== false;
     }
 
-    public function trip(): void
+    public function reason(): ?string
     {
-        if (@file_put_contents($this->markerPath, self::MARKER_CONTENT, LOCK_EX) === false) {
+        $content = @file_get_contents($this->markerPath);
+        if (!\is_string($content) || !str_starts_with($content, self::MARKER_HEADER)) {
+            return null;
+        }
+        $reason = trim(substr($content, \strlen(self::MARKER_HEADER)));
+
+        return $reason === '' ? null : $reason;
+    }
+
+    public function trip(string $reason): void
+    {
+        $content = self::MARKER_HEADER . preg_replace('/[^a-z0-9_]/i', '_', $reason) . "\n";
+        if (@file_put_contents($this->markerPath, $content, LOCK_EX) === false) {
             throw new \RuntimeException('okx_demo_trip_persistence_failed');
         }
     }

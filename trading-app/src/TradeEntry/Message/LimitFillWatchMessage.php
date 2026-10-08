@@ -19,5 +19,6 @@ final class LimitFillWatchMessage
         public readonly ?string $mode = null,
         /** @var array<string,mixed>|null */
         public readonly ?array $plan = null,
+        public readonly ?float $positionBaseline = null,
     ) {}
 }
