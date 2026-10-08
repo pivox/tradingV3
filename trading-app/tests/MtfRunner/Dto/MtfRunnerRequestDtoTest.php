@@ -280,7 +280,6 @@ final class MtfRunnerRequestDtoTest extends TestCase
         yield 'okx' => ['okx', Exchange::OKX];
         yield 'binance' => ['binance', Exchange::BINANCE];
         yield 'fake' => ['fake', Exchange::FAKE];
-        yield 'okx' => ['okx', Exchange::OKX];
         yield 'hyperliquid' => ['hyperliquid', Exchange::HYPERLIQUID];
         yield 'trimmed uppercase okx' => [' OKX ', Exchange::OKX];
     }
