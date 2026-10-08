@@ -120,12 +120,12 @@ def test_build_payload_carries_exact_canonical_identity_and_hash_on_retry():
     assert retry["config_hash"] == first["config_hash"]
 
 
-def test_build_payload_refuses_bypassed_bitmart_canonical_set_before_http_serialization():
+def test_build_payload_refuses_bypassed_binance_canonical_set_before_http_serialization():
     bypassed = OrchestratorSet.model_construct(
-        set_id="bypassed-modern-bitmart",
+        set_id="bypassed-modern-binance",
         enabled=True,
         action="mtf_run",
-        exchange=SimpleNamespace(value="bitmart"),
+        exchange=SimpleNamespace(value="binance"),
         market_type=SimpleNamespace(value="perpetual"),
         mtf_profile=SimpleNamespace(value="scalper"),
         environment=SimpleNamespace(value="demo"),
@@ -306,8 +306,8 @@ def test_build_payload_omits_snapshot_when_none():
 
 
 def test_snapshot_key_uses_exchange_and_market_type():
-    assert snapshot_key(_make_set(exchange="bitmart", market_type="perpetual")) == (
-        "bitmart",
+    assert snapshot_key(_make_set(exchange="okx", market_type="perpetual")) == (
+        "okx",
         "perpetual",
     )
 
@@ -315,16 +315,16 @@ def test_snapshot_key_uses_exchange_and_market_type():
 def test_snapshot_key_normalizes_casing_and_whitespace():
     # Une ligne ORM hors API peut porter une casse/des espaces ; le regroupement
     # snapshot doit la normaliser (sinon des variantes échapperaient au partage).
-    orm = SimpleNamespace(exchange=" Bitmart ", market_type="PERPETUAL")
-    assert snapshot_key(orm) == ("bitmart", "perpetual")
+    orm = SimpleNamespace(exchange=" OKX ", market_type="PERPETUAL")
+    assert snapshot_key(orm) == ("okx", "perpetual")
 
 
 @pytest.mark.parametrize("alias", ["perp", "future", "futures", "PERP", " Perpetual "])
 def test_snapshot_key_canonicalizes_market_type_aliases(alias):
     # Symfony (ExchangeContextResolver) canonicalise perp/future/futures en
     # perpetual : on miroir la table pour regrouper le même marché.
-    orm = SimpleNamespace(exchange="bitmart", market_type=alias)
-    assert snapshot_key(orm) == ("bitmart", "perpetual")
+    orm = SimpleNamespace(exchange="okx", market_type=alias)
+    assert snapshot_key(orm) == ("okx", "perpetual")
 
 
 def _client_with(handler) -> httpx.AsyncClient:
@@ -334,13 +334,13 @@ def _client_with(handler) -> httpx.AsyncClient:
 def test_fetch_open_state_returns_normalized_shape():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/exchange/open-state"
-        assert request.url.params["exchange"] == "bitmart"
+        assert request.url.params["exchange"] == "okx"
         assert "x-fake-only-safety-evidence" not in request.headers
         return httpx.Response(200, json={"open_positions": [{"symbol": "BTCUSDT"}], "open_orders": []})
 
     async def _run():
         async with _client_with(handler) as client:
-            return await fetch_open_state(client, "http://symfony", "bitmart", "perpetual")
+            return await fetch_open_state(client, "http://symfony", "okx", "perpetual")
 
     snapshot = asyncio.run(_run())
     assert snapshot == {"open_positions": [{"symbol": "BTCUSDT"}], "open_orders": []}
@@ -390,7 +390,7 @@ def test_fetch_open_state_raises_on_http_error_status():
 
     async def _run():
         async with _client_with(handler) as client:
-            await fetch_open_state(client, "http://symfony", "bitmart", "perpetual")
+            await fetch_open_state(client, "http://symfony", "okx", "perpetual")
 
     with pytest.raises(OpenStateUnavailableError) as caught:
         asyncio.run(_run())
@@ -441,7 +441,7 @@ def test_fetch_open_state_raises_on_unexpected_shape():
 
     async def _run():
         async with _client_with(handler) as client:
-            await fetch_open_state(client, "http://symfony", "bitmart", "perpetual")
+            await fetch_open_state(client, "http://symfony", "okx", "perpetual")
 
     with pytest.raises(OpenStateUnavailableError):
         asyncio.run(_run())
@@ -465,7 +465,7 @@ def test_fetch_open_state_raises_on_non_list_arrays(open_positions, open_orders)
 
     async def _run():
         async with _client_with(handler) as client:
-            await fetch_open_state(client, "http://symfony", "bitmart", "perpetual")
+            await fetch_open_state(client, "http://symfony", "okx", "perpetual")
 
     with pytest.raises(OpenStateUnavailableError):
         asyncio.run(_run())
@@ -488,7 +488,7 @@ def _ok_contracts_body(**overrides):
     body = {
         "ok": True,
         "profile": "scalper_micro",
-        "exchange": "bitmart",
+        "exchange": "okx",
         "market_type": "perpetual",
         "count": 2,
         "symbols": ["BTCUSDT", "ETHUSDT"],
@@ -498,7 +498,7 @@ def _ok_contracts_body(**overrides):
     return body
 
 
-def _fetch_contracts(handler, profile="scalper_micro", exchange="bitmart", market_type="perpetual"):
+def _fetch_contracts(handler, profile="scalper_micro", exchange="okx", market_type="perpetual"):
     async def _run():
         async with _client_with(handler) as client:
             return await fetch_selected_contracts(
@@ -512,14 +512,14 @@ def test_fetch_selected_contracts_returns_normalized_shape_and_passes_params():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/mtf/contracts"
         assert request.url.params["profile"] == "scalper_micro"
-        assert request.url.params["exchange"] == "bitmart"
+        assert request.url.params["exchange"] == "okx"
         assert request.url.params["market_type"] == "perpetual"
         return httpx.Response(200, json=_ok_contracts_body())
 
     result = _fetch_contracts(handler)
     assert result == {
         "profile": "scalper_micro",
-        "exchange": "bitmart",
+        "exchange": "okx",
         "market_type": "perpetual",
         "count": 2,
         "symbols": ["BTCUSDT", "ETHUSDT"],
@@ -598,7 +598,7 @@ def _orm_set(**kwargs: Any) -> SimpleNamespace:
     base = {
         "dry_run": True,
         "workers": 1,
-        "exchange": "bitmart",
+        "exchange": "okx",
         "market_type": "perpetual",
         "mtf_profile": "scalper_micro",
         "symbols": ["BTCUSDT", "ETHUSDT"],
@@ -614,7 +614,7 @@ def test_generate_set_payload_from_orm_string_fields():
     assert payload == {
         "dry_run": True,
         "workers": 1,
-        "exchange": "bitmart",
+        "exchange": "okx",
         "market_type": "perpetual",
         "mtf_profile": "scalper_micro",
         "sync_tables": False,
@@ -681,7 +681,7 @@ def test_generate_set_payload_matches_build_mtf_payload_shape():
     orm = _orm_set()
     pyd = OrchestratorSet(
         set_id="s",
-        exchange="bitmart",
+        exchange="okx",
         market_type="perpetual",
         mtf_profile="scalper_micro",
         symbols=("BTCUSDT", "ETHUSDT"),
@@ -745,7 +745,7 @@ def test_effective_set_payload_tolerates_enum_fields():
     from app.schemas import Exchange, MarketType, MtfProfile
 
     enum_set = _orm_set(
-        exchange=Exchange.BITMART,
+        exchange=Exchange.OKX,
         market_type=MarketType.PERPETUAL,
         mtf_profile=MtfProfile.SCALPER_MICRO,
     )
@@ -795,7 +795,7 @@ def test_run_persisted_set_dispatches_persisted_payload_with_snapshot_and_overri
     persisted = {
         "dry_run": False,
         "workers": 1,
-        "exchange": "bitmart",
+        "exchange": "okx",
         "market_type": "perpetual",
         "mtf_profile": "scalper_micro",
         "sync_tables": False,
@@ -862,7 +862,7 @@ def test_run_persisted_set_forces_safety_flags_over_stored_payload():
     persisted = {
         "dry_run": True,
         "workers": 1,
-        "exchange": "bitmart",
+        "exchange": "okx",
         "market_type": "perpetual",
         "mtf_profile": "scalper_micro",
         "sync_tables": True,
@@ -896,7 +896,7 @@ def test_run_persisted_set_rebuilds_from_orm_columns_not_stored_payload():
     persisted = {
         "dry_run": True,            # divergent (colonne dry_run=False)
         "workers": 1,
-        "exchange": "okx",          # divergent (colonne 'bitmart')
+        "exchange": "okx",          # divergent (colonne 'okx')
         "market_type": "spot",      # divergent (colonne 'perpetual')
         "mtf_profile": "scalper_micro",
         "sync_tables": True,        # divergent (doit finir false)
@@ -905,7 +905,7 @@ def test_run_persisted_set_rebuilds_from_orm_columns_not_stored_payload():
         "skip_open_state_filter": True,  # flag de contrôle runner parasite
     }
     orm = _orm_set(
-        set_id="s", payload=persisted, exchange="bitmart",
+        set_id="s", payload=persisted, exchange="okx",
         market_type="perpetual", symbols=["BTCUSDT"], dry_run=False,
     )
     snapshot = {"open_positions": [], "open_orders": []}
@@ -922,7 +922,7 @@ def test_run_persisted_set_rebuilds_from_orm_columns_not_stored_payload():
 
     asyncio.run(_run())
     sent = captured["json"]
-    assert sent["exchange"] == "bitmart"
+    assert sent["exchange"] == "okx"
     assert sent["market_type"] == "perpetual"
     assert sent["symbols"] == ["BTCUSDT"]
     assert sent["dry_run"] is False
@@ -1044,7 +1044,7 @@ def test_run_persisted_set_not_materialized_even_with_stale_payload():
     # symbols vidé en base mais un `payload` périmé subsiste : on doit échouer
     # « not materialized » (pas de run « tout l'univers ») et NE PAS appeler Symfony.
     persisted = {
-        "dry_run": True, "workers": 1, "exchange": "bitmart",
+        "dry_run": True, "workers": 1, "exchange": "okx",
         "market_type": "perpetual", "mtf_profile": "scalper_micro",
         "sync_tables": False, "process_tp_sl": False, "symbols": ["BTCUSDT"],
     }

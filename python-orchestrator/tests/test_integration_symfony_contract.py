@@ -41,7 +41,7 @@ def _orm_set(**kwargs: Any) -> SimpleNamespace:
         "set_id": "s",
         "dry_run": True,
         "workers": 1,
-        "exchange": "bitmart",
+        "exchange": "fake",
         "market_type": "perpetual",
         "mtf_profile": "scalper_micro",
         "symbols": ["BTCUSDT"],
@@ -64,7 +64,7 @@ def test_open_state_request_shape_and_normalized_response():
 
     async def _go():
         async with fake.new_client() as client:
-            return await fetch_open_state(client, "http://symfony", "bitmart", "perpetual")
+            return await fetch_open_state(client, "http://symfony", "okx", "perpetual")
 
     snapshot = _run(_go())
 
@@ -75,7 +75,7 @@ def test_open_state_request_shape_and_normalized_response():
     req = fake.open_state_requests[0]
     assert req["method"] == "GET"
     assert req["path"] == "/api/exchange/open-state"
-    assert req["params"] == {"exchange": "bitmart", "market_type": "perpetual"}
+    assert req["params"] == {"exchange": "okx", "market_type": "perpetual"}
 
 
 def test_open_state_transport_error_raises_unavailable():
@@ -84,7 +84,7 @@ def test_open_state_transport_error_raises_unavailable():
 
     async def _go():
         async with fake.new_client() as client:
-            await fetch_open_state(client, "http://symfony", "bitmart", "perpetual")
+            await fetch_open_state(client, "http://symfony", "fake", "perpetual")
 
     with pytest.raises(OpenStateUnavailableError):
         _run(_go())
@@ -96,7 +96,7 @@ def test_open_state_malformed_json_raises_unavailable():
 
     async def _go():
         async with fake.new_client() as client:
-            await fetch_open_state(client, "http://symfony", "bitmart", "perpetual")
+            await fetch_open_state(client, "http://symfony", "fake", "perpetual")
 
     with pytest.raises(OpenStateUnavailableError):
         _run(_go())
@@ -107,7 +107,7 @@ def test_open_state_502_raises_unavailable():
 
     async def _go():
         async with fake.new_client() as client:
-            await fetch_open_state(client, "http://symfony", "bitmart", "perpetual")
+            await fetch_open_state(client, "http://symfony", "fake", "perpetual")
 
     with pytest.raises(OpenStateUnavailableError):
         _run(_go())
@@ -124,14 +124,14 @@ def test_contracts_request_shape_and_normalized_response():
     async def _go():
         async with fake.new_client() as client:
             return await fetch_selected_contracts(
-                client, "http://symfony", "scalper_micro", "bitmart", "perpetual"
+                client, "http://symfony", "scalper_micro", "fake", "perpetual"
             )
 
     result = _run(_go())
 
     assert result == {
         "profile": "scalper_micro",
-        "exchange": "bitmart",
+        "exchange": "fake",
         "market_type": "perpetual",
         "count": 2,
         "symbols": ["BTCUSDT", "ETHUSDT"],
@@ -143,7 +143,7 @@ def test_contracts_request_shape_and_normalized_response():
     assert req["path"] == "/api/mtf/contracts"
     assert req["params"] == {
         "profile": "scalper_micro",
-        "exchange": "bitmart",
+        "exchange": "fake",
         "market_type": "perpetual",
     }
 
@@ -154,7 +154,7 @@ def test_contracts_omits_profile_param_when_none():
     async def _go():
         async with fake.new_client() as client:
             return await fetch_selected_contracts(
-                client, "http://symfony", None, "bitmart", "perpetual"
+                client, "http://symfony", None, "fake", "perpetual"
             )
 
     result = _run(_go())
@@ -170,7 +170,7 @@ def test_contracts_transport_error_raises_unavailable():
     async def _go():
         async with fake.new_client() as client:
             await fetch_selected_contracts(
-                client, "http://symfony", "scalper_micro", "bitmart", "perpetual"
+                client, "http://symfony", "scalper_micro", "fake", "perpetual"
             )
 
     with pytest.raises(ContractsUnavailableError):
@@ -183,7 +183,7 @@ def test_contracts_502_raises_unavailable():
     async def _go():
         async with fake.new_client() as client:
             await fetch_selected_contracts(
-                client, "http://symfony", "scalper_micro", "bitmart", "perpetual"
+                client, "http://symfony", "scalper_micro", "fake", "perpetual"
             )
 
     with pytest.raises(ContractsUnavailableError):
@@ -306,8 +306,8 @@ def test_mtf_run_business_failure_maps_ok_false(body, business_status):
 def test_snapshot_key_passes_through_non_string_market_type():
     # `_normalize_market_type` retourne tel quel une valeur non chaîne (l.70) :
     # une ligne ORM aberrante ne plante pas le regroupement snapshot.
-    orm = SimpleNamespace(exchange="bitmart", market_type=123)
-    assert snapshot_key(orm) == ("bitmart", 123)
+    orm = SimpleNamespace(exchange="fake", market_type=123)
+    assert snapshot_key(orm) == ("fake", 123)
 
 
 def test_build_mtf_payload_shape_matches_run_request():
@@ -315,7 +315,7 @@ def test_build_mtf_payload_shape_matches_run_request():
     # fil (mêmes clés de contrat), pour les sets pydantic comme ORM.
     pyd = OrchestratorSet(
         set_id="s",
-        exchange="bitmart",
+        exchange="fake",
         market_type="perpetual",
         mtf_profile="scalper_micro",
         symbols=("BTCUSDT",),

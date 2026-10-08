@@ -11,6 +11,8 @@ use Symfony\Component\Routing\Annotation\Route;
 
 class KlinesApiController extends AbstractController
 {
+    private const MAX_LIMIT = 500;
+
     public function __construct(
         private readonly KlineProviderInterface $klineProvider,
     ) {
@@ -21,7 +23,7 @@ class KlinesApiController extends AbstractController
     {
         $symbol = $request->query->get('symbol');
         $interval = $request->query->get('interval', '5m');
-        $limit = (int) $request->query->get('limit', 100);
+        $limit = max(1, min(self::MAX_LIMIT, (int) $request->query->get('limit', 100)));
 
         if (!$symbol) {
             return new JsonResponse(['error' => 'Symbol parameter is required'], 400);
@@ -34,7 +36,20 @@ class KlinesApiController extends AbstractController
             return new JsonResponse(['error' => "Invalid timeframe: $interval. Valid timeframes are: 1m, 5m, 15m, 1h, 4h"], 400);
         }
 
-        $klines = $this->klineProvider->getKlines($symbol, $timeframe, $limit);
+        $startRaw = $request->query->get('start');
+        $endRaw = $request->query->get('end');
+        if ($startRaw !== null && $startRaw !== '') {
+            $start = $this->parseInstant((string) $startRaw);
+            $end = $endRaw !== null && $endRaw !== '' ? $this->parseInstant((string) $endRaw) : new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+            if ($start === null || $end === null || $start >= $end) {
+                return new JsonResponse(['error' => 'Invalid start/end: expected ISO-8601 or UTC milliseconds with start < end'], 400);
+            }
+            $klines = $this->klineProvider->getKlinesInWindow($symbol, $timeframe, $start, $end, $limit);
+        } elseif ($endRaw !== null && $endRaw !== '') {
+            return new JsonResponse(['error' => 'end requires start'], 400);
+        } else {
+            $klines = $this->klineProvider->getKlines($symbol, $timeframe, $limit);
+        }
 
         if (empty($klines)) {
             return new JsonResponse([]);
@@ -65,5 +80,18 @@ class KlinesApiController extends AbstractController
         }, $klines);
 
         return new JsonResponse($data);
+    }
+
+    private function parseInstant(string $value): ?\DateTimeImmutable
+    {
+        $utc = new \DateTimeZone('UTC');
+        if (ctype_digit($value)) {
+            return (new \DateTimeImmutable('@' . intdiv((int) $value, 1000)))->setTimezone($utc);
+        }
+        try {
+            return (new \DateTimeImmutable($value, $utc))->setTimezone($utc);
+        } catch (\Exception) {
+            return null;
+        }
     }
 }

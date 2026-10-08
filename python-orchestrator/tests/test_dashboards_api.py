@@ -16,8 +16,8 @@ def _create_dashboard(client, name="dash_a", enabled=True, description="demo"):
 
 def _set_payload(**overrides):
     payload = {
-        "set_id": "bitmart_regular_top",
-        "exchange": "bitmart",
+        "set_id": "fake_regular_top",
+        "exchange": "fake",
         "mtf_profile": "regular",
         "symbols": ["BTCUSDT", "ETHUSDT"],
         "priority": 10,
@@ -138,14 +138,14 @@ def test_create_and_get_set(api_client):
     created = api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())
     assert created.status_code == 201
     body = created.json()
-    assert body["set_id"] == "bitmart_regular_top"
+    assert body["set_id"] == "fake_regular_top"
     assert body["symbols"] == ["BTCUSDT", "ETHUSDT"]
     assert body["dashboard_id"] == dashboard_id
     # Défauts appliqués.
     assert body["dry_run"] is True
     assert body["workers"] == 1
 
-    fetched = api_client.get(f"/dashboards/{dashboard_id}/sets/bitmart_regular_top")
+    fetched = api_client.get(f"/dashboards/{dashboard_id}/sets/fake_regular_top")
     assert fetched.status_code == 200
     assert fetched.json()["id"] == body["id"]
 
@@ -210,14 +210,14 @@ def test_patch_set_partial(api_client):
     api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())
 
     resp = api_client.patch(
-        f"/dashboards/{dashboard_id}/sets/bitmart_regular_top",
+        f"/dashboards/{dashboard_id}/sets/fake_regular_top",
         json={"priority": 42, "symbols": ["SOLUSDT"]},
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["priority"] == 42
     assert body["symbols"] == ["SOLUSDT"]
-    assert body["exchange"] == "bitmart"  # inchangé
+    assert body["exchange"] == "fake"  # inchangé
 
 
 def test_create_read_and_patch_preserve_exact_canonical_identity(api_client):
@@ -448,14 +448,14 @@ def test_patch_set_rejects_canonical_identity_without_changing_set(api_client):
     ).json()
 
     resp = api_client.patch(
-        f"/dashboards/{dashboard_id}/sets/bitmart_regular_top",
+        f"/dashboards/{dashboard_id}/sets/fake_regular_top",
         json={"trading_identity": None, "priority": 42},
     )
 
     assert resp.status_code == 422
     assert "champ 'trading_identity' ne peut pas être null" in resp.text
     persisted = api_client.get(
-        f"/dashboards/{dashboard_id}/sets/bitmart_regular_top"
+        f"/dashboards/{dashboard_id}/sets/fake_regular_top"
     ).json()
     assert persisted == created
 
@@ -472,7 +472,7 @@ def test_create_set_generates_payload(api_client):
     assert body["payload"] == {
         "dry_run": True,
         "workers": 1,
-        "exchange": "bitmart",
+        "exchange": "fake",
         "market_type": "perpetual",
         "mtf_profile": "regular",
         "sync_tables": False,
@@ -487,18 +487,18 @@ def test_set_read_exposes_effective_payload(api_client):
     dashboard_id = _create_dashboard(api_client).json()["id"]
     api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())
 
-    body = api_client.get(f"/dashboards/{dashboard_id}/sets/bitmart_regular_top").json()
+    body = api_client.get(f"/dashboards/{dashboard_id}/sets/fake_regular_top").json()
 
     assert body["effective_payload"] == {
         "dry_run": True,
         "workers": 1,
-        "exchange": "bitmart",
+        "exchange": "fake",
         "market_type": "perpetual",
         "mtf_profile": "regular",
         "sync_tables": False,
         "process_tp_sl": False,
         "symbols": ["BTCUSDT", "ETHUSDT"],
-        "config_hash": "sha256:7a427521b12ca8c1a789200261533a331e89c62d9560565826dfc3eb3a49ad55",
+        "config_hash": "sha256:7b6b145e9b19c78777c29b51c24c1d042680c299db96625d99f5601e0c42bd61",
     }
 
 
@@ -511,7 +511,7 @@ def test_set_read_effective_payload_null_when_not_materialized(api_client):
         json=_set_payload(symbols=[], contracts_limit=5),
     )
 
-    body = api_client.get(f"/dashboards/{dashboard_id}/sets/bitmart_regular_top").json()
+    body = api_client.get(f"/dashboards/{dashboard_id}/sets/fake_regular_top").json()
 
     assert body["effective_payload"] is None
 
@@ -521,7 +521,7 @@ def test_patch_set_regenerates_payload(api_client):
     api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())
 
     body = api_client.patch(
-        f"/dashboards/{dashboard_id}/sets/bitmart_regular_top",
+        f"/dashboards/{dashboard_id}/sets/fake_regular_top",
         json={"symbols": ["SOLUSDT"], "mtf_profile": "scalper_micro"},
     ).json()
 
@@ -537,12 +537,12 @@ def test_delete_set_then_404(api_client):
 
     assert (
         api_client.delete(
-            f"/dashboards/{dashboard_id}/sets/bitmart_regular_top"
+            f"/dashboards/{dashboard_id}/sets/fake_regular_top"
         ).status_code
         == 204
     )
     assert (
-        api_client.get(f"/dashboards/{dashboard_id}/sets/bitmart_regular_top").status_code
+        api_client.get(f"/dashboards/{dashboard_id}/sets/fake_regular_top").status_code
         == 404
     )
 
@@ -577,11 +577,11 @@ def test_patch_set_rejects_recipe_fault_profile_outside_safe_envelope(api_client
     dashboard_id = _create_dashboard(api_client).json()["id"]
     api_client.post(
         f"/dashboards/{dashboard_id}/sets",
-        json=_set_payload(set_id="bitmart_dry", exchange="bitmart", dry_run=True),
+        json=_set_payload(set_id="okx_dry", exchange="okx", dry_run=True),
     )
 
     resp = api_client.patch(
-        f"/dashboards/{dashboard_id}/sets/bitmart_dry",
+        f"/dashboards/{dashboard_id}/sets/okx_dry",
         json={"mtf_profile": "recipe_functional_error"},
     )
 
@@ -598,12 +598,12 @@ def test_workers_above_bound_rejected(api_client):
     assert resp.status_code == 422
 
 
-def test_create_bitmart_live_rejected(api_client):
+def test_create_fake_live_rejected(api_client):
     """Aucun live persistable en PY-002, même sur un exchange autorisé live."""
     dashboard_id = _create_dashboard(api_client).json()["id"]
     resp = api_client.post(
         f"/dashboards/{dashboard_id}/sets",
-        json=_set_payload(set_id="bm_live", exchange="bitmart", dry_run=False),
+        json=_set_payload(set_id="bm_live", exchange="fake", dry_run=False),
     )
     assert resp.status_code == 422
 
@@ -656,7 +656,7 @@ def test_patch_clearing_symbols_without_limit_rejected(api_client):
     dashboard_id = _create_dashboard(api_client).json()["id"]
     api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())
     resp = api_client.patch(
-        f"/dashboards/{dashboard_id}/sets/bitmart_regular_top", json={"symbols": []}
+        f"/dashboards/{dashboard_id}/sets/fake_regular_top", json={"symbols": []}
     )
     assert resp.status_code == 422
 
@@ -669,7 +669,7 @@ def test_patch_clear_contracts_limit_null_ok(api_client):
         json=_set_payload(contracts_limit=10),
     )
     resp = api_client.patch(
-        f"/dashboards/{dashboard_id}/sets/bitmart_regular_top",
+        f"/dashboards/{dashboard_id}/sets/fake_regular_top",
         json={"contracts_limit": None},
     )
     assert resp.status_code == 200
@@ -690,7 +690,7 @@ def test_payload_not_accepted_from_client_on_create(api_client):
     payload = resp.json()["payload"]
     # Le payload forgé par le client est ignoré ; c'est le payload serveur qui est stocké.
     assert "forged" not in payload
-    assert payload["exchange"] == "bitmart"
+    assert payload["exchange"] == "fake"
     assert payload["sync_tables"] is False
 
 
@@ -700,6 +700,16 @@ def test_patch_explicit_null_on_not_null_field_rejected(api_client):
     api_client.post(f"/dashboards/{dashboard_id}/sets", json=_set_payload())
     for field in ("exchange", "dry_run", "enabled", "symbols"):
         resp = api_client.patch(
-            f"/dashboards/{dashboard_id}/sets/bitmart_regular_top", json={field: None}
+            f"/dashboards/{dashboard_id}/sets/fake_regular_top", json={field: None}
         )
         assert resp.status_code == 422, field
+
+
+def test_create_set_rejects_removed_bitmart_exchange(api_client):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    resp = api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(set_id="old_bitmart", exchange="bitmart", dry_run=True),
+    )
+    assert resp.status_code == 422
+    assert "okx" in str(resp.json()["detail"])
