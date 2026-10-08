@@ -1,6 +1,6 @@
 # MtfRunner – Orchestrateur MTF
 
-`App\MtfRunner\Service\MtfRunnerService` est la boucle d’exécution principale utilisée par `/api/mtf/run` (RunnerController) et `bin/console mtf:run`. Il gère tout ce qui entoure le validateur (locks, switches, filtres, synchro Bitmart, parallélisation, TP/SL, enrichissement des résultats). Ce README documente chaque étape et chaque paramètre.
+`App\MtfRunner\Service\MtfRunnerService` est la boucle d’exécution principale utilisée par `/api/mtf/run` (RunnerController) et `bin/console mtf:run`. Il gère tout ce qui entoure le validateur (locks, switches, filtres, synchro exchange, parallélisation, TP/SL, enrichissement des résultats). Ce README documente chaque étape et chaque paramètre.
 
 ---
 
@@ -54,7 +54,7 @@ Paramètres clés (depuis API ou CLI) :
 | `skip_open_state_filter` | (API) Laisse passer les symboles même si positions/ordres ouverts (désactivé par défaut). |
 | `workers` | >1 → exécution parallèle via `mtf:run-worker` (Process). |
 | `profile`, `validation_mode` | Propagés vers `MtfValidatorService`. |
-| `exchange`, `market_type` | Construisent l’`ExchangeContext` (Bitmart perp par défaut). |
+| `exchange`, `market_type` | Construisent l’`ExchangeContext` (OKX perp par défaut). |
 | `sync_tables`, `process_tp_sl` | Activer la synchro et le recalcul TP/SL (true par défaut). |
 
 ---

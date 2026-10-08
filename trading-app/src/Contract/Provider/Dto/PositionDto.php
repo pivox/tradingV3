@@ -33,35 +33,25 @@ final class PositionDto extends BaseDto
 
     public static function fromArray(array $data): self
     {
-        // Mapping BitMart API vers DTO
-        // BitMart utilise 'position_side' (long/short) au lieu de 'side'
-        $side = $data['side'] ?? $data['position_side'] ?? null;
+        $side = $data['side'] ?? null;
         if ($side === null) {
             throw new \InvalidArgumentException('Missing side/position_side in position data');
         }
 
-        // BitMart utilise 'current_amount' au lieu de 'size'
-        $size = $data['size'] ?? $data['current_amount'] ?? '0';
+        $size = $data['size'] ?? '0';
 
-        // BitMart utilise 'entry_price' ou 'open_avg_price'
-        $entryPrice = $data['entry_price'] ?? $data['open_avg_price'] ?? '0';
+        $entryPrice = $data['entry_price'] ?? '0';
 
-        // BitMart utilise 'mark_price'
         $markPrice = $data['mark_price'] ?? '0';
 
-        // BitMart utilise 'unrealized_pnl'
         $unrealizedPnl = $data['unrealized_pnl'] ?? '0';
 
-        // BitMart utilise 'realized_value' au lieu de 'realized_pnl'
-        $realizedPnl = $data['realized_pnl'] ?? $data['realized_value'] ?? '0';
+        $realizedPnl = $data['realized_pnl'] ?? '0';
 
-        // BitMart utilise 'initial_margin' ou 'position_cross'
-        $margin = $data['margin'] ?? $data['initial_margin'] ?? $data['position_cross'] ?? '0';
+        $margin = $data['margin'] ?? '0';
 
-        // BitMart utilise 'leverage' (string)
         $leverage = $data['leverage'] ?? '1';
 
-        // BitMart utilise 'open_timestamp' (milliseconds) ou 'timestamp'
         $openedAtTimestamp = $data['open_timestamp'] ?? $data['timestamp'] ?? null;
         if ($openedAtTimestamp) {
             // Convertir millisecondes en secondes pour DateTimeImmutable

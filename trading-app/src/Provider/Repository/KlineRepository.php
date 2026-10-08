@@ -7,8 +7,6 @@ namespace App\Provider\Repository;
 use App\Common\Enum\Timeframe;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Entity\Kline;
-use App\Provider\Bitmart\Dto\KlineDto;
-use App\Provider\Bitmart\Dto\ListKlinesDto;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\Connection;
 use Doctrine\Persistence\ManagerRegistry;
@@ -33,7 +31,7 @@ class KlineRepository extends ServiceEntityRepository
     }
 
     /**
-     * Retourne les plages manquantes (chunks) pour BitMart calculées via la fonction PostgreSQL
+     * Retourne les plages manquantes (chunks) calculées via la fonction PostgreSQL
      * `get_missing_kline_chunks`.
      *
      * Chaque ligne = un "chunk" (symbol, step en minutes, from/to en secondes epoch)
@@ -331,10 +329,10 @@ SQL,
 
     /**
      * Sauvegarde plusieurs klines (DTOs) en lot.
-     * @param KlineDto[] $klineDtos
+     * @param \App\Contract\Provider\Dto\KlineDto[] $klines
      */
     public function saveKlines(
-        ListKlinesDto $listKlinesDto,
+        array $klines,
         string $symbol,
         Timeframe $timeframe,
         ?ExchangeContext $context = null,
@@ -344,7 +342,7 @@ SQL,
         $batchSize = 100;
         $i = 0;
 
-        foreach ($listKlinesDto as $klineDto) {
+        foreach ($klines as $klineDto) {
             $kline = new \App\Provider\Entity\Kline();
             $kline->setExchange(ExchangeContext::exchangeValue($context));
             $kline->setMarketType(ExchangeContext::marketTypeValue($context));

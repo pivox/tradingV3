@@ -20,7 +20,7 @@ final class DecisionKeyFactoryTest extends TestCase
     public function testBuildsStableBusinessDecisionKey(): void
     {
         $factory = new DecisionKeyFactory();
-        $context = new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL);
+        $context = new ExchangeContext(Exchange::OKX, MarketType::PERPETUAL);
         $evaluatedAt = new \DateTimeImmutable('2025-11-26 12:34:56 UTC');
 
         $key = $factory->key(
@@ -34,9 +34,9 @@ final class DecisionKeyFactoryTest extends TestCase
             evaluatedAt: $evaluatedAt,
         );
 
-        self::assertSame('bitmart:perpetual:BTCUSDT:1m:1764160440:long:scalper_micro:v1.1.7', $key);
+        self::assertSame('okx:perpetual:BTCUSDT:1m:1764160440:long:scalper_micro:v1.1.7', $key);
         self::assertSame([
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'BTCUSDT',
             'timeframe' => '1m',
@@ -47,10 +47,10 @@ final class DecisionKeyFactoryTest extends TestCase
         ], $factory->parse($key));
     }
 
-    public function testClientOrderIdIsDeterministicAndBitmartSafe(): void
+    public function testClientOrderIdIsDeterministicAndExchangeSafe(): void
     {
         $policy = new IdempotencyPolicy();
-        $decisionKey = 'bitmart:perpetual:BTCUSDT:1m:1764160440:long:scalper_micro:v1.1.7';
+        $decisionKey = 'okx:perpetual:BTCUSDT:1m:1764160440:long:scalper_micro:v1.1.7';
 
         $first = $policy->newClientOrderId($decisionKey);
         $second = $policy->newClientOrderId($decisionKey);

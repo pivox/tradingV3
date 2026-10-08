@@ -33,10 +33,10 @@ final class OkxExchangeBundleRegistryTest extends TestCase
     {
         $registry = new ExchangeProviderRegistry(
             [
-                $this->bitmartBundle(),
+                $this->fakeBundle(),
                 $this->okxBundle(),
             ],
-            Exchange::BITMART,
+            Exchange::FAKE,
             MarketType::PERPETUAL,
         );
 
@@ -49,17 +49,17 @@ final class OkxExchangeBundleRegistryTest extends TestCase
         self::assertInstanceOf(OkxAccountGateway::class, $bundle->account());
         self::assertInstanceOf(OkxSystemProvider::class, $bundle->system());
 
-        self::assertTrue($registry->getDefaultContext()->equals(new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL)));
+        self::assertTrue($registry->getDefaultContext()->equals(new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL)));
     }
 
-    public function testOkxSpotDoesNotFallbackToBitmart(): void
+    public function testOkxSpotDoesNotFallbackToFake(): void
     {
         $registry = new ExchangeProviderRegistry(
             [
-                $this->bitmartBundle(),
+                $this->fakeBundle(),
                 $this->okxBundle(),
             ],
-            Exchange::BITMART,
+            Exchange::FAKE,
             MarketType::PERPETUAL,
         );
 
@@ -73,10 +73,10 @@ final class OkxExchangeBundleRegistryTest extends TestCase
     {
         $mainProvider = new MainProvider(new ExchangeProviderRegistry(
             [
-                $this->bitmartBundle(),
+                $this->fakeBundle(),
                 $this->okxBundle(),
             ],
-            Exchange::BITMART,
+            Exchange::FAKE,
             MarketType::PERPETUAL,
         ));
 
@@ -107,10 +107,10 @@ final class OkxExchangeBundleRegistryTest extends TestCase
         );
     }
 
-    private function bitmartBundle(): ExchangeProviderBundle
+    private function fakeBundle(): ExchangeProviderBundle
     {
         return new ExchangeProviderBundle(
-            new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
+            new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL),
             $this->createMock(KlineProviderInterface::class),
             $this->createMock(ContractProviderInterface::class),
             $this->createMock(OrderProviderInterface::class),

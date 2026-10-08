@@ -6,7 +6,7 @@ namespace App\Provider\Command;
 
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\MainProviderInterface;
-use App\Provider\Bitmart\Dto\ContractDto;
+use App\Contract\Provider\Dto\ContractDto;
 use DateTimeZone;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -16,8 +16,8 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
-    name: 'bitmart:fetch-all-klines',
-    description: 'Récupère et persiste les klines 4h et 1h pour tous les contrats BitMart'
+    name: 'provider:fetch-all-klines',
+    description: 'Récupère et persiste les klines 4h et 1h pour tous les contrats exchange'
 )]
 final class FetchAllKlinesCommand extends Command
 {
@@ -38,13 +38,13 @@ final class FetchAllKlinesCommand extends Command
             ->addOption('timeframes', 't', InputOption::VALUE_OPTIONAL, 'Timeframes à traiter (4h,1h)', '4h,1h')
             ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Simulation sans persistance en base')
             ->setHelp('
-Cette commande récupère et persiste les klines pour tous les contrats BitMart Futures.
+Cette commande récupère et persiste les klines pour tous les contrats exchange.
 
 Exemples:
-  php bin/console bitmart:fetch-all-klines
-  php bin/console bitmart:fetch-all-klines --limit=50 --contracts=5
-  php bin/console bitmart:fetch-all-klines --timeframes=4h --dry-run
-  php bin/console bitmart:fetch-all-klines --contracts=10 --limit=200
+  php bin/console provider:fetch-all-klines
+  php bin/console provider:fetch-all-klines --limit=50 --contracts=5
+  php bin/console provider:fetch-all-klines --timeframes=4h --dry-run
+  php bin/console provider:fetch-all-klines --contracts=10 --limit=200
             ');
     }
 
@@ -319,7 +319,7 @@ Exemples:
         }
 
         // 4. Vérifier l'open interest (si disponible)
-        // Note: BitMart ne fournit pas toujours l'open interest dans l'API publique
+        // Note: exchange ne fournit pas toujours l'open interest dans l'API publique
         // On peut ajouter cette vérification si nécessaire
 
         // 5. Vérifier que le contrat n'est pas trop récent (moins de 880 heures = 36.67 jours)

@@ -83,7 +83,7 @@ final class MicrostructureConditionsTest extends TestCase
         yield 'input hash' => [self::replace('microstructure_input_hash', 'sha256:nope'), 'microstructure_proof_input_hash_invalid'];
         yield 'checksum' => [self::replace('source_checksum', 'sha256:nope'), 'microstructure_proof_source_checksum_invalid'];
         yield 'network' => [self::replace('source_network', 'sandbox'), 'microstructure_proof_network_invalid'];
-        yield 'venue' => [self::replace('market_data_venue', 'bitmart'), 'microstructure_proof_venue_invalid'];
+        yield 'venue' => [self::replace('market_data_venue', 'binance'), 'microstructure_proof_venue_invalid'];
         yield 'market type' => [self::replace('market_type', 'spot'), 'microstructure_proof_market_type_invalid'];
         yield 'symbol' => [self::replace('symbol', 'btc/usdt'), 'microstructure_proof_symbol_invalid'];
         yield 'unit' => [self::replace('quantity_unit', 'base_asset'), 'microstructure_proof_quantity_unit_invalid'];

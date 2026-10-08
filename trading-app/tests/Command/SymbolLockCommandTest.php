@@ -103,7 +103,7 @@ final class SymbolLockCommandTest extends KernelTestCase
         $exitCode = $tester->execute([]);
 
         self::assertSame(Command::SUCCESS, $exitCode);
-        self::assertStringContainsString('bitmart', $tester->getDisplay());
+        self::assertStringContainsString('okx', $tester->getDisplay());
         self::assertStringContainsString('perpetual', $tester->getDisplay());
         self::assertStringContainsString('BTCUSDT', $tester->getDisplay());
         self::assertStringContainsString('scalper', $tester->getDisplay());
@@ -119,7 +119,7 @@ final class SymbolLockCommandTest extends KernelTestCase
         $tester = new CommandTester(new SymbolLockReleaseCommand($this->manager));
         $exitCode = $tester->execute([
             'symbol' => 'BTCUSDT',
-            '--exchange' => 'bitmart',
+            '--exchange' => 'okx',
             '--market-type' => 'perpetual',
             '--reason' => 'manual_investigation',
         ]);
@@ -140,15 +140,15 @@ final class SymbolLockCommandTest extends KernelTestCase
         $tester = new CommandTester(new SymbolLockReleaseCommand($this->manager));
         $exitCode = $tester->execute([
             'symbol' => 'BTCUSDT',
-            '--exchange' => 'bitmart',
+            '--exchange' => 'okx',
             '--market-type' => 'perpetual',
             '--reason' => 'manual_investigation',
             '--force' => true,
         ]);
 
         self::assertSame(Command::SUCCESS, $exitCode);
-        self::assertStringContainsString('Released lock for bitmart:perpetual:BTCUSDT', $tester->getDisplay());
-        self::assertNull($this->em->getRepository(SymbolExecutionLock::class)->findActive('bitmart', 'perpetual', 'BTCUSDT'));
+        self::assertStringContainsString('Released lock for okx:perpetual:BTCUSDT', $tester->getDisplay());
+        self::assertNull($this->em->getRepository(SymbolExecutionLock::class)->findActive('okx', 'perpetual', 'BTCUSDT'));
     }
 
     public function testPositionClosedEventReleasesSymbolLock(): void
@@ -159,11 +159,11 @@ final class SymbolLockCommandTest extends KernelTestCase
 
         (new SymbolExecutionLockReleaseListener($this->manager))->__invoke(new PositionClosedEvent(
             positionHistory: $this->closedPosition('BTCUSDT'),
-            exchange: 'bitmart',
+            exchange: 'okx',
             extra: ['market_type' => 'perpetual'],
         ));
 
-        self::assertNull($this->em->getRepository(SymbolExecutionLock::class)->findActive('bitmart', 'perpetual', 'BTCUSDT'));
+        self::assertNull($this->em->getRepository(SymbolExecutionLock::class)->findActive('okx', 'perpetual', 'BTCUSDT'));
     }
 
     public function testPositionClosedEventKeepsLockWhileAnotherSideIsOpen(): void
@@ -175,19 +175,19 @@ final class SymbolLockCommandTest extends KernelTestCase
 
         (new SymbolExecutionLockReleaseListener($this->manager))->__invoke(new PositionClosedEvent(
             positionHistory: $this->closedPosition('BTCUSDT'),
-            exchange: 'bitmart',
+            exchange: 'okx',
             extra: ['market_type' => 'perpetual'],
         ));
 
-        self::assertNotNull($this->em->getRepository(SymbolExecutionLock::class)->findActive('bitmart', 'perpetual', 'BTCUSDT'));
+        self::assertNotNull($this->em->getRepository(SymbolExecutionLock::class)->findActive('okx', 'perpetual', 'BTCUSDT'));
     }
 
     private function persistIntent(string $symbol, string $profile): OrderIntent
     {
         $intent = (new OrderIntent())
-            ->setExchange(Exchange::BITMART)
+            ->setExchange(Exchange::OKX)
             ->setMarketType(MarketType::PERPETUAL)
-            ->setDecisionKey(sprintf('bitmart:perpetual:%s:1m:1764160800:long:%s:v1', $symbol, $profile))
+            ->setDecisionKey(sprintf('okx:perpetual:%s:1m:1764160800:long:%s:v1', $symbol, $profile))
             ->setStrategyProfile($profile)
             ->setStrategyVersion('v1')
             ->setSymbol($symbol)

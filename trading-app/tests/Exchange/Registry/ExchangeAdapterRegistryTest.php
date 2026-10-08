@@ -19,12 +19,12 @@ final class ExchangeAdapterRegistryTest extends TestCase
     public function testReturnsAdapterForExchangeAndMarketType(): void
     {
         $adapter = $this->createMock(ExchangeAdapterInterface::class);
-        $adapter->method('exchange')->willReturn(Exchange::BITMART);
+        $adapter->method('exchange')->willReturn(Exchange::OKX);
         $adapter->method('marketType')->willReturn(MarketType::PERPETUAL);
 
         $registry = new ExchangeAdapterRegistry([$adapter]);
 
-        self::assertSame($adapter, $registry->get(Exchange::BITMART, MarketType::PERPETUAL));
+        self::assertSame($adapter, $registry->get(Exchange::OKX, MarketType::PERPETUAL));
     }
 
     public function testThrowsWhenAdapterIsMissing(): void
@@ -34,6 +34,6 @@ final class ExchangeAdapterRegistryTest extends TestCase
         $this->expectException(ExchangeAdapterNotFoundException::class);
         $this->expectExceptionMessage('No exchange adapter registered');
 
-        $registry->get(Exchange::BITMART, MarketType::PERPETUAL);
+        $registry->get(Exchange::OKX, MarketType::PERPETUAL);
     }
 }

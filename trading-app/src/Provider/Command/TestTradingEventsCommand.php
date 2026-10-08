@@ -121,7 +121,7 @@ Exemples:
         $this->eventDispatcher->dispatch(new PositionOpenedEvent(
             position: $position,
             runId: 'test-run-' . time(),
-            exchange: 'BITMART',
+            exchange: 'OKX',
             accountId: 'test-account',
             extra: ['test' => true]
         ));
@@ -153,7 +153,7 @@ Exemples:
         $this->eventDispatcher->dispatch(new PositionClosedEvent(
             positionHistory: $history,
             runId: 'test-run-' . time(),
-            exchange: 'BITMART',
+            exchange: 'OKX',
             accountId: 'test-account',
             reasonCode: 'profit_or_tp',
             extra: ['test' => true, 'pnl' => '100']
@@ -191,7 +191,7 @@ Exemples:
             previousStatus: 'NEW',
             newStatus: 'CANCELLED',
             runId: 'test-run-' . time(),
-            exchange: 'BITMART',
+            exchange: 'OKX',
             accountId: 'test-account',
             extra: ['test' => true]
         ));

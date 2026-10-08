@@ -7,7 +7,7 @@ mtf_contracts:
         enabled: true       # Active la sélection de contrats (si false : pas de filtrage avancé)
 
         filters:
-            quote_currency: 'USDT'     # On ne garde que les futures quotés en USDT (standard BitMart)
+            quote_currency: 'USDT'     # On ne garde que les futures quotés en USDT
             status: 'Trading'          # Filtre les contrats actifs uniquement (pas settled, pas delisted)
 
             # === LIQUIDITÉ / TURNOVER 24H ===
@@ -24,12 +24,12 @@ mtf_contracts:
             # Filtrage basé sur les timestamps open/expire.
 
             require_not_expired: false # Désactive la vérification d'expiration.
-            # Tu laisses BitMart gérer l'expiration et le delist.
+            # Tu laisses l'exchange gérer l'expiration et le delist.
 
             max_age_hours: 880         # Exclut les contrats listés depuis moins de ~36 jours.
             # Empêche le trading de nouveaux contrats trop volatils.
 
-            expire_unit: 'ms'          # expire_timestamp est exprimé en millisecondes (format BitMart).
+            expire_unit: 'ms'          # expire_timestamp est exprimé en millisecondes.
             open_unit: 'ms'            # open_timestamp également en millisecondes.
 
         limits:

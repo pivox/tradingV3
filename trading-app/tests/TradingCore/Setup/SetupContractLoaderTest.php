@@ -681,7 +681,6 @@ final class SetupContractLoaderTest extends TestCase
         foreach (['#303', '#304', '#132', '#191'] as $issue) {
             self::assertStringContainsString($issue, $blockers);
         }
-        self::assertStringNotContainsString('BitMart fallback', $blockers);
     }
 
     public function testCrashDecisionProvenanceInventoriesValidationAndTradeEntrySources(): void

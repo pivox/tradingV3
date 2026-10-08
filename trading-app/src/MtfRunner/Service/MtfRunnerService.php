@@ -1105,7 +1105,7 @@ final class MtfRunnerService
      */
     private function createContext(RunnerRequestDto $request): ExchangeContext
     {
-        $exchange = $request->exchange ?? Exchange::BITMART;
+        $exchange = $request->exchange ?? Exchange::OKX;
         $marketType = $request->marketType ?? MarketType::PERPETUAL;
 
         return new ExchangeContext($exchange, $marketType);

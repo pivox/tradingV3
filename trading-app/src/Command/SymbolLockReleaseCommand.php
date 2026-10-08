@@ -31,7 +31,7 @@ final class SymbolLockReleaseCommand extends Command
     {
         $this
             ->addArgument('symbol', InputArgument::REQUIRED, 'Symbol to release')
-            ->addOption('exchange', null, InputOption::VALUE_REQUIRED, 'Exchange', Exchange::BITMART->value)
+            ->addOption('exchange', null, InputOption::VALUE_REQUIRED, 'Exchange', Exchange::OKX->value)
             ->addOption('market-type', null, InputOption::VALUE_REQUIRED, 'Market type', MarketType::PERPETUAL->value)
             ->addOption('reason', null, InputOption::VALUE_REQUIRED, 'Release reason')
             ->addOption('force', null, InputOption::VALUE_NONE, 'Force release even if an open position or order exists');
@@ -51,7 +51,7 @@ final class SymbolLockReleaseCommand extends Command
         $exchange = Exchange::tryFrom(strtolower(trim((string) $input->getOption('exchange'))));
         $marketType = MarketType::tryFrom(strtolower(trim((string) $input->getOption('market-type'))));
         if (!$exchange instanceof Exchange || !$marketType instanceof MarketType) {
-            $io->error('Invalid --exchange or --market-type.');
+            $io->error(sprintf('Invalid --exchange or --market-type. Accepted exchanges: %s.', implode(', ', \App\Provider\Context\UnsupportedExchangeException::accepted())));
 
             return Command::FAILURE;
         }

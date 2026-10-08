@@ -90,7 +90,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         $run = 'run_dashA_20260617';
 
         // Entrée T1 (BTC, set s1, scalper) : clôture rapprochée par trade_id, net complet.
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', [
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', [
             'trade_id' => 'T1', 'r_multiple_final' => 1.5,
         ], '2026-06-17 08:30:00+00', 100);
         $this->close('BTCUSDT', $run, ['trade_id' => 'T1', 'pnl' => 12.0, 'pnl_R' => 1.5, 'mfe_pct' => 2.0,
@@ -100,14 +100,14 @@ final class PositionTradeAnalysisViewTest extends TestCase
         // Entrée T2 (BTC, set s2, regular) : cycle NORMAL — `order_submitted` n'a que le
         // trade_id, la clôture synchronisée n'a que le position_id. Le pont `position_opened`
         // (trade_id T2 -> position_id P2) permet le rapprochement par position_id (P1).
-        $this->entry('BTCUSDT', $run, 's2', 'regular', 'bitmart', 'perpetual', [
+        $this->entry('BTCUSDT', $run, 's2', 'regular', 'okx', 'perpetual', [
             'trade_id' => 'T2',
         ], '2026-06-17 08:31:00+00', 101);
         $this->opened('BTCUSDT', $run, 'T2', 'P2', '2026-06-17 08:32:30+00', 150);
         $this->close('BTCUSDT', $run, ['pnl' => -4.0, 'pnl_R' => -1.0], 'P2', '2026-06-17 08:45:00+00', 201);
 
         // Entrée ETH (set s1, scalper) : aucune clôture -> unmatched / ouvert.
-        $this->entry('ETHUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', [
+        $this->entry('ETHUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', [
             'trade_id' => 'T3',
         ], '2026-06-17 08:32:00+00', 102);
 
@@ -139,7 +139,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('matched_trade_id', $t1['close_matched_by']);
         self::assertSame('s1', $t1['set_id']);
         self::assertSame('scalper', $t1['mtf_profile']);
-        self::assertSame('bitmart', $t1['exchange']);
+        self::assertSame('okx', $t1['exchange']);
         self::assertSame('perpetual', $t1['market_type']);
         self::assertSame($run, $t1['orchestration_run_id']);
         self::assertSame($run, $t1['correlation_run_id']);
@@ -2139,8 +2139,8 @@ SQL);
         $run = 'run_reuse';
         // 2 entrées + 2 clôtures partageant le même position_id : appariement 1-pour-1
         // par FIFO, jamais de réutilisation ni de multiplication de lignes.
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['position_id' => 'PSHARED'], '2026-06-17 09:00:00+00', 300);
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['position_id' => 'PSHARED'], '2026-06-17 09:01:00+00', 301);
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', ['position_id' => 'PSHARED'], '2026-06-17 09:00:00+00', 300);
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', ['position_id' => 'PSHARED'], '2026-06-17 09:01:00+00', 301);
         $this->close('BTCUSDT', $run, ['pnl' => 1.0], 'PSHARED', '2026-06-17 09:10:00+00', 400);
         $this->close('BTCUSDT', $run, ['pnl' => 2.0], 'PSHARED', '2026-06-17 09:11:00+00', 401);
 
@@ -2159,11 +2159,11 @@ SQL);
     {
         $run = 'run_fifo_excess_close';
 
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['position_id' => 'PFIFO'], '2026-06-17 09:00:00+00', 500);
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', ['position_id' => 'PFIFO'], '2026-06-17 09:00:00+00', 500);
         $this->close('BTCUSDT', $run, ['pnl' => 1.0], 'PFIFO', '2026-06-17 09:10:00+00', 501);
         // Clôture excédentaire entre deux entrées : elle ne doit pas voler le rang de E2.
         $this->close('BTCUSDT', $run, ['pnl' => 999.0], 'PFIFO', '2026-06-17 09:20:00+00', 502);
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['position_id' => 'PFIFO'], '2026-06-17 09:30:00+00', 503);
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', ['position_id' => 'PFIFO'], '2026-06-17 09:30:00+00', 503);
         $this->close('BTCUSDT', $run, ['pnl' => 3.0], 'PFIFO', '2026-06-17 09:40:00+00', 504);
 
         $rows = $this->conn->fetchAllAssociative(
@@ -2190,7 +2190,7 @@ SQL);
         $this->close('BTCUSDT', $run, ['pnl' => 999.0], 'PR', '2026-06-17 08:00:00+00', 700);
         // Nouvelle entrée (09:00) réutilisant `PR` via le pont : la clôture périmée
         // (antérieure à l'entrée) ne doit PAS lui être attribuée -> unmatched, pas de PnL.
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TS'], '2026-06-17 09:00:00+00', 701);
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TS'], '2026-06-17 09:00:00+00', 701);
         $this->opened('BTCUSDT', $run, 'TS', 'PR', '2026-06-17 09:00:30+00', 702);
 
         $rows = $this->conn->fetchAllAssociative(
@@ -2213,7 +2213,7 @@ SQL);
         // entrée antérieure) — elle ne doit pas voler le rang à la vraie clôture.
         $this->close('BTCUSDT', $run, ['pnl' => 999.0], 'PO', '2026-06-17 08:00:00+00', 800);
         // Entrée réelle (trade TO) + pont vers `PO` + VRAIE clôture postérieure.
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TO'], '2026-06-17 09:00:00+00', 801);
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TO'], '2026-06-17 09:00:00+00', 801);
         $this->opened('BTCUSDT', $run, 'TO', 'PO', '2026-06-17 09:00:30+00', 802);
         $this->close('BTCUSDT', $run, ['pnl' => 7.0, 'pnl_R' => 1.0], 'PO', '2026-06-17 10:00:00+00', 803);
 
@@ -2238,9 +2238,9 @@ SQL);
         // Même position_id `PX` réutilisé sur BTC et ETH. L'entrée BTC est la première,
         // mais la clôture ETH arrive AVANT la clôture BTC : sans partition par symbole,
         // les rangs se croiseraient et le garde de symbole rejetterait les deux clôtures.
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TB'], '2026-06-17 09:00:00+00', 900);
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TB'], '2026-06-17 09:00:00+00', 900);
         $this->opened('BTCUSDT', $run, 'TB', 'PX', '2026-06-17 09:00:30+00', 901);
-        $this->entry('ETHUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TE'], '2026-06-17 09:10:00+00', 902);
+        $this->entry('ETHUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TE'], '2026-06-17 09:10:00+00', 902);
         $this->opened('ETHUSDT', $run, 'TE', 'PX', '2026-06-17 09:10:30+00', 903);
         $this->close('ETHUSDT', $run, ['pnl' => 3.0], 'PX', '2026-06-17 09:20:00+00', 904);
         $this->close('BTCUSDT', $run, ['pnl' => 5.0], 'PX', '2026-06-17 09:30:00+00', 905);
@@ -2270,14 +2270,14 @@ SQL);
     public function testReusedPositionIdAcrossVenuesDoesNotCrossMatch(): void
     {
         $run = 'run_venue';
-        // Même symbole BTC + même position_id `PV`, mais deux venues (bitmart / okx).
-        // Une clôture OKX ne doit pas être appariée à l'entrée bitmart (PnL au mauvais
+        // Même symbole BTC + même position_id `PV`, mais deux venues (hyperliquid / okx).
+        // Une clôture OKX ne doit pas être appariée à l'entrée hyperliquid (PnL au mauvais
         // bucket by_exchange) et inversement.
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TBB'], '2026-06-17 09:00:00+00', 920);
-        $this->opened('BTCUSDT', $run, 'TBB', 'PV', '2026-06-17 09:00:30+00', 921, 'bitmart', 'perpetual');
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'hyperliquid', 'perpetual', ['trade_id' => 'TBB'], '2026-06-17 09:00:00+00', 920);
+        $this->opened('BTCUSDT', $run, 'TBB', 'PV', '2026-06-17 09:00:30+00', 921, 'hyperliquid', 'perpetual');
         $this->entry('BTCUSDT', $run, 's2', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TBO'], '2026-06-17 09:05:00+00', 922);
         $this->opened('BTCUSDT', $run, 'TBO', 'PV', '2026-06-17 09:05:30+00', 923, 'okx', 'perpetual');
-        $this->close('BTCUSDT', $run, ['pnl' => 5.0], 'PV', '2026-06-17 09:30:00+00', 924, 'bitmart', 'perpetual');
+        $this->close('BTCUSDT', $run, ['pnl' => 5.0], 'PV', '2026-06-17 09:30:00+00', 924, 'hyperliquid', 'perpetual');
         $this->close('BTCUSDT', $run, ['pnl' => 8.0], 'PV', '2026-06-17 09:35:00+00', 925, 'okx', 'perpetual');
 
         $rows = $this->conn->fetchAllAssociative(
@@ -2293,9 +2293,9 @@ SQL);
         }
 
         // Chaque venue est rapprochée de SA propre clôture, jamais en cross-venue.
-        self::assertSame('matched', $byExchange['bitmart']['close_match_status']);
-        self::assertSame(924, (int) $byExchange['bitmart']['close_event_id']);
-        self::assertEqualsWithDelta(5.0, (float) $byExchange['bitmart']['recorded_pnl_usdt'], 1e-9);
+        self::assertSame('matched', $byExchange['hyperliquid']['close_match_status']);
+        self::assertSame(924, (int) $byExchange['hyperliquid']['close_event_id']);
+        self::assertEqualsWithDelta(5.0, (float) $byExchange['hyperliquid']['recorded_pnl_usdt'], 1e-9);
 
         self::assertSame('matched', $byExchange['okx']['close_match_status']);
         self::assertSame(925, (int) $byExchange['okx']['close_event_id']);
@@ -2305,15 +2305,15 @@ SQL);
     public function testSameTradeIdAcrossVenuesMatchesEachOnItsOwnVenue(): void
     {
         $run = 'run_tid_venue';
-        // Même trade_id `TX` émis par DEUX venues (bitmart / okx) — possible car le
+        // Même trade_id `TX` émis par DEUX venues (hyperliquid / okx) — possible car le
         // trade_id n'est unique que par (exchange, market_type, trade_id). L'entrée
-        // bitmart est la première, mais la clôture OKX arrive AVANT la clôture bitmart :
+        // hyperliquid est la première, mais la clôture OKX arrive AVANT la clôture hyperliquid :
         // sans périmètre venue dans le passage trade_id, les rangs se croiseraient et
-        // l'entrée bitmart hériterait du PnL OKX (cross-venue swap).
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TX'], '2026-06-17 09:00:00+00', 1200);
+        // l'entrée hyperliquid hériterait du PnL OKX (cross-venue swap).
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'hyperliquid', 'perpetual', ['trade_id' => 'TX'], '2026-06-17 09:00:00+00', 1200);
         $this->entry('BTCUSDT', $run, 's2', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TX'], '2026-06-17 09:05:00+00', 1201);
         $this->close('BTCUSDT', $run, ['trade_id' => 'TX', 'pnl' => 8.0], null, '2026-06-17 09:20:00+00', 1202, 'okx', 'perpetual');
-        $this->close('BTCUSDT', $run, ['trade_id' => 'TX', 'pnl' => 5.0], null, '2026-06-17 09:30:00+00', 1203, 'bitmart', 'perpetual');
+        $this->close('BTCUSDT', $run, ['trade_id' => 'TX', 'pnl' => 5.0], null, '2026-06-17 09:30:00+00', 1203, 'hyperliquid', 'perpetual');
 
         $rows = $this->conn->fetchAllAssociative(
             'SELECT exchange, trade_id, close_match_status, close_matched_by, close_event_id, recorded_pnl_usdt
@@ -2329,10 +2329,10 @@ SQL);
 
         // Rapprochement PAR trade_id (pas position_id) mais borné à la venue : chaque
         // entrée hérite du PnL de SA propre clôture, jamais en cross-venue.
-        self::assertSame('matched', $byExchange['bitmart']['close_match_status']);
-        self::assertSame('matched_trade_id', $byExchange['bitmart']['close_matched_by']);
-        self::assertSame(1203, (int) $byExchange['bitmart']['close_event_id']);
-        self::assertEqualsWithDelta(5.0, (float) $byExchange['bitmart']['recorded_pnl_usdt'], 1e-9);
+        self::assertSame('matched', $byExchange['hyperliquid']['close_match_status']);
+        self::assertSame('matched_trade_id', $byExchange['hyperliquid']['close_matched_by']);
+        self::assertSame(1203, (int) $byExchange['hyperliquid']['close_event_id']);
+        self::assertEqualsWithDelta(5.0, (float) $byExchange['hyperliquid']['recorded_pnl_usdt'], 1e-9);
 
         self::assertSame('matched', $byExchange['okx']['close_match_status']);
         self::assertSame('matched_trade_id', $byExchange['okx']['close_matched_by']);
@@ -2346,13 +2346,13 @@ SQL);
         // Même trade_id `TG` émis par DEUX venues, chacune avec son `position_opened`
         // (le pont) résolvant un position_id DISTINCT, puis sa clôture par position_id.
         // Sans périmètre venue dans le pont, l'entrée okx pourrait hériter du position_id
-        // bitmart (rang croisé) et matcher la mauvaise venue (mauvais bucket by_exchange).
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TG'], '2026-06-17 09:00:00+00', 1300);
-        $this->opened('BTCUSDT', $run, 'TG', 'PGB', '2026-06-17 09:00:30+00', 1301, 'bitmart', 'perpetual');
+        // hyperliquid (rang croisé) et matcher la mauvaise venue (mauvais bucket by_exchange).
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'hyperliquid', 'perpetual', ['trade_id' => 'TG'], '2026-06-17 09:00:00+00', 1300);
+        $this->opened('BTCUSDT', $run, 'TG', 'PGB', '2026-06-17 09:00:30+00', 1301, 'hyperliquid', 'perpetual');
         $this->entry('BTCUSDT', $run, 's2', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TG'], '2026-06-17 09:05:00+00', 1302);
         $this->opened('BTCUSDT', $run, 'TG', 'PGO', '2026-06-17 09:05:30+00', 1303, 'okx', 'perpetual');
         $this->close('BTCUSDT', $run, ['pnl' => 8.0], 'PGO', '2026-06-17 09:20:00+00', 1304, 'okx', 'perpetual');
-        $this->close('BTCUSDT', $run, ['pnl' => 5.0], 'PGB', '2026-06-17 09:30:00+00', 1305, 'bitmart', 'perpetual');
+        $this->close('BTCUSDT', $run, ['pnl' => 5.0], 'PGB', '2026-06-17 09:30:00+00', 1305, 'hyperliquid', 'perpetual');
 
         $rows = $this->conn->fetchAllAssociative(
             'SELECT exchange, position_id, close_match_status, close_matched_by, close_event_id, recorded_pnl_usdt
@@ -2367,11 +2367,11 @@ SQL);
         }
 
         // Chaque entrée résout le position_id de SA venue via le pont, puis matche SA clôture.
-        self::assertSame('PGB', $byExchange['bitmart']['position_id']);
-        self::assertSame('matched', $byExchange['bitmart']['close_match_status']);
-        self::assertSame('matched_position_id', $byExchange['bitmart']['close_matched_by']);
-        self::assertSame(1305, (int) $byExchange['bitmart']['close_event_id']);
-        self::assertEqualsWithDelta(5.0, (float) $byExchange['bitmart']['recorded_pnl_usdt'], 1e-9);
+        self::assertSame('PGB', $byExchange['hyperliquid']['position_id']);
+        self::assertSame('matched', $byExchange['hyperliquid']['close_match_status']);
+        self::assertSame('matched_position_id', $byExchange['hyperliquid']['close_matched_by']);
+        self::assertSame(1305, (int) $byExchange['hyperliquid']['close_event_id']);
+        self::assertEqualsWithDelta(5.0, (float) $byExchange['hyperliquid']['recorded_pnl_usdt'], 1e-9);
 
         self::assertSame('PGO', $byExchange['okx']['position_id']);
         self::assertSame('matched', $byExchange['okx']['close_match_status']);
@@ -2385,8 +2385,8 @@ SQL);
         // (a) Anti cross-run : entrée runA + clôture TAGUÉE runB (même trade_id + venue).
         // La clôture d'un AUTRE run ne doit pas être consommée par l'entrée runA (sinon son
         // PnL serait attribué à runA, que l'API filtre par run APRÈS l'appariement).
-        $this->entry('BTCUSDT', 'runA', 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TR'], '2026-06-17 09:00:00+00', 1400);
-        $this->close('BTCUSDT', 'runB', ['trade_id' => 'TR', 'pnl' => 8.0], null, '2026-06-17 09:30:00+00', 1401, 'bitmart', 'perpetual');
+        $this->entry('BTCUSDT', 'runA', 's1', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TR'], '2026-06-17 09:00:00+00', 1400);
+        $this->close('BTCUSDT', 'runB', ['trade_id' => 'TR', 'pnl' => 8.0], null, '2026-06-17 09:30:00+00', 1401, 'okx', 'perpetual');
 
         $rowsA = $this->conn->fetchAllAssociative(
             'SELECT trade_id, close_match_status, close_event_id, recorded_pnl_usdt
@@ -2400,11 +2400,11 @@ SQL);
 
         // (b) Chemin LIVE : la synchro émet les clôtures SANS run_id (run_id NULL) — elles
         // restent rapprochables par le run de l'entrée (le garde est permissif sur NULL).
-        $this->entry('ETHUSDT', 'runC', 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TN'], '2026-06-17 09:00:00+00', 1410);
+        $this->entry('ETHUSDT', 'runC', 's1', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TN'], '2026-06-17 09:00:00+00', 1410);
         $this->conn->executeStatement(
             'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, exchange, market_type, extra, happened_at)
              VALUES (?, ?, \'position_closed\', NULL, NULL, ?, ?, ?::jsonb, ?)',
-            [1411, 'ETHUSDT', 'bitmart', 'perpetual', json_encode(['trade_id' => 'TN', 'pnl' => 3.0], JSON_THROW_ON_ERROR), '2026-06-17 09:30:00+00']
+            [1411, 'ETHUSDT', 'okx', 'perpetual', json_encode(['trade_id' => 'TN', 'pnl' => 3.0], JSON_THROW_ON_ERROR), '2026-06-17 09:30:00+00']
         );
 
         $rowsC = $this->conn->fetchAllAssociative(
@@ -2422,11 +2422,11 @@ SQL);
     {
         $run = 'run_internal_priority';
 
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', [
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', [
             'internal_trade_id' => 'itd-first',
             'position_id' => 'P-REUSED',
         ], '2026-06-17 09:00:00+00', 1500);
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', [
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', [
             'internal_trade_id' => 'itd-second',
             'position_id' => 'P-REUSED',
         ], '2026-06-17 09:01:00+00', 1501);
@@ -2455,7 +2455,7 @@ SQL);
     {
         $run = 'run_realtime';
         // Entrée réelle à 09:00 (trade TCT, pont -> PCT).
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TCT'], '2026-06-17 09:00:00+00', 1000);
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TCT'], '2026-06-17 09:00:00+00', 1000);
         $this->opened('BTCUSDT', $run, 'TCT', 'PCT', '2026-06-17 09:00:30+00', 1001);
         // Clôture périmée d'un ancien trade au MÊME position_id : LOGGÉE tardivement
         // (happened_at 10:00, après l'entrée) mais close_time RÉEL à 08:00 (avant l'entrée).
@@ -2478,7 +2478,7 @@ SQL);
     public function testMatchedCloseExposesRealCloseTime(): void
     {
         $run = 'run_realtime_ok';
-        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['trade_id' => 'TMC'], '2026-06-17 09:00:00+00', 1100);
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', ['trade_id' => 'TMC'], '2026-06-17 09:00:00+00', 1100);
         $this->opened('BTCUSDT', $run, 'TMC', 'PMC', '2026-06-17 09:00:30+00', 1101);
         // Clôture réelle à 10:00 mais loggée à 10:05 : effective_close_time = close_time réel.
         $this->close('BTCUSDT', $run, ['pnl' => 5.0, 'close_time' => '2026-06-17 10:00:00'], 'PMC', '2026-06-17 10:05:00+00', 1102);
@@ -2507,7 +2507,7 @@ SQL);
         for ($i = 0; $i < $entryCount; $i++) {
             $entryTime = $base->modify(sprintf('+%d minutes', $i * 3))->format('Y-m-d H:i:sP');
             $closeTime = $base->modify(sprintf('+%d minutes', ($i * 3) + 1))->format('Y-m-d H:i:sP');
-            $this->entry('BTCUSDT', $run, 's1', 'scalper', 'bitmart', 'perpetual', ['position_id' => 'PBULK'], $entryTime, $nextId++);
+            $this->entry('BTCUSDT', $run, 's1', 'scalper', 'okx', 'perpetual', ['position_id' => 'PBULK'], $entryTime, $nextId++);
             $this->close('BTCUSDT', $run, ['pnl' => 1.0], 'PBULK', $closeTime, $nextId++);
 
             if ($i % 100 === 0) {
@@ -2579,7 +2579,7 @@ CREATE TABLE trade_lifecycle_event (
     paper_eligibility VARCHAR(32),
     timeframe VARCHAR(8),
     config_profile VARCHAR(64),
-    exchange VARCHAR(32) DEFAULT 'bitmart',
+    exchange VARCHAR(32) DEFAULT 'okx',
     market_data_venue VARCHAR(32),
     market_type VARCHAR(32) DEFAULT 'perpetual',
     extra JSONB,
@@ -2729,7 +2729,7 @@ SQL);
         string $positionId,
         string $happenedAt,
         int $forcedId,
-        string $exchange = 'bitmart',
+        string $exchange = 'okx',
         string $marketType = 'perpetual',
         ?string $marketDataVenue = null,
     ): void {
@@ -2750,7 +2750,7 @@ SQL);
         ?string $positionId,
         string $happenedAt,
         int $forcedId,
-        string $exchange = 'bitmart',
+        string $exchange = 'okx',
         string $marketType = 'perpetual',
         ?string $marketDataVenue = null,
     ): void {

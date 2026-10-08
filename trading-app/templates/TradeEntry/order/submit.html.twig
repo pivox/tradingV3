@@ -314,7 +314,7 @@
                         <div class="accordion-item">
                             <h2 class="accordion-header">
                                 <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseResponse">
-                                    <i class="bi bi-arrow-down-circle me-2"></i> <strong>Réponse BitMart (Response)</strong>
+                                    <i class="bi bi-arrow-down-circle me-2"></i> <strong>Réponse exchange (Response)</strong>
                                 </button>
                             </h2>
                             <div id="collapseResponse" class="accordion-collapse collapse" data-bs-parent="#orderDetailsAccordion">
@@ -347,7 +347,7 @@
                                                 <td><code>data.order_id</code></td>
                                                 <td>string/integer</td>
                                                 <td><strong class="fs-5">{{ order_details.order_id }}</strong></td>
-                                                <td><strong>ID unique de l'ordre BitMart</strong></td>
+                                                <td><strong>ID unique de l'ordre exchange</strong></td>
                                             </tr>
                                             {% if order_details.response_full.data.client_order_id is defined %}
                                             <tr>
@@ -388,7 +388,7 @@
             <p class="mb-0">
                 <small>
                     <i class="bi bi-clock"></i> Soumis le {{ 'now'|date('d/m/Y à H:i:s') }} 
-                    | Votre ordre a été soumis à BitMart avec le Take Profit configuré.
+                    | Votre ordre a été soumis à l'exchange avec le Take Profit configuré.
                 </small>
             </p>
             <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
@@ -411,7 +411,7 @@
             </p>
             {% endif %}
             <hr>
-            <p class="mb-0">Votre ordre a été soumis à BitMart avec le Take Profit configuré.</p>
+            <p class="mb-0">Votre ordre a été soumis à l'exchange avec le Take Profit configuré.</p>
             <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
         </div>
     </div>
@@ -651,7 +651,7 @@
 <script>
 // Stocker les contract sizes (sera rempli dynamiquement ou avec une valeur par défaut)
 const contractSizes = {
-    // Valeurs par défaut courantes pour BitMart Futures (1 USDT par contrat généralement)
+    // Valeurs par défaut courantes pour les contrats futures (1 USDT par contrat généralement)
     // Ces valeurs seront mises à jour si on récupère les données depuis l'API
 };
 

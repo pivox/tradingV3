@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Trading\Listener;
 
+use App\Provider\Context\UnsupportedExchangeException;
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\MainProviderInterface;
 use App\Entity\TradeLineage;
@@ -452,10 +453,16 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
         }
 
         $payload = $this->positionPayloadFromRaw($raw);
-        $context = ExchangeContext::fromValues(
-            $this->stringValue($raw['exchange'] ?? $payload['exchange'] ?? $extra['exchange'] ?? null),
-            $marketType ?? $this->stringValue($raw['market_type'] ?? $payload['market_type'] ?? $extra['market_type'] ?? null),
-        );
+        try {
+            $context = ExchangeContext::fromValues(
+                $this->stringValue($raw['exchange'] ?? $payload['exchange'] ?? $extra['exchange'] ?? null),
+                $marketType ?? $this->stringValue($raw['market_type'] ?? $payload['market_type'] ?? $extra['market_type'] ?? null),
+            );
+        } catch (UnsupportedExchangeException $e) {
+            $this->logger?->warning('trade_lifecycle.unsupported_exchange_skipped', ['exchange' => $e->rawValue]);
+
+            return null;
+        }
 
         return $this->tradeLineageManager->resolve(
             $context,

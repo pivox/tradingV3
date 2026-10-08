@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\MessageHandler;
 
-use App\Common\Enum\OrderStatus;
-use App\Contract\Provider\MainProviderInterface;
+use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
+use App\Provider\Context\ExchangeContext;
+use App\TradeEntry\Execution\RestingEntryState;
+use App\TradeEntry\Execution\RestingEntryWatcher;
 use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\TradeEntry\Message\CancelOrderMessage;
 use Psr\Log\LoggerInterface;
@@ -16,7 +18,8 @@ use Symfony\Component\Messenger\Attribute\AsMessageHandler;
 final class CancelOrderMessageHandler
 {
     public function __construct(
-        private readonly MainProviderInterface $provider,
+        private readonly ExchangeAdapterRegistryInterface $adapters,
+        private readonly RestingEntryWatcher $watcher,
         private readonly MtfSwitchRepository $mtfSwitchRepository,
         #[Autowire(service: 'monolog.logger.positions')]
         private readonly LoggerInterface $positionsLogger,
@@ -26,10 +29,11 @@ final class CancelOrderMessageHandler
 
     public function __invoke(CancelOrderMessage $message): void
     {
-        $orderProvider = $this->provider->getOrderProvider();
+        $context = ExchangeContext::resolve(null);
+        $adapter = $this->adapters->get($context->exchange, $context->marketType);
 
         try {
-            $order = $orderProvider->getOrder($message->symbol, $message->exchangeOrderId);
+            $state = $this->watcher->inspect($adapter, $message->symbol, $message->exchangeOrderId, $message->clientOrderId);
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('trade_entry.timeout.order_fetch_failed', [
                 'symbol' => $message->symbol,
@@ -38,44 +42,42 @@ final class CancelOrderMessageHandler
                 'decision_key' => $message->decisionKey,
                 'error' => $e->getMessage(),
             ]);
-            $order = null;
+            $state = null;
         }
 
-        if ($order !== null) {
-            $status = $order->status->value;
+        if ($state?->status === RestingEntryState::FILLED) {
+            $this->positionsLogger->info('trade_entry.timeout.skip_cancel', [
+                'symbol' => $message->symbol,
+                'exchange_order_id' => $message->exchangeOrderId,
+                'client_order_id' => $message->clientOrderId,
+                'decision_key' => $message->decisionKey,
+                'order_status' => $state->order?->status->value ?? 'filled',
+            ]);
 
-            if (in_array($status, [OrderStatus::FILLED->value, OrderStatus::PARTIALLY_FILLED->value], true)) {
-                $this->positionsLogger->info('trade_entry.timeout.skip_cancel', [
-                    'symbol' => $message->symbol,
-                    'exchange_order_id' => $message->exchangeOrderId,
-                    'client_order_id' => $message->clientOrderId,
-                    'decision_key' => $message->decisionKey,
-                    'order_status' => $status,
-                ]);
-                return;
-            }
+            return;
+        }
 
-            if (in_array($status, [OrderStatus::CANCELLED->value, OrderStatus::EXPIRED->value, OrderStatus::REJECTED->value], true)) {
-                $this->positionsLogger->info('trade_entry.timeout.already_closed', [
-                    'symbol' => $message->symbol,
-                    'exchange_order_id' => $message->exchangeOrderId,
-                    'client_order_id' => $message->clientOrderId,
-                    'decision_key' => $message->decisionKey,
-                    'order_status' => $status,
-                ]);
-                return;
-            }
+        if ($state?->status === RestingEntryState::CLOSED) {
+            $this->positionsLogger->info('trade_entry.timeout.already_closed', [
+                'symbol' => $message->symbol,
+                'exchange_order_id' => $message->exchangeOrderId,
+                'client_order_id' => $message->clientOrderId,
+                'decision_key' => $message->decisionKey,
+                'order_status' => $state->order?->status->value ?? 'closed',
+            ]);
+
+            return;
         }
 
         try {
-            $cancelled = $orderProvider->cancelOrder($message->symbol, $message->exchangeOrderId);
+            $cancelled = $this->watcher->cancel($adapter, $message->symbol, $message->exchangeOrderId, $message->clientOrderId, $message->decisionKey)->cancelled;
             $this->positionsLogger->info('trade_entry.timeout.cancel_attempt', [
                 'symbol' => $message->symbol,
                 'exchange_order_id' => $message->exchangeOrderId,
                 'client_order_id' => $message->clientOrderId,
                 'decision_key' => $message->decisionKey,
                 'cancelled' => $cancelled,
-                'order_found' => $order !== null,
+                'order_found' => $state !== null,
             ]);
 
             // Si l'ordre a été annulé avec succès, réactiver le MtfSwitch avec un délai réduit

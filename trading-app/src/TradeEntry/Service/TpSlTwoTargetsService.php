@@ -16,20 +16,27 @@ use App\TradeEntry\Types\Side as EntrySide;
 use App\TradeEntry\TpSplit\TpSplitResolver;
 use App\TradeEntry\TpSplit\Dto\TpSplitContext;
 use App\Contract\Indicator\IndicatorProviderInterface;
-use App\Common\Enum\OrderSide;
-use App\Common\Enum\OrderType;
-use App\Contract\Provider\Dto\OrderDto;
+use App\Exchange\Contract\ExchangeAdapterInterface;
+use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
+use App\Exchange\Dto\CancelOrderRequest;
+use App\Exchange\Dto\ExchangeOrderDto;
+use App\Exchange\Dto\PlaceOrderRequest;
+use App\Exchange\Enum\ExchangeOrderSide;
+use App\Exchange\Enum\ExchangeOrderType;
+use App\Exchange\Enum\ExchangePositionSide;
+use App\Exchange\Enum\ExchangeTimeInForce;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use App\Runtime\Cache\DbValidationCache;
 
-final class TpSlTwoTargetsService
+final class TpSlTwoTargetsService implements TakeProfitPlacerInterface
 {
     public function __construct(
         private readonly PreTradeChecks $pretrade,
         private readonly StopLossCalculator $slc,
         private readonly TakeProfitCalculator $tpc,
         private readonly MainProviderInterface $providers,
+        private readonly ExchangeAdapterRegistryInterface $adapters,
         private readonly PositionRepository $positions,
         private readonly TradeEntryConfigProvider $configProvider,
         private readonly TradeEntryModeContext $modeContext,
@@ -506,7 +513,7 @@ final class TpSlTwoTargetsService
 
         // 4) Annulations (SL si différent, TP existants)
         $cancelled = [];
-        $orderProvider = $providers->getOrderProvider();
+        $adapter = $this->adapters->get($exchangeContext->exchange, $exchangeContext->marketType);
         $isDryRun = $req->dryRun ?? false;
 
         if ($isDryRun) {
@@ -517,7 +524,7 @@ final class TpSlTwoTargetsService
             ]);
         }
         try {
-            $open = $orderProvider->getOpenOrders($symbol);
+            $open = $adapter->getOpenOrders($symbol);
         } catch (\Throwable $e) {
             $open = [];
             $this->positionsLogger->warning('tp2sl.open_orders_failed', [
@@ -528,16 +535,17 @@ final class TpSlTwoTargetsService
         }
 
         // Détermination sens fermeture
-        $closeSide = $req->side === EntrySide::Long ? OrderSide::SELL : OrderSide::BUY;
-        $isSl = function (OrderDto $o) use ($req, $entryPrice): bool {
-            if ($o->price === null) { return false; }
-            $p = (float)$o->price->__toString();
+        $closeSide = $req->side === EntrySide::Long ? ExchangeOrderSide::SELL : ExchangeOrderSide::BUY;
+        $positionSide = $req->side === EntrySide::Long ? ExchangePositionSide::LONG : ExchangePositionSide::SHORT;
+        $priceOf = fn(ExchangeOrderDto $o): ?float => $o->stopPrice ?? $o->price;
+        $isSl = function (ExchangeOrderDto $o) use ($req, $entryPrice, $priceOf): bool {
+            $p = $priceOf($o);
+            if ($p === null) { return false; }
             return $req->side === EntrySide::Long ? ($p < $entryPrice) : ($p > $entryPrice);
         };
-        $priceOf = fn(OrderDto $o): ?float => $o->price ? (float)$o->price->__toString() : null;
 
-        /** @var array<int,OrderDto> $closing */
-        $closing = array_values(array_filter($open, fn(OrderDto $o) => $o->side === $closeSide));
+        /** @var array<int,ExchangeOrderDto> $closing */
+        $closing = array_values(array_filter($open, fn(ExchangeOrderDto $o) => $o->side === $closeSide && $o->reduceOnly));
 
         // Annuler SL si différent (tolérance = 1 tick)
         if ($req->cancelExistingStopLossIfDifferent && !$isDryRun) {
@@ -549,13 +557,13 @@ final class TpSlTwoTargetsService
                 $p = $priceOf($existingSl);
                 if ($p !== null && abs($p - $stop) > max($tick, 1e-8)) {
                     try {
-                        if ($orderProvider->cancelOrder($existingSl->symbol, $existingSl->orderId)) {
-                            $cancelled[] = $existingSl->orderId;
+                        if ($this->cancelClosingOrder($adapter, $existingSl, 'protective')) {
+                            $cancelled[] = $existingSl->exchangeOrderId;
                         }
                     } catch (\Throwable $e) {
                         $this->positionsLogger->warning('tp2sl.cancel_sl_failed', [
                             'symbol' => $symbol,
-                            'order_id' => $existingSl->orderId,
+                            'order_id' => $existingSl->exchangeOrderId,
                             'error' => $e->getMessage(),
                             'reason' => 'cancel_sl_exception',
                         ]);
@@ -571,7 +579,7 @@ final class TpSlTwoTargetsService
             if ($existingSl !== null) {
                 $p = $priceOf($existingSl);
                 if ($p !== null && abs($p - $stop) > max($tick, 1e-8)) {
-                    $cancelled[] = $existingSl->orderId . ' (DRY-RUN)';
+                    $cancelled[] = $existingSl->exchangeOrderId . ' (DRY-RUN)';
                 }
             }
         }
@@ -581,13 +589,13 @@ final class TpSlTwoTargetsService
             foreach ($closing as $o) {
                 if (!$isSl($o)) {
                     try {
-                        if ($orderProvider->cancelOrder($o->symbol, $o->orderId)) {
-                            $cancelled[] = $o->orderId;
+                        if ($this->cancelClosingOrder($adapter, $o, 'take_profit')) {
+                            $cancelled[] = $o->exchangeOrderId;
                         }
                     } catch (\Throwable $e) {
                         $this->positionsLogger->warning('tp2sl.cancel_tp_failed', [
                             'symbol' => $symbol,
-                            'order_id' => $o->orderId,
+                            'order_id' => $o->exchangeOrderId,
                             'error' => $e->getMessage(),
                             'reason' => 'cancel_tp_exception',
                         ]);
@@ -598,7 +606,7 @@ final class TpSlTwoTargetsService
             // En mode dry-run, simuler les annulations qui seraient faites
             foreach ($closing as $o) {
                 if (!$isSl($o)) {
-                    $cancelled[] = $o->orderId . ' (DRY-RUN)';
+                    $cancelled[] = $o->exchangeOrderId . ' (DRY-RUN)';
                 }
             }
         }
@@ -668,14 +676,6 @@ final class TpSlTwoTargetsService
         $slSize = $slFull ? (int)$size : (int)max(0, $size - $size1 - $size2);
 
         $submitted = [];
-        $bitmartCloseSide = ($req->side === EntrySide::Long) ? 2 : 3; // 2=close_long, 3=close_short
-
-        $optionsBase = [
-            'side' => $bitmartCloseSide,
-            // Force reduce-only when supported by provider/API
-            'reduce_only' => true,
-            'reduceOnly' => true,
-        ];
 
         // Quantifier SL size au multiple minVol
         $slSize = $slSize > 0 ? (int)floor($slSize / $minVol) * $minVol : 0;
@@ -683,22 +683,14 @@ final class TpSlTwoTargetsService
         $baseCid = $this->makeBaseCid($symbol, $req->side, $decisionKey);
 
         if ($slSize > 0) {
-            $options = $optionsBase + ['client_order_id' => $baseCid . '-SL'];
+            $options = ['client_order_id' => $baseCid . '-SL'];
             if (!$isDryRun) {
                 // Submit SL as a stop-limit (triggered) by using stopPrice; keep limit price equal to stop for determinism
-                $dto = $orderProvider->placeOrder(
-                    symbol: $symbol,
-                    side: $closeSide,
-                    type: OrderType::LIMIT,
-                    quantity: (float)$slSize,
-                    price: (float)$stop,
-                    stopPrice: (float)$stop,
-                    options: $options,
-                );
-                if ($dto instanceof OrderDto) {
+                $dto = $this->placeClosingOrder($adapter, $symbol, $closeSide, $positionSide, ExchangeOrderType::STOP_LOSS, (float)$slSize, (float)$stop, (float)$stop, $options['client_order_id'], (float) $contractSize);
+                if ($dto !== null) {
                     $submitted[] = [
-                        'order_id' => $dto->orderId,
-                        'price' => (float)($dto->price?->__toString() ?? (string)$stop),
+                        'order_id' => $dto,
+                        'price' => (float)$stop,
                         'size' => $slSize,
                         'type' => 'limit',
                         'side' => $closeSide->value,
@@ -722,21 +714,13 @@ final class TpSlTwoTargetsService
 
         // TP1
         if ($size1 > 0) {
-            $options = $optionsBase + ['client_order_id' => $baseCid . '-TP1'];
+            $options = ['client_order_id' => $baseCid . '-TP1'];
             if (!$isDryRun) {
-                $dto = $orderProvider->placeOrder(
-                    symbol: $symbol,
-                    side: $closeSide,
-                    type: OrderType::LIMIT,
-                    quantity: (float)$size1,
-                    price: (float)$tp1,
-                    stopPrice: null,
-                    options: $options,
-                );
-                if ($dto instanceof OrderDto) {
+                $dto = $this->placeClosingOrder($adapter, $symbol, $closeSide, $positionSide, ExchangeOrderType::TAKE_PROFIT, (float)$size1, (float)$tp1, (float)$tp1, $options['client_order_id'], (float) $contractSize);
+                if ($dto !== null) {
                     $submitted[] = [
-                        'order_id' => $dto->orderId,
-                        'price' => (float)($dto->price?->__toString() ?? (string)$tp1),
+                        'order_id' => $dto,
+                        'price' => (float)$tp1,
                         'size' => $size1,
                         'type' => 'limit',
                         'side' => $closeSide->value,
@@ -760,21 +744,13 @@ final class TpSlTwoTargetsService
 
         // TP2
         if ($size2 > 0) {
-            $options = $optionsBase + ['client_order_id' => $baseCid . '-TP2'];
+            $options = ['client_order_id' => $baseCid . '-TP2'];
             if (!$isDryRun) {
-                $dto = $orderProvider->placeOrder(
-                    symbol: $symbol,
-                    side: $closeSide,
-                    type: OrderType::LIMIT,
-                    quantity: (float)$size2,
-                    price: (float)$tp2,
-                    stopPrice: null,
-                    options: $options,
-                );
-                if ($dto instanceof OrderDto) {
+                $dto = $this->placeClosingOrder($adapter, $symbol, $closeSide, $positionSide, ExchangeOrderType::TAKE_PROFIT, (float)$size2, (float)$tp2, (float)$tp2, $options['client_order_id'], (float) $contractSize);
+                if ($dto !== null) {
                     $submitted[] = [
-                        'order_id' => $dto->orderId,
-                        'price' => (float)($dto->price?->__toString() ?? (string)$tp2),
+                        'order_id' => $dto,
+                        'price' => (float)$tp2,
                         'size' => $size2,
                         'type' => 'limit',
                         'side' => $closeSide->value,
@@ -817,6 +793,52 @@ final class TpSlTwoTargetsService
             'submitted' => $submitted,
             'cancelled' => $cancelled,
         ];
+    }
+
+    private function cancelClosingOrder(ExchangeAdapterInterface $adapter, ExchangeOrderDto $order, string $writeKind): bool
+    {
+        return $adapter->cancelOrder(new CancelOrderRequest(
+            exchange: $adapter->exchange(),
+            marketType: $adapter->marketType(),
+            symbol: $order->symbol,
+            exchangeOrderId: $order->exchangeOrderId,
+            clientOrderId: $order->clientOrderId,
+            metadata: ['write_kind' => $writeKind, 'reason' => 'tp_sl_recalculation'],
+        ))->cancelled;
+    }
+
+    private function placeClosingOrder(
+        ExchangeAdapterInterface $adapter,
+        string $symbol,
+        ExchangeOrderSide $side,
+        ExchangePositionSide $positionSide,
+        ExchangeOrderType $type,
+        float $quantity,
+        float $price,
+        float $triggerPrice,
+        string $clientOrderId,
+        ?float $contractSize = null,
+    ): ?string {
+        $result = $adapter->placeOrder(new PlaceOrderRequest(
+            exchange: $adapter->exchange(),
+            marketType: $adapter->marketType(),
+            symbol: $symbol,
+            side: $side,
+            positionSide: $positionSide,
+            orderType: $type,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: $quantity,
+            price: $price,
+            stopPrice: $triggerPrice,
+            reduceOnly: true,
+            postOnly: false,
+            leverage: null,
+            marginMode: 'isolated',
+            clientOrderId: $clientOrderId,
+            metadata: ['source' => 'tp_sl_two_targets', 'contract_size' => $contractSize],
+        ));
+
+        return $result->accepted ? $result->exchangeOrderId : null;
     }
 
     private function resolvePosition(string $symbol, EntrySide $side, ?ExchangeContext $context = null): ?Position
@@ -1054,7 +1076,7 @@ final class TpSlTwoTargetsService
             } catch (\Throwable) { $rnd = substr(sha1(uniqid('', true)), 0, 6); }
             $base = sprintf('TPSL-%s-%s-%s', strtoupper($symbol), $sideTag, $rnd);
         }
-        // Bitmart allows fairly long IDs; keep under 64 chars to be safe
+        // Keep under 64 chars to be safe
         return substr($base, 0, 64);
     }
 

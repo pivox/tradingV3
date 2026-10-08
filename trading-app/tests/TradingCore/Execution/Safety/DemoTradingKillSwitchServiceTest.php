@@ -185,11 +185,11 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
             hyperliquidTestnetTradingEnabled: true,
         );
 
-        $bitmartDemo = $service->evaluate($this->attempt(
-            exchange: Exchange::BITMART,
+        $binanceDemo = $service->evaluate($this->attempt(
+            exchange: Exchange::BINANCE,
             environment: ExchangeRuntimeEnvironment::DEMO,
             symbol: 'BTCUSDT',
-            clientOrderId: 'bitmart-cid-001',
+            clientOrderId: 'binance-cid-001',
         ));
         $okxTestnet = $service->evaluate($this->attempt(
             exchange: Exchange::OKX,
@@ -198,8 +198,8 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
             clientOrderId: 'okx-testnet-cid-001',
         ));
 
-        self::assertFalse($bitmartDemo->allowed);
-        self::assertContains('exchange_environment_pair_unsupported', $bitmartDemo->reasons);
+        self::assertFalse($binanceDemo->allowed);
+        self::assertContains('exchange_environment_pair_unsupported', $binanceDemo->reasons);
         self::assertFalse($okxTestnet->allowed);
         self::assertContains('exchange_environment_pair_unsupported', $okxTestnet->reasons);
         self::assertSame('blocked', $sink->events[0]['outcome']);

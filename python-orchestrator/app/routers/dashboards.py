@@ -27,6 +27,7 @@ from app.db.engine import get_session
 from app.db.models import Dashboard, OrchestrationSet
 from app.schemas import (
     Action,
+    Exchange,
     ContractRefreshResponse,
     ContractRefreshSetPreview,
     DashboardCreate,
@@ -303,6 +304,22 @@ async def refresh_contracts(
         for s in repo.list_active_sets(session, dashboard_id)
         if s.action == Action.MTF_RUN.value
     ]
+
+    supported_exchanges = {e.value for e in Exchange}
+    unsupported = [
+        f"{s.set_id} ({s.exchange})"
+        for s in mtf_sets
+        if getattr(s.exchange, "value", s.exchange) not in supported_exchanges
+    ]
+    if unsupported:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=(
+                "refresh impossible: exchange non supporté pour "
+                + ", ".join(unsupported)
+                + f" (supportés: {', '.join(sorted(supported_exchanges))})"
+            ),
+        )
 
     # 1) Un seul fetch par couple distinct (profil, exchange, market_type).
     #    Tout échec interrompt AVANT la moindre écriture (fail-closed).

@@ -103,7 +103,7 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
                 raw: ['position_id' => 'pos-real'],
             ),
             runId: null,
-            exchange: Exchange::BITMART->value,
+            exchange: Exchange::OKX->value,
             extra: ['market_type' => MarketType::PERPETUAL->value],
         ));
 
@@ -144,7 +144,7 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
                 raw: ['raw_history' => ['position_id' => 'pos-real']],
             ),
             runId: null,
-            exchange: Exchange::BITMART->value,
+            exchange: Exchange::OKX->value,
             extra: ['market_type' => MarketType::PERPETUAL->value],
         ));
 
@@ -852,7 +852,7 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
                 openedAt: new \DateTimeImmutable('2026-06-23 11:00:00 UTC'),
                 raw: ['position_id' => 'pos-missing-lineage'],
             ),
-            exchange: Exchange::BITMART->value,
+            exchange: Exchange::OKX->value,
             extra: ['market_type' => MarketType::PERPETUAL->value],
         ));
 
@@ -869,7 +869,7 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
     private function persistLineageWithPosition(): TradeLineage
     {
         $intent = (new OrderIntent())
-            ->setExchange(Exchange::BITMART)
+            ->setExchange(Exchange::OKX)
             ->setMarketType(MarketType::PERPETUAL)
             ->setSymbol('BTCUSDT')
             ->setSide(1)
@@ -879,7 +879,7 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
             ->setSize(1)
             ->setClientOrderId('cid-real')
             ->setPresetMode(OrderIntent::PRESET_MODE_NONE)
-            ->setDecisionKey('bitmart:perpetual:BTCUSDT:1m:1764161200:long:scalper:v1');
+            ->setDecisionKey('okx:perpetual:BTCUSDT:1m:1764161200:long:scalper:v1');
 
         $this->em->persist($intent);
         $this->em->flush();
@@ -897,7 +897,7 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
     {
         $event = (new TradeLifecycleEvent('BTCUSDT', 'order_submitted', $happenedAt))
             ->setRunId($runId)
-            ->setExchange(Exchange::BITMART)
+            ->setExchange(Exchange::OKX)
             ->setMarketType(MarketType::PERPETUAL)
             ->setInternalTradeId($internalTradeId)
             ->setExtra(array_filter([

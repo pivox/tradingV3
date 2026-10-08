@@ -28,8 +28,8 @@ class Position
     #[ORM\Column(type: Types::BIGINT)]
     private ?int $id = null;
 
-    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
-    private string $exchange = 'bitmart';
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'okx'])]
+    private string $exchange = 'okx';
 
     #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
     private string $marketType = 'perpetual';
@@ -79,7 +79,7 @@ class Position
     public function __construct(
         string $symbol,
         string $side,
-        Exchange|string $exchange = Exchange::BITMART,
+        Exchange|string $exchange = Exchange::OKX,
         MarketType|string $marketType = MarketType::PERPETUAL,
     )
     {

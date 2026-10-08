@@ -90,7 +90,8 @@ final class MtfRunRequestDto
 
         $exchange = null;
         if (is_string($exchangeRaw) && $exchangeRaw !== '') {
-            $exchange = Exchange::tryFrom(strtolower($exchangeRaw)) ?? null;
+            $exchange = Exchange::tryFrom(strtolower($exchangeRaw))
+                ?? throw new \App\Provider\Context\UnsupportedExchangeException($exchangeRaw);
         }
 
         $marketType = null;

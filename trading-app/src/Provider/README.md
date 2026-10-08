@@ -1,6 +1,6 @@
 # Provider README (2025)
 
-Le module **Provider** offre une façade unique pour toutes les interactions exchange (Bitmart aujourd’hui, d’autres demain). Il est consommé par `MtfRunnerService`, `IndicatorProviderInterface`, `TradingDecisionHandler`, les scripts de sync et les contrôleurs d’administration.
+Le module **Provider** offre une façade unique pour toutes les interactions exchange (OKX, Hyperliquid, Fake). Il est consommé par `MtfRunnerService`, `IndicatorProviderInterface`, `TradingDecisionHandler`, les scripts de sync et les contrôleurs d’administration.
 
 ---
 
@@ -17,7 +17,7 @@ Provider/
     ├── Context/ExchangeContext (exchange + market type)
     ├── Registry/ExchangeProviderRegistry + ExchangeProviderBundle
     ├── MainProvider (#[AsAlias(MainProviderInterface::class)])
-    ├── Bitmart/ (implémentation concrète)
+    ├── Hyperliquid/ (public read-only, perpetual uniquement)
     ├── Okx/ (public read-only explicite, perpetual uniquement)
     └── CleanupProvider + services utilitaires
 ```
@@ -46,7 +46,7 @@ public function sync(Exchange $exchange, MarketType $market): void
 
 Points clés :
 - `forContext(?ExchangeContext $ctx)` renvoie une nouvelle façade scoped sur l’exchange/le marché demandé.
-- Si aucun contexte n’est fourni : la priorité suit `config/services.yaml` (`App\Provider\Context\ExchangeContext.bitmart_perpetual` aujourd’hui).
+- Si aucun contexte n’est fourni : la priorité suit `config/services.yaml` (`App\Provider\Context\ExchangeContext.okx_perpetual` aujourd’hui).
 - Le runner (`MtfRunnerService::createContext()`) appelle systématiquement `forContext()` avant de filtrer les symboles, synchroniser les ordres ou recalculer TP/SL.
 
 ---
@@ -70,25 +70,11 @@ final class ExchangeProviderBundle
 ```
 
 Cela permet :
-- d’enregistrer plusieurs bundles Bitmart (perp, spot) ou d’autres exchanges,
+- d’enregistrer plusieurs bundles (OKX, Hyperliquid, Fake),
 - de partager la même façade `MainProviderInterface` dans l’ensemble du code,
-- de basculer un batch spécifique (`/api/mtf/run?exchange=bitmart&market_type=spot`) sans reconfigurer Symfony.
+- de basculer un batch spécifique (`/api/mtf/run?exchange=hyperliquid&market_type=perpetual`) sans reconfigurer Symfony.
 
 ---
-
-## 4. Vue rapide des providers Bitmart
-
-- **HTTP publics/privés** : `Provider/Bitmart/Http/*`
-- **WebSocket** : `Provider/Bitmart/WebSocket/*`
-- **Services utilitaires** :
-  - `KlineJsonIngestionService` → ingestion SQL JSON (bulk insert).
-  - `KlineFetcher` → orchestration fetch/persist.
-- **DTO spécifiques** (ListContracts, ListKlines…) convertis ensuite vers les DTO “contrat” (`App\Contract\Provider\Dto`).
-
-Chaque provider implémente son interface avec un accent sur :
-- `healthCheck()` (utilisé pour `/provider/health`),
-- `sync*()` (contrats, ordres, positions),
-- `Mapper`s internes pour convertir les structures Bitmart.
 
 ## 4 bis. Bundle OKX public/private read-only
 
@@ -176,8 +162,7 @@ le polling REST public ci-dessus.
 
 Seul `okx/perpetual` est enregistré. `okx/spot` doit échouer avec
 `ProviderNotFoundException` et ne doit jamais retomber silencieusement sur
-Bitmart. Le contexte par défaut reste `bitmart/perpetual` tant que le runtime
-legacy en dépend.
+un autre exchange. Le contexte par défaut est `okx/perpetual`.
 
 ---
 
@@ -228,8 +213,8 @@ $report = $this->cleanupProvider->cleanupAll(
 ## 7. Bonnes pratiques
 
 1. **Injecter les interfaces** (ex. `KlineProviderInterface`) sauf besoin d’implémentations concrètes (tests, commandes expérimentales).
-2. **Toujours créer un `ExchangeContext`** dans les services multi-exchange. Utiliser `Exchange::BITMART`, `MarketType::PERPETUAL` par défaut si rien n’est spécifié.
-3. **Ne pas manipuler directement les DTO Bitmart** hors module. Convertissez-les via les factories présentes dans les providers → vous évitez une fuite de détails spécifiques.
+2. **Toujours créer un `ExchangeContext`** dans les services multi-exchange. Utiliser `Exchange::OKX`, `MarketType::PERPETUAL` par défaut si rien n’est spécifié.
+3. **Ne pas manipuler directement les DTO spécifiques à un exchange** hors module. Convertissez-les via les factories présentes dans les providers → vous évitez une fuite de détails spécifiques.
 4. **Health checks** : `MainProvider::healthCheck()` reste un boolean, mais `/provider/health` s’appuie sur `getDetailedHealthCheck()` pour savoir quel provider a lâché.
 5. **Extensibilité** : pour un nouvel exchange, créez :
    - un `ExchangeContext` + `ExchangeProviderBundle`,
@@ -237,133 +222,6 @@ $report = $this->cleanupProvider->cleanupAll(
    - enregistrez le bundle dans le registre via `services.yaml`.
 
 Le module Provider est ainsi prêt pour d’autres exchanges/markets tout en continuant à servir le runner, l’indicator et les services de TradeEntry à travers des contrats stables.
-```
-
-## Services Utilitaires Bitmart
-
-### KlineFetcher
-
-Service pour récupérer et sauvegarder automatiquement les klines :
-
-```php
-use App\Provider\Bitmart\Service\KlineFetcher;
-use App\Common\Enum\Timeframe;
-
-class KlineService
-{
-    public function __construct(
-        private readonly KlineFetcher $klineFetcher
-    ) {}
-
-    public function fetchAndSave(string $symbol, Timeframe $timeframe): array
-    {
-        // Récupère et sauvegarde automatiquement
-        return $this->klineFetcher->fetchAndSaveKlines($symbol, $timeframe, 270);
-    }
-
-    public function fillGaps(string $symbol, Timeframe $timeframe): int
-    {
-        // Remplit automatiquement les gaps dans les données
-        return $this->klineFetcher->fillGaps($symbol, $timeframe);
-    }
-
-    public function isUpToDate(string $symbol, Timeframe $timeframe): bool
-    {
-        // Vérifie si les données sont à jour
-        return $this->klineFetcher->isDataUpToDate($symbol, $timeframe);
-    }
-}
-```
-
-### KlineJsonIngestionService
-
-Service d'ingestion performante utilisant une fonction SQL JSON pour insérer les klines en batch :
-
-```php
-use App\Provider\Bitmart\Service\KlineJsonIngestionService;
-
-class BatchKlineService
-{
-    public function __construct(
-        private readonly KlineJsonIngestionService $ingestionService
-    ) {}
-
-    public function ingestBatch(array $klines, string $symbol, string $timeframe): void
-    {
-        $result = $this->ingestionService->ingestKlinesBatch($klines, $symbol, $timeframe);
-        
-        // $result->count : nombre de klines ingérées
-        // $result->durationMs : durée en millisecondes
-        // $result->success : statut de succès
-    }
-}
-```
-
-## WebSocket
-
-Les clients WebSocket permettent de recevoir des mises à jour en temps réel.
-
-### WebSocket Public
-
-Pour les données publiques (klines, ticker, depth, trade) :
-
-```php
-use App\Provider\Bitmart\WebSocket\BitmartWebsocketPublic;
-
-class WebSocketService
-{
-    public function __construct(
-        private readonly BitmartWebsocketPublic $wsPublic
-    ) {}
-
-    public function subscribeKlines(string $symbol, string $timeframe): array
-    {
-        // Construit le message de souscription
-        return $this->wsPublic->buildSubscribeKline($symbol, $timeframe);
-        // Retourne: ['action' => 'subscribe', 'args' => ['futures/klineBin1m:BTCUSDT']]
-    }
-
-    public function subscribeMultipleKlines(string $symbol, array $timeframes): array
-    {
-        return $this->wsPublic->buildSubscribeKlines($symbol, $timeframes);
-    }
-}
-```
-
-### WebSocket Private
-
-Pour les données privées (ordres, positions, balance) nécessitant une authentification :
-
-```php
-use App\Provider\Bitmart\WebSocket\BitmartWebsocketPrivate;
-
-class PrivateWebSocketService
-{
-    public function __construct(
-        private readonly BitmartWebsocketPrivate $wsPrivate
-    ) {}
-
-    public function authenticate(): array
-    {
-        // Construit le message d'authentification
-        return $this->wsPrivate->buildLogin();
-    }
-
-    public function subscribeOrders(): array
-    {
-        return $this->wsPrivate->buildSubscribeOrder();
-    }
-
-    public function subscribePositions(): array
-    {
-        return $this->wsPrivate->buildSubscribePosition();
-    }
-
-    public function subscribeAsset(string $currency = 'USDT'): array
-    {
-        return $this->wsPrivate->buildSubscribeAsset($currency);
-    }
-}
 ```
 
 ## Processus MTF Run
@@ -441,7 +299,7 @@ mtf:run
 Les services sont auto‑configurés via Symfony DI :
 
 - `MainProvider` est marqué avec `#[AsAlias(id: MainProviderInterface::class)]`
-- Les providers Bitmart implémentent les interfaces avec `#[AsAlias]` ou `Autoconfigure`
+- Les providers implémentent les interfaces avec `#[AsAlias]` ou `Autoconfigure`
 - Les services sont auto-wirés via l'autodiscovery
 
 ## Vérification de santé
@@ -741,7 +599,7 @@ $execution = $this->tradeEntryService->buildAndExecute($tradeRequest, $decisionK
 
 Le système supporte deux modes pour les TP/SL :
 
-1. **TP/SL intégrés** : Si l'exchange supporte les ordres avec TP/SL (comme Bitmart Futures V2)
+1. **TP/SL intégrés** : Si l'exchange supporte les ordres avec TP/SL (selon les capacités de l'exchange)
 2. **TP/SL séparés** : Sinon, création d'ordres séparés après l'exécution de l'ordre principal
 
 Le `TpSlAttacher` gère l'attachement des TP/SL selon les capacités de l'exchange.

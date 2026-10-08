@@ -31,7 +31,7 @@ final class ExchangeProviderRegistry implements ExchangeProviderRegistryInterfac
             $this->bundles[(string) $bundle->context()] = $bundle;
         }
 
-        $defaultExchange ??= Exchange::BITMART;
+        $defaultExchange ??= Exchange::OKX;
         $defaultMarketType ??= MarketType::PERPETUAL;
         $this->defaultContext = new ExchangeContext($defaultExchange, $defaultMarketType);
     }

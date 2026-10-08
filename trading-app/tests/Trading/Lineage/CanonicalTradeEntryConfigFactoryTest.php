@@ -79,7 +79,7 @@ final class CanonicalTradeEntryConfigFactoryTest extends TestCase
             'entry' => ['entry_zone' => ['from' => 'vwap', 'k_atr' => 0.4]],
         ]));
 
-        $zone = $calculator->compute('BTCUSDT', lineageContext: LineageContext::legacy('BTCUSDT', 'bitmart', 'perpetual'));
+        $zone = $calculator->compute('BTCUSDT', lineageContext: LineageContext::legacy('BTCUSDT', 'okx', 'perpetual'));
 
         self::assertSame('open zone (no indicators)', $zone->rationale);
     }

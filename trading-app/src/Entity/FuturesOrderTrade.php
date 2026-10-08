@@ -38,8 +38,8 @@ class FuturesOrderTrade
     #[ORM\Column(type: Types::STRING, length: 80)]
     private string $orderId; // référence vers futures_order.order_id
 
-    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
-    private string $exchange = 'bitmart';
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'okx'])]
+    private string $exchange = 'okx';
 
     #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
     private string $marketType = 'perpetual';

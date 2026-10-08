@@ -7,8 +7,7 @@ namespace App\TradeEntry\Workflow;
  * Optionnel — non utilisé dans la logique actuelle.
  *
  * Contexte:
- * - Le module Execution utilise `Execution\TpSlAttacher::presetInSubmitPayload()` pour
- *   pré-attacher TP/SL au moment de la création de l'ordre (mode "preset").
+ * - Le module Execution pré-attache TP/SL au moment de la création de l'ordre (mode "preset").
  * - Par conséquent, aucun attachement séparé n'est nécessaire et cette classe n'est
  *   pas appelée par `Service\TradeEntryService`.
  *

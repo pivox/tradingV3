@@ -71,7 +71,7 @@ final class LineageReadIntegrationTest extends KernelTestCase
 
     public function testPositionIdCanBeReusedAcrossVenuesWhenVenueIsExplicit(): void
     {
-        $this->persistLineage('trade-bitmart', 'bitmart', 'perpetual', 'EX-SHARED', 'POS-SHARED');
+        $this->persistLineage('trade-hl', 'hyperliquid', 'perpetual', 'EX-SHARED', 'POS-SHARED');
         $this->persistLineage('trade-okx', 'okx', 'perpetual', 'EX-SHARED', 'POS-SHARED');
 
         $page = $this->service->search(
@@ -85,28 +85,28 @@ final class LineageReadIntegrationTest extends KernelTestCase
 
     public function testExchangeOrderIdCanBeReusedAcrossVenuesWhenVenueIsExplicit(): void
     {
-        $this->persistLineage('trade-bitmart', 'bitmart', 'perpetual', 'EX-SHARED', 'POS-BM');
+        $this->persistLineage('trade-hl', 'hyperliquid', 'perpetual', 'EX-SHARED', 'POS-HL');
         $this->persistLineage('trade-okx', 'okx', 'perpetual', 'EX-SHARED', 'POS-OKX');
 
         $page = $this->service->search(
-            LineageReadCriteria::forVenueIdentifier('exchange_order_id', 'EX-SHARED', 'bitmart', 'perpetual', 10, 0),
+            LineageReadCriteria::forVenueIdentifier('exchange_order_id', 'EX-SHARED', 'hyperliquid', 'perpetual', 10, 0),
         );
 
         self::assertSame(1, $page->total);
-        self::assertSame('trade-bitmart', $page->items[0]['lineage']['internal_trade_id']);
-        self::assertSame('bitmart', $page->items[0]['lineage']['exchange']);
+        self::assertSame('trade-hl', $page->items[0]['lineage']['internal_trade_id']);
+        self::assertSame('hyperliquid', $page->items[0]['lineage']['exchange']);
     }
 
     public function testSameVenueDuplicateExchangeIdentifierReturnsConflict(): void
     {
-        $this->persistLineage('trade-a', 'bitmart', 'perpetual', 'EX-DUP', 'POS-A');
-        $this->persistLineage('trade-b', 'bitmart', 'perpetual', 'EX-DUP', 'POS-B');
+        $this->persistLineage('trade-a', 'okx', 'perpetual', 'EX-DUP', 'POS-A');
+        $this->persistLineage('trade-b', 'okx', 'perpetual', 'EX-DUP', 'POS-B');
 
         $this->expectException(LineageReadException::class);
         $this->expectExceptionCode(409);
 
         $this->service->search(
-            LineageReadCriteria::forVenueIdentifier('exchange_order_id', 'EX-DUP', 'bitmart', 'perpetual', 10, 0),
+            LineageReadCriteria::forVenueIdentifier('exchange_order_id', 'EX-DUP', 'okx', 'perpetual', 10, 0),
         );
     }
 
@@ -115,11 +115,11 @@ final class LineageReadIntegrationTest extends KernelTestCase
         $intentA = $this->persistIntent('trade-a');
         $intentB = $this->persistIntent('trade-b');
 
-        $this->persistLineage('trade-a', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', orderIntent: $intentA, withCloseEvent: false);
-        $this->persistLifecycleEvent('trade-a', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', 'order_submitted');
+        $this->persistLineage('trade-a', 'okx', 'perpetual', 'EX-SAME', 'POS-SAME', orderIntent: $intentA, withCloseEvent: false);
+        $this->persistLifecycleEvent('trade-a', 'okx', 'perpetual', 'EX-SAME', 'POS-SAME', 'order_submitted');
 
-        $this->persistLineage('trade-b', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', orderIntent: $intentB, withCloseEvent: false);
-        $this->persistLifecycleEvent('trade-b', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', 'position_closed');
+        $this->persistLineage('trade-b', 'okx', 'perpetual', 'EX-SAME', 'POS-SAME', orderIntent: $intentB, withCloseEvent: false);
+        $this->persistLifecycleEvent('trade-b', 'okx', 'perpetual', 'EX-SAME', 'POS-SAME', 'position_closed');
 
         $page = $this->service->search(
             LineageReadCriteria::forIdentifier('internal_trade_id', 'trade-a', 10, 0),
@@ -136,11 +136,11 @@ final class LineageReadIntegrationTest extends KernelTestCase
         $intentA = $this->persistIntent('trade-a');
         $intentB = $this->persistIntent('trade-b');
 
-        $this->persistLineage('trade-a', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', orderIntent: $intentA, withCloseEvent: false);
-        $this->persistLifecycleEvent('trade-a', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', 'order_submitted');
+        $this->persistLineage('trade-a', 'okx', 'perpetual', 'EX-SAME', 'POS-SAME', orderIntent: $intentA, withCloseEvent: false);
+        $this->persistLifecycleEvent('trade-a', 'okx', 'perpetual', 'EX-SAME', 'POS-SAME', 'order_submitted');
 
-        $this->persistLineage('trade-b', 'bitmart', 'perpetual', 'EX-SAME', 'POS-SAME', orderIntent: $intentB, withCloseEvent: false);
-        $this->persistLegacyLifecycleEvent('client-trade-b', 'bitmart', 'perpetual', 'EX-SAME', 'POS-OTHER', 'position_closed');
+        $this->persistLineage('trade-b', 'okx', 'perpetual', 'EX-SAME', 'POS-SAME', orderIntent: $intentB, withCloseEvent: false);
+        $this->persistLegacyLifecycleEvent('client-trade-b', 'okx', 'perpetual', 'EX-SAME', 'POS-OTHER', 'position_closed');
 
         $page = $this->service->search(
             LineageReadCriteria::forIdentifier('internal_trade_id', 'trade-a', 10, 0),
@@ -157,15 +157,15 @@ final class LineageReadIntegrationTest extends KernelTestCase
 
         $this->persistLineage(
             'trade-position-close',
-            'bitmart',
+            'okx',
             'perpetual',
             'EX-ENTRY',
             'POS-STABLE',
             orderIntent: $intent,
             withCloseEvent: false,
         );
-        $this->persistLifecycleEvent('trade-position-close', 'bitmart', 'perpetual', 'EX-ENTRY', 'POS-STABLE', 'order_submitted');
-        $this->persistLegacyLifecycleEvent('client-close-order', 'bitmart', 'perpetual', 'EX-CLOSE', 'POS-STABLE', 'position_closed');
+        $this->persistLifecycleEvent('trade-position-close', 'okx', 'perpetual', 'EX-ENTRY', 'POS-STABLE', 'order_submitted');
+        $this->persistLegacyLifecycleEvent('client-close-order', 'okx', 'perpetual', 'EX-CLOSE', 'POS-STABLE', 'position_closed');
 
         $page = $this->service->search(
             LineageReadCriteria::forIdentifier('internal_trade_id', 'trade-position-close', 10, 0),
@@ -182,14 +182,14 @@ final class LineageReadIntegrationTest extends KernelTestCase
 
         $this->persistLineage(
             'trade-case',
-            'bitmart',
+            'okx',
             'perpetual',
             'EX-CASE',
             'POS-CASE',
             orderIntent: $intent,
             withCloseEvent: false,
         );
-        $this->persistLegacyLifecycleEvent('CLIENT-TRADE-CASE', 'bitmart', 'perpetual', 'EX-CASE', null, 'position_closed');
+        $this->persistLegacyLifecycleEvent('CLIENT-TRADE-CASE', 'okx', 'perpetual', 'EX-CASE', null, 'position_closed');
 
         $page = $this->service->search(
             LineageReadCriteria::forIdentifier('internal_trade_id', 'trade-case', 10, 0),
@@ -202,9 +202,9 @@ final class LineageReadIntegrationTest extends KernelTestCase
 
     public function testRunSearchIsPaginatedAndDeterministicallyOrdered(): void
     {
-        $this->persistLineage('trade-1', 'bitmart', 'perpetual', 'EX-1', 'POS-1', 'run-paged');
-        $this->persistLineage('trade-2', 'bitmart', 'perpetual', 'EX-2', 'POS-2', 'run-paged');
-        $this->persistLineage('trade-3', 'bitmart', 'perpetual', 'EX-3', 'POS-3', 'run-paged');
+        $this->persistLineage('trade-1', 'okx', 'perpetual', 'EX-1', 'POS-1', 'run-paged');
+        $this->persistLineage('trade-2', 'okx', 'perpetual', 'EX-2', 'POS-2', 'run-paged');
+        $this->persistLineage('trade-3', 'okx', 'perpetual', 'EX-3', 'POS-3', 'run-paged');
 
         $page = $this->service->search(
             LineageReadCriteria::forIdentifier('orchestration_run_id', 'run-paged', 2, 0),
@@ -220,9 +220,9 @@ final class LineageReadIntegrationTest extends KernelTestCase
     public function testSearchBySetAndOrderIntentId(): void
     {
         $intent = $this->persistIntent('trade-intent');
-        $this->persistLineage('trade-intent', 'bitmart', 'perpetual', 'EX-INTENT', 'POS-INTENT', 'run-intent', 'set-a', $intent);
-        $this->persistLineage('trade-set-peer', 'bitmart', 'perpetual', 'EX-PEER', 'POS-PEER', 'run-intent', 'set-a');
-        $this->persistLineage('trade-other-set', 'bitmart', 'perpetual', 'EX-OTHER', 'POS-OTHER', 'run-intent', 'set-b');
+        $this->persistLineage('trade-intent', 'okx', 'perpetual', 'EX-INTENT', 'POS-INTENT', 'run-intent', 'set-a', $intent);
+        $this->persistLineage('trade-set-peer', 'okx', 'perpetual', 'EX-PEER', 'POS-PEER', 'run-intent', 'set-a');
+        $this->persistLineage('trade-other-set', 'okx', 'perpetual', 'EX-OTHER', 'POS-OTHER', 'run-intent', 'set-b');
 
         $setPage = $this->service->search(
             LineageReadCriteria::forIdentifier('orchestration_set_id', 'set-a', 10, 0),
@@ -352,7 +352,7 @@ final class LineageReadIntegrationTest extends KernelTestCase
     private function persistIntent(string $internalTradeId): OrderIntent
     {
         $intent = (new OrderIntent())
-            ->setExchange('bitmart')
+            ->setExchange('okx')
             ->setMarketType('perpetual')
             ->setSymbol('BTCUSDT')
             ->setSide(1)

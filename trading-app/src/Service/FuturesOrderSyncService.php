@@ -36,8 +36,4 @@ final class FuturesOrderSyncService
         return $this->runnerService->syncTradeFromApi($tradeData);
     }
 
-    public function syncOrderFromWebSocket(array $eventData): ?FuturesOrder
-    {
-        return $this->runnerService->syncOrderFromWebSocket($eventData);
-    }
 }

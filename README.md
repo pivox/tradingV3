@@ -1,11 +1,11 @@
 # Trading App – Orchestrateur MTF 2025
 
-Plateforme Symfony dédiée au trading Bitmart futures. Elle combine :
+Plateforme Symfony dédiée au trading futures OKX / Hyperliquid. Elle combine :
 - un **Runner HTTP/CLI** (`/api/mtf/run`, `bin/console mtf:run`) qui orchestre les validations multi‑timeframes ;
 - un **Validator** qui applique les règles YAML et décide si un symbole est tradable ;
 - un **module TradeEntry** qui calcule zone, taille, levier, SL/TP et place les ordres.
 
-Le dépôt contient aussi les workers Temporal (`cron_symfony_mtf_workers/`) qui déclenchent les runs toutes les minutes, ainsi que les outils Provider/Indicator pour fluidifier les échanges avec Bitmart.
+Le dépôt contient aussi les workers Temporal (`cron_symfony_mtf_workers/`) qui déclenchent les runs toutes les minutes, ainsi que les outils Provider/Indicator pour fluidifier les échanges avec les exchanges.
 
 ---
 
@@ -30,9 +30,6 @@ docker compose exec trading-app-php php bin/console doctrine:migrations:migrate
 `.env.local` doit au minimum contenir :
 ```env
 DATABASE_URL="postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8"
-BITMART_API_KEY=xxx
-BITMART_SECRET_KEY=xxx
-BITMART_API_MEMO=prod-trader
 REDIS_URL=redis://trading-app-redis:6379
 MESSENGER_TRANSPORT_DSN=doctrine://default?queue_name=log_messages
 ```
@@ -40,8 +37,8 @@ MESSENGER_TRANSPORT_DSN=doctrine://default?queue_name=log_messages
 ### 1.3 Commandes essentielles
 | Commande | Description |
 | --- | --- |
-| `bin/console bitmart:fetch-contracts [--symbol=BTCUSDT]` | Sync des contrats Bitmart. |
-| `bin/console bitmart:fetch-klines BTCUSDT --timeframe=1h --limit=200` | Ingestion des klines. |
+| `bin/console provider:fetch-contracts [--symbol=BTCUSDT]` | Sync des contrats. |
+| `bin/console provider:fetch-klines BTCUSDT --timeframe=1h --limit=200` | Ingestion des klines. |
 | `bin/console mtf:run --workers=4 --dry-run=1` | Run MTF piloté par le runner. |
 | `curl -XPOST http://localhost:8082/api/mtf/run -d '{"dry_run":false,"workers":8,"mtf_profile":"scalper_micro"}'` | Appel HTTP équivalent. |
 | `bin/console messenger:consume order_timeout` | Worker TP/SL + dead-man switch. |
@@ -55,7 +52,7 @@ API RunnerController / CLI mtf:run
           │ (MtfRunnerRequestDto)
           ▼
       MtfRunnerService
-          ├ resolveSymbols + sync tables Bitmart
+          ├ resolveSymbols + sync tables exchange
           ├ filtre positions/ordres ouverts (switch repository)
           ├ runSequential() / runParallel() → MtfValidatorService
           ├ dispatchIndicatorSnapshotPersistence()
@@ -79,7 +76,7 @@ API RunnerController / CLI mtf:run
 | Validator | `trading-app/src/MtfValidator/README.md` |
 | TradeEntry | `trading-app/src/TradeEntry/README.md` |
 | Indicator | `trading-app/src/Indicator/README.md` |
-| Provider (Bitmart) | `trading-app/src/Provider/README.md` |
+| Provider | `trading-app/src/Provider/README.md` |
 | Temporal cron | `cron_symfony_mtf_workers/README.md` |
 
 ---
@@ -120,7 +117,7 @@ API RunnerController / CLI mtf:run
 | `trading-app/config/app/mtf_contracts.yaml` | Contrats activés côté runner. |
 
 - `MtfValidationConfigProvider` + `TradeEntryModeContext` sélectionnent le mode actif (`scalper_micro` par défaut).
-- Secrets indispensables : `BITMART_*`, `APP_ENV`, `APP_DEBUG`, `REDIS_URL`, `MESSENGER_TRANSPORT_DSN`, `MTF_LOG_LEVEL`.
+- Secrets indispensables : `OKX_*`, `HYPERLIQUID_*`, `APP_ENV`, `APP_DEBUG`, `REDIS_URL`, `MESSENGER_TRANSPORT_DSN`, `MTF_LOG_LEVEL`.
 
 ---
 
@@ -145,7 +142,7 @@ API RunnerController / CLI mtf:run
 | --- | --- |
 | `var/log/mtf-runner.log` (`monolog.logger.mtf`) | Résolution symboles, filtres, exécution MTF, snapshots. |
 | `var/log/order-journey*.log` (`monolog.logger.positions`) | Détails TradeEntry (prix, watchers, levier). |
-| `var/log/bitmart-http.log` (`monolog.logger.provider`) | Appels Bitmart + rate-limit. |
+| `var/log/provider.log` (`monolog.logger.provider`) | Appels provider + rate-limit. |
 
 API / commandes utiles :
 - `GET /mtf/status`, `/mtf/lock/status`, `/mtf/audit`.

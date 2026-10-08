@@ -6,8 +6,11 @@ namespace App\Indicator\MessageHandler;
 
 use App\Indicator\Message\IndicatorSnapshotProjectionMessage;
 use App\Indicator\Service\IndicatorSnapshotProjector;
+use App\Provider\Context\ExchangeContext;
+use App\Provider\Context\UnsupportedExchangeException;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Messenger\Attribute\AsMessageHandler;
+use Symfony\Component\Messenger\Exception\UnrecoverableMessageHandlingException;
 
 #[AsMessageHandler]
 final class IndicatorSnapshotProjectionMessageHandler
@@ -20,6 +23,12 @@ final class IndicatorSnapshotProjectionMessageHandler
 
     public function __invoke(IndicatorSnapshotProjectionMessage $message): void
     {
+        try {
+            ExchangeContext::fromValues($message->exchange);
+        } catch (UnsupportedExchangeException $exception) {
+            throw new UnrecoverableMessageHandlingException($exception->getMessage(), 0, $exception);
+        }
+
         try {
             $this->projector->project($message);
         } catch (\Throwable $exception) {

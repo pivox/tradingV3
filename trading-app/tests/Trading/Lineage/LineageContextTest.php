@@ -33,7 +33,7 @@ final class LineageContextTest extends TestCase
     }
     public function testContractKindExplicitlyDiscriminatesLegacyAndModernContexts(): void
     {
-        self::assertFalse(LineageContext::legacy('BTCUSDT', 'bitmart', 'perpetual')->isModern());
+        self::assertFalse(LineageContext::legacy('BTCUSDT', 'okx', 'perpetual')->isModern());
         self::assertTrue(LineageContext::fromOrchestratorPayload($this->canonicalPayload())->isModern());
 
         $payload = $this->canonicalPayload();
@@ -68,7 +68,7 @@ final class LineageContextTest extends TestCase
         yield 'unpublished setup version' => ['setup_version', '1.0.1', 'canonical_identity_invalid:setup_version'];
         yield 'uppercase config hash' => ['config_hash', 'sha256:' . str_repeat('A', 64), 'canonical_identity_invalid:config_hash'];
         yield 'bare catalog digest' => ['condition_catalog_hash', str_repeat('b', 64), 'canonical_identity_invalid:condition_catalog_hash'];
-        yield 'legacy exchange' => ['exchange', 'bitmart', 'canonical_identity_invalid:exchange'];
+        yield 'legacy exchange' => ['exchange', 'binance', 'canonical_identity_invalid:exchange'];
         yield 'market alias' => ['market_type', 'perp', 'canonical_identity_invalid:market_type'];
         yield 'unsafe symbol' => ['symbol', 'BTC/USDT', 'canonical_identity_invalid:symbol'];
         yield 'unsafe run id' => ['orchestration_run_id', '../run', 'canonical_identity_invalid:orchestration_run_id'];
@@ -400,7 +400,7 @@ final class LineageContextTest extends TestCase
             'orchestration_set_id' => 'set-a',
             'orchestration_dashboard_id' => 'dash-a',
             'mtf_profile' => 'scalper_micro',
-            'exchange' => 'BITMART',
+            'exchange' => 'OKX',
             'market_type' => 'PERP',
             'symbol' => 'btcusdt',
             'dry_run' => true,
@@ -414,7 +414,7 @@ final class LineageContextTest extends TestCase
         self::assertSame('set-a', $context->orchestrationSetId);
         self::assertSame('dash-a', $context->orchestrationDashboardId);
         self::assertSame('scalper_micro', $context->mtfProfile);
-        self::assertSame('bitmart', $context->exchange);
+        self::assertSame('okx', $context->exchange);
         self::assertSame('perpetual', $context->marketType);
         self::assertSame('BTCUSDT', $context->symbol);
         self::assertTrue($context->dryRun);
@@ -454,7 +454,7 @@ final class LineageContextTest extends TestCase
             'set_id' => 'set-a',
             'dashboard_id' => 'dash-a',
             'profile' => 'scalper',
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'SOLUSDT',
         ]);
@@ -476,7 +476,7 @@ final class LineageContextTest extends TestCase
             'set_id' => 'set-a',
             'dashboard_id' => 'dash-a',
             'profile' => 'scalper',
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'BTCUSDT',
             'token' => 'secret-token',

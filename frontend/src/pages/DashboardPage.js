@@ -83,8 +83,8 @@ const DashboardPage = () => {
             setChartData([]);
 
             api.getKlines(symbol, timeframe, 200)
-                .then(async data => {
-                    let normalized = Array.isArray(data) ? data.map(d => {
+                .then(data => {
+                    const normalized = Array.isArray(data) ? data.map(d => {
                         let ts = d.timestamp;
                         if (typeof ts === 'string') {
                             // Convertit 'YYYY-MM-DD HH:mm:ss' en epoch ms (UTC) pour compatibilité Safari
@@ -98,28 +98,6 @@ const DashboardPage = () => {
                         };
                     }) : [];
 
-                    // Si aucune donnée, tenter de télécharger depuis Bitmart
-                    if (normalized.length === 0) {
-                        try {
-                            await api.fetchKlinesFromBitmart(symbol, timeframe, 200);
-                            // Recharger les klines après téléchargement
-                            const retry = await api.getKlines(symbol, timeframe, 200);
-                            normalized = Array.isArray(retry) ? retry.map(d => {
-                                let ts = d.timestamp;
-                                if (typeof ts === 'string') {
-                                    const iso = ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z';
-                                    const ms = Date.parse(iso);
-                                    ts = Number.isFinite(ms) ? ms : new Date(ts).getTime();
-                                }
-                                return {
-                                    ...d,
-                                    timestamp: ts,
-                                };
-                            }) : [];
-                        } catch (err) {
-                            setChartError('Impossible de télécharger les klines depuis Bitmart.');
-                        }
-                    }
                     setChartData(normalized);
                     setChartError(null);
                 })

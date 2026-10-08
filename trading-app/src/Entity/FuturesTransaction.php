@@ -22,8 +22,8 @@ class FuturesTransaction
     #[ORM\Column(type: Types::BIGINT)]
     private ?int $id = null;
 
-    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
-    private string $exchange = 'bitmart';
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'okx'])]
+    private string $exchange = 'okx';
 
     #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
     private string $marketType = 'perpetual';
@@ -32,7 +32,7 @@ class FuturesTransaction
     private string $symbol;
 
     /**
-     * flow_type Bitmart (ex: 2 = realized PnL, 3 = funding, 4 = commission, ...)
+     * flow_type (ex: 2 = realized PnL, 3 = funding, 4 = commission, ...)
      */
     #[ORM\Column(type: Types::INTEGER)]
     private int $flowType;
@@ -67,7 +67,7 @@ class FuturesTransaction
     private ?FuturesOrderTrade $trade = null;
 
     /**
-     * Données brutes Bitmart (JSON) pour debug / audit
+     * Données brutes (JSON) pour debug / audit
      *
      * @var array<string,mixed>
      */

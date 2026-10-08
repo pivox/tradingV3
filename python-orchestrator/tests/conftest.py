@@ -241,7 +241,7 @@ class FakeSymfony:
     DEFAULT_CONTRACTS: Dict[str, Any] = {
         "ok": True,
         "profile": "scalper_micro",
-        "exchange": "bitmart",
+        "exchange": "fake",
         "market_type": "perpetual",
         "count": 2,
         "symbols": ["BTCUSDT", "ETHUSDT"],

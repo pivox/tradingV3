@@ -44,7 +44,7 @@ final class DiagnoseConditionsCommand extends Command
             ->addOption('limit', 'l', InputOption::VALUE_OPTIONAL, 'Nombre de klines à charger', 150)
             ->addOption('no-json', null, InputOption::VALUE_NONE, 'Ne pas afficher les klines au format JSON')
             ->addOption('json-results', null, InputOption::VALUE_NONE, 'Afficher les résultats d\'évaluation au format JSON')
-            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: okx)')
             ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)');
     }
 
@@ -77,16 +77,10 @@ final class DiagnoseConditionsCommand extends Command
             $io->listing($namesSide ?: ['<aucune>']);
         }
 
-        // Resolve context (default Bitmart/Perpetual) + charge des klines
+        // Resolve context (default OKX/Perpetual) + charge des klines
         $exchangeOpt = $input->getOption('exchange');
         $marketTypeOpt = $input->getOption('market-type');
-        $exchange = Exchange::BITMART;
-        if (is_string($exchangeOpt) && $exchangeOpt !== '') {
-            $exchange = match (strtolower(trim($exchangeOpt))) {
-                'bitmart' => Exchange::BITMART,
-                default => Exchange::BITMART,
-            };
-        }
+        $exchange = ExchangeContext::fromValues($exchangeOpt)->exchange;
         $marketType = MarketType::PERPETUAL;
         if (is_string($marketTypeOpt) && $marketTypeOpt !== '') {
             $marketType = match (strtolower(trim($marketTypeOpt))) {

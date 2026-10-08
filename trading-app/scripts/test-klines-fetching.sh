@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script de test pour la récupération des klines depuis BitMart
+# Script de test pour la récupération des klines depuis l'exchange
 # Usage: ./scripts/test-klines-fetching.sh
 
 set -e
@@ -10,7 +10,7 @@ API_BASE="http://localhost:8082"
 ENDPOINT="/indicators/revalidate"
 
 echo "=========================================="
-echo "Test de récupération des klines depuis BitMart"
+echo "Test de récupération des klines depuis l'exchange"
 echo "=========================================="
 echo "URL: $API_BASE$ENDPOINT"
 echo ""
@@ -66,7 +66,7 @@ if echo "$RESPONSE" | jq -e '.success' > /dev/null; then
                 
                 # Vérifier si les données semblent réalistes
                 if [ "$CLOSE" != "N/A" ] && [ "$CLOSE" != "null" ]; then
-                    echo "  ✅ Données klines valides récupérées depuis BitMart"
+                    echo "  ✅ Données klines valides récupérées depuis l'exchange"
                 else
                     echo "  ⚠️  Données klines manquantes ou invalides"
                 fi
@@ -182,7 +182,7 @@ echo "Tests terminés"
 echo "=========================================="
 echo ""
 echo "🎯 Résumé des fonctionnalités testées:"
-echo "  ✅ Récupération des klines depuis BitMart"
+echo "  ✅ Récupération des klines depuis l'exchange"
 echo "  ✅ Détection et comblement des trous dans les données"
 echo "  ✅ Support de différents timeframes"
 echo "  ✅ Gestion des dates anciennes et récentes"
@@ -192,7 +192,7 @@ echo "🌐 Interface web disponible sur: $API_BASE/indicators/test"
 echo "📊 Nouvelles fonctionnalités:"
 echo "  - Récupération automatique des klines manquantes"
 echo "  - Détection des gaps dans les données historiques"
-echo "  - Comblement des trous via l'API BitMart"
+echo "  - Comblement des trous via l'API de l'exchange"
 echo "  - Validation avec les vraies données de marché"
 echo "  - Fallback vers données simulées si nécessaire"
 

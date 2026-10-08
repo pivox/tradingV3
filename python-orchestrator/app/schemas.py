@@ -40,7 +40,6 @@ _SET_ID_PATTERN = r"^[A-Za-z0-9_.\-]+$"
 
 
 class Exchange(str, Enum):
-    BITMART = "bitmart"
     OKX = "okx"
     HYPERLIQUID = "hyperliquid"
     FAKE = "fake"
@@ -690,6 +689,13 @@ class SetUpdate(BaseModel):
         )
 
 
+UNSUPPORTED_EXCHANGE_REASON = "unsupported_exchange"
+
+
+def _is_supported_exchange(exchange: object) -> bool:
+    return getattr(exchange, "value", exchange) in {e.value for e in Exchange}
+
+
 class SetRead(BaseModel):
     """Représentation d'un set persistant renvoyée par l'API."""
 
@@ -700,7 +706,7 @@ class SetRead(BaseModel):
     set_id: str
     enabled: bool
     action: Action
-    exchange: Exchange
+    exchange: Exchange | str
     market_type: MarketType
     mtf_profile: MtfProfile
     environment: Environment
@@ -714,6 +720,17 @@ class SetRead(BaseModel):
     trading_identity: Optional[CanonicalTradingIdentity] = None
     created_at: datetime
     updated_at: datetime
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def runnable(self) -> bool:
+        """``False`` pour un set persisté sur un exchange retiré (non exécutable)."""
+        return _is_supported_exchange(self.exchange)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def unsupported_reason(self) -> Optional[str]:
+        return None if self.runnable else UNSUPPORTED_EXCHANGE_REASON
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -739,6 +756,8 @@ class SetRead(BaseModel):
         """
         from app.services.symfony_client import effective_set_payload
 
+        if not self.runnable:
+            return None
         return effective_set_payload(self)
 
 

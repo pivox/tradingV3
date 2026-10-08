@@ -215,7 +215,7 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
     }
 
     /**
-     * Mappe le side numérique BitMart vers OrderSide enum
+     * Mappe le side numérique legacy vers OrderSide enum
      * 1=open_long, 2=close_long, 3=close_short, 4=open_short
      */
     private function mapNumericSideToOrderSide(?int $numericSide): \App\Common\Enum\OrderSide
@@ -232,7 +232,7 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
     }
 
     /**
-     * Mappe OrderSide enum vers side numérique BitMart
+     * Mappe OrderSide enum vers side numérique legacy
      */
     private function mapOrderSideToNumericSide(\App\Common\Enum\OrderSide $orderSide): int
     {

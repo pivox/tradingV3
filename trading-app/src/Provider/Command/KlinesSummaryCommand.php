@@ -140,7 +140,7 @@ class KlinesSummaryCommand extends Command
             $table->render();
 
             $io->writeln("💡 Pour mettre à jour les données:");
-            $io->writeln("   docker-compose exec trading-app-php bin/console bitmart:fetch-all-klines");
+            $io->writeln("   docker-compose exec trading-app-php bin/console provider:fetch-all-klines");
         }
     }
 }

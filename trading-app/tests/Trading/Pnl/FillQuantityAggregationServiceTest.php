@@ -19,16 +19,16 @@ final class FillQuantityAggregationServiceTest extends TestCase
         $service = new FillQuantityAggregationService();
 
         $result = $service->aggregateEntries([
-            self::fill('entry-a', 'entry', '2026-06-25 10:00:00 UTC', 100.0, 0.4, exchange: 'bitmart', marketType: 'futures', feeUsdt: 0.02),
-            self::fill('entry-b', 'entry', '2026-06-25 10:00:20 UTC', 101.0, 0.6, exchange: 'bitmart', marketType: 'futures', feeUsdt: 0.03),
-            self::fill('tp1', 'exit', '2026-06-25 10:10:00 UTC', 110.0, 0.5, exchange: 'bitmart', marketType: 'futures', feeUsdt: 0.04),
-            self::fill('trailing', 'exit', '2026-06-25 10:20:00 UTC', 108.0, 0.5, exchange: 'bitmart', marketType: 'futures', feeUsdt: 0.05),
-            self::fill('funding-credit', 'funding', '2026-06-25 10:15:00 UTC', null, null, exchange: 'bitmart', marketType: 'futures', fundingUsdt: 0.12),
-            self::fill('spread', 'adjustment', '2026-06-25 10:20:01 UTC', null, null, exchange: 'bitmart', marketType: 'futures', spreadCostUsdt: 0.07),
-        ], internalTradeId: 'shared-trade-id', exchange: 'bitmart', marketType: 'futures');
+            self::fill('entry-a', 'entry', '2026-06-25 10:00:00 UTC', 100.0, 0.4, exchange: 'okx', marketType: 'futures', feeUsdt: 0.02),
+            self::fill('entry-b', 'entry', '2026-06-25 10:00:20 UTC', 101.0, 0.6, exchange: 'okx', marketType: 'futures', feeUsdt: 0.03),
+            self::fill('tp1', 'exit', '2026-06-25 10:10:00 UTC', 110.0, 0.5, exchange: 'okx', marketType: 'futures', feeUsdt: 0.04),
+            self::fill('trailing', 'exit', '2026-06-25 10:20:00 UTC', 108.0, 0.5, exchange: 'okx', marketType: 'futures', feeUsdt: 0.05),
+            self::fill('funding-credit', 'funding', '2026-06-25 10:15:00 UTC', null, null, exchange: 'okx', marketType: 'futures', fundingUsdt: 0.12),
+            self::fill('spread', 'adjustment', '2026-06-25 10:20:01 UTC', null, null, exchange: 'okx', marketType: 'futures', spreadCostUsdt: 0.07),
+        ], internalTradeId: 'shared-trade-id', exchange: 'okx', marketType: 'futures');
 
         self::assertSame('shared-trade-id', $result->internalTradeId);
-        self::assertSame('bitmart', $result->exchange);
+        self::assertSame('okx', $result->exchange);
         self::assertSame('futures', $result->marketType);
         self::assertEquals(new \DateTimeImmutable('2026-06-25 10:00:00 UTC'), $result->entryFirstFillAt);
         self::assertEquals(new \DateTimeImmutable('2026-06-25 10:00:20 UTC'), $result->entryLastFillAt);
@@ -214,17 +214,17 @@ final class FillQuantityAggregationServiceTest extends TestCase
         $service = new FillQuantityAggregationService();
 
         $fills = [
-            self::fill('bitmart-entry', 'entry', '2026-06-25 10:00:00 UTC', 100.0, 1.0, exchange: 'bitmart', marketType: 'futures'),
-            self::fill('bitmart-exit', 'exit', '2026-06-25 10:05:00 UTC', 101.0, 1.0, exchange: 'bitmart', marketType: 'futures'),
+            self::fill('okx-entry', 'entry', '2026-06-25 10:00:00 UTC', 100.0, 1.0, exchange: 'okx', marketType: 'futures'),
+            self::fill('okx-exit', 'exit', '2026-06-25 10:05:00 UTC', 101.0, 1.0, exchange: 'okx', marketType: 'futures'),
             self::fill('fake-entry', 'entry', '2026-06-25 10:00:00 UTC', 200.0, 2.0, exchange: 'fake', marketType: 'paper'),
             self::fill('fake-exit', 'exit', '2026-06-25 10:05:00 UTC', 201.0, 1.0, exchange: 'fake', marketType: 'paper'),
         ];
 
-        $bitmart = $service->aggregateEntries($fills, internalTradeId: 'shared-trade-id', exchange: 'bitmart', marketType: 'futures');
+        $legacyDefault = $service->aggregateEntries($fills, internalTradeId: 'shared-trade-id', exchange: 'okx', marketType: 'futures');
         $fake = $service->aggregateEntries($fills, internalTradeId: 'shared-trade-id', exchange: 'fake', marketType: 'paper');
 
-        self::assertEqualsWithDelta(0.0, $bitmart->remainingQty, 1e-12);
-        self::assertSame('complete', $bitmart->quantityStatus);
+        self::assertEqualsWithDelta(0.0, $legacyDefault->remainingQty, 1e-12);
+        self::assertSame('complete', $legacyDefault->quantityStatus);
         self::assertEqualsWithDelta(1.0, $fake->remainingQty, 1e-12);
         self::assertSame('open_position', $fake->quantityStatus);
     }

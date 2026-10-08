@@ -107,6 +107,6 @@ final class OpenActivityFilterTest extends TestCase
 
     private function legacyContext(): ExchangeContext
     {
-        return new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL);
+        return new ExchangeContext(Exchange::OKX, MarketType::PERPETUAL);
     }
 }

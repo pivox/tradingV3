@@ -237,7 +237,7 @@ class CheckKlinesQualityCommand extends Command
             $io->writeln("    🔄 Tentative de récupération des données manquantes...");
 
             // Ici on pourrait implémenter la logique pour récupérer les données manquantes
-            // via l'API Bitmart ou d'autres sources
+            // via l'API de l'exchange ou d'autres sources
 
             $io->writeln("    ℹ️  Fonctionnalité de récupération automatique non implémentée");
         } catch (\Exception $e) {

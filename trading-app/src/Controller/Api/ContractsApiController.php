@@ -44,7 +44,7 @@ class ContractsApiController extends AbstractController
             // + trim ; contexte : trim, alias futures/perp, erreur explicite sur valeur
             // inconnue) pour que le preview prépare exactement le même set qu'un
             // /api/mtf/run avec les mêmes entrées, plutôt que de retomber silencieusement
-            // sur le profil par défaut ou sur Bitmart/perpetual.
+            // sur le profil par défaut ou sur OKX/perpetual.
             try {
                 $runnerRequest = MtfRunnerRequestDto::fromArray([
                     'profile' => $request->query->get('profile'),
@@ -69,7 +69,7 @@ class ContractsApiController extends AbstractController
             }
 
             $context = ExchangeContext::fromEnums(
-                $runnerRequest->exchange ?? Exchange::BITMART,
+                $runnerRequest->exchange ?? Exchange::OKX,
                 $runnerRequest->marketType ?? MarketType::PERPETUAL,
             );
 

@@ -84,7 +84,7 @@ def test_dry_run_override_propagated_to_symfony(orchestrator_env, symfony, monke
     # Avec {"dry_run": true}, il est forcé en dry-run, donc dispatché avec dry_run=true.
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
     fake = symfony(open_state_status=503)
 
     body = client.post(
@@ -100,7 +100,7 @@ def test_no_snapshot_key_when_couple_uncached(orchestrator_env, symfony):
     # Dry-run sans snapshot fiable (open-state 500) : exécuté, payload sans snapshot.
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "dry", dry_run=True, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "dry", dry_run=True, exchange="fake", symbols=("BTCUSDT",))
     fake = symfony(open_state_status=500)
 
     body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
@@ -163,14 +163,14 @@ def test_live_set_fail_closed_on_snapshot_502_without_dispatch(
     orchestrator_env, symfony, monkeypatch
 ):
     # Fail-closed live SANS écriture partielle : le snapshot d'état ouvert revient en
-    # 502 ; un set live (live activé + bitmart allow-listé) ne doit déclencher AUCUN
+    # 502 ; un set live (live activé + fake allow-listé) ne doit déclencher AUCUN
     # POST /api/mtf/run (on ne trade pas à l'aveugle), être compté en échec, et le run
     # global rester ok=false.
     monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
-    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "bitmart")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "fake")
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
     fake = symfony(open_state_status=502)
 
     body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()

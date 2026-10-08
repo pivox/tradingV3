@@ -52,7 +52,7 @@ final class MtfValidationRequestTest extends TestCase
             requestId: 'run-456',
             dryRun: true,
             options: [
-                'exchange' => 'bitmart',
+                'exchange' => 'okx',
                 'market_type' => 'perpetual',
                 'current_tf' => '5m',
                 'force_run' => true,
@@ -66,7 +66,7 @@ final class MtfValidationRequestTest extends TestCase
 
         self::assertSame('ETHUSDT', $request->symbol);
         self::assertSame('regular', $request->profile);
-        self::assertSame(Exchange::BITMART, $request->exchange);
+        self::assertSame(Exchange::OKX, $request->exchange);
         self::assertSame(MarketType::PERPETUAL, $request->marketType);
         self::assertSame('5m', $request->requestedTimeframe);
         self::assertSame('SHORT', $request->direction);

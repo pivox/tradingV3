@@ -311,7 +311,7 @@ final class CanonicalEffectiveTradingConfigTest extends TestCase
             ['scalper', '1.0.0', 'scalping.pullback.long', '1.0.0', 'fake', 'test', 'long'],
             ['scalper_micro', '1.0.0', 'micro_scalping.momentum_ofi.long', '1.0.0', 'fake', 'test', 'long'],
             ['scalping', 'latest', 'scalping.pullback.long', '1.0.0', 'fake', 'test', 'long'],
-            ['scalping', '1.0.0', 'scalping.pullback.long', '1.0.0', 'bitmart', 'test', 'long'],
+            ['scalping', '1.0.0', 'scalping.pullback.long', '1.0.0', 'okx', 'test', 'long'],
             ['scalping', '1.0.0', 'scalping.pullback.long', '1.0.0', 'fake', 'test', 'buy'],
         ] as $arguments) {
             try {

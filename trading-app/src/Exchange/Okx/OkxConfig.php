@@ -21,6 +21,7 @@ final readonly class OkxConfig
         public bool $demoTradingEnabled = false,
         public bool $liveEnabled = false,
         public string $wsBusinessUri = '',
+        public bool $globalDemoTradingEnabled = false,
     ) {
     }
 
@@ -123,13 +124,11 @@ final readonly class OkxConfig
         }
     }
 
-    private function assertPrivateRestEndpointAllowed(): void
+    public function assertPrivateRestEndpointAllowed(): void
     {
         $expected = $this->isDemo() ? self::DEMO_API_BASE_URI : self::LIVE_API_BASE_URI;
         $configured = $this->apiBaseUri === '' ? $expected : $this->apiBaseUri;
 
-        if ($configured !== $expected) {
-            throw new \RuntimeException('okx_private_rest_endpoint_not_allowed');
-        }
+        (new OkxRestEndpointGuard())->assertAllowed($configured, $this->isDemo());
     }
 }

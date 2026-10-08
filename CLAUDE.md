@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository overview
 
-This is a Symfony 7.1 / PHP 8.2 trading platform for Bitmart perpetual futures. It runs an MTF (Multi-TimeFrame) validation loop that evaluates 100+ symbols every minute and—when conditions are met—places limit/market orders with dynamic leverage, stop-loss, and take-profit.
+This is a Symfony 7.1 / PHP 8.2 trading platform for OKX and Hyperliquid perpetual futures. It runs an MTF (Multi-TimeFrame) validation loop that evaluates 100+ symbols every minute and—when conditions are met—places limit/market orders with dynamic leverage, stop-loss, and take-profit.
 
 Three sub-projects live here:
 
@@ -41,11 +41,11 @@ curl -X POST http://localhost:8082/api/mtf/run \
   -H 'Content-Type: application/json' \
   -d '{"dry_run":false,"workers":8,"mtf_profile":"scalper_micro"}'
 
-# Sync contracts from Bitmart
-php bin/console bitmart:fetch-contracts [--symbol=BTCUSDT]
+# Sync contracts from the exchange
+php bin/console provider:fetch-contracts [--symbol=BTCUSDT]
 
 # Fetch klines
-php bin/console bitmart:fetch-klines BTCUSDT --timeframe=1h --limit=200
+php bin/console provider:fetch-klines BTCUSDT --timeframe=1h --limit=200
 
 # Start Messenger workers (required for order watchers and async projections)
 php bin/console messenger:consume order_timeout
@@ -115,7 +115,7 @@ POST /api/mtf/run  (RunnerController)
          ▼
    MtfRunnerService
          ├─ resolveSymbols()          → active contracts + MtfSwitch queue
-         ├─ syncTables()              → sync Bitmart positions/orders (FuturesOrderSyncService)
+         ├─ syncTables()              → sync exchange positions/orders (FuturesOrderSyncService)
          ├─ filterSymbols*()          → skip symbols with open positions/orders
          ├─ runSequential|Parallel()  → spawns mtf:run-worker processes
          ├─ dispatchIndicatorSnapshotPersistence()   → async via Redis mtf_projection
@@ -177,7 +177,7 @@ Both `order_timeout` and `mtf_decision` workers **must** be running in productio
 All exchange calls go through `MainProviderInterface`. The concrete implementation selects a bundle at runtime via `ExchangeContext(exchange, marketType)`:
 
 ```php
-$provider = $this->mainProvider->forContext(new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL));
+$provider = $this->mainProvider->forContext(new ExchangeContext(Exchange::OKX, MarketType::PERPETUAL));
 $contracts = $provider->getContractProvider()->syncContracts();
 ```
 
@@ -247,7 +247,7 @@ These YAML keys control entry zone behavior in `trade_entry.<mode>.yaml`:
 |---|---|---|
 | `var/log/mtf-runner.log` | `mtf` | Symbol resolution, filters, MTF execution, snapshots |
 | `var/log/order-journey*.log` | `positions` | TradeEntry details (prices, watchers, leverage) |
-| `var/log/bitmart-http.log` | `bitmart` / `provider` | Bitmart HTTP calls, rate-limit backoffs |
+| `var/log/provider.log` | `provider` | Exchange provider HTTP calls, rate-limit backoffs |
 
 Useful diagnostic API endpoints (prefix `/api`):
 - `GET /mtf/status`, `/mtf/lock/status`, `/mtf/audit`

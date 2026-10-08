@@ -30,7 +30,7 @@ final class LineageReadApiControllerTest extends TestCase
 
     public function testVenueIdentifierRequiresExchangeAndMarketType(): void
     {
-        $response = $this->controller([])->search(new Request(['position_id' => 'POS-1', 'exchange' => 'bitmart']));
+        $response = $this->controller([])->search(new Request(['position_id' => 'POS-1', 'exchange' => 'okx']));
 
         self::assertSame(Response::HTTP_BAD_REQUEST, $response->getStatusCode());
         self::assertSame('missing_venue', $this->json($response)['error']['code']);
@@ -51,7 +51,7 @@ final class LineageReadApiControllerTest extends TestCase
 
         $response = $this->controller([$lineageA, $lineageB])->search(new Request([
             'exchange_order_id' => 'EX-DUP',
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
         ]));
 
@@ -200,7 +200,7 @@ final class LineageReadApiControllerTest extends TestCase
     private function lineage(string $internalTradeId): TradeLineage
     {
         return (new TradeLineage($internalTradeId, 'client-' . $internalTradeId, 'BTCUSDT'))
-            ->setExchange('bitmart')
+            ->setExchange('okx')
             ->setMarketType('perpetual')
             ->setOrigin('orchestrator')
             ->setRunId('run-1')
@@ -213,7 +213,7 @@ final class LineageReadApiControllerTest extends TestCase
     private function intent(int $id, string $internalTradeId): OrderIntent
     {
         $intent = (new OrderIntent())
-            ->setExchange('bitmart')
+            ->setExchange('okx')
             ->setMarketType('perpetual')
             ->setSymbol('BTCUSDT')
             ->setSide(1)
@@ -236,7 +236,7 @@ final class LineageReadApiControllerTest extends TestCase
     private function event(string $type, string $internalTradeId): TradeLifecycleEvent
     {
         return (new TradeLifecycleEvent('BTCUSDT', $type, new \DateTimeImmutable('2026-06-25T10:00:00+00:00')))
-            ->setExchange('bitmart')
+            ->setExchange('okx')
             ->setMarketType('perpetual')
             ->setInternalTradeId($internalTradeId)
             ->setOrderId('EX-1')

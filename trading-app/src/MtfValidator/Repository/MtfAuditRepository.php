@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Repository;
 
+use App\Provider\Context\UnsupportedExchangeException;
 use App\Entity\MtfState;
 use App\MtfValidator\Entity\MtfAudit;
 use App\Provider\Context\ExchangeContext;
@@ -21,7 +22,8 @@ class MtfAuditRepository extends ServiceEntityRepository
 {
     public function __construct(
         ManagerRegistry $registry,
-        private readonly Connection $conn
+        private readonly Connection $conn,
+        private readonly ?\Psr\Log\LoggerInterface $logger = null,
     )
     {
         parent::__construct($registry, MtfAudit::class);
@@ -686,7 +688,7 @@ SQL;
 COALESCE(
   NULLIF(details->>'exchange', ''),
   NULLIF(details->'extra'->'options'->>'exchange', ''),
-  'bitmart'
+  'okx'
 ) AS exchange,
 COALESCE(
   NULLIF(details->>'market_type', ''),
@@ -840,7 +842,7 @@ SQL;
 
         foreach ($successRows as $row) {
             $symbol = (string)($row['symbol'] ?? '');
-            $exchange = $this->normalizeScopeValue($row['exchange'] ?? null, 'bitmart');
+            $exchange = $this->normalizeScopeValue($row['exchange'] ?? null, 'okx');
             $marketType = $this->normalizeScopeValue($row['market_type'] ?? null, 'perpetual');
             $resultKey = $this->auditScopeKey($symbol, $exchange, $marketType);
             $timeframe = (string)($row['timeframe'] ?? '');
@@ -878,7 +880,7 @@ SQL;
 
         foreach ($failureRows as $row) {
             $symbol = (string)($row['symbol'] ?? '');
-            $exchange = $this->normalizeScopeValue($row['exchange'] ?? null, 'bitmart');
+            $exchange = $this->normalizeScopeValue($row['exchange'] ?? null, 'okx');
             $marketType = $this->normalizeScopeValue($row['market_type'] ?? null, 'perpetual');
             $resultKey = $this->auditScopeKey($symbol, $exchange, $marketType);
             $timeframe = (string)($row['timeframe'] ?? '');
@@ -936,7 +938,7 @@ SQL;
 
         foreach ($readyRows as $row) {
             $symbol = (string)($row['symbol'] ?? '');
-            $exchange = $this->normalizeScopeValue($row['exchange'] ?? null, 'bitmart');
+            $exchange = $this->normalizeScopeValue($row['exchange'] ?? null, 'okx');
             $marketType = $this->normalizeScopeValue($row['market_type'] ?? null, 'perpetual');
             $resultKey = $this->auditScopeKey($symbol, $exchange, $marketType);
             if ($symbol === '') {
@@ -987,11 +989,17 @@ SQL;
                         $tfSeconds = $tfSecondsMap[$tf] ?? 0;
                         if ($tfSeconds > 0) {
                             $expectedOpenTime = $eventTs->modify("-{$tfSeconds} seconds");
-                            $klineId = $this->findKlineId(
+                            try {
+                                $klineContext = ExchangeContext::fromValues($entry['exchange'] ?? null, $entry['market_type'] ?? null);
+                            } catch (UnsupportedExchangeException $e) {
+                                $this->logger?->warning('mtf_audit.unsupported_exchange_skipped', ['exchange' => $e->rawValue]);
+                                $klineContext = null;
+                            }
+                            $klineId = $klineContext === null ? null : $this->findKlineId(
                                 $entry['symbol'],
                                 $tf,
                                 $expectedOpenTime,
-                                ExchangeContext::fromValues($entry['exchange'] ?? null, $entry['market_type'] ?? null),
+                                $klineContext,
                             );
                             $tfData['kline_id'] = $klineId;
                             // Conserver l'indicateur d'existence si possible via klines (id non null)

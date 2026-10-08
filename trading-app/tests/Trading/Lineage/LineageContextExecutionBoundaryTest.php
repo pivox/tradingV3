@@ -21,7 +21,7 @@ final class LineageContextExecutionBoundaryTest extends TestCase
         $paper = $this->lineage(ShadowExecutionCapability::Paper, 'okx', 'mainnet');
 
         $paper->assertExecutionBoundary('BTCUSDT', 'LONG', 'fake', 'perpetual');
-        foreach (['okx', 'hyperliquid', 'bitmart'] as $exchange) {
+        foreach (['okx', 'hyperliquid', 'okx'] as $exchange) {
             try {
                 $paper->assertExecutionBoundary('BTCUSDT', 'LONG', $exchange, 'perpetual');
                 self::fail('Paper execution accepted on ' . $exchange);

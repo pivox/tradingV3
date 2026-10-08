@@ -7,7 +7,7 @@ namespace App\Util;
  * Helper pour gérer les granularités (klines).
  *
  * - Certaines APIs (ex: Spot) attendent des secondes (60, 300…).
- * - BitMart Futures V2 attend des minutes (1, 3, 5, 15, 30, 60…).
+ * - Les APIs futures attendent des minutes (1, 3, 5, 15, 30, 60…).
  */
 final class GranularityHelper
 {
@@ -26,7 +26,7 @@ final class GranularityHelper
     ];
 
     /**
-     * Mapping humain → minutes (Futures V2 BitMart).
+     * Mapping humain → minutes (Futures).
      */
     private const MAP_MINUTES = [
         '1m'  => 1,

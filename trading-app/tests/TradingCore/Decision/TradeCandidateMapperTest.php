@@ -23,7 +23,7 @@ final class TradeCandidateMapperTest extends TestCase
         $validationResult = new MtfValidationResult(
             symbol: 'BTCUSDT',
             profile: 'scalper_micro',
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             status: 'READY',
             direction: 'LONG',
@@ -45,7 +45,7 @@ final class TradeCandidateMapperTest extends TestCase
         self::assertSame('BTCUSDT', $candidate->symbol);
         self::assertSame('BTCUSDT', $candidate->instrument);
         self::assertSame('scalper_micro', $candidate->profile);
-        self::assertSame(Exchange::BITMART, $candidate->exchange);
+        self::assertSame(Exchange::OKX, $candidate->exchange);
         self::assertSame(MarketType::PERPETUAL, $candidate->marketType);
         self::assertSame('LONG', $candidate->direction);
         self::assertSame('1m', $candidate->executionTimeframe);
@@ -61,7 +61,7 @@ final class TradeCandidateMapperTest extends TestCase
         $validationResult = new MtfValidationResult(
             symbol: 'ETHUSDT',
             profile: 'regular',
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             status: 'REJECTED',
             direction: null,

@@ -15,10 +15,10 @@ echo "   a) Vérifier les kill switches:\n";
 echo "      docker-compose exec trading-app-php php bin/console mtf:switches\n\n";
 
 echo "   b) Vérifier les contrats actifs:\n";
-echo "      docker-compose exec trading-app-php php bin/console bitmart:fetch-contracts\n\n";
+echo "      docker-compose exec trading-app-php php bin/console provider:fetch-contracts\n\n";
 
 echo "   c) Vérifier les klines disponibles:\n";
-echo "      docker-compose exec trading-app-php php bin/console bitmart:check-klines --symbol=BTCUSDT --timeframe=4h --limit=5\n\n";
+echo "      docker-compose exec trading-app-php php bin/console provider:check-klines --symbol=BTCUSDT --timeframe=4h --limit=5\n\n";
 
 echo "   d) Tester avec un symbole spécifique:\n";
 echo "      docker-compose exec trading-app-php php bin/console mtf:run --symbols=BTCUSDT --force-run --dry-run=1\n\n";
