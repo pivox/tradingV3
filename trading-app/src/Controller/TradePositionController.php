@@ -3,7 +3,7 @@
 namespace App\Controller;
 
 use App\Contract\Provider\AccountProviderInterface;
-use App\Provider\Bitmart\BitmartOrderProvider;
+use App\Contract\Provider\OrderProviderInterface;
 use App\Repository\OrderIntentRepository;
 use App\Service\OrderIntentManager;
 use App\Service\TradeCycleRebuilder;
@@ -20,7 +20,7 @@ final class TradePositionController extends AbstractController
         private readonly TradeCycleRebuilder $cycleRebuilder,
         private readonly OrderIntentRepository $orderIntentRepository,
         private readonly OrderIntentManager $orderIntentManager,
-        private readonly BitmartOrderProvider $bitmartOrderProvider,
+        private readonly OrderProviderInterface $orderProvider,
     )
     {
 
@@ -36,7 +36,7 @@ final class TradePositionController extends AbstractController
             ->modify('-1 days')
             ->getTimestamp();
 
-        // 2) Trades bruts depuis Bitmart
+        // 2) Trades bruts depuis l'exchange
         $trades = $accountProvider->getTrades(
             startTime: $startTime,
             endTime: $endTime->getTimestamp()
@@ -53,7 +53,7 @@ final class TradePositionController extends AbstractController
                     'price' => $intent->getPrice(),
                 ];
             }
-            $trades[$key]['order_history'] = $this->bitmartOrderProvider->getOrderHistory($trade['symbol'], 20);sleep(1);
+            $trades[$key]['order_history'] = $this->orderProvider->getOrderHistory($trade['symbol'], 20);sleep(1);
             $trades[$key]['create_time'] = (new \DateTimeImmutable())->setTimestamp(intval($trade['create_time']/1000))->format('Y-m-d H:i:s');
         }
 

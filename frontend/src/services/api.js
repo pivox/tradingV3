@@ -10,25 +10,6 @@ const handleResponse = async (response) => {
     return await response.json();
 };
 
-const intervalToStepMinutes = (interval) => {
-    const map = {
-        '1m': 1,
-        '3m': 3,
-        '5m': 5,
-        '15m': 15,
-        '30m': 30,
-        '1h': 60,
-        '2h': 120,
-        '4h': 240,
-        '6h': 360,
-        '12h': 720,
-        '1d': 1440,
-        '3d': 4320,
-        '1w': 10080,
-    };
-    return map[interval] || 60; // défaut 1h
-};
-
 const api = {
     // Contrats
     async getContracts(search = '', opts = {}) {
@@ -66,55 +47,32 @@ const api = {
         return handleResponse(response);
     },
 
-    // Klines (utilise le bon endpoint /api/bitmart/klines/by-timeframe)
-    async getKlines(symbol, interval = '1h', limit = 100) {
-        const endDate = new Date();
-        const startDate = new Date(endDate.getTime() - limit * intervalToStepMinutes(interval) * 60 * 1000);
+    // Klines (endpoint /api/klines : tableau trié du plus récent au plus ancien)
+    async fetchKlines(symbol, interval, limit) {
         const params = new URLSearchParams({
             symbol: String(symbol).toUpperCase(),
-            intervals: interval,
-            start: startDate.toISOString(),
-            end: endDate.toISOString(),
+            interval,
             limit: String(limit),
         });
-        const url = `${config.apiUrl}/api/bitmart/klines/by-timeframe?${params.toString()}`;
-        const response = await fetch(url);
+        const response = await fetch(`${config.apiUrl}/api/klines?${params.toString()}`);
         const data = await handleResponse(response);
-        // Retourne les données pour l'intervalle spécifié
-        return data.intervals?.[interval] || [];
+        return (Array.isArray(data) ? data : [])
+            .map((k) => ({ ...k, timestamp: k.openTime }))
+            .sort((x, y) => x.timestamp - y.timestamp);
+    },
+
+    async getKlines(symbol, interval = '1h', limit = 100) {
+        return this.fetchKlines(symbol, interval, limit);
     },
 
     async getKlinesRange(symbol, interval = '1h', start, end) {
-        const toIsoOrNull = (v) => {
-            if (!v) return null;
-            try {
-                const d = new Date(v);
-                return d instanceof Date && !isNaN(d) ? d.toISOString() : null;
-            } catch (e) {
-                return null;
-            }
-        };
-        const startIso = toIsoOrNull(start);
-        const endIso = toIsoOrNull(end);
-        const params = new URLSearchParams({
-            symbol: String(symbol).toUpperCase(),
-            intervals: interval,
-        });
-        if (startIso) params.append('start', startIso);
-        if (endIso) params.append('end', endIso);
-        const url = `${config.apiUrl}/api/bitmart/klines/by-timeframe?${params.toString()}`;
-        const response = await fetch(url);
-        const data = await handleResponse(response);
-        // Retourne les données pour l'intervalle spécifié
-        return data.intervals?.[interval] || [];
-    },
-
-    // Kliness Bitmart direct
-    async fetchKlinesFromBitmart(symbol, interval, limit = 200) {
-        const params = new URLSearchParams({ symbol, interval, limit });
-        const url = `${config.apiUrl}/klines/bitmart?${params.toString()}`;
-        const response = await fetch(url, { method: 'POST' });
-        return handleResponse(response);
+        const startMs = start ? new Date(start).getTime() : null;
+        const endMs = end ? new Date(end).getTime() : null;
+        const klines = await this.fetchKlines(symbol, interval, 500);
+        return klines.filter((k) => (
+            (startMs === null || Number.isNaN(startMs) || k.timestamp >= startMs)
+            && (endMs === null || Number.isNaN(endMs) || k.timestamp <= endMs)
+        ));
     },
 
     // Pipeline

@@ -10,7 +10,6 @@ use App\MtfValidator\Service\Helper\OrdersExtractor;
 use App\MtfValidator\Entity\MtfSwitch;
 use App\Contract\Provider\MainProviderInterface;
 use App\Contract\Provider\Dto\ContractDto as ProviderContractDto;
-use App\Provider\Bitmart\Dto\ContractDto as BitmartContractDto;
 use App\Provider\Repository\ContractRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
 use Brick\Math\BigDecimal;
@@ -68,7 +67,7 @@ class MtfRunCommand extends Command
             ->addOption('switch-duration', null, InputOption::VALUE_OPTIONAL, 'Durée de désactivation pour les symboles INVALID (ex: 4h, 1d, 1w)', '1d')
             ->addOption('limit', null, InputOption::VALUE_OPTIONAL, 'Nombre maximum de symboles à traiter quand --symbols est absent (0 = illimité)', '0')
             ->addOption('workers', null, InputOption::VALUE_OPTIONAL, 'Nombre de workers parallèles (1 = mode séquentiel)', '1')
-            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: okx)')
             ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)')
             ->addOption('trade-profile', null, InputOption::VALUE_OPTIONAL, 'Profil TradeEntry/MTF (ex: scalper, regular)')
             ->addOption('validation-mode', null, InputOption::VALUE_OPTIONAL, 'Mode de validation du contexte (pragmatic|strict|ultra-pragmatig)');
@@ -117,16 +116,10 @@ class MtfRunCommand extends Command
         $ipAddress = $input->getOption('ip-address');
         $ipAddress = is_string($ipAddress) && $ipAddress !== '' ? $ipAddress : null;
 
-        // Context options (default Bitmart/Perpetual)
+        // Context options (default OKX/Perpetual)
         $exchangeOpt = $input->getOption('exchange');
         $marketTypeOpt = $input->getOption('market-type');
-        $exchange = Exchange::BITMART;
-        if (is_string($exchangeOpt) && $exchangeOpt !== '') {
-            $exchange = match (strtolower(trim($exchangeOpt))) {
-                'bitmart' => Exchange::BITMART,
-                default => Exchange::BITMART,
-            };
-        }
+        $exchange = ExchangeContext::fromValues($exchangeOpt)->exchange;
         $marketType = MarketType::PERPETUAL;
         if (is_string($marketTypeOpt) && $marketTypeOpt !== '') {
             $marketType = match (strtolower(trim($marketTypeOpt))) {
@@ -318,7 +311,7 @@ class MtfRunCommand extends Command
             'skip_open_state_filter' => (bool)($options['skip_open_filter'] ?? false),
             'user_id' => $options['user_id'] ?? null,
             'ip_address' => $options['ip_address'] ?? null,
-            'exchange' => $options['exchange'] ?? \App\Common\Enum\Exchange::BITMART->value,
+            'exchange' => $options['exchange'] ?? \App\Common\Enum\Exchange::OKX->value,
             'market_type' => $options['market_type'] ?? \App\Common\Enum\MarketType::PERPETUAL->value,
             'profile' => $options['profile'] ?? null,
             'validation_mode' => $options['validation_mode'] ?? null,

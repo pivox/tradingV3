@@ -1,5 +1,5 @@
 monolog:
-  channels: ['mtf', 'signals', 'positions', 'provider', 'bitmart', 'indicators', 'runtime', 'pipeline_exec', 'deprecation', 'global-severity', 'ws_agent', 'conditionsLogger', 'demo_trading_audit', 'okx_private_ws']
+  channels: ['mtf', 'signals', 'positions', 'provider', 'indicators', 'runtime', 'pipeline_exec', 'deprecation', 'global-severity', 'conditionsLogger', 'demo_trading_audit', 'okx_private_ws']
   handlers:
     # =====================
     # --- Handler Temporal (Asynchrone) ---
@@ -38,13 +38,13 @@ monolog:
       channels: ['positions']
       formatter: App\Logging\CustomLineFormatter
 
-    # Canal Provider - Activité des providers; inclut Bitmart pour duplication
+    # Canal Provider - Activité des providers
     provider_rotating:
       type: rotating_file
       path: '%kernel.project_dir%/var/log/provider.log'
       max_files: 10
       level: info
-      channels: ['provider', 'bitmart']
+      channels: ['provider']
       formatter: App\Logging\CustomLineFormatter
 
     # Canal Indicators - Calculs d'indicateurs techniques
@@ -78,24 +78,6 @@ monolog:
       max_files: 10
       level: info
       channels: ['okx_private_ws']
-      formatter: App\Logging\CustomLineFormatter
-
-    # Canal Bitmart - Traçage des appels API Bitmart (REST/Privé)
-    bitmart_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/bitmart.log'
-      max_files: 5
-      level: 'info'
-      channels: ['bitmart']
-      formatter: App\Logging\CustomLineFormatter
-
-    # Canal WS Agent - WebSocket agent pour écouter les ordres BitMart
-    ws_agent_rotating:
-      type: rotating_file
-      path: '%kernel.project_dir%/var/log/ws/ws-agent.log'
-      max_files: 10
-      level: 'info'
-      channels: ['ws_agent']
       formatter: App\Logging\CustomLineFormatter
 
     # Canal High Conviction - Stratégies validées

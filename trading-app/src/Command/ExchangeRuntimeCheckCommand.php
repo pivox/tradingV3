@@ -41,15 +41,11 @@ final class ExchangeRuntimeCheckCommand extends Command
 {
     private readonly ClockInterface $clock;
 
-    /**
-     * @param array<string, string> $bitmartEnv
-     */
     public function __construct(
         private readonly ExchangeAdapterRegistryInterface $adapters,
         private readonly ExchangeProviderRegistryInterface $providers,
         private readonly OkxConfig $okxConfig,
         private readonly HyperliquidConfig $hyperliquidConfig,
-        private readonly array $bitmartEnv = [],
         private readonly ?HyperliquidMutationReadinessProbeInterface $hyperliquidReadinessProbe = null,
         private readonly ?OkxPrivateWebSocketStatusStoreInterface $okxPrivateWebSocketStatusStore = null,
         private readonly OkxPrivateWebSocketObservabilityPolicy $okxPrivateWebSocketObservabilityPolicy = new OkxPrivateWebSocketObservabilityPolicy(),
@@ -258,7 +254,6 @@ final class ExchangeRuntimeCheckCommand extends Command
     private function credentialsStatus(Exchange $exchange): string
     {
         return match ($exchange) {
-            Exchange::BITMART => $this->hasBitmartCredentials() ? 'ok' : 'missing',
             Exchange::OKX => $this->hasOkxCredentials() ? 'ok' : 'missing',
             Exchange::HYPERLIQUID => $this->hasHyperliquidCredentials() ? 'ok' : 'missing',
             Exchange::FAKE => 'not_required',
@@ -535,40 +530,9 @@ final class ExchangeRuntimeCheckCommand extends Command
             && trim($this->okxConfig->apiPassphrase) !== '';
     }
 
-    private function hasBitmartCredentials(): bool
-    {
-        return $this->envIsPresent('BITMART_API_KEY')
-            && $this->envIsPresent('BITMART_SECRET_KEY')
-            && $this->envIsPresent('BITMART_API_MEMO');
-    }
-
     private function hasHyperliquidCredentials(): bool
     {
         return $this->hyperliquidConfig->signingAccountAddress() !== ''
             && $this->hyperliquidConfig->signerAddress() !== '';
-    }
-
-    private function envIsPresent(string $name): bool
-    {
-        return trim($this->envValue($name)) !== '';
-    }
-
-    private function envValue(string $name): string
-    {
-        if (array_key_exists($name, $this->bitmartEnv)) {
-            return (string) $this->bitmartEnv[$name];
-        }
-
-        if (isset($_ENV[$name])) {
-            return (string) $_ENV[$name];
-        }
-
-        if (isset($_SERVER[$name])) {
-            return (string) $_SERVER[$name];
-        }
-
-        $value = getenv($name);
-
-        return is_string($value) ? $value : '';
     }
 }

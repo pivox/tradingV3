@@ -123,8 +123,6 @@ check_config() {
     # Vérifier les variables d'environnement
     local required_vars=(
         "TEMPORAL_ADDRESS"
-        "BITMART_API_KEY"
-        "BITMART_SECRET_KEY"
         "DATABASE_URL"
     )
     
@@ -171,14 +169,6 @@ test_connectivity() {
         log_warning "Impossible de se connecter à Temporal"
     else
         log_success "Temporal: OK"
-    fi
-    
-    # Test BitMart
-    log_info "Test de connectivité BitMart..."
-    if ! php bin/console app:test-bitmart > /dev/null 2>&1; then
-        log_warning "Impossible de se connecter à BitMart"
-    else
-        log_success "BitMart: OK"
     fi
     
     # Test base de données

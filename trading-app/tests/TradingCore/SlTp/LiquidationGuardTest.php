@@ -21,7 +21,7 @@ final class LiquidationGuardTest extends TestCase
         $result = $guard->check(new LiquidationCheckRequest(
             symbol: 'BTCUSDT',
             instrument: null,
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'futures',
             direction: 'long',
             entryPrice: 100.0,
@@ -46,7 +46,7 @@ final class LiquidationGuardTest extends TestCase
         $result = $guard->check(new LiquidationCheckRequest(
             symbol: 'BTCUSDT',
             instrument: null,
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'futures',
             direction: 'long',
             entryPrice: 100.0,
@@ -70,7 +70,7 @@ final class LiquidationGuardTest extends TestCase
         $result = $guard->check(new LiquidationCheckRequest(
             symbol: 'BTCUSDT',
             instrument: null,
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'futures',
             direction: 'long',
             entryPrice: 100.0,
@@ -93,7 +93,7 @@ final class LiquidationGuardTest extends TestCase
         $result = $guard->check(new LiquidationCheckRequest(
             symbol: 'BTCUSDT',
             instrument: null,
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'futures',
             direction: 'long',
             entryPrice: 100.0,
@@ -116,7 +116,7 @@ final class LiquidationGuardTest extends TestCase
         $result = $guard->check(new LiquidationCheckRequest(
             symbol: 'BTCUSDT',
             instrument: null,
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'futures',
             direction: 'long',
             entryPrice: 100.0,
@@ -134,7 +134,7 @@ final class LiquidationGuardTest extends TestCase
         $result2 = $guard->check(new LiquidationCheckRequest(
             symbol: 'BTCUSDT',
             instrument: null,
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'futures',
             direction: 'long',
             entryPrice: 100.0,
@@ -156,7 +156,7 @@ final class LiquidationGuardTest extends TestCase
         $result = $guard->check(new LiquidationCheckRequest(
             symbol: 'ETHUSDT',
             instrument: null,
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'futures',
             direction: 'short',
             entryPrice: 100.0,

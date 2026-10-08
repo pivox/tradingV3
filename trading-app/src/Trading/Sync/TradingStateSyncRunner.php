@@ -305,7 +305,7 @@ final class TradingStateSyncRunner
             $sideFilter = strtoupper($localPos->side->value);
             foreach ($trades as $trade) {
                 // Vérifier si le trade correspond au side de la position
-                // BitMart utilise open_type: 1=open_long, 2=close_long, 3=close_short, 4=open_short
+                // side numérique legacy: 1=open_long, 2=close_long, 3=close_short, 4=open_short
                 $openType = $trade['open_type'] ?? null;
                 $isCloseTrade = ($sideFilter === 'LONG' && $openType == 2) || ($sideFilter === 'SHORT' && $openType == 3);
                 

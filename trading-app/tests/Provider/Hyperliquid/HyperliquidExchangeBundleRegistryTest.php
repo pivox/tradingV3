@@ -41,10 +41,10 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
     {
         $registry = new ExchangeProviderRegistry(
             [
-                $this->bitmartBundle(),
+                $this->fakeBundle(),
                 $this->hyperliquidBundle(),
             ],
-            Exchange::BITMART,
+            Exchange::FAKE,
             MarketType::PERPETUAL,
         );
 
@@ -58,14 +58,14 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
         self::assertInstanceOf(HyperliquidSystemProvider::class, $bundle->system());
     }
 
-    public function testHyperliquidSpotDoesNotFallbackToBitmart(): void
+    public function testHyperliquidSpotDoesNotFallbackToFake(): void
     {
         $registry = new ExchangeProviderRegistry(
             [
-                $this->bitmartBundle(),
+                $this->fakeBundle(),
                 $this->hyperliquidBundle(),
             ],
-            Exchange::BITMART,
+            Exchange::FAKE,
             MarketType::PERPETUAL,
         );
 
@@ -79,10 +79,10 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
     {
         $mainProvider = new MainProvider(new ExchangeProviderRegistry(
             [
-                $this->bitmartBundle(),
+                $this->fakeBundle(),
                 $this->hyperliquidBundle(),
             ],
-            Exchange::BITMART,
+            Exchange::FAKE,
             MarketType::PERPETUAL,
         ));
 
@@ -292,10 +292,10 @@ final class HyperliquidExchangeBundleRegistryTest extends TestCase
         );
     }
 
-    private function bitmartBundle(): ExchangeProviderBundle
+    private function fakeBundle(): ExchangeProviderBundle
     {
         return new ExchangeProviderBundle(
-            new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
+            new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL),
             $this->createMock(KlineProviderInterface::class),
             $this->createMock(ContractProviderInterface::class),
             $this->createMock(OrderProviderInterface::class),

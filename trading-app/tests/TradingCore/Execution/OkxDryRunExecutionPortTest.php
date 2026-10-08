@@ -339,14 +339,14 @@ final class OkxDryRunExecutionPortTest extends TestCase
 
     public function testRejectsPlanForAnotherExchange(): void
     {
-        $request = ExecutionRequest::forPlan($this->executablePlan(exchange: 'bitmart'), ExecutionMode::DryRun);
+        $request = ExecutionRequest::forPlan($this->executablePlan(exchange: 'binance'), ExecutionMode::DryRun);
 
         $result = (new OkxDryRunExecutionPort())->execute($request);
 
         self::assertSame(ExecutionStatus::Rejected, $result->status);
         self::assertNull($result->exchangeOrderId);
         self::assertSame('wrong_exchange_for_okx_dry_run', $result->metadata['reject_reason']);
-        self::assertSame('bitmart', $result->metadata['plan_exchange']);
+        self::assertSame('binance', $result->metadata['plan_exchange']);
     }
 
     public function testRejectsUnsupportedMarketType(): void

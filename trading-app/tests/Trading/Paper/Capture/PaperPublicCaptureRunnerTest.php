@@ -166,7 +166,7 @@ final class PaperPublicCaptureRunnerTest extends TestCase
         $this->expectExceptionMessage('paper_public_capture_venue_invalid');
         try {
             $this->runner($okx, $hyperliquid)->run(
-                'bitmart',
+                'binance',
                 'invalid-venue-mainnet',
                 300,
                 new StreamSelectLoop(),

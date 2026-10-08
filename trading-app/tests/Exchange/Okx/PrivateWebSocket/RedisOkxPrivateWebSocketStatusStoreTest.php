@@ -263,7 +263,7 @@ final class RedisOkxPrivateWebSocketStatusStoreTest extends TestCase
             json_encode(array_diff_key($valid, ['exchange' => true]), JSON_THROW_ON_ERROR),
             json_encode([...$valid, 'unexpected' => true], JSON_THROW_ON_ERROR),
             json_encode([...$valid, 'schema_version' => 2], JSON_THROW_ON_ERROR),
-            json_encode([...$valid, 'exchange' => 'bitmart'], JSON_THROW_ON_ERROR),
+            json_encode([...$valid, 'exchange' => 'binance'], JSON_THROW_ON_ERROR),
             json_encode([...$valid, 'environment' => 'live'], JSON_THROW_ON_ERROR),
             json_encode([...$valid, 'endpoint_id' => 'mainnet'], JSON_THROW_ON_ERROR),
             json_encode([...$valid, 'connected' => 1], JSON_THROW_ON_ERROR),

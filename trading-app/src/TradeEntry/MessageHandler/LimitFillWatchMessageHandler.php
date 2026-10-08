@@ -11,6 +11,7 @@ use App\Contract\Provider\OrderProviderInterface;
 use App\Logging\TradeLifecycleLogger;
 use App\Logging\TradeLifecycleReason;
 use App\Provider\Context\ExchangeContext;
+use App\Provider\Context\UnsupportedExchangeException;
 use App\TradeEntry\Message\LimitFillWatchMessage;
 use App\Trading\Lineage\TradeLineageManager;
 use Brick\Math\RoundingMode;
@@ -38,9 +39,19 @@ final class LimitFillWatchMessageHandler
 
     public function __invoke(LimitFillWatchMessage $message): void
     {
-        $context = $message->lifecycleContext !== null
-            ? ExchangeContext::fromArray($message->lifecycleContext)
-            : null;
+        try {
+            $context = $message->lifecycleContext !== null
+                ? ExchangeContext::fromArray($message->lifecycleContext)
+                : null;
+        } catch (UnsupportedExchangeException $e) {
+            $this->positionsLogger->warning('limit_watch.unsupported_exchange_dropped', [
+                'exchange' => $e->rawValue,
+                'symbol' => $message->symbol,
+                'order_id' => $message->exchangeOrderId,
+            ]);
+
+            return;
+        }
         $orderProvider = $this->provider->forContext($context)->getOrderProvider();
 
         try {

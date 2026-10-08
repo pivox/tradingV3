@@ -104,7 +104,7 @@ final class PaperExecutionProvenanceEntityTest extends TestCase
             new OrderIntent(),
             new TradeLineage('trade-1', 'client-1', 'BTCUSDT'),
             new TradeLifecycleEvent('BTCUSDT', 'order_submitted', $at),
-            new FillCostLedgerEntry('cost-1', str_repeat('a', 64), 'bitmart', 'perpetual', 'BTCUSDT', 'fill-1', 'entry', $at, 'paper', 'v1'),
+            new FillCostLedgerEntry('cost-1', str_repeat('a', 64), 'okx', 'perpetual', 'BTCUSDT', 'fill-1', 'entry', $at, 'paper', 'v1'),
             new TradeZoneEvent('BTCUSDT', 'inside_zone', 99.0, 101.0, 100.0, 0.01, 0.02, $at),
         ];
     }

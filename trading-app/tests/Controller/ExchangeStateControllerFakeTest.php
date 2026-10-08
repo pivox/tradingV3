@@ -30,7 +30,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Exercises GET /api/exchange/open-state for the FAKE exchange context using a
- * registry wired only with the fake provider bundle (no Bitmart / no env). The
+ * registry wired only with the fake provider bundle (no env). The
  * snapshot must be an empty {open_positions: [], open_orders: []}.
  */
 #[CoversClass(ExchangeStateController::class)]
@@ -165,7 +165,7 @@ final class ExchangeStateControllerFakeTest extends TestCase
             'market_type' => 'perpetual',
         ]];
         yield 'real exchange' => [[
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'dry_run' => 'true',
         ]];
@@ -193,7 +193,7 @@ final class ExchangeStateControllerFakeTest extends TestCase
         // l'orchestrateur fail-close les sets live.
         $throwingAccount = $this->createMock(AccountProviderInterface::class);
         $throwingAccount->method('getOpenPositionsOrFail')
-            ->willThrowException(new \RuntimeException('bitmart unavailable'));
+            ->willThrowException(new \RuntimeException('exchange unavailable'));
         $fake = FakeProviderFixture::create();
 
         $registry = new ExchangeProviderRegistry(

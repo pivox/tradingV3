@@ -85,7 +85,7 @@ final class ExchangeStateSynchronizerTest extends TestCase
                     && $position->getAvgEntryPrice() === '42000'
                     && $position->getLeverage() === 3
                     && $position->getUnrealizedPnl() === '7.5'
-                    && $position->getPayload()['exchange'] === 'bitmart'
+                    && $position->getPayload()['exchange'] === 'okx'
                     && $position->getPayload()['market_type'] === 'perpetual'
                     && $position->getPayload()['mark_price'] === '42100';
             }));
@@ -105,7 +105,7 @@ final class ExchangeStateSynchronizerTest extends TestCase
 
     private function legacyContext(): ExchangeContext
     {
-        return new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL);
+        return new ExchangeContext(Exchange::OKX, MarketType::PERPETUAL);
     }
 
     private function positionDto(): PositionDto

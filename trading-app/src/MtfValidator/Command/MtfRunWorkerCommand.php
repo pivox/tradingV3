@@ -44,7 +44,7 @@ final class MtfRunWorkerCommand extends Command
             ->addOption('lock-per-symbol', null, InputOption::VALUE_NONE, 'Forcer l\'utilisation d\'un verrou par symbole (activé par défaut)')
             ->addOption('user-id', null, InputOption::VALUE_OPTIONAL, 'Identifiant utilisateur propagé au pipeline MTF')
             ->addOption('ip-address', null, InputOption::VALUE_OPTIONAL, 'Adresse IP associée à la requête')
-            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: okx)')
             ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)')
             ->addOption('trade-profile', null, InputOption::VALUE_OPTIONAL, 'Profil TradeEntry/MTF à utiliser (ex: scalper, regular)')
             ->addOption('validation-mode', null, InputOption::VALUE_OPTIONAL, 'Mode de validation du contexte (pragmatic|strict|ultra-pragmatig)')
@@ -173,7 +173,7 @@ final class MtfRunWorkerCommand extends Command
                 'user_id' => $userId,
                 'ip_address' => $ipAddress,
                 'exchange' => $lineageContext?->exchange
-                    ?? ($exchangeOpt !== null && $exchangeOpt !== '' ? $exchangeOpt : Exchange::BITMART->value),
+                    ?? \App\Provider\Context\ExchangeContext::fromValues($exchangeOpt)->exchange->value,
                 'market_type' => $lineageContext?->marketType
                     ?? ($marketTypeOpt !== null && $marketTypeOpt !== '' ? $marketTypeOpt : MarketType::PERPETUAL->value),
                 'profile' => $lineageContext?->modeId ?? $profile,

@@ -386,7 +386,7 @@ def test_resume_rejects_unsafe_existing_schedule_before_unpause(monkeypatch):
         async def describe(self):
             return _description(
                 workflow="CronSymfonyMtfWorkersWorkflow",
-                args=[[{"dry_run": False, "exchange": "bitmart"}]],
+                args=[[{"dry_run": False, "exchange": "binance"}]],
             )
 
         async def unpause(self, *, note=None):
@@ -597,10 +597,10 @@ def test_validate_runtime_checks_requires_schedule_ready_yes():
 
 
 def test_validate_runtime_checks_rejects_wrong_exchange_and_mainnet_readiness():
-    with pytest.raises(RuntimeError, match="okx runtime-check returned exchange='bitmart'"):
+    with pytest.raises(RuntimeError, match="okx runtime-check returned exchange='binance'"):
         validate_runtime_checks(
             {
-                "okx": {"exchange": "bitmart", "schedule_ready": "yes"},
+                "okx": {"exchange": "binance", "schedule_ready": "yes"},
                 "hyperliquid": {"schedule_ready": "yes"},
             }
         )

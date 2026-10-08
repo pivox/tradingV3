@@ -310,7 +310,7 @@ final class ExchangeReadinessEvaluatorTest extends TestCase
         $report = (new ExchangeReadinessEvaluator())->evaluate(
             $this->readyInput(warnings: [
                 'password=demo-password',
-                'BITMART_API_MEMO=demo-memo',
+                'OKX_API_PASSPHRASE=demo-memo',
                 'OK-ACCESS-SIGN=demo-signature',
                 'private_key=wallet-secret',
                 'safe_fixture_warning',

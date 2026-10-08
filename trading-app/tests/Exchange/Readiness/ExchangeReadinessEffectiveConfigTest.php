@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
 final class ExchangeReadinessEffectiveConfigTest extends TestCase
 {
     /** @dataProvider forbiddenPairProvider */
-    public function testCrossEnvironmentAndBitmartRequestsFailBeforeReadiness(string $exchange, string $environment): void
+    public function testCrossEnvironmentRequestsFailBeforeReadiness(string $exchange, string $environment): void
     {
         $this->expectException(TradingConfigException::class);
         new EffectiveTradingConfigRequest(
@@ -26,6 +26,5 @@ final class ExchangeReadinessEffectiveConfigTest extends TestCase
     {
         yield 'OKX testnet' => ['okx', 'testnet'];
         yield 'Hyperliquid demo' => ['hyperliquid', 'demo'];
-        yield 'BitMart' => ['bitmart', 'demo'];
     }
 }

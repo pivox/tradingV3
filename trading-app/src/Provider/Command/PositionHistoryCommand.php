@@ -98,7 +98,7 @@ NB: Les ordres affichés sont les ordres OUVERTS persistés en base (pour le sta
         $symbols = $symbol !== null ? [strtoupper((string)$symbol)] : null;
 
         // 1) Synchronisation avant lecture
-        $io->section('Synchronisation des positions/ordres (BitMart → BDD)...');
+        $io->section('Synchronisation des positions/ordres (exchange → BDD)...');
         try {
             $this->syncRunner->syncAndDispatch('position_history_command', $symbols);
         } catch (\Throwable $e) {

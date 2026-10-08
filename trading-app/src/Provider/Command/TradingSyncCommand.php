@@ -37,7 +37,7 @@ final class TradingSyncCommand extends Command
             ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Mode dry-run : affiche ce qui serait synchronisé sans le faire')
             ->addOption('skip-events', null, InputOption::VALUE_NONE, 'Synchronise sans dispatcher les événements')
             ->setHelp('
-Synchronise les positions et ordres depuis l\'exchange (BitMart) vers la BDD.
+Synchronise les positions et ordres depuis l\'exchange vers la BDD.
 
 Cette commande :
 1. Récupère les positions ouvertes depuis l\'exchange

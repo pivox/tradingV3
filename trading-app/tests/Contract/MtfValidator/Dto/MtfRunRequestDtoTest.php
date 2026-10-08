@@ -110,7 +110,7 @@ final class MtfRunRequestDtoTest extends TestCase
             'dashboard_id' => 'dash-a',
             'set_id' => 'set-a',
             'profile' => 'scalper',
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'attempt_number' => 2,
         ]);
@@ -132,7 +132,7 @@ final class MtfRunRequestDtoTest extends TestCase
             'orchestration_run_id' => $originalRunId,
             'dashboard_id' => 'dash-a',
             'set_id' => 'set-a',
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
         ]);
 

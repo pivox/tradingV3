@@ -31,15 +31,7 @@ rg -n -S -e "$pattern" \
   "$LOGDIR"/positions-*.log || true
 
 echo
-echo "-- Bitmart (submit-leverage, submit-order) --"
-rg -n -S -e "$pattern" \
-  -e "/contract/private/submit-leverage|/contract/private/submit-order|Request failed|Response|Request" \
-  "$LOGDIR"/bitmart-*.log || true
-
-echo
 echo "-- Recent budget checks (last 20 lines) --"
 rg -n -S "order_plan.budget_check" "$LOGDIR"/positions-flow-*.log | tail -n 20 || true
 
-echo
-echo "Hint: If Bitmart shows 40011 Invalid parameter, verify side (1 or 4) and size fields in the JSON payload above."
 

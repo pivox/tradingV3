@@ -19,8 +19,8 @@ class OrderController extends AbstractController
     public function __construct(
         private readonly OrderProviderInterface $orderProvider,
         private readonly ContractRepository $contractRepository,
-        #[Autowire(service: 'monolog.logger.bitmart')]
-        private readonly LoggerInterface $bitmartLogger,
+        #[Autowire(service: 'monolog.logger.provider')]
+        private readonly LoggerInterface $logger,
     ) {
     }
 
@@ -85,7 +85,7 @@ class OrderController extends AbstractController
                             $notionalValue = (float) $initialMargin * (float) $leverage;
                             
                             // Taille en contrats = Valeur notionale / (Prix limit * Contract Size)
-                            // Pour BitMart Futures: Notional = Prix × Contract Size × Nombre de contrats
+                            // Pour les contrats futures: Notional = Prix × Contract Size × Nombre de contrats
                             $calculatedSize = floor($notionalValue / ((float) $limitPrice * $contractSizeFloat));
                             
                             if ($calculatedSize <= 0) {
@@ -154,12 +154,12 @@ class OrderController extends AbstractController
                                         
                                         if (!$leverageSuccess) {
                                             $error = 'Échec de la définition du levier. Veuillez réessayer.';
-                                            $this->bitmartLogger->error('[Order Submit] Leverage submission failed', [
+                                            $this->logger->error('[Order Submit] Leverage submission failed', [
                                                 'symbol' => $symbol,
                                                 'leverage' => $leverage,
                                             ]);
                                         } else {
-                                            $this->bitmartLogger->info('[Order Submit] Leverage set successfully', [
+                                            $this->logger->info('[Order Submit] Leverage set successfully', [
                                                 'symbol' => $symbol,
                                                 'leverage' => $leverage,
                                             ]);
@@ -169,7 +169,7 @@ class OrderController extends AbstractController
                                             
                                             // Construire les options pour TP et SL
                                             $orderOptions = [
-                                                'side' => (int) $side, // 1=open_long, 4=open_short pour BitMart
+                                                'side' => (int) $side, // 1=open_long, 4=open_short (code numérique legacy)
                                                 'open_type' => 'isolated',
                                                 'preset_take_profit_price' => (string) $takeProfitPrice,
                                                 'preset_take_profit_price_type' => 1, // 1 = prix fixe
@@ -248,7 +248,7 @@ class OrderController extends AbstractController
                                                     ],
                                                 ];
                                         
-                                                $this->bitmartLogger->info('[Order Submit] Order submitted successfully', [
+                                                $this->logger->info('[Order Submit] Order submitted successfully', [
                                                     'order_id' => $orderId,
                                                     'symbol' => $symbol,
                                                     'side' => $side,
@@ -263,14 +263,14 @@ class OrderController extends AbstractController
                                                 ]);
                                             } else {
                                                 $error = 'Ordre soumis mais aucun order_id reçu dans la réponse.';
-                                                $this->bitmartLogger->warning('[Order Submit] No order_id in response', [
+                                                $this->logger->warning('[Order Submit] No order_id in response', [
                                                     'order_dto' => $orderDto,
                                                 ]);
                                             }
                                         }
                                     } catch (\Throwable $leverageException) {
                                         $error = sprintf('Erreur lors de la soumission de l\'ordre: %s', $leverageException->getMessage());
-                                        $this->bitmartLogger->error('[Order Submit] Order submission exception', [
+                                        $this->logger->error('[Order Submit] Order submission exception', [
                                             'error' => $leverageException->getMessage(),
                                             'trace' => $leverageException->getTraceAsString(),
                                         ]);
@@ -281,7 +281,7 @@ class OrderController extends AbstractController
                     }
                 } catch (\Throwable $e) {
                     $error = sprintf('Erreur lors de la soumission: %s', $e->getMessage());
-                    $this->bitmartLogger->error('[Order Submit] Exception', [
+                    $this->logger->error('[Order Submit] Exception', [
                         'error' => $e->getMessage(),
                         'trace' => $e->getTraceAsString(),
                     ]);

@@ -39,7 +39,7 @@ final class ExecutionRequestTest extends TestCase
         $forgedPlan = new OrderPlan(
             symbol: 'BTCUSDT',
             profile: 'scalper_micro',
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'perpetual',
             side: 'long',
             orderType: 'limit',
@@ -67,7 +67,7 @@ final class ExecutionRequestTest extends TestCase
         $stalePlan = new OrderPlan(
             symbol: 'BTCUSDT',
             profile: 'scalper_micro',
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'perpetual',
             side: 'long',
             orderType: 'limit',
@@ -97,7 +97,7 @@ final class ExecutionRequestTest extends TestCase
         return new OrderPlan(
             symbol: 'BTCUSDT',
             profile: 'scalper_micro',
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'perpetual',
             side: 'long',
             orderType: 'limit',

@@ -13,7 +13,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
     name: 'app:account:balance',
-    description: 'Affiche l\'état du compte Bitmart (balance disponible, equity, marge immobilisée, etc.).',
+    description: 'Affiche l\'état du compte (balance disponible, equity, marge immobilisée, etc.).',
 )]
 final class ShowAccountBalanceCommand extends Command
 {

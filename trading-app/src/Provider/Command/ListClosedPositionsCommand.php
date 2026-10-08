@@ -6,7 +6,6 @@ namespace App\Provider\Command;
 
 use App\Contract\Provider\AccountProviderInterface;
 use App\Contract\Provider\OrderProviderInterface;
-use App\Provider\Bitmart\Http\BitmartHttpClientPrivate;
 use App\Provider\Repository\ContractRepository;
 use App\Repository\OrderIntentRepository;
 use Psr\Log\LoggerInterface;
@@ -19,7 +18,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
     name: 'provider:list-closed-positions',
-    description: 'Affiche l’historique des ordres BitMart (vue proche mobile/web) et un winrate approximatif'
+    description: 'Affiche l’historique des ordres exchange (vue proche mobile/web) et un winrate approximatif'
 )]
 final class ListClosedPositionsCommand extends Command
 {
@@ -28,7 +27,6 @@ final class ListClosedPositionsCommand extends Command
         private readonly ?OrderProviderInterface $orderProvider,
         private readonly ContractRepository $contractRepository,
         private readonly ?OrderIntentRepository $orderIntentRepository = null,
-        private readonly ?BitmartHttpClientPrivate $bitmartClient = null,
         private readonly ?LoggerInterface $logger = null
     ) {
         parent::__construct();
@@ -40,9 +38,9 @@ final class ListClosedPositionsCommand extends Command
             ->addOption('hours', null, InputOption::VALUE_OPTIONAL, 'Nombre d\'heures en arrière pour filtrer les ordres', '24')
             ->addOption('symbol', 's', InputOption::VALUE_OPTIONAL, 'Filtrer par symbole(s) (ex: BTCUSDT,ETHUSDT). Si non spécifié, utilise les symboles des positions ouvertes ou des contrats actifs.')
             ->addOption('format', 'f', InputOption::VALUE_REQUIRED, 'Format de sortie (table|json)', 'table')
-            ->addOption('limit', 'l', InputOption::VALUE_OPTIONAL, 'Limite de résultats par symbole (max BitMart: 200)', '100')
+            ->addOption('limit', 'l', InputOption::VALUE_OPTIONAL, 'Limite de résultats par symbole (max exchange: 200)', '100')
             ->setHelp('
-Affiche l’historique des ordres BitMart pour une période donnée (proche de la vue mobile / web) :
+Affiche l’historique des ordres exchange pour une période donnée (proche de la vue mobile / web) :
 
 Colonnes :
 - Heure
@@ -91,7 +89,7 @@ Exemples:
             return Command::FAILURE;
         }
 
-        if (!$this->orderProvider && !$this->bitmartClient) {
+        if (!$this->orderProvider) {
             $io->error('Aucun provider d’ordres disponible.');
             return Command::FAILURE;
         }
@@ -175,7 +173,7 @@ Exemples:
             $progressBar->setMessage("Symbole $sym");
 
             try {
-                // BitMart limite à 200 ordres
+                // exchange limite à 200 ordres
                 $apiLimit = min(max($limit, 1), 200);
                 $orders   = $this->getOrderHistoryRaw($sym, $apiLimit, $startTime, $endTime);
 
@@ -187,7 +185,7 @@ Exemples:
                     $allRawOrders[] = $order;
                 }
             } catch (\Throwable $e) {
-                $this->logger?->error('Erreur BitMart order-history', [
+                $this->logger?->error('Erreur exchange order-history', [
                     'symbol' => $sym,
                     'error'  => $e->getMessage(),
                 ]);
@@ -209,7 +207,7 @@ Exemples:
             return Command::SUCCESS;
         }
 
-        // 2. Construction des lignes "vue BitMart"
+        // 2. Construction des lignes "vue exchange"
         $rowsForDisplay = [];
         foreach ($allRawOrders as $order) {
             $rowsForDisplay[] = $this->buildUiRowFromOrder($order);
@@ -250,21 +248,6 @@ Exemples:
     private function getOrderHistoryRaw(string $symbol, int $limit, ?int $startTime = null, ?int $endTime = null): array
     {
         try {
-            if ($this->bitmartClient) {
-                $response = $this->bitmartClient->getOrderHistory($symbol, $limit, $startTime, $endTime);
-
-                $orders = null;
-                if (isset($response['data']['orders']) && is_array($response['data']['orders'])) {
-                    $orders = $response['data']['orders'];
-                } elseif (isset($response['data']) && is_array($response['data']) && isset($response['data'][0]['order_id'])) {
-                    $orders = $response['data'];
-                }
-
-                if ($orders !== null) {
-                    return $orders;
-                }
-            }
-
             if ($this->orderProvider) {
                 $orders = $this->orderProvider->getOrderHistory($symbol, $limit);
 
@@ -289,7 +272,7 @@ Exemples:
     }
 
     /**
-     * Convertit un OrderDto en tableau brut proche du JSON BitMart.
+     * Convertit un OrderDto en tableau brut proche du JSON exchange.
      */
     private function orderDtoToArray(\App\Contract\Provider\Dto\OrderDto $order): array
     {
@@ -311,7 +294,7 @@ Exemples:
     }
 
     /**
-     * Transforme un ordre brut en ligne "vue BitMart".
+     * Transforme un ordre brut en ligne "vue exchange".
      *
      * @param array<string,mixed> $order
      * @return array<string,mixed>
@@ -393,7 +376,7 @@ Exemples:
             $levLabel = sprintf('%sx', $levLabel);
         }
 
-        // Convention BitMart Futures:
+        // Convention exchange Futures:
         // 1 = open_long, 2 = close_long, 3 = close_short, 4 = open_short
         return match ($side) {
             1       => $levLabel ? sprintf('Longue %s', $levLabel) : 'Longue',
@@ -504,7 +487,7 @@ Exemples:
     }
 
     /**
-     * Retourne le timestamp (sec) d’un ordre BitMart.
+     * Retourne le timestamp (sec) d’un ordre exchange.
      */
     private function getOrderTimestamp(array $order): ?int
     {
@@ -552,7 +535,7 @@ Exemples:
     }
 
     /**
-     * Convertit side (string/enum) → entier BitMart.
+     * Convertit side (string/enum) → entier exchange.
      */
     private function extractSideValue(mixed $side): ?int
     {
@@ -583,7 +566,7 @@ Exemples:
     }
 
     /**
-     * Affichage “vue BitMart” en tableau.
+     * Affichage “vue exchange” en tableau.
      *
      * @param array<int,array<string,mixed>> $orders
      */

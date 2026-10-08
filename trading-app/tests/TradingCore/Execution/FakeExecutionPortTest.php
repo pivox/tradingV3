@@ -331,7 +331,7 @@ final class FakeExecutionPortTest extends TestCase
         $plan = new OrderPlan(
             symbol: 'BTCUSDT',
             profile: 'scalper_micro',
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'perpetual',
             side: 'long',
             orderType: 'limit',
@@ -353,7 +353,7 @@ final class FakeExecutionPortTest extends TestCase
         return new OrderPlan(
             symbol: 'BTCUSDT',
             profile: 'scalper_micro',
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'perpetual',
             side: 'long',
             orderType: 'limit',

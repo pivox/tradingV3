@@ -25,7 +25,7 @@ final class MarketDataVenueEntityContractTest extends TestCase
         foreach ($this->entities() as $entity) {
             self::assertTrue(method_exists($entity, 'getMarketDataVenue'));
             self::assertNull($entity->getMarketDataVenue());
-            self::assertSame('bitmart', $entity->getExchange());
+            self::assertSame('okx', $entity->getExchange());
         }
     }
 
@@ -45,13 +45,13 @@ final class MarketDataVenueEntityContractTest extends TestCase
 
             self::assertSame($entity, $entity->setMarketDataVenue(null));
             self::assertNull($entity->getMarketDataVenue());
-            self::assertSame('bitmart', $entity->getExchange());
+            self::assertSame('okx', $entity->getExchange());
         }
     }
 
     public function testSetterRejectsBlankAndUnsupportedValuesWithStableError(): void
     {
-        foreach (['', '   ', 'bitmart', 'coinbase'] as $invalidVenue) {
+        foreach (['', '   ', 'binance', 'coinbase'] as $invalidVenue) {
             foreach ($this->entities() as $entity) {
                 self::assertTrue(method_exists($entity, 'setMarketDataVenue'));
 
@@ -116,7 +116,7 @@ final class MarketDataVenueEntityContractTest extends TestCase
             new FillCostLedgerEntry(
                 'fill-cost-1',
                 str_repeat('a', 64),
-                'bitmart',
+                'okx',
                 'perpetual',
                 'BTCUSDT',
                 'fill-1',

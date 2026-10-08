@@ -70,7 +70,7 @@ final class TradeLineageManagerTest extends KernelTestCase
 
     public function testCreatesOneStableInternalTradeIdForAnOrderIntent(): void
     {
-        $intent = $this->persistIntent('cid-1', 'BTCUSDT', Exchange::BITMART, MarketType::PERPETUAL);
+        $intent = $this->persistIntent('cid-1', 'BTCUSDT', Exchange::OKX, MarketType::PERPETUAL);
 
         $lineage = $this->manager->ensureForIntent($intent, [
             'internal_trade_id' => 'itd-stable-1',
@@ -271,21 +271,21 @@ final class TradeLineageManagerTest extends KernelTestCase
 
     public function testResolvesOnlyByExactPersistedIdentifiersWithinVenue(): void
     {
-        $bitmart = $this->persistIntent('shared-cid', 'BTCUSDT', Exchange::BITMART, MarketType::PERPETUAL);
+        $hyperliquidIntent = $this->persistIntent('shared-cid', 'BTCUSDT', Exchange::HYPERLIQUID, MarketType::PERPETUAL);
         $okx = $this->persistIntent('shared-cid', 'BTCUSDT', Exchange::OKX, MarketType::PERPETUAL);
 
-        $bitmartLineage = $this->manager->ensureForIntent($bitmart, ['internal_trade_id' => 'itd-bitmart']);
+        $hyperliquidLineage = $this->manager->ensureForIntent($hyperliquidIntent, ['internal_trade_id' => 'itd-hyperliquid']);
         $okxLineage = $this->manager->ensureForIntent($okx, ['internal_trade_id' => 'itd-okx']);
 
-        $this->manager->attachExchangeOrderId($bitmartLineage, 'ex-shared');
+        $this->manager->attachExchangeOrderId($hyperliquidLineage, 'ex-shared');
         $this->manager->attachExchangeOrderId($okxLineage, 'ex-shared');
-        $this->manager->attachPositionId($bitmartLineage, 'pos-shared');
+        $this->manager->attachPositionId($hyperliquidLineage, 'pos-shared');
         $this->manager->attachPositionId($okxLineage, 'pos-shared');
 
         self::assertSame(
-            'itd-bitmart',
+            'itd-hyperliquid',
             $this->manager->resolve(
-                new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
+                new ExchangeContext(Exchange::HYPERLIQUID, MarketType::PERPETUAL),
                 clientOrderId: 'shared-cid',
             )?->getInternalTradeId(),
         );
@@ -297,9 +297,9 @@ final class TradeLineageManagerTest extends KernelTestCase
             )?->getInternalTradeId(),
         );
         self::assertSame(
-            'itd-bitmart',
+            'itd-hyperliquid',
             $this->manager->resolve(
-                new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
+                new ExchangeContext(Exchange::HYPERLIQUID, MarketType::PERPETUAL),
                 positionId: 'pos-shared',
             )?->getInternalTradeId(),
         );
@@ -307,11 +307,11 @@ final class TradeLineageManagerTest extends KernelTestCase
 
     public function testDoesNotResolveFromSymbolSideOrTimestamp(): void
     {
-        $intent = $this->persistIntent('cid-a', 'SOLUSDT', Exchange::BITMART, MarketType::PERPETUAL);
+        $intent = $this->persistIntent('cid-a', 'SOLUSDT', Exchange::OKX, MarketType::PERPETUAL);
         $this->manager->ensureForIntent($intent, ['internal_trade_id' => 'itd-sol']);
 
         $resolved = $this->manager->resolve(
-            new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
+            new ExchangeContext(Exchange::OKX, MarketType::PERPETUAL),
             symbol: 'SOLUSDT',
             side: 'LONG',
         );
@@ -321,12 +321,12 @@ final class TradeLineageManagerTest extends KernelTestCase
 
     public function testResolveFallsBackAfterUnmatchedHigherPriorityIdentifier(): void
     {
-        $intent = $this->persistIntent('cid-real', 'BTCUSDT', Exchange::BITMART, MarketType::PERPETUAL);
+        $intent = $this->persistIntent('cid-real', 'BTCUSDT', Exchange::OKX, MarketType::PERPETUAL);
         $lineage = $this->manager->ensureForIntent($intent, ['internal_trade_id' => 'itd-fallback']);
         $this->manager->attachExchangeOrderId($lineage, 'ex-fallback');
 
         $resolved = $this->manager->resolve(
-            new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
+            new ExchangeContext(Exchange::OKX, MarketType::PERPETUAL),
             clientOrderId: 'stale-client-id',
             exchangeOrderId: 'ex-fallback',
         );
@@ -336,8 +336,8 @@ final class TradeLineageManagerTest extends KernelTestCase
 
     public function testAmbiguousExchangeOrPositionIdentifierStaysUnmatched(): void
     {
-        $first = $this->persistIntent('cid-first', 'BTCUSDT', Exchange::BITMART, MarketType::PERPETUAL);
-        $second = $this->persistIntent('cid-second', 'BTCUSDT', Exchange::BITMART, MarketType::PERPETUAL);
+        $first = $this->persistIntent('cid-first', 'BTCUSDT', Exchange::OKX, MarketType::PERPETUAL);
+        $second = $this->persistIntent('cid-second', 'BTCUSDT', Exchange::OKX, MarketType::PERPETUAL);
 
         $firstLineage = $this->manager->ensureForIntent($first, ['internal_trade_id' => 'itd-first']);
         $secondLineage = $this->manager->ensureForIntent($second, ['internal_trade_id' => 'itd-second']);
@@ -347,7 +347,7 @@ final class TradeLineageManagerTest extends KernelTestCase
         $this->manager->attachPositionId($firstLineage, 'ambiguous-position');
         $this->manager->attachPositionId($secondLineage, 'ambiguous-position');
 
-        $context = new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL);
+        $context = new ExchangeContext(Exchange::OKX, MarketType::PERPETUAL);
 
         self::assertNull($this->manager->resolve($context, exchangeOrderId: 'ambiguous-order'));
         self::assertNull($this->manager->resolve($context, positionId: 'ambiguous-position'));

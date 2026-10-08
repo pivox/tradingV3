@@ -109,8 +109,8 @@ class TradeLifecycleEvent implements PaperExecutionProvenanceAwareInterface
     #[ORM\Column(length: 64, nullable: true)]
     private ?string $planId = null;
 
-    #[ORM\Column(length: 32, options: ['default' => 'bitmart'])]
-    private string $exchange = 'bitmart';
+    #[ORM\Column(length: 32, options: ['default' => 'okx'])]
+    private string $exchange = 'okx';
 
     #[ORM\Column(name: 'market_data_venue', type: Types::STRING, length: 32, nullable: true)]
     private ?string $marketDataVenue = null;
@@ -468,7 +468,7 @@ class TradeLifecycleEvent implements PaperExecutionProvenanceAwareInterface
 
     public function setExchange(Exchange|string|null $exchange): self
     {
-        $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange ?? 'bitmart');
+        $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange ?? 'okx');
 
         return $this;
     }

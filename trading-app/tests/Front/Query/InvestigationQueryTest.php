@@ -206,7 +206,7 @@ SQL);
             'created_at' => '2026-06-01 10:15:00',
         ]);
         $this->connection->insert('futures_order', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 1,
@@ -221,7 +221,7 @@ SQL);
             'updated_at' => '2026-06-01 10:15:00',
         ]);
         $this->connection->insert('futures_plan_order', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 1,
@@ -259,7 +259,7 @@ SQL);
     public function testDecisionKeyInvestigationFindsLifecycleRowsByOrderIds(): void
     {
         $this->connection->insert('order_intent', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'decision_key' => 'decision-key',
             'strategy_profile' => 'scalper_micro',

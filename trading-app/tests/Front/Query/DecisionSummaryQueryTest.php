@@ -169,7 +169,7 @@ SQL);
     public function testDetailFindsLifecycleRowsThroughOrderIntentOrderIds(): void
     {
         $this->connection->insert('order_intent', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'timeframe' => '1m',

@@ -1,8 +1,5 @@
 services:
   # Services MTF
-  # HTTP Client (utilise maintenant BitmartHttpClientPublic)
-  # App\Infrastructure\Http\BitmartClient: supprimé, utilise App\Provider\Bitmart\Http\BitmartHttpClientPublic
-
   # Temporal Services
 
   # Commands

@@ -93,9 +93,9 @@ class SimpleKlinesCheckCommand extends Command
             $io->newLine();
             $io->section('Recommandations');
             $io->writeln("💡 Pour récupérer les données récentes:");
-            $io->writeln("   docker-compose exec trading-app-php bin/console bitmart:fetch-klines --symbol=$symbol --timeframe={$timeframe->value}");
+            $io->writeln("   docker-compose exec trading-app-php bin/console provider:fetch-klines $symbol --timeframe={$timeframe->value}");
             $io->writeln("   ou");
-            $io->writeln("   docker-compose exec trading-app-php bin/console bitmart:fetch-all-klines");
+            $io->writeln("   docker-compose exec trading-app-php bin/console provider:fetch-all-klines");
         }
 
         return Command::SUCCESS;

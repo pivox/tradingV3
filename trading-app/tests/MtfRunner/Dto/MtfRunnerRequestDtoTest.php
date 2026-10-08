@@ -216,7 +216,7 @@ final class MtfRunnerRequestDtoTest extends TestCase
 
         MtfRunnerRequestDto::fromArray([
             'dry_run' => true,
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'spot',
             'mtf_profile' => 'regular',
             'lineage_context' => $data,
@@ -277,7 +277,7 @@ final class MtfRunnerRequestDtoTest extends TestCase
      */
     public static function exchangeProvider(): iterable
     {
-        yield 'bitmart' => ['bitmart', Exchange::BITMART];
+        yield 'okx' => ['okx', Exchange::OKX];
         yield 'binance' => ['binance', Exchange::BINANCE];
         yield 'fake' => ['fake', Exchange::FAKE];
         yield 'okx' => ['okx', Exchange::OKX];
@@ -515,7 +515,7 @@ final class MtfRunnerRequestDtoTest extends TestCase
             'set_id' => 'set-a',
             'dashboard_id' => 'dash-a',
             'profile' => 'scalper_micro',
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'dry_run' => true,
             'attempt_number' => 3,

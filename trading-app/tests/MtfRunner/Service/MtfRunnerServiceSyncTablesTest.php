@@ -88,7 +88,7 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
 
         $request = new MtfRunnerRequestDto(
             symbols: ['BTCUSDT', 'ETHUSDT'],
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             workers: 1,
             syncTables: true, // le snapshot prime sur sync_tables
@@ -120,7 +120,7 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
             symbols: ['BTCUSDT'],
             dryRun: false,
             skipOpenStateFilter: true,
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             workers: 1,
             syncTables: false,
@@ -148,7 +148,7 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
             symbols: ['BTCUSDT'],
             dryRun: true,
             skipOpenStateFilter: true,
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             workers: 1,
             syncTables: false,
@@ -178,7 +178,7 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
             symbols: ['BTCUSDT'],
             dryRun: true,
             skipOpenStateFilter: true,
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             workers: 1,
             syncTables: false,
@@ -267,7 +267,7 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
     /** @return iterable<string, array{array{exchange: Exchange, dry_run: bool}}> */
     public static function invalidInternalFakeOnlyProofContexts(): iterable
     {
-        yield 'real exchange' => [['exchange' => Exchange::BITMART, 'dry_run' => true]];
+        yield 'real exchange' => [['exchange' => Exchange::OKX, 'dry_run' => true]];
         yield 'mutative Fake' => [['exchange' => Exchange::FAKE, 'dry_run' => false]];
     }
 
@@ -276,7 +276,7 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
         // Pas de profil : couvre aussi le chemin sans profil (cf. guard resolveTimeframes).
         return new MtfRunnerRequestDto(
             symbols: ['BTCUSDT'],
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             workers: 1,
             syncTables: $syncTables,

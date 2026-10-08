@@ -118,7 +118,7 @@ SQL);
     public function testOpenPositionWithoutStopLossProducesCriticalAlert(): void
     {
         $this->connection->insert('positions', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 'LONG',
@@ -146,7 +146,7 @@ SQL);
     public function testExpiredExecutionLockIsReportedAsStale(): void
     {
         $this->connection->insert('symbol_execution_lock', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'BTCUSDT',
             'status' => 'ACTIVE',
@@ -171,7 +171,7 @@ SQL);
     {
         foreach (['sent', '1', '2'] as $index => $status) {
             $this->connection->insert('futures_order', [
-                'exchange' => 'bitmart',
+                'exchange' => 'okx',
                 'market_type' => 'perpetual',
                 'symbol' => 'ETHUSDT',
                 'side' => 1,
@@ -186,7 +186,7 @@ SQL);
         }
 
         $this->connection->insert('futures_plan_order', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'ETHUSDT',
             'side' => 1,
@@ -216,7 +216,7 @@ SQL);
     public function testActiveStopLossPlanOrderSuppressesMissingStopLossAlert(): void
     {
         $this->connection->insert('positions', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 'LONG',
@@ -229,7 +229,7 @@ SQL);
             'updated_at' => '2026-06-01 10:00:00',
         ]);
         $this->connection->insert('futures_plan_order', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 3,
@@ -258,7 +258,7 @@ SQL);
     {
         foreach (['LONG', 'SHORT'] as $side) {
             $this->connection->insert('positions', [
-                'exchange' => 'bitmart',
+                'exchange' => 'okx',
                 'market_type' => 'perpetual',
                 'symbol' => 'LINKUSDT',
                 'side' => $side,
@@ -272,7 +272,7 @@ SQL);
             ]);
         }
         $this->connection->insert('futures_plan_order', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 3,
@@ -308,7 +308,7 @@ SQL);
     {
         foreach (['LONG', 'SHORT'] as $side) {
             $this->connection->insert('positions', [
-                'exchange' => 'bitmart',
+                'exchange' => 'okx',
                 'market_type' => 'perpetual',
                 'symbol' => 'LINKUSDT',
                 'side' => $side,
@@ -322,7 +322,7 @@ SQL);
             ]);
         }
         $this->connection->insert('futures_plan_order', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 2,
@@ -357,7 +357,7 @@ SQL);
     public function testFailedOrderProtectionDoesNotSuppressMissingStopLossAlert(): void
     {
         $this->connection->insert('positions', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 'LONG',
@@ -370,7 +370,7 @@ SQL);
             'updated_at' => '2026-06-01 10:00:00',
         ]);
         $this->connection->insert('order_intent', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 1,
@@ -401,7 +401,7 @@ SQL);
     public function testNumericOpenPlanOrderStatusCanProtectPosition(): void
     {
         $this->connection->insert('positions', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 'LONG',
@@ -414,7 +414,7 @@ SQL);
             'updated_at' => '2026-06-01 10:00:00',
         ]);
         $this->connection->insert('futures_plan_order', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 3,
@@ -442,7 +442,7 @@ SQL);
     public function testSentOrderProtectionWithCancelledPlanDoesNotSuppressMissingStopLossAlert(): void
     {
         $this->connection->insert('positions', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 'LONG',
@@ -455,7 +455,7 @@ SQL);
             'updated_at' => '2026-06-01 10:00:00',
         ]);
         $this->connection->insert('order_intent', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 1,
@@ -474,7 +474,7 @@ SQL);
             'updated_at' => '2026-06-01 10:01:00',
         ]);
         $this->connection->insert('futures_plan_order', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 3,
@@ -502,7 +502,7 @@ SQL);
     public function testPlanOrderRawStateCanProtectPositionWhenStatusIsMissing(): void
     {
         $this->connection->insert('positions', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 'LONG',
@@ -515,7 +515,7 @@ SQL);
             'updated_at' => '2026-06-01 10:00:00',
         ]);
         $this->connection->insert('futures_plan_order', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 3,
@@ -543,7 +543,7 @@ SQL);
     public function testTerminalPlanOrderStatusWinsOverRawOpenState(): void
     {
         $this->connection->insert('positions', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 'LONG',
@@ -556,7 +556,7 @@ SQL);
             'updated_at' => '2026-06-01 10:00:00',
         ]);
         $this->connection->insert('futures_plan_order', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 3,
@@ -585,7 +585,7 @@ SQL);
     public function testStoredProtectionUsesParentIntentIdsToFindActivePlanOrder(): void
     {
         $this->connection->insert('positions', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 'LONG',
@@ -598,7 +598,7 @@ SQL);
             'updated_at' => '2026-06-01 10:00:00',
         ]);
         $this->connection->insert('order_intent', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 1,
@@ -617,7 +617,7 @@ SQL);
             'updated_at' => '2026-06-01 10:01:00',
         ]);
         $this->connection->insert('futures_plan_order', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 3,
@@ -645,7 +645,7 @@ SQL);
     public function testStoredProtectionDoesNotUseParentEntryOrderAsStopLoss(): void
     {
         $this->connection->insert('positions', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 'LONG',
@@ -658,7 +658,7 @@ SQL);
             'updated_at' => '2026-06-01 10:00:00',
         ]);
         $this->connection->insert('order_intent', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 1,
@@ -677,7 +677,7 @@ SQL);
             'updated_at' => '2026-06-01 10:01:00',
         ]);
         $this->connection->insert('futures_order', [
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'LINKUSDT',
             'side' => 1,

@@ -70,7 +70,7 @@ final class MtfValidationResultMapperTest extends TestCase
 
         $result = (new MtfValidationResultMapper())->fromMtfResult(
             result: $legacyResult,
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             metadata: ['source' => 'unit-test'],
         );
@@ -78,7 +78,7 @@ final class MtfValidationResultMapperTest extends TestCase
         self::assertSame('BTCUSDT', $result->symbol);
         self::assertSame('BTCUSDT', $result->instrument);
         self::assertSame('scalper_micro', $result->profile);
-        self::assertSame(Exchange::BITMART, $result->exchange);
+        self::assertSame(Exchange::OKX, $result->exchange);
         self::assertSame(MarketType::PERPETUAL, $result->marketType);
         self::assertSame('READY', $result->status);
         self::assertSame('LONG', $result->direction);

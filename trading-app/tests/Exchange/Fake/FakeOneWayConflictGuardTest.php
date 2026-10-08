@@ -359,7 +359,7 @@ final class FakeOneWayConflictGuardTest extends TestCase
     {
         $state = new FakeExchangeStateStore();
         $state->savePosition(new ExchangePositionDto(
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::SPOT,
             symbol: 'BTCUSDT',
             side: ExchangePositionSide::SHORT,

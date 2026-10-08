@@ -36,5 +36,4 @@ trading:
     source: exchange_layer_or_legacy_runtime_config
 
 compatibility:
-  bitmart_legacy_runtime_kept: true
   current_runtime_unchanged: true

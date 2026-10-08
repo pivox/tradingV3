@@ -11,7 +11,6 @@ use App\Common\Enum\PositionSide;
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\Dto\ContractDto;
 use App\Contract\Provider\Dto\KlineDto;
-use App\Exchange\Adapter\BitmartLegacyOrderMapper;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Provider\Fake\FakeAccountProvider;
 use App\Provider\Fake\FakeContractProvider;
@@ -341,10 +340,9 @@ final class FakeProvidersTest extends TestCase
         self::assertSame('1', (string) $openOrders[0]->quantity);
     }
 
-    public function testOrderProviderAcceptsRealBitmartLegacyMapperOptionsWithIocAndAttachedProtection(): void
+    public function testOrderProviderAcceptsLegacyOptionsWithIocAndAttachedProtection(): void
     {
-        $mapper = new BitmartLegacyOrderMapper();
-        $options = $mapper->orderOptions([
+        $options = [
             'side' => 1,
             'mode' => 3,
             'open_type' => 'isolated',
@@ -354,7 +352,7 @@ final class FakeProvidersTest extends TestCase
             'preset_stop_loss_price_type' => 1,
             'preset_take_profit_price' => '26000.0',
             'preset_take_profit_price_type' => 1,
-        ]);
+        ];
 
         $placed = $this->fixture->order->placeOrder(
             'BTCUSDT',
@@ -517,7 +515,7 @@ final class FakeProvidersTest extends TestCase
         }
     }
 
-    public function testOrderProviderMapsEveryBitmartLegacySideCode(): void
+    public function testOrderProviderMapsEveryLegacySideCode(): void
     {
         $cases = [
             1 => [OrderSide::BUY, 'long', false],

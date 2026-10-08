@@ -21,7 +21,7 @@ final class RiskConfigInterpreterTest extends TestCase
         $request = $interpreter->fromLegacyTradeEntryConfig(
             symbol: 'BTCUSDT',
             profile: 'scalper',
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'futures',
             entryPrice: 100.0,
             stopPct: 0.01,
@@ -48,7 +48,7 @@ final class RiskConfigInterpreterTest extends TestCase
         $request = $interpreter->fromLegacyTradeEntryConfig(
             symbol: 'ETHUSDT',
             profile: 'regular',
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'futures',
             entryPrice: 100.0,
             stopPct: 0.02,

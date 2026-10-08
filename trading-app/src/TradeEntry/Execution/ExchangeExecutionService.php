@@ -4,13 +4,11 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Execution;
 
-use App\Common\Enum\Exchange;
 use App\Config\TradeEntryConfigResolver;
 use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Contract\ExchangeAdapterInterface;
 use App\Exchange\Dto\CancelOrderRequest;
 use App\Exchange\Dto\CancelOrderResult;
-use App\Exchange\Dto\ExchangeCapabilities;
 use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Dto\PlaceOrderResult;
@@ -98,34 +96,8 @@ final class ExchangeExecutionService
         }
         $clientOrderId ??= $this->idempotency->newClientOrderId($decisionKey);
         $capabilities = $adapter->capabilities();
-        if ($this->shouldRejectUnprotectableBitmartMarket($context, $plan, $capabilities)) {
-            $this->positionsLogger->error('exchange_execution.entry_rejected_unprotectable_market', [
-                'symbol' => $plan->symbol,
-                'exchange' => $context->exchange->value,
-                'market_type' => $context->marketType->value,
-                'order_type' => $plan->orderType,
-                'client_order_id' => $clientOrderId,
-                'decision_key' => $decisionKey,
-                'reason' => 'bitmart_market_entry_without_protection_path',
-            ]);
-
-            return new ExecutionResult(
-                clientOrderId: $clientOrderId,
-                exchangeOrderId: null,
-                status: ExecutionResult::STATUS_ERROR,
-                raw: [
-                    'reason' => 'bitmart_market_entry_without_protection_path',
-                    'exchange' => $context->exchange->value,
-                    'market_type' => $context->marketType->value,
-                    'order_type' => $plan->orderType,
-                    'supports_trigger_orders' => $capabilities->supportsTriggerOrders,
-                    'supports_attached_stop_loss_on_entry' => $capabilities->supportsAttachedStopLossOnEntry,
-                ],
-            );
-        }
         $attachedStopLossRequested = $capabilities->supportsAttachedStopLossOnEntry
-            && $plan->stop > 0.0
-            && !($context->exchange === Exchange::BITMART && $plan->orderType === 'market');
+            && $plan->stop > 0.0;
         $attachedTakeProfitRequested = $attachedStopLossRequested
             && $capabilities->supportsAttachedTakeProfitOnEntry
             && $plan->takeProfit > 0.0;
@@ -355,17 +327,6 @@ final class ExchangeExecutionService
                 'source' => 'exchange_execution_service',
             ] + $executionMetadata,
         );
-    }
-
-    private function shouldRejectUnprotectableBitmartMarket(
-        ExchangeContext $context,
-        OrderPlanModel $plan,
-        ExchangeCapabilities $capabilities,
-    ): bool {
-        return $context->exchange === Exchange::BITMART
-            && $plan->orderType === 'market'
-            && $plan->stop > 0.0
-            && !$capabilities->supportsTriggerOrders;
     }
 
     private function skipBelowMinimum(

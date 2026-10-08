@@ -215,7 +215,7 @@ python scripts/manage_demo_testnet_schedule.py delete
 - **Statut** : **DEPRECATED (CLEAN-001)** — legacy multi-jobs. Conservé pour les déploiements existants ; ne plus créer de nouveaux schedules. Migrer vers le schedule orchestrateur unique (§4.0). Lancer ce script émet un `DeprecationWarning`.
 - **Objectif** : gérer les schedules MTF explicites par couple `exchange/market_type/profile`.
 - **Fichier CLI** : `scripts/manage_exchange_profile_schedule.py`.
-- **Règle de sécurité** : `dry_run=true` est le défaut pour tous les exchanges, y compris BitMart.
+- **Règle de sécurité** : `dry_run=true` est le défaut pour tous les exchanges, y compris les exchanges sans restriction dry-run-only.
 - **Diagnostic live** : avant `dry_run=false`, le script appelle `docker compose exec -T trading-app-php php bin/console app:exchange:runtime-check <exchange> <market_type>`.
 
 Le script envoie toujours un payload explicite à `/api/mtf/run` :
@@ -248,7 +248,6 @@ IDs générés par défaut :
 | Entrée | `schedule_id` | `workflow_id` |
 | --- | --- | --- |
 | `--exchange=okx --profile=scalper --cron="*/1 * * * *"` | `cron-mtf-okx-scalper-1m` | `mtf-okx-scalper-runner` |
-| `--exchange=bitmart --profile=regular --cron="*/5 * * * *"` | `cron-mtf-bitmart-regular-5m` | `mtf-bitmart-regular-runner` |
 | `--exchange=hyperliquid --profile=scalper_micro --cron="*/1 * * * *"` | `cron-mtf-hyperliquid-scalper-micro-1m` | `mtf-hyperliquid-scalper-micro-runner` |
 | `--exchange=okx --market-type=spot --profile=scalper --cron="*/1 * * * *"` | `cron-mtf-okx-spot-scalper-1m` | `mtf-okx-spot-scalper-runner` |
 
@@ -258,9 +257,6 @@ Matrice recommandée :
 
 | Schedule | Exchange | Market type | Profile | Cadence | Défaut |
 | --- | --- | --- | --- | --- | --- |
-| `cron-mtf-bitmart-scalper-1m` | `bitmart` | `perpetual` | `scalper` | `*/1 * * * *` | `dry_run=true` |
-| `cron-mtf-bitmart-scalper-micro-1m` | `bitmart` | `perpetual` | `scalper_micro` | `*/1 * * * *` | `dry_run=true` |
-| `cron-mtf-bitmart-regular-5m` | `bitmart` | `perpetual` | `regular` | `*/5 * * * *` | `dry_run=true` |
 | `cron-mtf-okx-scalper-1m` | `okx` | `perpetual` | `scalper` | `*/1 * * * *` | `dry_run=true` |
 | `cron-mtf-okx-scalper-micro-1m` | `okx` | `perpetual` | `scalper_micro` | `*/1 * * * *` | `dry_run=true` |
 | `cron-mtf-okx-regular-5m` | `okx` | `perpetual` | `regular` | `*/5 * * * *` | `dry_run=true` |

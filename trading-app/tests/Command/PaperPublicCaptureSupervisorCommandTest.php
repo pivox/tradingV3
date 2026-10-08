@@ -52,7 +52,7 @@ final class PaperPublicCaptureSupervisorCommandTest extends TestCase
         ));
 
         self::assertSame(Command::FAILURE, $tester->execute([
-            '--venue' => 'bitmart',
+            '--venue' => 'okx',
             '--dataset-prefix' => '/private/wallet-secret',
             '--duration-sec' => '299',
             '--attempts' => '0',

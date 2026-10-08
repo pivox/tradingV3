@@ -668,10 +668,10 @@ final class TpSlTwoTargetsService
         $slSize = $slFull ? (int)$size : (int)max(0, $size - $size1 - $size2);
 
         $submitted = [];
-        $bitmartCloseSide = ($req->side === EntrySide::Long) ? 2 : 3; // 2=close_long, 3=close_short
+        $closeSideCode = ($req->side === EntrySide::Long) ? 2 : 3; // legacy numeric side: 2=close_long, 3=close_short
 
         $optionsBase = [
-            'side' => $bitmartCloseSide,
+            'side' => $closeSideCode,
             // Force reduce-only when supported by provider/API
             'reduce_only' => true,
             'reduceOnly' => true,
@@ -1054,7 +1054,7 @@ final class TpSlTwoTargetsService
             } catch (\Throwable) { $rnd = substr(sha1(uniqid('', true)), 0, 6); }
             $base = sprintf('TPSL-%s-%s-%s', strtoupper($symbol), $sideTag, $rnd);
         }
-        // Bitmart allows fairly long IDs; keep under 64 chars to be safe
+        // Keep under 64 chars to be safe
         return substr($base, 0, 64);
     }
 

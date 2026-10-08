@@ -371,7 +371,7 @@ class MtfController extends AbstractController
      *
      * Paramètres (query string en GET, JSON en POST) :
      * - profile / mtf_profile : profil de config (défaut = mode actif TradeEntry) ;
-     * - exchange / market_type : contexte exchange (défaut bitmart / perpetual) ;
+     * - exchange / market_type : contexte exchange (défaut okx / perpetual) ;
      * - ignore_limits : true pour retourner tous les symboles éligibles sans top_n/mid_n.
      */
     #[Route('/selected-contracts', name: 'selected_contracts', methods: ['GET', 'POST'])]

@@ -166,7 +166,7 @@ final class OrderIntentRepository extends ServiceEntityRepository implements Ord
 
     /**
      * Retourne la liste des symboles distincts pour lesquels un OrderIntent a été créé
-     * depuis une date donnée. Utilisé pour limiter les appels BitMart aux seuls symboles
+     * depuis une date donnée. Utilisé pour limiter les appels exchange aux seuls symboles
      * effectivement tradés récemment.
      *
      * @return string[]

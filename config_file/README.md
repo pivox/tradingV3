@@ -14,7 +14,6 @@ prod.env
 - Ces fichiers doivent contenir les noms des clés attendues, pas les valeurs réelles.
 - Ne jamais committer de secrets, tokens, private keys, mots de passe ou URLs sensibles.
 - Les vraies valeurs doivent rester dans l'environnement local, le secret manager, le CI/CD ou les fichiers locaux ignores par Git.
-- `Bitmart` reste liste uniquement comme legacy tant que le runtime existant en depend encore.
 - Les gateways cible sont `OKX`, `Hyperliquid` et `Fake/Paper`.
 
 ## Utilisation cible

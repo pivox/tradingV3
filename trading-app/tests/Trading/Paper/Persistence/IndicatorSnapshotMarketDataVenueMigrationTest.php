@@ -170,7 +170,7 @@ WHERE schemaname = current_schema()
       'ux_ind_snap_exchange_market_venue_symbol_tf_time'
   )
 SQL));
-            $connection->executeStatement("INSERT INTO indicator_snapshots (exchange, market_type, symbol, timeframe, kline_time) VALUES ('bitmart', 'perpetual', 'BTCUSDT', '1m', NOW())");
+            $connection->executeStatement("INSERT INTO indicator_snapshots (exchange, market_type, symbol, timeframe, kline_time) VALUES ('okx', 'perpetual', 'BTCUSDT', '1m', NOW())");
             self::assertNull($connection->fetchOne('SELECT market_data_venue FROM indicator_snapshots'));
         } finally {
             try {

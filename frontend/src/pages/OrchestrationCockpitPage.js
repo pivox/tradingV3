@@ -251,13 +251,13 @@ const OrchestrationCockpitPage = () => {
 
     // Un set effectivement live (`dry_run=false` ET « Forcer dry-run » décoché) est
     // REFUSÉ par le runner avant tout appel : tant que la readiness live n'est pas
-    // livrée, `orchestrator.py` skip TOUT set live (tous exchanges, Bitmart inclus)
+    // livrée, `orchestrator.py` skip TOUT set live (tous exchanges)
     // en `ok=false` / `payload_sent=null` — aucun /api/mtf/run n'est envoyé. Ce
     // garde précède la vérif de matérialisation côté runner, donc on l'applique en
     // premier ici. Cocher « Forcer dry-run » les rend dry → exécutables.
     const liveRefusedSets = enabledMtfSets.filter((s) => !effectiveDryRun(s));
     // OKX/Hyperliquid : live interdit même après readiness (politique permanente) ;
-    // les autres (Bitmart, fake) ne sont refusés que dans la phase actuelle.
+    // les autres (fake) ne sont refusés que dans la phase actuelle.
     const forbiddenLiveSets = liveRefusedSets.filter((s) => LIVE_FORBIDDEN_EXCHANGES.includes(s.exchange));
 
     // Parmi les sets effectivement dry, on distingue matérialisé / non matérialisé.

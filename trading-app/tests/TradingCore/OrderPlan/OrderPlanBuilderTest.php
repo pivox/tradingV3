@@ -36,7 +36,7 @@ final class OrderPlanBuilderTest extends TestCase
         self::assertTrue($plan->validation->isExecutable);
         self::assertSame('BTCUSDT', $plan->symbol);
         self::assertSame('long', $plan->side);
-        self::assertSame('bitmart', $plan->exchange);
+        self::assertSame('okx', $plan->exchange);
         self::assertSame('perpetual', $plan->marketType);
         self::assertSame(100.0, $plan->entryPrice);   // entryZone.center
         self::assertSame(12.0, $plan->quantity);       // riskCalculation.quantity
@@ -201,7 +201,7 @@ final class OrderPlanBuilderTest extends TestCase
         return new TradeCandidate(
             symbol: $symbol,
             profile: 'scalper_micro',
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             direction: $direction,
             executionTimeframe: '1m',

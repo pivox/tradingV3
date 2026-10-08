@@ -55,7 +55,7 @@ final class FakeExchangeBundleRegistryTest extends KernelTestCase
     {
         $registry = new ExchangeProviderRegistry(
             [$this->fakeBundle(MarketType::PERPETUAL)],
-            Exchange::BITMART,
+            Exchange::OKX,
             MarketType::PERPETUAL,
         );
 
@@ -70,9 +70,9 @@ final class FakeExchangeBundleRegistryTest extends KernelTestCase
         self::assertInstanceOf(FakeAccountProvider::class, $bundle->account());
         self::assertInstanceOf(FakeSystemProvider::class, $bundle->system());
 
-        // Default context is left unchanged (Bitmart/perpetual).
+        // Default context is left unchanged (OKX/perpetual).
         self::assertTrue(
-            $registry->getDefaultContext()->equals(new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL))
+            $registry->getDefaultContext()->equals(new ExchangeContext(Exchange::OKX, MarketType::PERPETUAL))
         );
     }
 

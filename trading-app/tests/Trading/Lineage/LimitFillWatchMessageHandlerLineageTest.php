@@ -89,9 +89,9 @@ final class LimitFillWatchMessageHandlerLineageTest extends KernelTestCase
                 clientOrderId: 'client-limit-1',
                 side: 'BUY',
                 cancelAfterSec: 30,
-                decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764161200:long:scalper:v1',
+                decisionKey: 'okx:perpetual:BTCUSDT:1m:1764161200:long:scalper:v1',
                 lifecycleContext: [
-                    'exchange' => 'bitmart',
+                    'exchange' => 'okx',
                     'market_type' => 'perpetual',
                     'run_id' => 'run-limit',
                 ],

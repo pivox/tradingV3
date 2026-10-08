@@ -24,7 +24,7 @@ final class ExchangeContextResolver
      */
     public function resolve(
         array $data,
-        Exchange $defaultExchange = Exchange::BITMART,
+        Exchange $defaultExchange = Exchange::OKX,
         MarketType $defaultMarket = MarketType::PERPETUAL,
     ): ExchangeContext {
         $exchangeInput = $data['exchange'] ?? $data['cex'] ?? null;
@@ -52,7 +52,7 @@ final class ExchangeContextResolver
     public static function normalizeExchange(string $value): Exchange
     {
         return Exchange::tryFrom(strtolower(trim($value)))
-            ?? throw new \InvalidArgumentException(sprintf('Unsupported exchange "%s".', $value));
+            ?? throw new UnsupportedExchangeException($value);
     }
 
     public static function normalizeMarketType(string $value): MarketType

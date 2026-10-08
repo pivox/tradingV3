@@ -129,7 +129,7 @@ final class TradeLifecycleLoggerListenerCanonicalIdentityTest extends KernelTest
                 'orchestration_set_id' => null,
                 'orchestration_dashboard_id' => null,
                 'internal_trade_id' => 'itd-legacy',
-                'exchange' => 'bitmart',
+                'exchange' => 'okx',
                 'market_type' => 'perpetual',
             ], self::identity($event), $eventType);
             self::assertSame('itd-legacy', $event->getExtra()['internal_trade_id'] ?? null);
@@ -266,8 +266,8 @@ final class TradeLifecycleLoggerListenerCanonicalIdentityTest extends KernelTest
 
     private function legacyLineage(): TradeLineage
     {
-        $intent = $this->intent('cid-legacy', Exchange::BITMART)
-            ->setDecisionKey('bitmart:perpetual:BTCUSDT:1m:1764161200:long:scalper:v1');
+        $intent = $this->intent('cid-legacy', Exchange::OKX)
+            ->setDecisionKey('okx:perpetual:BTCUSDT:1m:1764161200:long:scalper:v1');
         $this->em->persist($intent);
         $this->em->flush();
 

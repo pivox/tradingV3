@@ -855,7 +855,7 @@ async function viewContractDetails(symbol) {
                                 ${hasValue(data.tick_size) ? `<tr><td><strong>Tick size:</strong></td><td>${formatNumber(data.tick_size)}</td></tr>` : ''}
                                 ${hasValue(data.multiplier) ? `<tr><td><strong>Multiplier:</strong></td><td>${formatValue(data.multiplier)}</td></tr>` : ''}
                             </table>
-                            ${!hasValue(data.min_size) && !hasValue(data.max_size) && !hasValue(data.tick_size) && !hasValue(data.multiplier) ? '<div class="text-muted small mt-2"><i class="bi bi-info-circle me-1"></i>Ces champs ne sont pas fournis par l\'API Bitmart</div>' : ''}
+                            ${!hasValue(data.min_size) && !hasValue(data.max_size) && !hasValue(data.tick_size) && !hasValue(data.multiplier) ? '<div class="text-muted small mt-2"><i class="bi bi-info-circle me-1"></i>Ces champs ne sont pas fournis par l\'API de l\'exchange</div>' : ''}
                         </div>
                     </div>
                 </div>

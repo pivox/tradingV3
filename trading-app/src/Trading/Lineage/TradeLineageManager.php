@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Trading\Lineage;
 
+use App\Provider\Context\UnsupportedExchangeException;
 use App\Entity\OrderIntent;
 use App\Entity\TradeLineage;
 use App\Provider\Context\ExchangeContext;
@@ -81,9 +82,15 @@ final class TradeLineageManager
             }
         }
 
-        $existingByClient = $this->repository->findOneByClientOrderId(
+        try {
+            $intentContext = ExchangeContext::fromValues($intent->getExchange(), $intent->getMarketType());
+        } catch (UnsupportedExchangeException $e) {
+            $this->logger->warning('trade_lineage.unsupported_exchange_skipped', ['exchange' => $e->rawValue]);
+            $intentContext = null;
+        }
+        $existingByClient = $intentContext === null ? null : $this->repository->findOneByClientOrderId(
             $intent->getClientOrderId(),
-            ExchangeContext::fromValues($intent->getExchange(), $intent->getMarketType()),
+            $intentContext,
         );
         if ($existingByClient instanceof TradeLineage) {
             if ($identity?->isModern()) {
