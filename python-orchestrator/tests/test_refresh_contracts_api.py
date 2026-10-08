@@ -22,7 +22,7 @@ def _mk_dashboard(client, name="dash"):
 def _mk_set(client, dashboard_id, set_id, **overrides):
     payload = {
         "set_id": set_id,
-        "exchange": "bitmart",
+        "exchange": "fake",
         "mtf_profile": "scalper_micro",
         "symbols": ["OLD"],
     }
@@ -119,8 +119,8 @@ def test_refresh_one_fetch_per_distinct_triple(api_client, monkeypatch):
     assert resp.json()["count"] == 3
     # Un seul fetch par couple distinct : 2 couples => 2 appels (pas 3).
     assert sorted(recorder.calls) == [
-        ("regular", "bitmart", "perpetual"),
-        ("scalper_micro", "bitmart", "perpetual"),
+        ("regular", "fake", "perpetual"),
+        ("scalper_micro", "fake", "perpetual"),
     ]
 
 

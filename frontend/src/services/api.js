@@ -10,6 +10,17 @@ const handleResponse = async (response) => {
     return await response.json();
 };
 
+const KLINES_MAX_LIMIT = 500;
+
+const intervalToStepMinutes = (interval) => {
+    const map = {
+        '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
+        '1h': 60, '2h': 120, '4h': 240, '6h': 360, '12h': 720,
+        '1d': 1440, '3d': 4320, '1w': 10080,
+    };
+    return map[interval] || 60;
+};
+
 const api = {
     // Contrats
     async getContracts(search = '', opts = {}) {
@@ -65,14 +76,32 @@ const api = {
         return this.fetchKlines(symbol, interval, limit);
     },
 
+    // Plage historique : /api/klines?start&end (limite serveur 500) paginé par fenêtres.
     async getKlinesRange(symbol, interval = '1h', start, end) {
-        const startMs = start ? new Date(start).getTime() : null;
-        const endMs = end ? new Date(end).getTime() : null;
-        const klines = await this.fetchKlines(symbol, interval, 500);
-        return klines.filter((k) => (
-            (startMs === null || Number.isNaN(startMs) || k.timestamp >= startMs)
-            && (endMs === null || Number.isNaN(endMs) || k.timestamp <= endMs)
-        ));
+        const startMs = start ? new Date(start).getTime() : NaN;
+        const endMs = end ? new Date(end).getTime() : Date.now();
+        if (Number.isNaN(startMs) || Number.isNaN(endMs) || startMs >= endMs) {
+            return this.fetchKlines(symbol, interval, 500);
+        }
+        const stepMs = intervalToStepMinutes(interval) * 60 * 1000;
+        const windowMs = stepMs * KLINES_MAX_LIMIT;
+        const byTimestamp = new Map();
+        for (let from = startMs; from < endMs; from += windowMs) {
+            const to = Math.min(from + windowMs, endMs);
+            const params = new URLSearchParams({
+                symbol: String(symbol).toUpperCase(),
+                interval,
+                limit: String(KLINES_MAX_LIMIT),
+                start: String(from),
+                end: String(to),
+            });
+            const response = await fetch(`${config.apiUrl}/api/klines?${params.toString()}`);
+            const data = await handleResponse(response);
+            (Array.isArray(data) ? data : []).forEach((k) => {
+                byTimestamp.set(k.openTime, { ...k, timestamp: k.openTime });
+            });
+        }
+        return Array.from(byTimestamp.values()).sort((x, y) => x.timestamp - y.timestamp);
     },
 
     // Pipeline

@@ -40,7 +40,6 @@ _SET_ID_PATTERN = r"^[A-Za-z0-9_.\-]+$"
 
 
 class Exchange(str, Enum):
-    BITMART = "bitmart"
     OKX = "okx"
     HYPERLIQUID = "hyperliquid"
     FAKE = "fake"
@@ -700,7 +699,7 @@ class SetRead(BaseModel):
     set_id: str
     enabled: bool
     action: Action
-    exchange: Exchange
+    exchange: Exchange | str
     market_type: MarketType
     mtf_profile: MtfProfile
     environment: Environment

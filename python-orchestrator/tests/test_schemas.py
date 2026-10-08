@@ -184,18 +184,9 @@ def test_effective_config_reference_is_trimmed_and_blank_is_rejected():
         )
 
 
-def test_bitmart_remains_legacy_only_when_canonical_identity_is_present():
-    legacy = OrchestratorSet(set_id="legacy-bitmart", exchange="bitmart", dry_run=True)
-    assert legacy.trading_identity is None
-
-    with pytest.raises(ValidationError, match="canonical_exchange_invalid"):
-        OrchestratorSet(
-            set_id="modern-bitmart",
-            exchange="bitmart",
-            dry_run=True,
-            symbols=("BTCUSDT",),
-            trading_identity=CanonicalTradingIdentity(**_canonical_identity_payload()),
-        )
+def test_removed_bitmart_exchange_is_rejected():
+    with pytest.raises(ValidationError, match="okx"):
+        OrchestratorSet(set_id="legacy-bitmart", exchange="bitmart", dry_run=True)
 
 
 @pytest.mark.parametrize("version", ["latest", "^1.0", "1", "1.0", "01.0.0", "1.0.0-rc1"])
@@ -404,11 +395,6 @@ def test_okx_dry_run_is_allowed():
     assert s.dry_run is True
 
 
-def test_bitmart_live_is_allowed():
-    s = OrchestratorSet(set_id="x", exchange="bitmart", dry_run=False)
-    assert s.dry_run is False
-
-
 # --- assert_set_persistable ⇆ assess_live (SAFE-003) ------------------------
 #
 # La persistance d'un set live n'est autorisée que si le runner l'exécuterait
@@ -416,7 +402,7 @@ def test_bitmart_live_is_allowed():
 # persistance ↔ runtime en pilotant l'interrupteur d'activation par l'env.
 
 
-def _persist(exchange="bitmart", dry_run=False):
+def _persist(exchange="fake", dry_run=False):
     assert_set_persistable(
         dry_run=dry_run,
         symbols=["BTCUSDT"],
@@ -432,35 +418,35 @@ def test_persist_live_refused_by_default(monkeypatch):
     monkeypatch.delenv("ORCHESTRATION_LIVE_ENABLED", raising=False)
     monkeypatch.delenv("ORCHESTRATION_LIVE_EXCHANGES", raising=False)
     with pytest.raises(ValueError):
-        _persist(exchange="bitmart", dry_run=False)
+        _persist(exchange="fake", dry_run=False)
 
 
 def test_persist_dry_run_allowed_by_default(monkeypatch):
     monkeypatch.delenv("ORCHESTRATION_LIVE_ENABLED", raising=False)
     monkeypatch.delenv("ORCHESTRATION_LIVE_EXCHANGES", raising=False)
-    _persist(exchange="bitmart", dry_run=True)  # ne lève pas
+    _persist(exchange="fake", dry_run=True)  # ne lève pas
 
 
 def test_persist_live_allowed_when_switch_on_and_allowlisted(monkeypatch):
-    # Interrupteur ON + bitmart allow-listé ⇒ assess_live autorise ⇒ persistance OK.
+    # Interrupteur ON + fake allow-listé ⇒ assess_live autorise ⇒ persistance OK.
     monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
-    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "bitmart")
-    _persist(exchange="bitmart", dry_run=False)  # ne lève pas
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "fake")
+    _persist(exchange="fake", dry_run=False)  # ne lève pas
 
 
 def test_persist_live_okx_refused_even_when_switch_on(monkeypatch):
     # Bannissement permanent : OKX live refusé même interrupteur ON + allow-listé.
     monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
-    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "okx,bitmart")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "okx,fake")
     with pytest.raises(ValueError):
         _persist(exchange="okx", dry_run=False)
 
 
 def test_persist_live_refused_when_exchange_not_allowlisted(monkeypatch):
     monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
-    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "fake")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "okx")
     with pytest.raises(ValueError):
-        _persist(exchange="bitmart", dry_run=False)
+        _persist(exchange="fake", dry_run=False)
 
 
 def test_unknown_exchange_is_rejected():
@@ -485,7 +471,7 @@ def test_recipe_functional_error_profile_is_allowed_only_for_fake_demo_dry_run()
     assert safe.mtf_profile is MtfProfile.RECIPE_FUNCTIONAL_ERROR
 
     unsafe_overrides = (
-        {"exchange": "bitmart"},
+        {"exchange": "hyperliquid"},
         {"environment": "mainnet"},
         {"dry_run": False},
     )
@@ -531,7 +517,7 @@ def _set_read(**kwargs) -> SetRead:
         set_id="s1",
         enabled=True,
         action=Action.MTF_RUN,
-        exchange=Exchange.BITMART,
+        exchange=Exchange.OKX,
         market_type=MarketType.PERPETUAL,
         mtf_profile=MtfProfile.SCALPER_MICRO,
         environment=Environment.DEMO,
@@ -556,13 +542,13 @@ def test_set_read_exposes_effective_payload_when_materialized():
     assert dumped["effective_payload"] == {
         "dry_run": True,
         "workers": 1,
-        "exchange": "bitmart",
+        "exchange": "okx",
         "market_type": "perpetual",
         "mtf_profile": "scalper_micro",
         "sync_tables": False,
         "process_tp_sl": False,
         "symbols": ["BTCUSDT", "ETHUSDT"],
-        "config_hash": "sha256:feb32cc0bf6491ed5f7a551ae53ec5b8db234fdaa692f108583792d91c9aea3f",
+        "config_hash": "sha256:cf92c7cfc0d29843f23e44feb731a98e914b235716fe870860a718b27d68b6e8",
     }
 
 

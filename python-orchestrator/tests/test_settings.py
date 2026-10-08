@@ -101,14 +101,14 @@ def test_live_enabled_invalid_raises(monkeypatch):
 
 
 def test_live_exchanges_parsed_normalized_and_deduped(monkeypatch):
-    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", " Bitmart , bitmart , FAKE ")
-    assert Settings.from_env().live_exchanges == ("bitmart", "fake")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", " OKX , okx , FAKE ")
+    assert Settings.from_env().live_exchanges == ("okx", "fake")
 
 
 def test_live_exchanges_unknown_raises(monkeypatch):
     # Une coquille (exchange inconnu) doit lever au démarrage plutôt que de rendre
     # l'allow-list silencieusement inopérante (fail-closed explicite).
-    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "bitmart,binance")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "okx,binance")
     with pytest.raises(SettingsError):
         Settings.from_env()
 

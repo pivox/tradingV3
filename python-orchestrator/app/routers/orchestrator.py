@@ -34,6 +34,7 @@ from app.db.engine import get_session
 from app.db.models import OrchestrationLock, OrchestrationSet, Run, RunSet
 from app.schemas import (
     Action,
+    Exchange,
     RUN_STATUS_RUNNING,
     TERMINAL_RUN_STATUSES,
     RunRequest,
@@ -79,6 +80,7 @@ _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9_.\-]+$")
 # propre `code` via `live_guard.LiveDecision`). Stables, réutilisés tels quels.
 _SKIP_CODE_LOCKED = "locked"  # symbole déjà verrouillé par un run actif (SAFE-001)
 _SKIP_CODE_CONFLICTING_LIVE = "conflicting_live"  # sets live chevauchants intra-batch
+_SKIP_CODE_UNSUPPORTED_EXCHANGE = "unsupported_exchange"  # set persisté sur un exchange retiré (ex: bitmart)
 _SKIP_CODE_NOT_MATERIALIZED = "not_materialized"  # sélection non matérialisée (aucun POST)
 
 
@@ -586,6 +588,11 @@ def _conflicting_live_set_ids(mtf_sets: List[Any], force_dry_run: bool) -> set:
     return conflicting
 
 
+def _has_supported_exchange(a_set: Any) -> bool:
+    raw = getattr(a_set.exchange, "value", a_set.exchange)
+    return raw in {e.value for e in Exchange}
+
+
 def _set_labels(a_set: Any) -> Dict[str, str]:
     """Labels de métriques d'un set (OBS-002), cardinalité bornée.
 
@@ -672,7 +679,7 @@ async def _collect_snapshots(
     OBS-001 : chaque couple émet un ``snapshot_fetch`` corrélé (``ok`` /
     indisponible), pour rendre visible en flux le fetch 1×/(exchange, market_type).
     """
-    keys = {snapshot_key(s) for s in mtf_sets}
+    keys = {snapshot_key(s) for s in mtf_sets if _has_supported_exchange(s)}
     snapshots: Dict[SnapshotKey, Dict[str, Any]] = {}
     failed_safety_evidence: Dict[SnapshotKey, Dict[str, Any]] = {}
     for exchange, market_type in keys:
@@ -919,6 +926,8 @@ async def run_orchestrator(
     locked_out: Dict[str, str] = {}
     set_lock_keys: Dict[str, List[str]] = {}
     for a_set in mtf_sets:
+        if not _has_supported_exchange(a_set):
+            continue  # exchange retiré : jamais dispatché
         if a_set.set_id in conflicting_live_ids:
             continue  # déjà rejeté, jamais dispatché : rien à verrouiller
         if a_set.set_id in preserved_results:
@@ -961,6 +970,30 @@ async def run_orchestrator(
             # son résultat conservé est fusionné au summary/last_json recomposés.
             if a_set.set_id in preserved_results:
                 return preserved_results[a_set.set_id]
+            if not _has_supported_exchange(a_set):
+                run_audit.emit(
+                    run_audit.SET_SKIPPED,
+                    run_id=run_id,
+                    level="warning",
+                    set_id=a_set.set_id,
+                    code=_SKIP_CODE_UNSUPPORTED_EXCHANGE,
+                )
+                run_metrics.observe_set_skipped(
+                    code=_SKIP_CODE_UNSUPPORTED_EXCHANGE, **_set_labels(a_set)
+                )
+                supported = ", ".join(e.value for e in Exchange)
+                return {
+                    "set_id": a_set.set_id,
+                    "ok": False,
+                    "status": None,
+                    "business_status": None,
+                    "body": (
+                        f"unsupported exchange '{_set_labels(a_set)['exchange']}': "
+                        f"set not runnable (supported: {supported})"
+                    ),
+                    "payload_sent": None,
+                    "duration_ms": None,
+                }
             if a_set.set_id in conflicting_live_ids:
                 run_audit.emit(
                     run_audit.SET_SKIPPED,
