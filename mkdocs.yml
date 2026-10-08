@@ -70,6 +70,7 @@ nav:
       - "Decision pre-mutative demo/testnet": reports/pre-mutative-demo-readiness-decision.md
       - "Baseline bad trades #132": reports/bad-trades-baseline.md
       - "Récap 2026-10-08 OKX + Hyperliquid": recap-2026-10-08-okx-hyperliquid.md
+      - "Diagnostic Paper zero-trade 2026-10-08": reports/paper-zero-trade-diagnostic-2026-10-08.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 
