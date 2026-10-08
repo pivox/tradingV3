@@ -22,6 +22,7 @@ final readonly class OkxDemoWriteRuntimeCheck
      */
     public function check(): array
     {
+        $tripped = $this->gate->isTripped();
         $environmentReasons = $this->gate->environmentReasons();
         $credentials = [
             'api_key_present' => trim($this->config->apiKey) !== '',
@@ -43,7 +44,7 @@ final readonly class OkxDemoWriteRuntimeCheck
             $wsAllowed = false;
         }
 
-        $blocking = $environmentReasons;
+        $blocking = $tripped ? ['okx_demo_tripped', ...$environmentReasons] : $environmentReasons;
         if (!$credentialsPresent) {
             $blocking[] = 'okx_demo_credentials_missing';
         }
@@ -55,7 +56,7 @@ final readonly class OkxDemoWriteRuntimeCheck
             'exchange' => 'okx',
             'flags' => $this->gate->flags(),
             'credentials' => $credentials + ['all_present' => $credentialsPresent],
-            'kill_switch' => ['clear' => $killSwitch->allowed, 'reasons' => $killSwitch->reasons],
+            'kill_switch' => ['clear' => $killSwitch->allowed && !$tripped, 'tripped' => $tripped, 'reasons' => $killSwitch->reasons],
             'endpoint_guard' => ['rest_allowed' => $restAllowed, 'ws_private_allowed' => $wsAllowed],
             'write_ready' => $blocking === [],
             'blocking_reasons' => array_values(array_unique($blocking)),

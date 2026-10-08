@@ -2,9 +2,11 @@
 
 namespace App\Controller\Web;
 
-use App\Common\Enum\OrderSide;
-use App\Common\Enum\OrderType;
-use App\Contract\Provider\OrderProviderInterface;
+use App\Provider\Context\ExchangeContext;
+use App\TradeEntry\Dto\ExecutionResult;
+use App\TradeEntry\Execution\ExchangeExecutionService;
+use App\TradeEntry\OrderPlan\OrderPlanModel;
+use App\TradeEntry\Types\Side;
 use App\Provider\Repository\ContractRepository;
 use App\TradeEntry\Pricing\TickQuantizer;
 use Psr\Log\LoggerInterface;
@@ -17,7 +19,7 @@ use Symfony\Component\Routing\Annotation\Route;
 class OrderController extends AbstractController
 {
     public function __construct(
-        private readonly OrderProviderInterface $orderProvider,
+        private readonly ExchangeExecutionService $execution,
         private readonly ContractRepository $contractRepository,
         #[Autowire(service: 'monolog.logger.provider')]
         private readonly LoggerInterface $logger,
@@ -146,12 +148,26 @@ class OrderController extends AbstractController
                                 } else {
                                     // IMPORTANT: Le levier doit être défini AVANT de soumettre l'ordre
                                     try {
-                                        $leverageSuccess = $this->orderProvider->submitLeverage(
-                                            strtoupper($symbol),
-                                            (int) $leverage,
-                                            'isolated'
+                                        $execution = $this->execution->execute(
+                                            new OrderPlanModel(
+                                                symbol: strtoupper($symbol),
+                                                side: (int) $side === 1 ? Side::Long : Side::Short,
+                                                orderType: 'limit',
+                                                openType: 'isolated',
+                                                orderMode: 1,
+                                                entry: $limitPriceFloat,
+                                                stop: $stopLossPrice,
+                                                takeProfit: (float) $takeProfitPrice,
+                                                size: (int) $calculatedSize,
+                                                leverage: (int) $leverage,
+                                                pricePrecision: $pricePrecision,
+                                                contractSize: $contractSizeFloat,
+                                                exchangeContext: ExchangeContext::resolve(null),
+                                            ),
+                                            'manual-' . bin2hex(random_bytes(6)),
                                         );
-                                        
+                                        $leverageSuccess = ($execution->raw['leverage_submit_success'] ?? true) !== false;
+
                                         if (!$leverageSuccess) {
                                             $error = 'Échec de la définition du levier. Veuillez réessayer.';
                                             $this->logger->error('[Order Submit] Leverage submission failed', [
@@ -164,33 +180,8 @@ class OrderController extends AbstractController
                                                 'leverage' => $leverage,
                                             ]);
                                             
-                                            // Mapper side (1 ou 4) vers OrderSide
-                                            $orderSide = ((int) $side === 1) ? OrderSide::BUY : OrderSide::SELL;
-                                            
-                                            // Construire les options pour TP et SL
-                                            $orderOptions = [
-                                                'side' => (int) $side, // 1=open_long, 4=open_short (code numérique legacy)
-                                                'open_type' => 'isolated',
-                                                'preset_take_profit_price' => (string) $takeProfitPrice,
-                                                'preset_take_profit_price_type' => 1, // 1 = prix fixe
-                                                'preset_stop_loss_price' => (string) $stopLossPrice,
-                                                'preset_stop_loss_price_type' => 1, // 1 = prix fixe
-                                            ];
-                                            
-                                            // Soumettre l'ordre via OrderProvider
-                                            $orderDto = $this->orderProvider->placeOrder(
-                                                strtoupper($symbol),
-                                                $orderSide,
-                                                OrderType::LIMIT,
-                                                (float) $calculatedSize,
-                                                (float) $limitPrice,
-                                                $stopLossPrice, // stopPrice pour compatibilité
-                                                $orderOptions
-                                            );
-
-                                            // Vérifier la réponse
-                                            if ($orderDto !== null && $orderDto->orderId !== null) {
-                                                $orderId = $orderDto->orderId;
+                                            if ($execution->exchangeOrderId !== null && !\in_array($execution->status, [ExecutionResult::STATUS_ERROR, ExecutionResult::STATUS_SKIPPED], true)) {
+                                                $orderId = $execution->exchangeOrderId;
                                                 
                                                 // Stocker tous les détails de l'ordre pour l'affichage
                                                 $orderDetails = [
@@ -264,7 +255,7 @@ class OrderController extends AbstractController
                                             } else {
                                                 $error = 'Ordre soumis mais aucun order_id reçu dans la réponse.';
                                                 $this->logger->warning('[Order Submit] No order_id in response', [
-                                                    'order_dto' => $orderDto,
+                                                    'execution' => $execution->raw,
                                                 ]);
                                             }
                                         }

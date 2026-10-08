@@ -17,5 +17,7 @@ final class LimitFillWatchMessage
         public readonly ?array $lifecycleContext = null,
         public readonly bool $cancelIssued = false,
         public readonly ?string $mode = null,
+        /** @var array<string,mixed>|null */
+        public readonly ?array $plan = null,
     ) {}
 }

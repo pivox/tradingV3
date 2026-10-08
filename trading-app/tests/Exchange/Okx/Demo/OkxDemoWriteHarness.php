@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Exchange\Okx\Demo;
 
+use App\Exchange\Okx\Demo\OkxDemoTripInterface;
 use App\Exchange\Okx\Demo\OkxDemoWriteGate;
 use App\Exchange\Okx\OkxConfig;
 use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketObservabilityPolicy;
@@ -25,6 +26,8 @@ final class OkxDemoWriteHarness
     public bool $failAudit = false;
 
     public bool $healthyPrivateStream = true;
+
+    public bool $tripped = false;
 
     public function __construct(
         public readonly OkxConfig $config,
@@ -84,6 +87,27 @@ final class OkxDemoWriteHarness
         };
     }
 
+    public function trip(): OkxDemoTripInterface
+    {
+        $harness = $this;
+
+        return new class($harness) implements OkxDemoTripInterface {
+            public function __construct(private readonly OkxDemoWriteHarness $harness)
+            {
+            }
+
+            public function isTripped(): bool
+            {
+                return $this->harness->tripped;
+            }
+
+            public function trip(): void
+            {
+                $this->harness->tripped = true;
+            }
+        };
+    }
+
     public function gate(): OkxDemoWriteGate
     {
         $harness = $this;
@@ -139,6 +163,7 @@ final class OkxDemoWriteHarness
             new OkxPrivateWebSocketObservabilityPolicy(),
             $this->clock(),
             $this->maxNotional,
+            $this->trip(),
             $store,
         );
     }

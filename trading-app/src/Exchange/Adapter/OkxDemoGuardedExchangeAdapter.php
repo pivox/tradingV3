@@ -16,8 +16,10 @@ use App\Exchange\Dto\ExchangeReconciliationResult;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Dto\PlaceOrderResult;
 use App\Exchange\Enum\ExchangeOrderSide;
+use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Okx\Demo\OkxDemoWriteDecision;
 use App\Exchange\Okx\Demo\OkxDemoWriteGate;
+use App\Exchange\Okx\Demo\OkxDemoWriteKind;
 use App\Exchange\Okx\Demo\OkxDemoWriteRefusedException;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
 use App\TradingCore\Execution\Safety\DemoTradingAuditSinkInterface;
@@ -109,15 +111,19 @@ final readonly class OkxDemoGuardedExchangeAdapter implements ExchangeAdapterInt
             'decision_id' => $this->stringOrNull($request->metadata['decision_key'] ?? null),
             'order_intent_id' => $this->stringOrNull($request->metadata['order_intent_id'] ?? null),
         ];
+        $kind = $this->placeKind($request);
+        $context['write_kind'] = $kind->value;
         $notional = $this->notional($request);
         $decision = $notional === null
-            ? OkxDemoWriteDecision::refuse(['notional_unavailable'])
+            ? OkxDemoWriteDecision::refuse(['notional_unavailable'], $kind)
             : $this->gate->evaluate(
+                $kind,
                 'place_order',
                 $context['symbol'],
                 $notional,
                 $request->clientOrderId,
                 $this->correlationIds($context),
+                $request->reduceOnly,
             );
         $this->assertAllowed('place_order', $this->before($context + ['notional' => $notional], $decision));
 
@@ -146,7 +152,10 @@ final readonly class OkxDemoGuardedExchangeAdapter implements ExchangeAdapterInt
             'decision_id' => $this->stringOrNull($request->metadata['decision_key'] ?? null),
             'order_intent_id' => $this->stringOrNull($request->metadata['order_intent_id'] ?? null),
         ];
+        $kind = OkxDemoWriteKind::fromMetadata($request->metadata['write_kind'] ?? null);
+        $context['write_kind'] = $kind->value;
         $decision = $this->gate->evaluate(
+            $kind,
             'cancel_order',
             $context['symbol'],
             OkxDemoWriteGate::NON_SIZING_NOTIONAL,
@@ -176,9 +185,11 @@ final readonly class OkxDemoGuardedExchangeAdapter implements ExchangeAdapterInt
             'symbol' => strtoupper($symbol),
             'leverage' => $leverage,
             'margin_mode' => $marginMode,
+            'write_kind' => OkxDemoWriteKind::ENTRY->value,
             'client_order_id' => sprintf('set_leverage:%s', strtoupper($symbol)),
         ];
         $decision = $this->gate->evaluate(
+            OkxDemoWriteKind::ENTRY,
             'set_leverage',
             $context['symbol'],
             OkxDemoWriteGate::NON_SIZING_NOTIONAL,
@@ -197,6 +208,22 @@ final readonly class OkxDemoGuardedExchangeAdapter implements ExchangeAdapterInt
         $this->after($context, $applied ? 'accepted' : 'rejected');
 
         return $applied;
+    }
+
+    private function placeKind(PlaceOrderRequest $request): OkxDemoWriteKind
+    {
+        $explicit = $request->metadata['write_kind'] ?? null;
+        if (\is_string($explicit) && OkxDemoWriteKind::tryFrom($explicit) !== null) {
+            return OkxDemoWriteKind::from($explicit);
+        }
+        if (!$request->reduceOnly) {
+            return OkxDemoWriteKind::ENTRY;
+        }
+
+        return match ($request->orderType) {
+            ExchangeOrderType::TAKE_PROFIT, ExchangeOrderType::LIMIT => OkxDemoWriteKind::TAKE_PROFIT,
+            default => OkxDemoWriteKind::PROTECTIVE,
+        };
     }
 
     private function notional(PlaceOrderRequest $request): ?float
@@ -242,13 +269,16 @@ final readonly class OkxDemoGuardedExchangeAdapter implements ExchangeAdapterInt
                 'allowed' => $allowed,
                 'outcome' => $allowed ? 'attempted' : 'refused',
                 'reasons' => $reasons,
+                'write_kind' => $decision->kind?->value,
+                'exemption_applied' => $decision->exemptionApplied(),
+                'exempted_reasons' => $decision->exemptedReasons,
             ]);
         } catch (\Throwable) {
             $allowed = false;
             $reasons = array_values(array_unique([...$reasons, 'audit_failed']));
         }
 
-        return $allowed ? $decision : OkxDemoWriteDecision::refuse($reasons);
+        return $allowed ? $decision : OkxDemoWriteDecision::refuse($reasons, $decision->kind);
     }
 
     private function assertAllowed(string $action, OkxDemoWriteDecision $decision): void

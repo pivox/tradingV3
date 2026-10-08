@@ -17,8 +17,8 @@ use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Okx\Demo\OkxDemoWriteRefusedException;
 use App\Exchange\Okx\OkxActionFactory;
 use App\Exchange\Okx\OkxInstrumentResolver;
-use App\Exchange\Okx\OkxRestClientInterface;
 use App\Tests\Exchange\Okx\Demo\OkxDemoWriteHarness;
+use App\Tests\Exchange\Okx\Demo\RecordingOkxClient;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -244,6 +244,119 @@ final class OkxDemoGuardedExchangeAdapterTest extends TestCase
         self::assertArrayNotHasKey('error', $events[1]);
     }
 
+    public function testWriteKindIsDerivedFromTheRequestAndRecordedWithTheExemption(): void
+    {
+        [$adapter, , $harness] = $this->build(OkxDemoWriteHarness::config());
+        $harness->healthyPrivateStream = false;
+
+        $stop = $this->reduceOnly(ExchangeOrderType::STOP_LOSS, 'OKXSL', stopPrice: 24800.0);
+        $close = $this->reduceOnly(ExchangeOrderType::MARKET, 'OKXEM');
+        $adapter->placeOrder($stop);
+        $adapter->placeOrder($close);
+        $adapter->cancelOrder(new CancelOrderRequest(Exchange::OKX, MarketType::PERPETUAL, 'BTCUSDT', '12345', 'OKX1', ['write_kind' => 'protective']));
+
+        $before = array_values(array_filter($this->adapterEvents($harness), static fn (array $e): bool => $e['phase'] === 'before'));
+        self::assertSame(['protective', 'protective', 'protective'], array_column($before, 'write_kind'));
+        foreach ($before as $event) {
+            self::assertTrue($event['allowed']);
+            self::assertTrue($event['exemption_applied']);
+            self::assertContains('private_ws_not_connected', $event['exempted_reasons']);
+        }
+
+        foreach ([
+            fn () => $adapter->placeOrder($this->reduceOnly(ExchangeOrderType::TAKE_PROFIT, 'OKXTP', stopPrice: 26000.0)),
+            fn () => $adapter->placeOrder($this->limitRequest()),
+            fn () => $adapter->cancelOrder($this->cancelRequest()),
+        ] as $call) {
+            try {
+                $call();
+                self::fail('non protective write must be refused on a stale stream');
+            } catch (OkxDemoWriteRefusedException $e) {
+                self::assertContains('private_ws_not_connected', $e->reasons);
+            }
+        }
+        $refused = array_values(array_filter($this->adapterEvents($harness), static fn (array $e): bool => ($e['outcome'] ?? '') === 'refused'));
+        self::assertSame(['take_profit', 'entry', 'entry'], array_column($refused, 'write_kind'));
+        self::assertSame([false, false, false], array_column($refused, 'exemption_applied'));
+    }
+
+    public function testExplicitProtectiveKindWithoutReduceOnlyIsRefusedAndNeverSent(): void
+    {
+        [$adapter, $client] = $this->build(OkxDemoWriteHarness::config());
+        $request = new PlaceOrderRequest(
+            exchange: Exchange::OKX,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangeOrderSide::BUY,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::LIMIT,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 0.01,
+            price: 25000.0,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: false,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: 'OKX1',
+            metadata: ['write_kind' => 'protective'],
+        );
+
+        try {
+            $adapter->placeOrder($request);
+            self::fail('refused');
+        } catch (OkxDemoWriteRefusedException $e) {
+            self::assertSame(['protective_requires_reduce_only'], $e->reasons);
+        }
+        self::assertSame([], $client->posts);
+    }
+
+    public function testProtectiveStopIsAllowedOverTheNotionalCapAndAuditsTheExemption(): void
+    {
+        [$adapter, , $harness] = $this->build(OkxDemoWriteHarness::config(), maxNotional: 10.0);
+
+        $adapter->placeOrder($this->reduceOnly(ExchangeOrderType::STOP_LOSS, 'OKXSL', stopPrice: 24800.0));
+
+        $before = $this->adapterEvents($harness)[0];
+        self::assertTrue($before['allowed']);
+        self::assertSame(['max_notional_exceeded'], $before['exempted_reasons']);
+    }
+
+    public function testTrippedMarkerRefusesProtectiveWritesToo(): void
+    {
+        [$adapter, $client, $harness] = $this->build(OkxDemoWriteHarness::config());
+        $harness->tripped = true;
+
+        try {
+            $adapter->placeOrder($this->reduceOnly(ExchangeOrderType::STOP_LOSS, 'OKXSL', stopPrice: 24800.0));
+            self::fail('tripped');
+        } catch (OkxDemoWriteRefusedException $e) {
+            self::assertSame(['okx_demo_tripped'], $e->reasons);
+        }
+        self::assertSame([], $client->posts);
+    }
+
+    private function reduceOnly(ExchangeOrderType $type, string $clientOrderId, ?float $stopPrice = null): PlaceOrderRequest
+    {
+        return new PlaceOrderRequest(
+            exchange: Exchange::OKX,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangeOrderSide::SELL,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: $type,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 0.01,
+            price: null,
+            stopPrice: $stopPrice,
+            reduceOnly: true,
+            postOnly: false,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: $clientOrderId,
+        );
+    }
+
     /**
      * @return list<array<string,mixed>>
      */
@@ -289,40 +402,5 @@ final class OkxDemoGuardedExchangeAdapterTest extends TestCase
     private function cancelRequest(): CancelOrderRequest
     {
         return new CancelOrderRequest(Exchange::OKX, MarketType::PERPETUAL, 'BTCUSDT', '12345', 'OKX1');
-    }
-}
-
-final class RecordingOkxClient implements OkxRestClientInterface
-{
-    /** @var list<array{0: string, 1: array<mixed>}> */
-    public array $posts = [];
-
-    public bool $throwOnPost = false;
-
-    public function publicGet(string $path, array $query = []): array
-    {
-        return ['code' => '0', 'data' => [[
-            'bids' => [['24999.5', '1']],
-            'asks' => [['25000.5', '1']],
-        ]]];
-    }
-
-    public function privateGet(string $path, array $query = []): array
-    {
-        return ['code' => '0', 'data' => []];
-    }
-
-    public function privatePost(string $path, array $body = []): array
-    {
-        if ($this->throwOnPost) {
-            throw new \RuntimeException('boom');
-        }
-        $this->posts[] = [$path, $body];
-
-        return match ($path) {
-            '/api/v5/trade/order' => ['code' => '0', 'data' => [['ordId' => '12345', 'sCode' => '0']]],
-            '/api/v5/trade/order-algo' => ['code' => '0', 'data' => [['algoId' => '90001', 'sCode' => '0']]],
-            default => ['code' => '0', 'data' => [['sCode' => '0']]],
-        };
     }
 }

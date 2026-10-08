@@ -27,8 +27,18 @@ final readonly class OkxDemoWriteGate
         private OkxPrivateWebSocketObservabilityPolicy $observabilityPolicy,
         private ClockInterface $clock,
         #[Autowire('%app.okx_demo_max_notional%')] private float $maxNotional,
+        private OkxDemoTripInterface $trip,
         private ?OkxPrivateWebSocketStatusStoreInterface $statusStore = null,
     ) {
+    }
+
+    public function isTripped(): bool
+    {
+        try {
+            return $this->trip->isTripped();
+        } catch (\Throwable) {
+            return true;
+        }
     }
 
     /**
@@ -89,22 +99,53 @@ final readonly class OkxDemoWriteGate
      * @param array<string,string> $correlationIds
      */
     public function evaluate(
+        OkxDemoWriteKind $kind,
         string $action,
         ?string $symbol,
         ?float $notional,
         string $clientOrderId,
         array $correlationIds = [],
+        bool $reduceOnly = true,
     ): OkxDemoWriteDecision {
+        if ($this->isTripped()) {
+            return OkxDemoWriteDecision::refuse(['okx_demo_tripped'], $kind);
+        }
         $reasons = $this->environmentReasons();
+        if ($kind === OkxDemoWriteKind::PROTECTIVE && !$reduceOnly) {
+            $reasons[] = 'protective_requires_reduce_only';
+        }
         if ($reasons !== []) {
-            return OkxDemoWriteDecision::refuse($reasons);
+            return OkxDemoWriteDecision::refuse($reasons, $kind);
         }
 
         $decision = $this->killSwitchDecision($action, $symbol, $notional, $clientOrderId, $correlationIds);
+        if ($decision->allowed) {
+            return OkxDemoWriteDecision::allow($kind);
+        }
 
-        return $decision->allowed
-            ? OkxDemoWriteDecision::allow()
-            : OkxDemoWriteDecision::refuse($decision->reasons === [] ? ['kill_switch_blocked'] : $decision->reasons);
+        $reasons = $decision->reasons === [] ? ['kill_switch_blocked'] : $decision->reasons;
+        if ($kind !== OkxDemoWriteKind::PROTECTIVE) {
+            return OkxDemoWriteDecision::refuse($reasons, $kind);
+        }
+
+        $exempt = [...$this->observabilityReasons($decision), 'max_notional_exceeded'];
+        $remaining = array_values(array_diff($reasons, $exempt));
+        if ($remaining !== []) {
+            return OkxDemoWriteDecision::refuse($remaining, $kind);
+        }
+
+        return OkxDemoWriteDecision::allow($kind, array_values(array_intersect($reasons, $exempt)));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function observabilityReasons(DemoTradingKillSwitchDecision $decision): array
+    {
+        $observability = $decision->auditEvent['private_observability'] ?? null;
+        $errors = \is_array($observability) ? ($observability['blocking_errors'] ?? null) : null;
+
+        return \is_array($errors) ? array_values(array_filter($errors, \is_string(...))) : [];
     }
 
     /**
