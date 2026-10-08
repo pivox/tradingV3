@@ -25,6 +25,7 @@ use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Okx\OkxActionFactory;
 use App\Exchange\Okx\OkxConfig;
+use App\Exchange\Okx\OkxContractValueResolver;
 use App\Exchange\Okx\OkxFillId;
 use App\Exchange\Okx\OkxInstrumentResolver;
 use App\Exchange\Okx\OkxRestClientInterface;
@@ -41,6 +42,7 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
         private OkxActionFactory $actions,
         private OkxConfig $config,
         private ClockInterface $clock,
+        private ?OkxContractValueResolver $contractValues = null,
     ) {
     }
 
@@ -352,6 +354,7 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
         }
 
         $fills = [];
+        $contractValues = $this->contractValues ?? new OkxContractValueResolver($this->client);
         foreach ($this->dataRows($this->client->privateGet('/api/v5/trade/fills', $query)) as $row) {
             $fills[] = new ExchangeFillDto(
                 exchange: $this->exchange(),
@@ -367,7 +370,7 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
                 fee: $this->float($row['fee'] ?? null),
                 feeCurrency: isset($row['feeCcy']) ? (string) $row['feeCcy'] : null,
                 filledAt: $this->time($row['ts'] ?? null),
-                metadata: $row,
+                metadata: OkxContractValueResolver::fillMetadata($contractValues, (string) ($row['instId'] ?? '')) + $row,
             );
         }
 

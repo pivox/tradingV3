@@ -82,6 +82,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
     public function __construct(
         private OkxInstrumentResolver $instruments,
         private ClockInterface $clock,
+        private ?OkxContractValueResolver $contractValues = null,
     ) {
     }
 
@@ -345,7 +346,10 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
                 'exchange_fill_id' => $this->scalarString($row['tradeId'] ?? null),
                 'liquidity_role' => $this->liquidityRole($row['execType'] ?? null),
                 'quantity_decimal' => $quantityDecimal,
-            ]),
+            ]) + OkxContractValueResolver::fillMetadata(
+                $this->contractValues,
+                $this->scalarString($row['instId'] ?? null) ?? '',
+            ),
         );
     }
 
