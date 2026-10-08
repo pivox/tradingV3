@@ -106,6 +106,43 @@ PHP,
         self::assertSame('1024M', SymfonyPaperPublicCaptureAttemptExecutor::CHILD_MEMORY_LIMIT);
     }
 
+    public function testStartsTheChildWithoutLogicExceptionAndKeepsHugeOutputBounded(): void
+    {
+        // Proves the Codex claim that disableOutput() + start($callback) throws
+        // a LogicException (exit 127) does not hold for the installed Symfony Process.
+        self::assertNotFalse(file_put_contents(
+            $this->root . '/bin/console',
+            <<<'PHP'
+<?php
+$chunk = str_repeat('x', 65536);
+for ($i = 0; $i < 800; ++$i) { fwrite(STDOUT, $chunk); fwrite(STDERR, $chunk); }
+fwrite(STDOUT, 'END-OF-STDOUT');
+fwrite(STDERR, 'END-OF-STDERR');
+exit(0);
+PHP,
+        ));
+
+        gc_collect_cycles();
+        memory_reset_peak_usage();
+        $before = memory_get_usage();
+        $result = (new SymfonyPaperPublicCaptureAttemptExecutor($this->root))->execute(
+            'okx',
+            'huge-output-okx-mainnet',
+            300,
+        );
+        $peakGrowth = memory_get_peak_usage() - $before;
+
+        self::assertSame(0, $result->exitCode, $result->stderrTail);
+        self::assertStringNotContainsString('LogicException', $result->stderrTail);
+        self::assertIsInt($result->pid);
+        self::assertStringEndsWith('END-OF-STDOUT', $result->stdoutTail);
+        self::assertStringEndsWith('END-OF-STDERR', $result->stderrTail);
+        self::assertLessThanOrEqual(8192, \strlen($result->stdoutTail));
+        self::assertLessThanOrEqual(8192, \strlen($result->stderrTail));
+        // ~50 MB per stream was written; peak growth must stay far below that.
+        self::assertLessThan(16 * 1024 * 1024, $peakGrowth);
+    }
+
     public function testForwardsSupervisorSignalAndSurvivesToReturnChildFailure(): void
     {
         if (!function_exists('pcntl_signal') || !function_exists('posix_kill')) {

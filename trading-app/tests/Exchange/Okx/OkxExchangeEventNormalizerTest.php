@@ -800,6 +800,7 @@ final class OkxExchangeEventNormalizerTest extends TestCase
             'instrument_id' => 'BTC-USDT-SWAP',
             'exchange_fill_id' => 'safe-trade',
             'quantity_decimal' => '0.2',
+            'quantity_unit' => 'contracts',
         ], $events[1]->fill()->metadata);
 
         $serialized = serialize($events);

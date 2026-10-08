@@ -22,6 +22,7 @@ use App\Exchange\Event\ExchangeOrderPartiallyFilled;
 use App\Exchange\Event\ExchangeOrderUpdated;
 use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionUpdated;
+use App\Exchange\Okx\OkxContractValueResolver;
 use App\Exchange\Okx\OkxFillId;
 use App\Exchange\Okx\OkxInstrumentResolver;
 use App\Exchange\Value\ExactOrderQuantities;
@@ -35,6 +36,7 @@ final readonly class OkxPrivateRestSnapshotReconciler
     public function __construct(
         private ExchangeEventBus $eventBus,
         private ExchangeLocalProjectionStoreInterface $projectionStore,
+        private ?OkxContractValueResolver $contractValues = null,
     ) {
     }
 
@@ -210,7 +212,9 @@ final readonly class OkxPrivateRestSnapshotReconciler
             throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
         }
         $quantityDecimal = $this->exactPositiveQuantity($item->size);
-        $payload = self::sourcePayload() + ['quantity_decimal' => $quantityDecimal];
+        $payload = self::sourcePayload()
+            + ['quantity_decimal' => $quantityDecimal]
+            + OkxContractValueResolver::fillMetadata($this->contractValues, $item->instrumentId);
 
         return new ExchangeFillReceived(new ExchangeFillDto(
             exchange: Exchange::OKX,
