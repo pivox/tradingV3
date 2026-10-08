@@ -3,18 +3,22 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\MessageHandler;
 
-use App\Common\Enum\OrderStatus;
-use App\Contract\Provider\Dto\OrderDto;
-use App\Contract\Provider\MainProviderInterface;
-use App\Contract\Provider\OrderProviderDecoratorInterface;
-use App\Contract\Provider\OrderProviderInterface;
+use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
+use App\Exchange\Dto\ExchangeOrderDto;
+use App\Exchange\Enum\ExchangePositionSide;
+use App\Exchange\Registry\ExchangeAdapterNotFoundException;
+use App\TradeEntry\Execution\RestingEntryState;
+use App\TradeEntry\Execution\RestingEntryWatcher;
+use App\TradeEntry\Dto\TpSlTwoTargetsRequest;
+use App\TradeEntry\OrderPlan\OrderPlanModel;
+use App\TradeEntry\Service\TakeProfitPlacerInterface;
+use App\TradeEntry\Types\Side;
 use App\Logging\TradeLifecycleLogger;
 use App\Logging\TradeLifecycleReason;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Context\UnsupportedExchangeException;
 use App\TradeEntry\Message\LimitFillWatchMessage;
 use App\Trading\Lineage\TradeLineageManager;
-use Brick\Math\RoundingMode;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Messenger\Attribute\AsMessageHandler;
@@ -29,12 +33,14 @@ final class LimitFillWatchMessageHandler
     private const CONFIRMATION_POLLS = 3; // nombre de polls supplémentaires après cancel() pour confirmer l'état réel
 
     public function __construct(
-        private readonly MainProviderInterface $provider,
+        private readonly ExchangeAdapterRegistryInterface $adapters,
+        private readonly RestingEntryWatcher $watcher,
         #[Autowire(service: 'monolog.logger.positions')]
         private readonly LoggerInterface $positionsLogger,
         private readonly MessageBusInterface $bus,
         private readonly TradeLifecycleLogger $tradeLifecycleLogger,
         private readonly ?TradeLineageManager $tradeLineageManager = null,
+        private readonly ?TakeProfitPlacerInterface $takeProfits = null,
     ) {}
 
     public function __invoke(LimitFillWatchMessage $message): void
@@ -52,10 +58,29 @@ final class LimitFillWatchMessageHandler
 
             return;
         }
-        $orderProvider = $this->provider->forContext($context)->getOrderProvider();
+        $context = ExchangeContext::resolve($context);
+        try {
+            $adapter = $this->adapters->get($context->exchange, $context->marketType);
+        } catch (ExchangeAdapterNotFoundException $e) {
+            $this->positionsLogger->warning('limit_watch.adapter_missing_dropped', [
+                'symbol' => $message->symbol,
+                'order_id' => $message->exchangeOrderId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return;
+        }
 
         try {
-            $order = $orderProvider->getOrder($message->symbol, $message->exchangeOrderId);
+            $state = $this->watcher->inspect(
+                $adapter,
+                $message->symbol,
+                $message->exchangeOrderId,
+                $message->clientOrderId,
+                $this->positionSide($message),
+                $message->positionBaseline,
+                isset($message->plan['size']) ? (float) $message->plan['size'] : null,
+            );
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('limit_watch.order_fetch_failed', [
                 'symbol' => $message->symbol,
@@ -65,62 +90,30 @@ final class LimitFillWatchMessageHandler
                 'tries' => $message->tries,
                 'error' => $e->getMessage(),
             ]);
-            $order = null;
+            $state = null;
         }
 
-        if ($order !== null) {
-            $status = $order->status;
+        if ($state?->status === RestingEntryState::FILLED) {
+            $this->onFilled($message, $adapter, $state);
 
-            if (
-                $status === OrderStatus::FILLED
-                || $status === OrderStatus::PARTIALLY_FILLED
-                || $order->filledQuantity->isPositive()
-            ) {
-                // Position ouverte: désarmer le dead-man switch pour ce symbole
-                $deadmanProvider = $this->unwrapOrderProvider($orderProvider);
-                if (method_exists($deadmanProvider, 'cancelAllAfter')) {
-                    try {
-                        $deadmanProvider->cancelAllAfter($message->symbol, 0);
-                        $this->positionsLogger->info('limit_watch.deadman_disarmed', [
-                            'symbol' => $message->symbol,
-                            'exchange_order_id' => $message->exchangeOrderId,
-                            'client_order_id' => $message->clientOrderId,
-                            'decision_key' => $message->decisionKey,
-                            'tries' => $message->tries,
-                        ]);
-                    } catch (\Throwable $e) {
-                        $this->positionsLogger->warning('limit_watch.deadman_disarm_failed', [
-                            'symbol' => $message->symbol,
-                            'error' => $e->getMessage(),
-                            'decision_key' => $message->decisionKey,
-                        ]);
-                    }
-                }
-                $this->logPositionOpenedLifecycle($message, $order);
-                return;
-            }
+            return;
+        }
 
-            if (
-                $status === OrderStatus::CANCELLED ||
-                $status === OrderStatus::REJECTED ||
-                $status === OrderStatus::EXPIRED
-            ) {
-                // Ordre clôturé sans fill → ne pas désarmer (inutile)
-                $this->positionsLogger->info('limit_watch.closed_no_disarm', [
-                    'symbol' => $message->symbol,
-                    'order_status' => $status->value,
-                    'exchange_order_id' => $message->exchangeOrderId,
-                    'client_order_id' => $message->clientOrderId,
-                    'decision_key' => $message->decisionKey,
-                ]);
+        if ($state?->status === RestingEntryState::CLOSED) {
+            $this->positionsLogger->info('limit_watch.closed_no_disarm', [
+                'symbol' => $message->symbol,
+                'order_status' => $state->order?->status->value ?? 'closed',
+                'exchange_order_id' => $message->exchangeOrderId,
+                'client_order_id' => $message->clientOrderId,
+                'decision_key' => $message->decisionKey,
+            ]);
+            $this->logOrderExpiredLifecycle(
+                $message,
+                $state->order?->status->value ?? 'closed',
+                $message->side,
+            );
 
-                $this->logOrderExpiredLifecycle(
-                    $message,
-                    $status->value,
-                    strtoupper($order->side->value)
-                );
-                return;
-            }
+            return;
         }
 
         // Toujours en attente → reprogammer si dans la fenêtre autorisée
@@ -139,7 +132,7 @@ final class LimitFillWatchMessageHandler
             ]);
 
             try {
-                $ok = $orderProvider->cancelOrder($message->symbol, $message->exchangeOrderId);
+                $ok = $this->watcher->cancel($adapter, $message->symbol, $message->exchangeOrderId, $message->clientOrderId, $message->decisionKey)->cancelled;
                 $this->positionsLogger->info('limit_watch.cancel_issued', [
                     'symbol' => $message->symbol,
                     'exchange_order_id' => $message->exchangeOrderId,
@@ -180,13 +173,203 @@ final class LimitFillWatchMessageHandler
         $this->rescheduleWatch($message, $message->cancelIssued, $maxTriesBeforeCancel, $maxAllowedTries);
     }
 
-    private function unwrapOrderProvider(OrderProviderInterface $provider): OrderProviderInterface
+    private function onFilled(LimitFillWatchMessage $message, \App\Exchange\Contract\ExchangeAdapterInterface $adapter, RestingEntryState $state): void
     {
-        while ($provider instanceof OrderProviderDecoratorInterface) {
-            $provider = $provider->innerOrderProvider();
+        if ($state->remainderActive) {
+            $confirmed = $this->confirmRemainderInactive($message, $adapter, $state);
+            if ($confirmed === null) {
+                $maxTriesBeforeCancel = (int) ceil((max(0, $message->cancelAfterSec) + self::GRACE_SECONDS) * 1000 / self::POLL_DELAY_MS);
+                $maxAllowedTries = $maxTriesBeforeCancel + self::CONFIRMATION_POLLS;
+                if ($message->tries + 1 <= $maxAllowedTries) {
+                    $this->rescheduleWatch($message, true, $maxTriesBeforeCancel, $maxAllowedTries);
+
+                    return;
+                }
+
+                $this->positionsLogger->critical('limit_watch.remainder_unconfirmed_residual_risk', [
+                    'symbol' => $message->symbol,
+                    'exchange_order_id' => $message->exchangeOrderId,
+                    'client_order_id' => $message->clientOrderId,
+                    'decision_key' => $message->decisionKey,
+                    'tries' => $message->tries,
+                ]);
+            } else {
+                $state = $confirmed;
+            }
         }
 
-        return $provider;
+        if ($message->plan === null) {
+            $this->positionsLogger->critical('limit_watch.protection_plan_missing', [
+                'symbol' => $message->symbol,
+                'exchange_order_id' => $message->exchangeOrderId,
+                'client_order_id' => $message->clientOrderId,
+                'decision_key' => $message->decisionKey,
+            ]);
+        } else {
+            $this->protect($message, $adapter, $state);
+        }
+
+        $this->logPositionOpenedLifecycle($message, $this->filledOrder($message, $state));
+    }
+
+    private function confirmRemainderInactive(LimitFillWatchMessage $message, \App\Exchange\Contract\ExchangeAdapterInterface $adapter, RestingEntryState $before): ?RestingEntryState
+    {
+        try {
+            $cancel = $this->watcher->cancel($adapter, $message->symbol, $message->exchangeOrderId, $message->clientOrderId, $message->decisionKey);
+            if (!$cancel->cancelled) {
+                $this->positionsLogger->warning('limit_watch.remainder_cancel_rejected', [
+                    'symbol' => $message->symbol,
+                    'exchange_order_id' => $message->exchangeOrderId,
+                    'decision_key' => $message->decisionKey,
+                    'cancel_status' => $cancel->status->value,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->positionsLogger->critical('limit_watch.remainder_cancel_failed', [
+                'symbol' => $message->symbol,
+                'exchange_order_id' => $message->exchangeOrderId,
+                'decision_key' => $message->decisionKey,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        try {
+            $after = $this->watcher->inspect(
+                $adapter,
+                $message->symbol,
+                $message->exchangeOrderId,
+                $message->clientOrderId,
+                $this->positionSide($message),
+                $message->positionBaseline,
+                isset($message->plan['size']) ? (float) $message->plan['size'] : null,
+            );
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if ($after->status === RestingEntryState::FILLED && !$after->remainderActive) {
+            return $after;
+        }
+
+        return $after->status === RestingEntryState::CLOSED
+            ? new RestingEntryState(RestingEntryState::FILLED, $before->filledQuantity, false, $before->order, $before->averagePrice)
+            : null;
+    }
+
+    private function protect(LimitFillWatchMessage $message, \App\Exchange\Contract\ExchangeAdapterInterface $adapter, RestingEntryState $state): void
+    {
+        try {
+            $context = ExchangeContext::resolve($message->lifecycleContext !== null ? ExchangeContext::fromArray($message->lifecycleContext) : null);
+            $protection = $this->watcher->protectFilledEntry(
+                $adapter,
+                OrderPlanModel::fromWatchSnapshot($message->plan ?? [], $context),
+                $state,
+                $message->exchangeOrderId,
+                $message->clientOrderId,
+                $message->decisionKey,
+            );
+            $this->placeTakeProfits($message, $state, $context, $protection->protected);
+            $this->positionsLogger->info('limit_watch.protection_enforced', [
+                'symbol' => $message->symbol,
+                'exchange_order_id' => $message->exchangeOrderId,
+                'client_order_id' => $message->clientOrderId,
+                'decision_key' => $message->decisionKey,
+                'status' => $protection->status,
+                'protected' => $protection->protected,
+                'protection_order_id' => $protection->protectionOrderId,
+                'emergency_order_id' => $protection->emergencyOrderId,
+            ]);
+        } catch (\Throwable $e) {
+            $this->positionsLogger->critical('limit_watch.protection_failed', [
+                'symbol' => $message->symbol,
+                'exchange_order_id' => $message->exchangeOrderId,
+                'client_order_id' => $message->clientOrderId,
+                'decision_key' => $message->decisionKey,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function placeTakeProfits(LimitFillWatchMessage $message, RestingEntryState $state, ExchangeContext $context, bool $protected): void
+    {
+        if (!$protected || !$this->takeProfits instanceof TakeProfitPlacerInterface || $message->plan === null) {
+            return;
+        }
+
+        try {
+            $result = ($this->takeProfits)(
+                new TpSlTwoTargetsRequest(
+                    symbol: $message->symbol,
+                    side: Side::from((string) $message->plan['side']),
+                    entryPrice: $state->averagePrice,
+                    size: (int) floor($state->filledQuantity),
+                    cancelExistingStopLossIfDifferent: false,
+                    cancelExistingTakeProfits: false,
+                    slFullSize: false,
+                    dryRun: false,
+                    exchangeContext: $context,
+                ),
+                $message->decisionKey,
+                $message->mode,
+            );
+            $this->positionsLogger->info('limit_watch.take_profit_placed', [
+                'symbol' => $message->symbol,
+                'exchange_order_id' => $message->exchangeOrderId,
+                'decision_key' => $message->decisionKey,
+                'submitted' => \count($result['submitted'] ?? []),
+            ]);
+        } catch (\Throwable $e) {
+            $this->positionsLogger->critical('limit_watch.take_profit_failed', [
+                'symbol' => $message->symbol,
+                'exchange_order_id' => $message->exchangeOrderId,
+                'client_order_id' => $message->clientOrderId,
+                'decision_key' => $message->decisionKey,
+                'error_class' => $e::class,
+                'error' => $e->getMessage(),
+                'stop_loss_kept' => true,
+            ]);
+        }
+    }
+
+    private function filledOrder(LimitFillWatchMessage $message, RestingEntryState $state): ExchangeOrderDto
+    {
+        if ($state->order !== null) {
+            return $state->order;
+        }
+
+        $context = ExchangeContext::resolve($message->lifecycleContext !== null ? ExchangeContext::fromArray($message->lifecycleContext) : null);
+        $buy = strtoupper((string) $message->side) !== 'SELL';
+
+        return new ExchangeOrderDto(
+            exchange: $context->exchange,
+            marketType: $context->marketType,
+            symbol: $message->symbol,
+            exchangeOrderId: $message->exchangeOrderId,
+            clientOrderId: $message->clientOrderId,
+            side: $buy ? \App\Exchange\Enum\ExchangeOrderSide::BUY : \App\Exchange\Enum\ExchangeOrderSide::SELL,
+            positionSide: null,
+            orderType: \App\Exchange\Enum\ExchangeOrderType::LIMIT,
+            status: \App\Exchange\Enum\ExchangeOrderStatus::FILLED,
+            quantity: $state->filledQuantity,
+            filledQuantity: $state->filledQuantity,
+            remainingQuantity: 0.0,
+            price: $state->averagePrice,
+            averagePrice: $state->averagePrice,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: false,
+            timeInForce: null,
+            createdAt: new \DateTimeImmutable(),
+        );
+    }
+
+    private function positionSide(LimitFillWatchMessage $message): ?ExchangePositionSide
+    {
+        return match (strtoupper((string) $message->side)) {
+            'BUY' => ExchangePositionSide::LONG,
+            'SELL' => ExchangePositionSide::SHORT,
+            default => null,
+        };
     }
 
     private function logOrderExpiredLifecycle(
@@ -225,14 +408,14 @@ final class LimitFillWatchMessageHandler
         }
     }
 
-    private function logPositionOpenedLifecycle(LimitFillWatchMessage $message, OrderDto $order): void
+    private function logPositionOpenedLifecycle(LimitFillWatchMessage $message, ExchangeOrderDto $order): void
     {
         try {
-            $filledQty = $order->filledQuantity->isZero() ? $order->quantity : $order->filledQuantity;
+            $filledQty = $order->filledQuantity > 0.0 ? $order->filledQuantity : $order->quantity;
             $avgPrice = $order->averagePrice ?? $order->price;
             $extra = $this->withLifecycleContext($message, [
                 'client_order_id' => $message->clientOrderId,
-                'exchange_order_id' => $order->orderId,
+                'exchange_order_id' => $order->exchangeOrderId,
                 'decision_key' => $message->decisionKey,
                 'source' => 'limit_watch',
             ]);
@@ -243,8 +426,8 @@ final class LimitFillWatchMessageHandler
                 symbol: $order->symbol,
                 positionId: $order->metadata['position_id'] ?? null,
                 side: $order->side->value,
-                qty: $filledQty->toScale(8, RoundingMode::DOWN)->__toString(),
-                entryPrice: $avgPrice?->toScale(8, RoundingMode::DOWN)->__toString(),
+                qty: $this->decimal($filledQty),
+                entryPrice: $avgPrice !== null ? $this->decimal($avgPrice) : null,
                 runId: $this->stringValue($extra['run_id'] ?? null),
                 exchange: $context->exchange->value,
                 accountId: null,
@@ -260,6 +443,11 @@ final class LimitFillWatchMessageHandler
         }
     }
 
+    private function decimal(float $value): string
+    {
+        return sprintf('%.8F', floor($value * 100000000) / 100000000);
+    }
+
     /**
      * @param array<string,mixed> $extra
      * @return array<string,mixed>
@@ -267,7 +455,7 @@ final class LimitFillWatchMessageHandler
     private function withBestEffortLineage(
         ExchangeContext $context,
         LimitFillWatchMessage $message,
-        OrderDto $order,
+        ExchangeOrderDto $order,
         array $extra,
     ): array {
         if ($this->tradeLineageManager === null) {
@@ -279,7 +467,7 @@ final class LimitFillWatchMessageHandler
                 $context,
                 internalTradeId: $this->stringValue($extra['internal_trade_id'] ?? null),
                 clientOrderId: $message->clientOrderId,
-                exchangeOrderId: $order->orderId,
+                exchangeOrderId: $order->exchangeOrderId,
             );
             if ($lineage === null) {
                 return $extra;
@@ -292,7 +480,7 @@ final class LimitFillWatchMessageHandler
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('limit_watch.lineage_sync_failed', [
                 'symbol' => $message->symbol,
-                'exchange_order_id' => $order->orderId,
+                'exchange_order_id' => $order->exchangeOrderId,
                 'client_order_id' => $message->clientOrderId,
                 'error' => $e->getMessage(),
             ]);
@@ -354,6 +542,8 @@ final class LimitFillWatchMessageHandler
                 lifecycleContext: $message->lifecycleContext,
                 cancelIssued: $cancelIssued,
                 mode: $message->mode ?? null,
+                plan: $message->plan,
+                positionBaseline: $message->positionBaseline,
             ),
             [new DelayStamp(self::POLL_DELAY_MS)]
         );

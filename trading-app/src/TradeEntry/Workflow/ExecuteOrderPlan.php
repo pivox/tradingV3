@@ -135,7 +135,7 @@ final class ExecuteOrderPlan
                 $this->syncLineageBeforeExecution($intent, $contextBuilder, $intentIdentity);
             }
 
-            $result = $this->exchangeExecution->execute($executionPlan, $decisionKey, $mode, $executionTf, $clientOrderId, $intent?->getId(), true);
+            $result = $this->exchangeExecution->execute($executionPlan, $decisionKey, $mode, $executionTf, $clientOrderId, $intent?->getId(), true, $contextBuilder);
 
             if ($intentIdentity !== null && $result->exchangeOrderId !== null) {
                 $result = $this->withSubmittedIdentity($result, $intentIdentity);

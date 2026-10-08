@@ -452,6 +452,7 @@ final class ProtectionEnforcer
                     exchangeOrderId: $order->exchangeOrderId,
                     clientOrderId: $order->clientOrderId,
                     metadata: [
+                        'write_kind' => 'protective',
                         'decision_key' => $decisionKey,
                         'reason' => 'stale_protection_after_emergency_close',
                     ],

@@ -36,6 +36,45 @@ final class OrderPlanModel
     ) {}
 
     /** @return array<string,mixed> */
+    public function toWatchSnapshot(): array
+    {
+        return [
+            'symbol' => $this->symbol,
+            'side' => $this->side->value,
+            'order_type' => $this->orderType,
+            'open_type' => $this->openType,
+            'order_mode' => $this->orderMode,
+            'entry' => $this->entry,
+            'stop' => $this->stop,
+            'take_profit' => $this->takeProfit,
+            'size' => $this->size,
+            'leverage' => $this->leverage,
+            'price_precision' => $this->pricePrecision,
+            'contract_size' => $this->contractSize,
+        ];
+    }
+
+    /** @param array<string,mixed> $snapshot */
+    public static function fromWatchSnapshot(array $snapshot, ?ExchangeContext $context = null): self
+    {
+        return new self(
+            symbol: (string) $snapshot['symbol'],
+            side: Side::from((string) $snapshot['side']),
+            orderType: (string) $snapshot['order_type'],
+            openType: (string) $snapshot['open_type'],
+            orderMode: (int) $snapshot['order_mode'],
+            entry: (float) $snapshot['entry'],
+            stop: (float) $snapshot['stop'],
+            takeProfit: (float) $snapshot['take_profit'],
+            size: (int) $snapshot['size'],
+            leverage: (int) $snapshot['leverage'],
+            pricePrecision: (int) $snapshot['price_precision'],
+            contractSize: (float) $snapshot['contract_size'],
+            exchangeContext: $context,
+        );
+    }
+
+    /** @return array<string,mixed> */
     public function canonicalSnapshot(): array
     {
         return $this->lineageContext?->toArray() ?? [];

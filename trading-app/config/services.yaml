@@ -72,6 +72,7 @@ parameters:
     env(FAKE_EXCHANGE_DAILY_LOSS_CAP_USDT): '100.000000000000'
     env(FAKE_EXCHANGE_DETERMINISTIC_SEED): 'fake-paper-default-seed-v1'
     app.trade_entry_default_mode: 'scalper_micro'
+    app.okx_demo_max_notional: 1000.0
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
 
@@ -198,6 +199,7 @@ services:
         class: App\TradeEntry\Execution\ExchangeExecutionService
         arguments:
             $adapters: '@paper.execution.empty_adapter_registry'
+            $restingEntryBus: null
 
     App\Trading\Paper\Execution\Fake\PaperFakeEffectDispatcher:
         arguments:
@@ -455,6 +457,14 @@ services:
             $simulatedTrading: '%env(bool:OKX_SIMULATED_TRADING)%'
             $demoTradingEnabled: '%env(bool:OKX_DEMO_TRADING_ENABLED)%'
             $liveEnabled: '%env(bool:OKX_LIVE_ENABLED)%'
+            $globalDemoTradingEnabled: '%env(bool:DEMO_TRADING_ENABLED)%'
+
+    App\Exchange\Okx\Demo\FilesystemOkxDemoTrip:
+        arguments:
+            $markerPath: '%kernel.project_dir%/var/okx-demo-execution.quarantine'
+
+    App\Exchange\Okx\Demo\OkxDemoTripInterface:
+        alias: App\Exchange\Okx\Demo\FilesystemOkxDemoTrip
 
     App\Exchange\Okx\OkxRestClient:
         arguments:
