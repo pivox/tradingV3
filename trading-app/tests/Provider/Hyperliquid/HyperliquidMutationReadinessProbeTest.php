@@ -49,13 +49,38 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
     private const AGENT = '0x0000000000000000000000000000000000000002';
     private const OTHER_AGENT = '0x0000000000000000000000000000000000000003';
 
+    public function testWithoutCanonicalIdentityTheEffectiveConfigStaysFailClosed(): void
+    {
+        $report = $this->probe()->current();
+
+        self::assertContains('canonical_identity_required', $report->warnings);
+        self::assertNull($report->configHash);
+        self::assertNull($report->configProfile);
+        self::assertTrue($report->killSwitch);
+        self::assertFalse($report->demoTestnetWriteGuard);
+    }
+
+    private function identity(): \App\TradingCore\Config\EffectiveTradingConfigRequest
+    {
+        return new \App\TradingCore\Config\EffectiveTradingConfigRequest(
+            'scalping',
+            '1.1.0',
+            'scalping.pullback.long',
+            '1.1.0',
+            'hyperliquid',
+            'testnet',
+            'long',
+            \App\TradingCore\Execution\Enum\ShadowExecutionCapability::Paper,
+        );
+    }
+
     public function testCurrentReturnsSoleTypedCandidateFromStrictReadOnlyEvidenceWithoutPhpKeyCustody(): void
     {
         $rest = new ReadinessRecordingInfoClient($this->validExtraAgents());
         $probe = $this->probe(rest: $rest);
 
         self::assertInstanceOf(HyperliquidMutationReadinessProbeInterface::class, $probe);
-        $report = $probe->current();
+        $report = $probe->current($this->identity());
 
         self::assertSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
         self::assertTrue($report->permissionsTrade);
@@ -85,7 +110,8 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
             environment: 'mainnet',
         ));
 
-        self::assertSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
+        self::assertNotSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
+        self::assertContains('canonical_identity_required', $report->warnings);
         self::assertSame(MarketType::PERPETUAL, $report->marketType);
         self::assertTrue($report->permissionsTrade);
     }
@@ -96,7 +122,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         array $extraAgents,
         string $warning,
     ): void {
-        $report = $this->probe(rest: new ReadinessRecordingInfoClient($extraAgents))->current();
+        $report = $this->probe(rest: new ReadinessRecordingInfoClient($extraAgents))->current($this->identity());
 
         self::assertFalse($report->permissionsTrade);
         self::assertContains($warning, $report->warnings);
@@ -135,7 +161,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
     ): void {
         $rest = new ReadinessRecordingInfoClient($this->validExtraAgents(), $userRole);
 
-        $report = $this->probe(rest: $rest)->current();
+        $report = $this->probe(rest: $rest)->current($this->identity());
 
         self::assertFalse($report->permissionsTrade);
         self::assertContains($warning, $report->warnings);
@@ -158,7 +184,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
     public function testZeroAccountOrAgentAddressCannotProvePermission(HyperliquidConfig $config): void
     {
         $rest = new ReadinessRecordingInfoClient($this->validExtraAgents());
-        $report = $this->probe(config: $config, rest: $rest)->current();
+        $report = $this->probe(config: $config, rest: $rest)->current($this->identity());
 
         self::assertFalse($report->permissionsTrade);
         self::assertSame([], $rest->requests);
@@ -193,14 +219,14 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         $report = $this->probe(
             config: $this->config(agent: strtoupper(self::AGENT)),
             rest: new ReadinessRecordingInfoClient([['address' => strtoupper(self::AGENT), 'validUntil' => 1_900_000_000_000]]),
-        )->current();
+        )->current($this->identity());
 
         self::assertTrue($report->permissionsTrade);
     }
 
     public function testSidecarMustProveHealthAgentEqualityAndBroadcast(): void
     {
-        $report = $this->probe(sidecarHealthy: false)->current();
+        $report = $this->probe(sidecarHealthy: false)->current($this->identity());
 
         self::assertFalse($report->signerConfigured);
         self::assertFalse($report->signerMatchesAccount);
@@ -209,7 +235,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
 
     public function testNonceScopeMustBePersistentlyReady(): void
     {
-        $report = $this->probe(nonceReady: false)->current();
+        $report = $this->probe(nonceReady: false)->current($this->identity());
 
         self::assertFalse($report->nonceStoreReady);
         self::assertContains('hyperliquid_nonce_store_not_ready', $report->warnings);
@@ -218,7 +244,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
     #[DataProvider('strictReadFailures')]
     public function testEveryStrictReadFailureRemainsFailClosed(string $failedRead, string $warning): void
     {
-        $report = $this->probe(failedRead: $failedRead)->current();
+        $report = $this->probe(failedRead: $failedRead)->current($this->identity());
 
         self::assertNotSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
         self::assertContains($warning, $report->warnings);
@@ -226,7 +252,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
 
     public function testAccountAndCollateralReadinessAreSeparateEvidence(): void
     {
-        $report = $this->probe(collateralReadable: false)->current();
+        $report = $this->probe(collateralReadable: false)->current($this->identity());
 
         self::assertTrue($report->accountReadable);
         self::assertFalse($report->collateralReadable);
@@ -246,8 +272,8 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
 
     public function testDurableAndEnvironmentKillSwitchesRemainEffective(): void
     {
-        $durable = $this->probe(durableKillSwitch: true, environmentKillSwitch: false)->current();
-        $environment = $this->probe(durableKillSwitch: false, environmentKillSwitch: true)->current();
+        $durable = $this->probe(durableKillSwitch: true, environmentKillSwitch: false)->current($this->identity());
+        $environment = $this->probe(durableKillSwitch: false, environmentKillSwitch: true)->current($this->identity());
 
         self::assertTrue($durable->killSwitch);
         self::assertTrue($environment->killSwitch);
@@ -259,7 +285,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
             environmentKillSwitch: true,
             allowedMarkets: [],
             maxNotional: null,
-        )->current();
+        )->current($this->identity());
 
         self::assertNotSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
         self::assertTrue($report->killSwitch);
@@ -273,7 +299,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
             environmentKillSwitch: false,
             effectiveDryRun: true,
             demoTestnetWriteEnabled: false,
-        )->current();
+        )->current($this->identity());
 
         self::assertFalse($report->killSwitch);
         self::assertFalse($report->demoTestnetWriteGuard);
@@ -282,7 +308,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
 
     public function testSlowSuccessfulReadCycleStampsPollingSnapshotAfterProbesComplete(): void
     {
-        $report = $this->probe(readCycleSeconds: 2.001)->current();
+        $report = $this->probe(readCycleSeconds: 2.001)->current($this->identity());
 
         self::assertTrue($report->privateObservability);
         self::assertTrue($report->pollingReady);
@@ -295,7 +321,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         $report = $this->probe(
             reconciliation: $reconciliation,
             reconciliationInFlightAfterReads: true,
-        )->current();
+        )->current($this->identity());
 
         self::assertFalse($report->pollingReady);
         self::assertContains('hyperliquid_reconciliation_in_flight', $report->warnings);
@@ -311,7 +337,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
             }
         };
 
-        $report = $this->probe(reconciliation: $reconciliation)->current();
+        $report = $this->probe(reconciliation: $reconciliation)->current($this->identity());
 
         self::assertFalse($report->pollingReady);
         self::assertContains('hyperliquid_reconciliation_status_unavailable', $report->warnings);
@@ -319,7 +345,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
 
     public function testInvalidMaxNotionalFailsClosedWithoutThrowing(): void
     {
-        $report = $this->probe(maxNotional: 0.0)->current();
+        $report = $this->probe(maxNotional: 0.0)->current($this->identity());
 
         self::assertNotSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
         self::assertNull($report->maxNotional);
@@ -339,7 +365,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
                 testnetTradingEnabled: true,
             ),
             rest: $rest,
-        )->current();
+        )->current($this->identity());
 
         self::assertSame([], $rest->requests);
         self::assertFalse($report->permissionsTrade);
@@ -355,7 +381,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
             testnetAgentAddress: self::AGENT,
             testnetAccountAddress: self::ACCOUNT,
             testnetTradingEnabled: false,
-        ))->current();
+        ))->current($this->identity());
 
         self::assertNotSame(ExchangeReadinessLevel::DemoTestnetCandidate, $report->readyLevel);
         self::assertFalse($report->demoTestnetWriteGuard);
@@ -588,7 +614,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
             ) {
             }
 
-            public function current(): HyperliquidMutationReadinessConfig
+            public function forIdentity(\App\TradingCore\Config\EffectiveTradingConfigRequest $identity): HyperliquidMutationReadinessConfig
             {
                 return new HyperliquidMutationReadinessConfig(
                     profile: 'scalper_micro',

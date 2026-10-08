@@ -26,8 +26,11 @@ use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Hyperliquid\HyperliquidActionFactory;
 use App\Exchange\Hyperliquid\HyperliquidAssetResolver;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
+use App\Exchange\Hyperliquid\HyperliquidMutationReadinessProof;
 use App\Exchange\Hyperliquid\HyperliquidRestClientInterface;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidMutationReadinessGate;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
@@ -42,7 +45,15 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
         private HyperliquidActionFactory $actions,
         private HyperliquidConfig $config,
         private ClockInterface $clock,
+        private HyperliquidMutationReadinessGate $proofGate,
+        private HyperliquidKillSwitchTripInterface $killSwitch,
+        private ?HyperliquidMutationReadinessProof $mutationProof = null,
     ) {
+    }
+
+    public function withMutationProof(HyperliquidMutationReadinessProof $proof): self
+    {
+        return new self($this->client, $this->assets, $this->actions, $this->config, $this->clock, $this->proofGate, $this->killSwitch, $proof);
     }
 
     public function exchange(): Exchange
@@ -153,9 +164,11 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
 
     public function placeOrder(PlaceOrderRequest $request): PlaceOrderResult
     {
+        $this->assertMutationProven();
         $this->assertContext($request->exchange, $request->marketType);
         $this->config->assertTradingConfigured();
         $request = $this->withHyperliquidExecutionPrice($request);
+        $this->assertScope($request->symbol, $request);
         $assetId = $this->assets->assetId($request->symbol);
         $response = $this->client->exchange($this->actions->order($assetId, $request));
         $status = $this->extractOrderStatus($response);
@@ -215,8 +228,10 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
 
     public function cancelOrder(CancelOrderRequest $request): CancelOrderResult
     {
+        $this->assertMutationProven();
         $this->assertContext($request->exchange, $request->marketType);
         $this->config->assertTradingConfigured();
+        $this->assertScope($request->symbol);
         $assetId = $this->assets->assetId($request->symbol);
         $response = $this->client->exchange($this->actions->cancel($assetId, $request));
         $status = $this->extractOrderStatus($response);
@@ -263,7 +278,9 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
 
     public function setLeverage(string $symbol, int $leverage, string $marginMode): bool
     {
+        $this->assertMutationProven();
         $this->config->assertTradingConfigured();
+        $this->assertScope($symbol);
         $response = $this->client->exchange($this->actions->updateLeverage(
             $this->assets->assetId($symbol),
             $leverage,
@@ -544,6 +561,44 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
         }
 
         return null;
+    }
+
+    private function assertMutationProven(): void
+    {
+        if (!$this->mutationProof instanceof HyperliquidMutationReadinessProof || !$this->proofGate->isGenuine($this->mutationProof)) {
+            throw new \LogicException('hyperliquid_mutation_requires_testnet_port');
+        }
+        try {
+            $tripped = $this->killSwitch->isTripped();
+        } catch (\Throwable) {
+            $tripped = true;
+        }
+        if ($tripped) {
+            throw new \LogicException('hyperliquid_mutation_kill_switch_tripped');
+        }
+    }
+
+    private function assertScope(string $symbol, ?PlaceOrderRequest $request = null): void
+    {
+        $proof = $this->mutationProof;
+        if (!$proof instanceof HyperliquidMutationReadinessProof) {
+            throw new \LogicException('hyperliquid_mutation_requires_testnet_port');
+        }
+        $coins = array_map(fn (string $allowed): string => $this->assets->coin($allowed), $proof->allowedSymbols);
+        if (!\in_array($this->assets->coin($symbol), $coins, true)) {
+            throw new \LogicException('proof_scope_symbol');
+        }
+        if (!$request instanceof PlaceOrderRequest) {
+            return;
+        }
+        if ($request->positionSide->value !== $proof->side) {
+            throw new \LogicException('proof_scope_side');
+        }
+        $price = $request->price ?? $request->stopPrice;
+        $notional = $price === null ? null : $request->quantity * $price;
+        if ($notional === null || !\is_finite($notional) || $notional > $proof->maxNotional) {
+            throw new \LogicException('proof_scope_notional');
+        }
     }
 
     private function assertContext(Exchange $exchange, MarketType $marketType): void

@@ -276,8 +276,16 @@ services:
     App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface:
         alias: App\Provider\Hyperliquid\HyperliquidMutationReadinessProbe
 
+    App\Provider\Hyperliquid\EffectiveTradingHyperliquidMutationReadinessConfigSource:
+        arguments:
+            $envelopePath: '%kernel.project_dir%/config/trading/env/testnet.yaml'
+
     App\Provider\Hyperliquid\HyperliquidMutationReadinessConfigSourceInterface:
         alias: App\Provider\Hyperliquid\EffectiveTradingHyperliquidMutationReadinessConfigSource
+
+    App\Exchange\Adapter\HyperliquidExchangeAdapter:
+        arguments:
+            $mutationProof: null
 
     App\Provider\Hyperliquid\HyperliquidInstrumentMetadataProviderInterface:
         alias: App\Provider\Hyperliquid\HyperliquidMetadataProvider

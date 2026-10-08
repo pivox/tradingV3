@@ -64,6 +64,18 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
         self::assertSame([], (new HyperliquidMutationReadinessGate())->blockingReasons(self::report(), self::config()));
     }
 
+    public function testEmitsTwentySevenVerdictsAndIssuesAProofOnlyWhenCleared(): void
+    {
+        $gate = new HyperliquidMutationReadinessGate();
+
+        self::assertCount(27, $gate->verdicts(self::report(), self::config()));
+        $proof = $gate->issueProof(self::report(), self::config(), 'long');
+        self::assertSame('scalper_micro', $proof?->profile);
+        self::assertTrue($gate->isGenuine($proof));
+        self::assertFalse((new HyperliquidMutationReadinessGate())->isGenuine($proof));
+        self::assertNull($gate->issueProof(self::report(killSwitch: true), self::config(), 'long'));
+    }
+
     public function testReasonsAreStableOrderedAndDeduplicated(): void
     {
         $report = self::report(

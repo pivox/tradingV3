@@ -1170,9 +1170,37 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
             liquidationGuard: new LiquidationGuard(),
             clock: $clock,
         );
-        $request = ExecutionRequest::forPlan($plan, $mode, $requestMetadata + ['correlation_id' => 'corr-1']);
+        $request = ExecutionRequest::forPlan($plan, $mode, $requestMetadata + ['correlation_id' => 'corr-1', 'canonical_identity' => $this->identityFor($plan->side)]);
 
         return new TestnetPortFixture($port, $request, $nonces, $signed, $compensation, $attempts, $trip, $lock);
+    }
+
+    /** @return array<string,string> */
+    private function identityFor(string $side): array
+    {
+        return [
+            'mode_id' => 'scalping',
+            'mode_version' => '1.1.0',
+            'setup_id' => $side === 'long' ? 'scalping.pullback.long' : 'scalping.trend_momentum.short',
+            'setup_version' => '1.1.0',
+            'exchange' => 'hyperliquid',
+            'environment' => 'testnet',
+            'side' => $side,
+        ];
+    }
+
+    public function testRejectsPlanWhoseSideDiffersFromTheCanonicalIdentity(): void
+    {
+        $fixture = $this->fixture(
+            plan: $this->plan(side: 'short', stop: 102.0),
+            requestMetadata: ['canonical_identity' => $this->identityFor('long')],
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Rejected, $result->status);
+        self::assertContains('side_identity_mismatch', $result->metadata['blocking_reasons']);
+        self::assertSame([], $fixture->signed->submissions);
     }
 
     private function config(string $network = 'testnet'): HyperliquidConfig
@@ -1495,7 +1523,7 @@ final class TestnetPortAttemptStore implements HyperliquidExecutionAttemptStoreI
 final readonly class TestnetPortReadinessProbe implements HyperliquidMutationReadinessProbeInterface
 {
     public function __construct(private ExchangeReadinessReport $report) {}
-    public function current(): ExchangeReadinessReport { return $this->report; }
+    public function current(?\App\TradingCore\Config\EffectiveTradingConfigRequest $identity = null): ExchangeReadinessReport { return $this->report; }
 }
 
 final class TestnetPortMetadataProvider implements HyperliquidInstrumentMetadataProviderInterface
