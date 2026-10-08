@@ -64,7 +64,11 @@ final readonly class PaperCanonicalStrategyEvidenceSource implements PaperCanoni
             $this->runtimes->forCell($cell),
             CanonicalPortfolioPolicy::fromSnapshot($config),
         );
-        $plan = $this->orderPlans->build($policy, $projection, $instrument, $book, $costs, $portfolio);
+        $plan = $this->orderPlans->build($policy, $projection, $instrument, $book, $costs, $portfolio, [
+            'cell_id' => $cell->id,
+            'run_id' => $cell->runId,
+            'event_id' => $event->eventId,
+        ]);
         if ($plan === null) {
             throw PaperCanonicalStrategyEvidenceUnavailable::orderPlan();
         }

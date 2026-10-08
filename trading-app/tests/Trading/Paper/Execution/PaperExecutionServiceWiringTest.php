@@ -31,6 +31,7 @@ use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceProviderI
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceSource;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceSourceInterface;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalOrderPlanEvidenceSource;
+use App\Trading\Paper\Execution\Strategy\PaperPlanRejectionDiagnostics;
 use App\Trading\Paper\Execution\Fake\PaperCanonicalFakePortfolioSource;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPortfolioReservationStore;
 use App\Trading\Paper\Certification\Campaign\PaperCertificationCampaignProcessExecutorInterface;
@@ -88,6 +89,17 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
             (new \ReflectionProperty(PaperExecutionCoordinator::class, 'canonicalOrderIntents'))->getValue($coordinator),
         );
         self::assertInstanceOf(PaperExecutionReplayCommand::class, $container->get(PaperExecutionReplayCommand::class));
+        $planDiagnostics = $container->get(PaperPlanRejectionDiagnostics::class);
+        self::assertSame(
+            $planDiagnostics,
+            (new \ReflectionProperty(PaperExecutionReplayCommand::class, 'diagnostics'))
+                ->getValue($container->get(PaperExecutionReplayCommand::class)),
+        );
+        self::assertSame(
+            $planDiagnostics,
+            (new \ReflectionProperty(PaperCanonicalOrderPlanEvidenceSource::class, 'diagnostics'))
+                ->getValue($container->get(PaperCanonicalOrderPlanEvidenceSource::class)),
+        );
         self::assertInstanceOf(PaperReplayRuntimeCheckCommand::class, $container->get(PaperReplayRuntimeCheckCommand::class));
         self::assertInstanceOf(PaperCertificationCampaignCommand::class, $container->get(PaperCertificationCampaignCommand::class));
         self::assertInstanceOf(

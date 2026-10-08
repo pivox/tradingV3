@@ -46,6 +46,7 @@ final readonly class PaperCanonicalOrderPlanEvidenceSource
         private CanonicalProtectionEngine $protection = new CanonicalProtectionEngine(),
         private CanonicalRiskEngine $risk = new CanonicalRiskEngine(),
         private CanonicalNetREngine $netR = new CanonicalNetREngine(),
+        private ?PaperPlanRejectionDiagnostics $diagnostics = null,
     ) {
     }
 
@@ -56,7 +57,9 @@ final readonly class PaperCanonicalOrderPlanEvidenceSource
         CanonicalOrderBookSnapshot $book,
         CanonicalExecutionCostSnapshot $costs,
         CanonicalPortfolioSnapshot $portfolio,
+        array $diagnosticContext = [],
     ): ?CanonicalOrderPlanBuildRequest {
+        $zoneRequest = null;
         try {
             $this->assertIdentity($policy, $projection, $instrument, $book, $costs, $portfolio);
             $now = \DateTimeImmutable::createFromInterface($this->clock->now());
@@ -174,6 +177,31 @@ final readonly class PaperCanonicalOrderPlanEvidenceSource
             );
         } catch (CanonicalOrderPlanException|CanonicalRiskException $exception) {
             if (in_array($exception->reasonCode, self::EXPECTED_NO_PLAN, true)) {
+                if ($this->diagnostics !== null) {
+                    $zonePolicy = $policy->entryZone;
+                    $this->diagnostics->record([
+                        'reason_code' => $exception->reasonCode,
+                        'cell_id' => $diagnosticContext['cell_id'] ?? null,
+                        'run_id' => $diagnosticContext['run_id'] ?? null,
+                        'event_id' => $diagnosticContext['event_id'] ?? null,
+                        'config_hash' => $policy->configHash,
+                        'symbol' => $book->symbol,
+                        'side' => $policy->riskPolicy->side,
+                        'zone' => [
+                            'candidate_price' => $zoneRequest?->market->candidatePrice,
+                            'anchor_price' => $zoneRequest?->anchor->value,
+                            'atr' => $zoneRequest?->atr->value,
+                            'tick_size' => $zoneRequest?->tick->tickSize,
+                            'atr_multiplier' => $zonePolicy->atrMultiplier,
+                            'minimum_half_width_rate' => $zonePolicy->minimumHalfWidthRate,
+                            'maximum_half_width_rate' => $zonePolicy->maximumHalfWidthRate,
+                            'asymmetry_rate' => $zonePolicy->asymmetryRate,
+                            'lower_price' => null,
+                            'upper_price' => null,
+                            'entry_price' => null,
+                        ],
+                    ]);
+                }
                 return null;
             }
 

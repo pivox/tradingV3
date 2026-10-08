@@ -54,6 +54,7 @@ Règles pour le coordinateur après le « go » :
 7. Exécuter les tests pertinents une fois, puis les répéter seulement après modification ou échec. Une correction de documentation ne déclenche pas de campagne Paper.
 8. Pendant un replay, utiliser l'attente du processus et communiquer son état ; éviter les boucles d'analyse ou les agents qui surveillent tous le même processus.
 9. Un seul cycle de revue par PR : revue consolidée → correction des retours → vérifications ciblées. Ne pas multiplier les reviewers ni demander une seconde revue systématique. Cette instruction utilisateur prévaut sur les cycles multiples proposés par les skills. Les tests pertinents et les contrôles requis restent applicables ; une difficulté persistante est traitée ou signalée sans relancer une boucle de revues.
+10. Instruction utilisateur du 8 octobre : après validation de l'agent ou correction de la revue unique, fusionner puis poursuivre le lot logique suivant sans redemander un « go ». Attendre les contrôles requis et ne pas contourner les protections ou laisser de défaut bloquant connu. Ne pas demander une revue GitHub supplémentaire si la revue déléguée a déjà rempli ce cycle. Les activations d'écriture et décisions de risque restent hors de cette autorisation.
 
 ## 3. Lot 0 — préparer un espace de travail à jour
 
@@ -247,4 +248,6 @@ Ne pas modifier les flags d'écriture, les plafonds opérateur ou les secrets. A
 - Le probe privé a été corrigé après sa première exécution pour les échantillons suivants ; cette version corrigée n'a pas été réexécutée. Seul le premier échantillon fonde la preuve précise.
 - Livrables : `docs/handbook/reports/paper-zero-trade-diagnostic-2026-10-08.md` et `docs/handbook/reports/queries/paper-zero-trade-diagnostic.sql`.
 - Aucun moteur, contrat de stratégie ou flag d'écriture modifié. La base jetable reste conservée pour vérification.
+- Lot 2 : instrumentation NDJSON privée opt-in implémentée sur `codex/paper-plan-rejection-diagnostics`, revue consolidée sans blocage et clarifications appliquées. Vérifications : 23 tests ciblés / 173 assertions ; suite Paper Execution complète 303 tests / 5 557 assertions, sans skip sur base jetable dédiée ; MkDocs strict vert. Prochaine action : fusion après CI, puis collecte des refus sur une nouvelle exécution de la même cellule, sans tuning.
+- PR #445 fusionnée après CI verte et revue unique : `c43495c235c14fc6694bf2f58b720c74b69dcb76`. Lot suivant démarré depuis ce main dans le même worktree isolé, branche `codex/paper-plan-rejection-diagnostics`.
 - Vérifications finales : SQL exact-run en transaction `REPEATABLE READ READ ONLY`, refus d'un run absent, `mkdocs build --strict` et contrôles d'espaces. Les liens du rapport pointent vers le commit étudié et le rapport figure dans la navigation du handbook. Une seule revue indépendante (`gpt-6-sol / medium`), sans blocage ; ses deux clarifications ont été appliquées, sans nouvelle demande de revue.

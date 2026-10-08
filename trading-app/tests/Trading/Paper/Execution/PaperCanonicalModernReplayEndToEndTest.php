@@ -43,6 +43,7 @@ use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparationInterf
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparationResult;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyRuntime;
 use App\Trading\Paper\Execution\Strategy\PaperPreparedEffectCodec;
+use App\Trading\Paper\Execution\Strategy\PaperPlanRejectionDiagnostics;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
@@ -76,6 +77,72 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
     protected static function getKernelClass(): string
     {
         return Kernel::class;
+    }
+
+    public function testModernReplayCheckpointAndBusinessFactsEqualWithDiagnosticsOnOrOff(): void
+    {
+        self::bootKernel(['environment' => 'test', 'debug' => false]);
+        $venue = PaperMarketDataVenue::OKX;
+        $resolver = new EffectiveTradingConfigResolver();
+        $snapshot = $resolver->resolve(new EffectiveTradingConfigRequest(
+            'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
+            $venue->value, 'mainnet', 'long', ShadowExecutionCapability::Paper,
+        ));
+        $cell = PaperExecutionCell::createModern(
+            PaperMarketDataNetwork::MAINNET, $venue, $snapshot->toArray()['snapshot_hash'],
+            PaperModernStrategyIdentity::fromResolvedSnapshot(PaperMarketDataNetwork::MAINNET, $venue, $snapshot),
+            'paper-modern-diagnostic-equality',
+        );
+        [$prefix, $trigger] = $this->representativeEvents($venue);
+        $run = function (bool $enabled) use ($cell, $prefix, $trigger, $resolver): array {
+            $root = sys_get_temp_dir() . '/paper_diag_equality_' . bin2hex(random_bytes(6));
+            $path = $root . '.ndjson';
+            $diagnostics = new PaperPlanRejectionDiagnostics();
+            try {
+                if ($enabled) {
+                    $diagnostics->start($path);
+                }
+                $clock = new PaperReplayClock(new \DateTimeImmutable('2026-08-20T12:00:04Z'));
+                $market = new PaperMarketStateProjector(new PaperKlineProvider());
+                $runtimeFactory = new PaperFakeRuntimeFactory($root, $clock, 'representative-modern-replay-seed');
+                $store = new InMemoryPaperExecutionStore();
+                $store->seedSources($prefix);
+                $store->bindDataset($cell, self::DATASET_ID, self::EVENTS_SHA256, self::SOURCE_BUILD_VERSION);
+                $intents = new RecordingCanonicalPaperOrderIntents();
+                $strategy = new TriggerOnlyCanonicalPreparation(
+                    $trigger->eventId,
+                    $this->canonicalPreparation($market, $clock, $runtimeFactory, $resolver, $diagnostics),
+                );
+                $coordinator = $this->coordinator($store, $market, $runtimeFactory, $clock, $strategy, $intents);
+                $coordinator->consumeAt($cell, PaperProfileEligibility::REFERENCE_ONLY, self::DATASET_ID, count($prefix), $trigger);
+                $checkpoint = $store->checkpoint($cell);
+                $entries = array_values(array_filter(
+                    $runtimeFactory->forCell($cell)->stateStore->getOrders('BTCUSDT'),
+                    static fn ($order): bool => !$order->reduceOnly,
+                ));
+                self::assertCount(1, $entries);
+                $statePath = $runtimeFactory->statePath($cell);
+                self::assertFileExists($statePath);
+
+                return [
+                    'next_source_position' => $checkpoint->nextSourcePosition,
+                    'journal_ordinal' => $checkpoint->journalOrdinal,
+                    'journal_checksum' => $checkpoint->journalChecksum,
+                    'reservations' => $intents->reservations,
+                    'acknowledgements' => $intents->acknowledgements,
+                    'client_order_id' => $entries[0]->clientOrderId,
+                    'exchange_order_id' => $entries[0]->exchangeOrderId,
+                    'metadata' => $entries[0]->metadata,
+                    'fake_state_sha256' => hash_file('sha256', $statePath),
+                ];
+            } finally {
+                $diagnostics->close();
+                @unlink($path);
+                (new Filesystem())->remove($root);
+            }
+        };
+
+        self::assertSame($run(false), $run(true));
     }
 
     #[DataProvider('publicVenueProvider')]
@@ -134,6 +201,24 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
         self::assertNotNull($probeDecision, 'The representative prefix must produce a canonical decision.');
         self::assertSame('15m', $probeDecision->executionTimeframe);
         self::assertSame($cell->modernIdentity?->configHash, $probeDecision->lineage->configHash);
+        $diagnostics = new PaperPlanRejectionDiagnostics();
+        $diagnosticPath = $root . '_plan_rejections.ndjson';
+        try {
+            $diagnostics->start($diagnosticPath);
+            $enabledPreparation = $this->canonicalPreparation(
+                $probeMarket, $clock,
+                new PaperFakeRuntimeFactory($probeRoot, $clock, 'representative-modern-replay-seed'),
+                $resolver, $diagnostics,
+            );
+            $enabledDecision = $enabledPreparation->prepareFor(
+                $cell, $trigger, self::DATASET_ID, self::EVENTS_SHA256, self::SOURCE_BUILD_VERSION,
+            )->decision;
+            self::assertEquals($probeDecision, $enabledDecision);
+            self::assertSame('', file_get_contents($diagnosticPath));
+        } finally {
+            $diagnostics->close();
+            @unlink($diagnosticPath);
+        }
         (new Filesystem())->remove($probeRoot);
         $store = new InMemoryPaperExecutionStore();
         $store->seedSources($prefix);
@@ -227,6 +312,7 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
         PaperReplayClock $clock,
         PaperFakeRuntimeFactory $runtimeFactory,
         EffectiveTradingConfigResolver $resolver,
+        ?PaperPlanRejectionDiagnostics $diagnostics = null,
     ): PaperCanonicalStrategyPreparation {
         $books = new PaperCanonicalOrderBookSource($market, $clock);
         $provider = new PaperCanonicalStrategyEvidenceProvider(
@@ -259,7 +345,7 @@ final class PaperCanonicalModernReplayEndToEndTest extends KernelTestCase
                 ),
                 $runtimeFactory,
                 new PaperCanonicalFakePortfolioSource($clock),
-                new PaperCanonicalOrderPlanEvidenceSource($clock),
+                new PaperCanonicalOrderPlanEvidenceSource($clock, diagnostics: $diagnostics),
             ),
         );
 

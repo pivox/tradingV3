@@ -14,6 +14,7 @@ use App\Trading\Paper\Execution\PaperEventCoordinatorInterface;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Profile\PaperProfileRegistry;
+use App\Trading\Paper\Execution\Strategy\PaperPlanRejectionDiagnostics;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
@@ -34,6 +35,49 @@ use Symfony\Component\Console\Tester\CommandTester;
 #[CoversClass(PaperReplayCheckpointResolver::class)]
 final class PaperExecutionReplayCommandTest extends TestCase
 {
+    public function testPlanDiagnosticOptionStartsPrivateFileAndResetsAfterFailure(): void
+    {
+        $path = sys_get_temp_dir() . '/paper-command-rejections-' . bin2hex(random_bytes(8)) . '.ndjson';
+        $diagnostics = new PaperPlanRejectionDiagnostics();
+        try {
+            $tester = new CommandTester($this->command(diagnostics: $diagnostics));
+            self::assertSame(Command::INVALID, $tester->execute([
+                '--plan-rejection-diagnostics' => $path,
+                '--dataset' => '/missing-dataset',
+                '--configuration' => '/missing-config.json',
+                '--strategy-profile' => 'regular',
+                '--run-id' => 'paper-run-001',
+            ]));
+            self::assertFileExists($path);
+            self::assertSame(0600, fileperms($path) & 0777);
+            $diagnostics->record(['should_not_be_written' => true]);
+            self::assertSame('', file_get_contents($path));
+        } finally {
+            $diagnostics->close();
+            @unlink($path);
+        }
+    }
+
+    public function testPlanDiagnosticOptionRefusesExistingFileWithoutOverwriting(): void
+    {
+        $path = sys_get_temp_dir() . '/paper-command-existing-' . bin2hex(random_bytes(8)) . '.ndjson';
+        file_put_contents($path, "existing\n");
+        try {
+            $tester = new CommandTester($this->command(diagnostics: new PaperPlanRejectionDiagnostics()));
+            self::assertSame(Command::INVALID, $tester->execute([
+                '--plan-rejection-diagnostics' => $path,
+                '--dataset' => '/missing-dataset',
+                '--configuration' => '/missing-config.json',
+                '--strategy-profile' => 'regular',
+                '--run-id' => 'paper-run-001',
+            ]));
+            self::assertStringContainsString('paper_plan_diagnostics_open_failed', $tester->getDisplay());
+            self::assertStringNotContainsString('"completed":true', $tester->getDisplay());
+            self::assertSame("existing\n", file_get_contents($path));
+        } finally {
+            @unlink($path);
+        }
+    }
     public function testEveryOperatorOptionIsMandatory(): void
     {
         $tester = new CommandTester($this->command());
@@ -289,7 +333,7 @@ final class PaperExecutionReplayCommandTest extends TestCase
         );
     }
 
-    private function command(?PaperDatasetVerifier $verifier = null, ?PaperReplayReader $reader = null, ?PaperExecutionStoreInterface $store = null, ?PaperEventCoordinatorInterface $coordinator = null): PaperExecutionReplayCommand
+    private function command(?PaperDatasetVerifier $verifier = null, ?PaperReplayReader $reader = null, ?PaperExecutionStoreInterface $store = null, ?PaperEventCoordinatorInterface $coordinator = null, ?PaperPlanRejectionDiagnostics $diagnostics = null): PaperExecutionReplayCommand
     {
         $coordinator ??= new class implements PaperEventCoordinatorInterface {
             public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void {}
@@ -317,6 +361,7 @@ final class PaperExecutionReplayCommandTest extends TestCase
             $reader,
             $store,
             $coordinator,
+            diagnostics: $diagnostics,
         );
     }
 }
