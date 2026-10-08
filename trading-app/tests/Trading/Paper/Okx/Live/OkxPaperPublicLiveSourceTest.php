@@ -9895,10 +9895,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
      */
     public function testForwardTradeRecoveryBench(): void
     {
-        $trades = (int) getenv('OKX_PAPER_RECOVERY_BENCH');
-        if ($trades <= 0) {
-            self::markTestSkipped('Set OKX_PAPER_RECOVERY_BENCH to a number of trades.');
-        }
+        $trades = (int) (getenv('OKX_PAPER_RECOVERY_BENCH') ?: 1000);
         $limiter = (new RateLimiterFactory(
             ['id' => 'okx_paper_history', 'policy' => 'sliding_window', 'limit' => 16, 'interval' => '2 seconds'],
             new InMemoryStorage(),
