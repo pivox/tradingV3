@@ -16,8 +16,6 @@ parameters:
     app.mtf_log_level: 'info'
     # Configuration pour le backtesting avec une heure fixe
     app.clock.fixed_time: null  # null = temps réel, sinon DateTimeImmutable pour backtesting
-    bitmart_public_base_uri: '%env(string:BITMART_PUBLIC_API_URL)%'
-    bitmart_private_base_uri: '%env(string:BITMART_PRIVATE_API_URL)%'
     trade_entry.order_timeout_seconds: 120
     # Durée de réactivation du MtfSwitch après annulation d'ordre (au lieu de 4h)
     env(ORDER_TIMEOUT_SWITCH_DURATION): '15m'
@@ -30,13 +28,6 @@ parameters:
     router.default_uri: 'http://trading-app-nginx'
     messenger.transport.dsn: 'doctrine://default?queue_name=log_messages'
     # Default values for env-backed log levels (so env is optional)
-    env(BITMART_API_KEY): ''
-    env(BITMART_SECRET_KEY): ''
-    env(BITMART_API_MEMO): ''
-    env(BITMART_BASE_URL): 'https://api-cloud-v2.bitmart.com'
-    env(BITMART_PUBLIC_API_URL): 'https://api-cloud-v2.bitmart.com'
-    env(BITMART_PRIVATE_API_URL): 'https://api-cloud-v2.bitmart.com'
-    env(BITMART_WS_PRIVATE_URL): 'wss://openapi-ws-v2.bitmart.com/api?protocol=1.1'
     env(MTF_LOG_LEVEL): 'info'
     env(LOG_LEVEL_MAIN): 'info'
     env(LOG_LEVEL_SIGNALS): 'info'
@@ -81,6 +72,7 @@ parameters:
     env(FAKE_EXCHANGE_DAILY_LOSS_CAP_USDT): '100.000000000000'
     env(FAKE_EXCHANGE_DETERMINISTIC_SEED): 'fake-paper-default-seed-v1'
     app.trade_entry_default_mode: 'scalper_micro'
+    app.okx_demo_max_notional: 1000.0
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
 
@@ -122,14 +114,8 @@ services:
         resource: '../src/Provider/'
         exclude:
             - '../src/Provider/Entity/'
-            - '../src/Provider/Bitmart/'
         bind:
             $logger: '@monolog.logger.provider'
-
-    App\Provider\Bitmart\:
-        resource: '../src/Provider/Bitmart/'
-        bind:
-            $logger: '@monolog.logger.bitmart'
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
@@ -213,6 +199,7 @@ services:
         class: App\TradeEntry\Execution\ExchangeExecutionService
         arguments:
             $adapters: '@paper.execution.empty_adapter_registry'
+            $restingEntryBus: null
 
     App\Trading\Paper\Execution\Fake\PaperFakeEffectDispatcher:
         arguments:
@@ -239,6 +226,35 @@ services:
             $canonicalDispatcher: '@App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher'
             $canonicalOrderIntents: '@App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorderInterface'
 
+    # #132 j: Paper trade lifecycle. Paper-only instances of live services, used by
+    # App\Trading\Paper\Execution\Lifecycle\PaperTradeLifecycleEmitter; no live definition changes.
+    # The Paper listener instance is NOT an event listener (autoconfigure: false): the Paper
+    # lifecycle calls it directly, with the replay clock and klines from the replayed dataset only.
+    paper.execution.lifecycle_logger:
+        class: App\Logging\TradeLifecycleLogger
+        autoconfigure: false
+        arguments:
+            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
+
+    paper.execution.lifecycle_listener:
+        class: App\Trading\Listener\TradeLifecycleLoggerListener
+        autoconfigure: false
+        arguments:
+            $tradeLifecycleLogger: '@paper.execution.lifecycle_logger'
+            $mainProvider: '@App\Trading\Paper\Execution\Lifecycle\PaperLifecycleMainProvider'
+
+    paper.execution.fill_cost_ledger:
+        class: App\Trading\Pnl\FillCostLedgerIngestionService
+        autoconfigure: false
+        arguments:
+            $evidenceRefresher: '@paper.execution.lifecycle_listener'
+
+    paper.execution.exchange_projection:
+        class: App\Exchange\Event\DoctrineExchangeLocalProjectionStore
+        autoconfigure: false
+        arguments:
+            $fillCostLedger: '@paper.execution.fill_cost_ledger'
+
     App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReaderInterface:
         alias: App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReader
 
@@ -260,8 +276,16 @@ services:
     App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface:
         alias: App\Provider\Hyperliquid\HyperliquidMutationReadinessProbe
 
+    App\Provider\Hyperliquid\EffectiveTradingHyperliquidMutationReadinessConfigSource:
+        arguments:
+            $envelopePath: '%kernel.project_dir%/config/trading/env/testnet.yaml'
+
     App\Provider\Hyperliquid\HyperliquidMutationReadinessConfigSourceInterface:
         alias: App\Provider\Hyperliquid\EffectiveTradingHyperliquidMutationReadinessConfigSource
+
+    App\Exchange\Adapter\HyperliquidExchangeAdapter:
+        arguments:
+            $mutationProof: null
 
     App\Provider\Hyperliquid\HyperliquidInstrumentMetadataProviderInterface:
         alias: App\Provider\Hyperliquid\HyperliquidMetadataProvider
@@ -396,17 +420,6 @@ services:
             $businessTransport: '@okx.private_ws.transport.business'
             $logger: '@monolog.logger.okx_private_ws'
 
-    # Service Redis réel pour OrderWatcherPublisher (Pub/Sub)
-    App\Provider\Redis\RedisPubSubClient:
-        class: App\Provider\Redis\RedisPubSubClient
-        public: true
-        arguments:
-            $host: '%env(string:REDIS_HOST)%'
-            $port: '%env(int:REDIS_PORT)%'
-            $logger: '@monolog.logger.bitmart'
-        tags:
-            - { name: 'container.hot_path' }
-
     App\MtfValidator\Runtime\Concurrency\LockManager:
         arguments:
             $redis: '@Redis'
@@ -414,24 +427,6 @@ services:
 
 
     # Rate Limiter
-
-    bitmart.throttle_lock_store:
-        class: Symfony\Component\Lock\Store\FlockStore
-        arguments:
-            - '%kernel.project_dir%/var/lock'
-
-    bitmart.throttle_lock_factory:
-        class: Symfony\Component\Lock\LockFactory
-        arguments:
-            - '@bitmart.throttle_lock_store'
-
-    # Configuration Bitmart
-    App\Provider\Bitmart\Http\BitmartConfig:
-        arguments:
-            $apiKey: '%env(BITMART_API_KEY)%'
-            $apiSecret: '%env(BITMART_SECRET_KEY)%'
-            $apiMemo: '%env(BITMART_API_MEMO)%'
-        public: true
 
     App\Exchange\Hyperliquid\HyperliquidConfig:
         arguments:
@@ -470,6 +465,14 @@ services:
             $simulatedTrading: '%env(bool:OKX_SIMULATED_TRADING)%'
             $demoTradingEnabled: '%env(bool:OKX_DEMO_TRADING_ENABLED)%'
             $liveEnabled: '%env(bool:OKX_LIVE_ENABLED)%'
+            $globalDemoTradingEnabled: '%env(bool:DEMO_TRADING_ENABLED)%'
+
+    App\Exchange\Okx\Demo\FilesystemOkxDemoTrip:
+        arguments:
+            $markerPath: '%kernel.project_dir%/var/okx-demo-execution.quarantine'
+
+    App\Exchange\Okx\Demo\OkxDemoTripInterface:
+        alias: App\Exchange\Okx\Demo\FilesystemOkxDemoTrip
 
     App\Exchange\Okx\OkxRestClient:
         arguments:
@@ -612,53 +615,7 @@ services:
         factory: ['@App\Config\MtfContractsConfigProvider', 'getConfigForProfile']
         arguments: [null]
 
-    # BitMart HTTP Client
-    App\Provider\Bitmart\Http\BitmartHttpClientPublic:
-        arguments:
-            $bitmartFuturesV2: '@http_client.bitmart_futures_v2'
-            $bitmartSystem: '@http_client.bitmart_system'
-            $lockFactory: '@bitmart.throttle_lock_factory'
-            $projectDir: '%kernel.project_dir%'
-        public: true
-
     # --- Exchange provider registry ---
-
-    App\Provider\Context\ExchangeContext.bitmart_perpetual:
-        class: App\Provider\Context\ExchangeContext
-        arguments:
-            $exchange: !php/const App\Common\Enum\Exchange::BITMART
-            $marketType: !php/const App\Common\Enum\MarketType::PERPETUAL
-        public: false
-
-    App\Provider\Context\ExchangeContext.bitmart_spot:
-        class: App\Provider\Context\ExchangeContext
-        arguments:
-            $exchange: !php/const App\Common\Enum\Exchange::BITMART
-            $marketType: !php/const App\Common\Enum\MarketType::SPOT
-        public: false
-
-    App\Provider\Registry\ExchangeProviderBundle.bitmart_perpetual:
-        class: App\Provider\Registry\ExchangeProviderBundle
-        arguments:
-            $context: '@App\Provider\Context\ExchangeContext.bitmart_perpetual'
-            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
-            $contractProvider: '@App\Provider\Bitmart\BitmartContractProvider'
-            $orderProvider: '@App\Provider\Bitmart\BitmartOrderProvider'
-            $accountProvider: '@App\Provider\Bitmart\BitmartAccountProvider'
-            $systemProvider: '@App\Provider\Bitmart\SystemProvider'
-        public: false
-
-    # Note: Spot currently reuses the same provider classes. Adjust when spot-specific providers exist.
-    App\Provider\Registry\ExchangeProviderBundle.bitmart_spot:
-        class: App\Provider\Registry\ExchangeProviderBundle
-        arguments:
-            $context: '@App\Provider\Context\ExchangeContext.bitmart_spot'
-            $klineProvider: '@App\Provider\Bitmart\BitmartKlineProvider'
-            $contractProvider: '@App\Provider\Bitmart\BitmartContractProvider'
-            $orderProvider: '@App\Provider\Bitmart\BitmartOrderProvider'
-            $accountProvider: '@App\Provider\Bitmart\BitmartAccountProvider'
-            $systemProvider: '@App\Provider\Bitmart\SystemProvider'
-        public: false
 
     # --- Fake exchange provider bundle ---
     # Neutral/empty exchange used by the Python orchestrator demo sets
@@ -725,7 +682,7 @@ services:
 
     # --- Hyperliquid provider bundle ---
     # Testnet readiness for perpetual only. Public and account read-only surfaces
-    # use Hyperliquid /info; every mutative path remains fail-closed. No Bitmart
+    # use Hyperliquid /info; every mutative path remains fail-closed. No
     # fallback, no broadcast.
     App\Provider\Registry\ExchangeProviderBundle.hyperliquid_perpetual:
         class: App\Provider\Registry\ExchangeProviderBundle
@@ -741,27 +698,22 @@ services:
     App\Provider\Registry\ExchangeProviderRegistry:
         arguments:
             $bundles:
-                - '@App\Provider\Registry\ExchangeProviderBundle.bitmart_perpetual'
-                - '@App\Provider\Registry\ExchangeProviderBundle.bitmart_spot'
                 - '@App\Provider\Registry\ExchangeProviderBundle.fake_perpetual'
                 - '@App\Provider\Registry\ExchangeProviderBundle.okx_perpetual'
                 - '@App\Provider\Registry\ExchangeProviderBundle.hyperliquid_perpetual'
-            $defaultExchange: !php/const App\Common\Enum\Exchange::BITMART
+            $defaultExchange: !php/const App\Common\Enum\Exchange::OKX
             $defaultMarketType: !php/const App\Common\Enum\MarketType::PERPETUAL
 
     App\Contract\Provider\ExchangeProviderRegistryInterface: '@App\Provider\Registry\ExchangeProviderRegistry'
 
-    # Default interface aliases for autowiring. KlineProviderInterface,
-    # OrderProviderInterface and SystemProviderInterface are aliased via #[AsAlias]
-    # on their Bitmart classes. AccountProviderInterface and ContractProviderInterface
-    # previously resolved implicitly because Bitmart was the single implementation;
-    # registering the Fake providers added a second candidate, so the default
-    # (Bitmart) alias must now be declared explicitly.
-    App\Contract\Provider\AccountProviderInterface: '@App\Provider\Bitmart\BitmartAccountProvider'
-    App\Contract\Provider\ContractProviderInterface: '@App\Provider\Bitmart\BitmartContractProvider'
+    App\Contract\Provider\AccountProviderInterface: '@App\Provider\Okx\OkxAccountGateway'
+    App\Contract\Provider\ContractProviderInterface: '@App\Provider\Okx\OkxMetadataProvider'
+    App\Contract\Provider\KlineProviderInterface: '@App\Provider\Okx\OkxMarketDataGateway'
+    App\Contract\Provider\OrderProviderInterface: '@App\Provider\Okx\OkxOrderGateway'
+    App\Contract\Provider\SystemProviderInterface: '@App\Provider\Okx\OkxSystemProvider'
 
     # Provide a default context alias so autowiring of ExchangeContext resolves
-    App\Provider\Context\ExchangeContext: '@App\Provider\Context\ExchangeContext.bitmart_perpetual'
+    App\Provider\Context\ExchangeContext: '@App\Provider\Context\ExchangeContext.okx_perpetual'
 
     App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceMapper: ~
     App\Provider\Hyperliquid\HyperliquidIsolatedLiquidationSolver: ~
@@ -771,14 +723,10 @@ services:
     # Kline Provider
 
 
-    # HTTP Client pour BitMart
     GuzzleHttp\Client:
         arguments:
             - timeout: 10
             - connect_timeout: 5
-
-    # BitMart REST Client (utilise maintenant BitmartHttpClientPublic)
-    # App\Infrastructure\Http\BitmartRestClient: supprimé, utilise App\Provider\Bitmart\Http\BitmartHttpClientPublic
 
     # WebSocket dependencies
     React\EventLoop\LoopInterface:
@@ -789,8 +737,6 @@ services:
         class: React\Socket\Connector
         arguments:
             - loop: '@React\EventLoop\LoopInterface'
-
-    # BitMart WebSocket Client
 
     # Repositories
     App\Provider\Repository\KlineRepository:
@@ -972,27 +918,6 @@ services:
             - trade_entry
         tags:
             - { name: monolog.logger, channel: trade_entry }
-
-    # Logger spécifique pour Bitmart (HTTP public/privé)
-    monolog.logger.bitmart:
-        parent: monolog.logger
-        arguments:
-            - bitmart
-        tags:
-            - { name: monolog.logger, channel: bitmart }
-
-    monolog.logger.ws_agent:
-        parent: monolog.logger
-        arguments:
-            - ws_agent
-        tags:
-            - { name: monolog.logger, channel: ws_agent }
-
-    # WebSocket Dispatcher (configuration explicite pour résoudre l'injection)
-    App\WebSocket\Service\WsDispatcher:
-        arguments:
-            $wsPublicKlinesService: '@App\WebSocket\Service\WsPublicKlinesService'
-            $logger: '@logger'
 
     # === Trading Storage Services ===
     # Alias pour les interfaces de repository

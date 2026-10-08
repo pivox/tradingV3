@@ -409,7 +409,8 @@ final class PaperCanonicalExecutionCostSourceTest extends TestCase
             PaperMarketDataVenue::OKX,
             'BTCUSDT',
             PaperMarketDataChannel::CANDLE_15M,
-            new \DateTimeImmutable('2026-08-01T10:00:00Z'),
+            // An OKX candle is stamped with its open: this 15m candle closes at 10:00.
+            new \DateTimeImmutable('2026-08-01T09:45:00Z'),
             new \DateTimeImmutable($receivedTimestamp),
             $sequence,
             [

@@ -157,7 +157,7 @@ const ExchangeAccountsPage = () => {
                         <input
                             name="exchange"
                             type="text"
-                            placeholder="ex: bitmart"
+                            placeholder="ex: okx"
                             value={formData.exchange}
                             onChange={handleChange}
                             required

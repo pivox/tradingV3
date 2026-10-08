@@ -26,7 +26,7 @@
   docker-compose exec trading-app-php php bin/console app:export-symbol-data LINKUSDT "2025-11-30 13:02" --show-sql --show-logs
   ```
   - Exporte toutes les données BDD (indicator_snapshots, mtf_*, order_intent*, futures_order*, trade_lifecycle_event, trade_zone_events) dans une fenêtre de ±1h
-  - Exporte tous les logs (positions, mtf, signals, bitmart, provider, indicators, dev) dans une fenêtre de ±5min
+  - Exporte tous les logs (positions, mtf, signals, provider, indicators, dev) dans une fenêtre de ±5min
   - Fichier créé dans `investigation/symbol_data_<SYMBOL>_<DATE>_<HEURE>.json`
   - Options:
     - `--show-sql`: Affiche toutes les requêtes SQL exécutées dans la console
@@ -41,7 +41,6 @@
   - `RsiBullishCondition` → seuil 5m abaissé dynamiquement à 49 (fallback automatique si aucun override n’est fourni).
   - `close_above_vwap_or_ma9_relaxed` → nouvelle règle YAML qui tolère une clôture proche du VWAP lorsque `atr_rel_in_range_5m` passe et que le prix reste dans ±0.4 % du VWAP.
 - TODO 09 déc 2025 : rétablir la persistance des signaux (SignalValidationService obsolète, aucun dispatch messenger → table `signals` vide). Décider si on reconnecte `SignalPersistenceService` directement dans les services TF ou si on crée un handler messenger dédié.
-- Nouveau endpoint `/api/provider/positions/protection` disponible pour Bitmart (payload `exchange: "bitmart"`, `symbol`, `plan_order_id` ou `order_id`, `stop_loss_price` / `take_profit_price`, `client_order_id` optionnel) ; permet de mettre à jour SL/TP via `modify-plan-order`.
 
 ## 4 déc 2025 – Persistance indicateurs asynchrone
 - `MtfRunnerService` n'appelle plus `getIndicatorsForSymbolAndTimeframes()` directement. À la place, chaque run dispatch un `IndicatorSnapshotPersistRequestMessage` (redis `mtf_projection`) contenant `symbols` + `timeframes` + `run_id`.

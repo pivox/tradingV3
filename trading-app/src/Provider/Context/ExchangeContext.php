@@ -25,18 +25,23 @@ final class ExchangeContext
 
     public static function legacyDefault(): self
     {
-        return new self(Exchange::BITMART, MarketType::PERPETUAL);
+        return new self(Exchange::OKX, MarketType::PERPETUAL);
     }
 
     public static function fromValues(mixed $exchange = null, mixed $marketType = null): self
     {
+        return new self(
+            self::exchangeFrom($exchange),
+            self::marketTypeFrom($marketType),
+        );
+    }
+
+    public static function tryFromValues(mixed $exchange = null, mixed $marketType = null): ?self
+    {
         try {
-            return new self(
-                Exchange::from(self::normalize($exchange, Exchange::BITMART->value)),
-                MarketType::from(self::normalize($marketType, MarketType::PERPETUAL->value)),
-            );
-        } catch (\ValueError) {
-            return self::legacyDefault();
+            return self::fromValues($exchange, $marketType);
+        } catch (UnsupportedExchangeException) {
+            return null;
         }
     }
 
@@ -49,6 +54,18 @@ final class ExchangeContext
             $data['exchange'] ?? null,
             $data['market_type'] ?? $data['marketType'] ?? null,
         );
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     */
+    public static function tryFromArray(array $data): ?self
+    {
+        try {
+            return self::fromArray($data);
+        } catch (UnsupportedExchangeException) {
+            return null;
+        }
     }
 
     public static function resolve(?self $context): self
@@ -84,6 +101,26 @@ final class ExchangeContext
     public function __toString(): string
     {
         return $this->key();
+    }
+
+    private static function exchangeFrom(mixed $value): Exchange
+    {
+        if ($value instanceof Exchange) {
+            return $value;
+        }
+        if ($value === null || (\is_string($value) && trim($value) === '')) {
+            return Exchange::OKX;
+        }
+        if (!\is_string($value)) {
+            throw new UnsupportedExchangeException(get_debug_type($value));
+        }
+
+        return Exchange::tryFrom(strtolower(trim($value))) ?? throw new UnsupportedExchangeException($value);
+    }
+
+    private static function marketTypeFrom(mixed $value): MarketType
+    {
+        return MarketType::tryFrom(self::normalize($value, MarketType::PERPETUAL->value)) ?? MarketType::PERPETUAL;
     }
 
     private static function normalize(mixed $value, string $fallback): string

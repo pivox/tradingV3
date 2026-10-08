@@ -108,7 +108,7 @@ CREATE TABLE trade_lifecycle_event (
     position_id VARCHAR(64),
     timeframe VARCHAR(8),
     config_profile VARCHAR(64),
-    exchange VARCHAR(32) DEFAULT 'bitmart',
+    exchange VARCHAR(32) DEFAULT 'okx',
     market_data_venue VARCHAR(32),
     market_type VARCHAR(32) DEFAULT 'perpetual',
     extra JSONB,

@@ -16,7 +16,7 @@ final class IndicatorSnapshotPersistRequestMessage
         public readonly ?string $runId = null,
         public readonly ?string $profile = null,
         public readonly ?string $requestedAt = null,
-        public readonly string $exchange = 'bitmart',
+        public readonly string $exchange = 'okx',
         public readonly string $marketType = 'perpetual',
     ) {
     }

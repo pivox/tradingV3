@@ -83,7 +83,23 @@ final readonly class OkxPaperPublicFrameDecoder
             throw new OkxPaperLiveIntegrityException('okx_paper_public_protocol_error');
         }
 
-        if ($event !== 'subscribe' || !self::hasRequiredAndOnlyKeys(
+        if ($event === 'notice') {
+            // Documented by OKX v5: sent 60 s before the connection is closed for a
+            // WebSocket service upgrade (code 64008). Any other notice is unknown.
+            if (!self::hasRequiredAndOnlyKeys($message, ['event', 'code', 'msg', 'connId'], [])
+                || $message['code'] !== '64008'
+                || !is_string($message['msg'])
+            ) {
+                throw self::invalidMessage();
+            }
+            self::assertControlMetadata($message);
+
+            return ['event' => 'notice', 'code' => '64008', 'msg' => $message['msg']];
+        }
+
+        // `unsubscribe` only acknowledges a books resubscription the source requested
+        // (it rejects any other one).
+        if (($event !== 'subscribe' && $event !== 'unsubscribe') || !self::hasRequiredAndOnlyKeys(
             $message,
             ['event', 'arg', 'connId'],
             ['id'],
@@ -99,7 +115,7 @@ final readonly class OkxPaperPublicFrameDecoder
 
         $normalizedArgument = $this->assertRequiredArgument(get_object_vars($arg), $business);
 
-        return ['event' => 'subscribe', 'arg' => $normalizedArgument];
+        return ['event' => $event, 'arg' => $normalizedArgument];
     }
 
     /**

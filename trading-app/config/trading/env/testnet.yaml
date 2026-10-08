@@ -1,13 +1,22 @@
-version: '0.1.0-effective-config-demo-testnet'
-
-trading:
-  env: testnet
-  environment: testnet
-  execution:
-    dry_run: true
-    live_enabled: false
-    mainnet_write_enabled: false
-    demo_testnet_write_enabled: false
-    kill_switch_enabled: true
-    require_stop_loss: true
-
+schema_version: hyperliquid-testnet-readiness-envelope.v1
+envelope_version: 1.0.0
+exchange: hyperliquid
+environment: testnet
+eligible_identities:
+  - { mode_id: day_trading, mode_version: 1.1.0, setup_id: day_trading.trend_continuation.long, setup_version: 1.1.0, side: long }
+  - { mode_id: micro_scalping, mode_version: 1.1.0, setup_id: micro_scalping.momentum_ofi.long, setup_version: 1.1.0, side: long }
+  - { mode_id: micro_scalping, mode_version: 1.1.0, setup_id: micro_scalping.momentum_ofi.short, setup_version: 1.1.0, side: short }
+  - { mode_id: scalping, mode_version: 1.1.0, setup_id: scalping.pullback.long, setup_version: 1.1.0, side: long }
+  - { mode_id: scalping, mode_version: 1.1.0, setup_id: scalping.trend_continuation.long, setup_version: 1.1.0, side: long }
+  - { mode_id: scalping, mode_version: 1.1.0, setup_id: scalping.trend_momentum.short, setup_version: 1.1.0, side: short }
+allowed_symbols: [BTCUSDT]
+allowed_markets: [perpetual]
+max_notional: 25.0
+execution:
+  dry_run: false
+  live_enabled: false
+  mainnet_write_enabled: false
+  demo_testnet_write_enabled: true
+  kill_switch_enabled: false
+  require_stop_loss: true
+envelope_hash: 5ddd67cb3a4c8be52560fb8747045ef3d8423eb2ec6173dccce9cf59c2465384

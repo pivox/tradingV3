@@ -6,7 +6,6 @@ namespace App\Provider\Command;
 
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\MainProviderInterface;
-use App\Provider\Bitmart\Dto\ListKlinesDto;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -16,8 +15,8 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
-    name: 'bitmart:fetch-klines',
-    description: 'Récupère les klines depuis BitMart Futures'
+    name: 'provider:fetch-klines',
+    description: 'Récupère les klines depuis exchange'
 )]
 final class FetchKlinesCommand extends Command
 {
@@ -37,13 +36,13 @@ final class FetchKlinesCommand extends Command
             ->addOption('from', null, InputOption::VALUE_OPTIONAL, 'Date de début (Y-m-d H:i:s)')
             ->addOption('to', null, InputOption::VALUE_OPTIONAL, 'Date de fin (Y-m-d H:i:s)')
             ->setHelp('
-Cette commande récupère les klines (bougies) depuis l\'API BitMart Futures.
+Cette commande récupère les klines (bougies) depuis l\'API exchange.
 
 Exemples:
-  php bin/console bitmart:fetch-klines BTCUSDT
-  php bin/console bitmart:fetch-klines BTCUSDT --timeframe=4h --limit=50
-  php bin/console bitmart:fetch-klines BTCUSDT --output=json
-  php bin/console bitmart:fetch-klines BTCUSDT --from="2024-01-01 00:00:00" --to="2024-01-02 00:00:00"
+  php bin/console provider:fetch-klines BTCUSDT
+  php bin/console provider:fetch-klines BTCUSDT --timeframe=4h --limit=50
+  php bin/console provider:fetch-klines BTCUSDT --output=json
+  php bin/console provider:fetch-klines BTCUSDT --from="2024-01-01 00:00:00" --to="2024-01-02 00:00:00"
             ');
     }
 
@@ -70,7 +69,7 @@ Exemples:
             $fromDate = $from ? new \DateTimeImmutable($from, new \DateTimeZone('UTC')) : null;
             $toDate = $to ? new \DateTimeImmutable($to, new \DateTimeZone('UTC')) : null;
 
-            $io->title('Récupération des klines BitMart Futures');
+            $io->title('Récupération des klines exchange');
             $io->info(sprintf(
                 'Symbole: %s | Timeframe: %s | Limite: %d',
                 $symbol,
@@ -131,6 +130,9 @@ Exemples:
     }
 
 
+    /**
+     * @param \App\Contract\Provider\Dto\KlineDto[] $klines
+     */
     private function displayKlinesTable(SymfonyStyle $io, array $klines, string $symbol, Timeframe $timeframe): void
     {
         $headers = ['Date/Heure', 'Open', 'High', 'Low', 'Close', 'Volume', 'Source'];
@@ -151,7 +153,10 @@ Exemples:
         $io->table($headers, $rows);
     }
 
-    private function outputJson(OutputInterface $output, ListKlinesDto $klines, string $symbol, Timeframe $timeframe): void
+    /**
+     * @param \App\Contract\Provider\Dto\KlineDto[] $klines
+     */
+    private function outputJson(OutputInterface $output, array $klines, string $symbol, Timeframe $timeframe): void
     {
         $data = array_map(function ($kline) use ($symbol, $timeframe) {
             return [
@@ -165,12 +170,15 @@ Exemples:
                 'volume' => $kline->volume->toScale(12)->__toString(),
                 'source' => $kline->source
             ];
-        }, $klines->toArray());
+        }, $klines);
 
         $output->writeln(json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
     }
 
-    private function outputCsv(OutputInterface $output, ListKlinesDto $klines, string $symbol, Timeframe $timeframe): void
+    /**
+     * @param \App\Contract\Provider\Dto\KlineDto[] $klines
+     */
+    private function outputCsv(OutputInterface $output, array $klines, string $symbol, Timeframe $timeframe): void
     {
         $output->writeln('open_time,open,high,low,close,volume,source');
 

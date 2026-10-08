@@ -144,7 +144,7 @@ final class PaperFakeRuntimeFactoryTest extends TestCase
         $state = new FakeExchangeStateStore();
         $book = new FakeExchangeOrderBook($state);
         $adapter = $this->createMock(ExchangeAdapterInterface::class);
-        $adapter->method('exchange')->willReturn(Exchange::BITMART);
+        $adapter->method('exchange')->willReturn(Exchange::OKX);
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('paper_execution_exchange_must_be_fake');

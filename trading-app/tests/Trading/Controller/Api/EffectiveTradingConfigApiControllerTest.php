@@ -49,12 +49,12 @@ final class EffectiveTradingConfigApiControllerTest extends TestCase
         self::assertSame([], $body['provenance']);
     }
 
-    public function testLegacyAliasesAndBitmartReturnStructuredInvalidRequestWithoutFallback(): void
+    public function testLegacyAliasesAndUnsupportedExchangeReturnStructuredInvalidRequestWithoutFallback(): void
     {
         $response = $this->controller()->effective(new Request([
             'mode_id' => 'scalper', 'mode_version' => '1.0.0',
             'setup_id' => 'scalping.pullback.long', 'setup_version' => '1.0.0',
-            'exchange' => 'bitmart', 'environment' => 'demo', 'side' => 'long',
+            'exchange' => 'binance', 'environment' => 'demo', 'side' => 'long',
         ]));
         self::assertSame(Response::HTTP_BAD_REQUEST, $response->getStatusCode());
         self::assertSame('invalid_config_request', $this->json($response)['error']['code']);

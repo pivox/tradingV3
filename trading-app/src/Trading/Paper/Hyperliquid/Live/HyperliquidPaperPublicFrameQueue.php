@@ -11,11 +11,18 @@ final class HyperliquidPaperPublicFrameQueue
 
     private int $bytes = 0;
 
+    /** The bounds default to the policy; only tests make them smaller. */
+    public function __construct(
+        private readonly int $maxFrames = HyperliquidPaperLivePolicy::MAX_QUEUED_FRAMES,
+        private readonly int $maxBytes = HyperliquidPaperLivePolicy::MAX_QUEUED_BYTES,
+    ) {
+    }
+
     public function enqueue(#[\SensitiveParameter] string $frame): void
     {
         $frameBytes = \strlen($frame);
-        if (\count($this->frames) >= HyperliquidPaperLivePolicy::MAX_QUEUED_FRAMES
-            || $frameBytes > HyperliquidPaperLivePolicy::MAX_QUEUED_BYTES - $this->bytes
+        if (\count($this->frames) >= $this->maxFrames
+            || $frameBytes > $this->maxBytes - $this->bytes
         ) {
             throw new HyperliquidPaperLiveIntegrityException(
                 'market_data_backpressure_exhausted',

@@ -14,19 +14,59 @@ final readonly class HyperliquidPaperLivePolicy
     public const HEARTBEAT_IDLE_SECONDS = 5.0;
     public const PONG_TIMEOUT_SECONDS = 10.0;
     public const NETWORK_PUMP_SECONDS = 0.001;
-    public const NETWORK_PUMP_FRAME_HIGH_WATER = 128;
-    public const NETWORK_RESUME_FRAME_LOW_WATER = 64;
-    public const NETWORK_PUMP_BYTE_HIGH_WATER = 1_048_576;
-    public const NETWORK_RESUME_BYTE_LOW_WATER = 524_288;
+    /*
+     * The bbo subscriptions push up to one frame per block per coin (about 20 frames/s with
+     * trades and candles, 60 in a burst), and Hyperliquid sends every fill of a block in one
+     * trades frame (thousands in a sweep): the budgets absorb a long burst backlog.
+     */
+    public const NETWORK_PUMP_FRAME_HIGH_WATER = 2048;
+    public const NETWORK_RESUME_FRAME_LOW_WATER = 1024;
+    public const NETWORK_PUMP_BYTE_HIGH_WATER = 16_777_216;
+    public const NETWORK_RESUME_BYTE_LOW_WATER = 8_388_608;
     public const FUNDING_REFRESH_SECONDS = 3000.0;
-    public const MAX_FRAME_BYTES = 1_048_576;
-    public const MAX_QUEUED_FRAMES = 256;
-    public const MAX_QUEUED_BYTES = 2_097_152;
+    public const MAX_FRAME_BYTES = 8_388_608;
+    public const MAX_QUEUED_FRAMES = 4096;
+    public const MAX_QUEUED_BYTES = 33_554_432;
     public const MAX_BOOK_LEVELS_PER_SIDE = 500;
     public const MAX_CHECKPOINT_BYTES = 1_048_576;
     public const MAX_PENDING_TRADE_ROWS = 256;
     public const MAX_ACKNOWLEDGED_EVENT_IDENTITIES = 512;
     public const MAX_ACKNOWLEDGED_IDENTITIES_PER_STREAM = 500;
+    /** Connection age at which a make-before-break rotation starts (HL drops ~3 h connections). */
+    public const CONNECTION_ROTATION_SECONDS = 8100.0;
+    public const ROTATION_OVERLAP_TIMEOUT_SECONDS = 60.0;
+    public const ROTATION_RETRY_SECONDS = 30.0;
+    /** A lost streaming connection is replaced within this budget, or the capture fails closed. */
+    public const RECOVERY_DEADLINE_SECONDS = 30.0;
+    public const RECOVERY_ATTEMPT_TIMEOUT_SECONDS = 10.0;
+    public const RECOVERY_MAX_ATTEMPTS = 3;
+    public const RECOVERY_RETRY_SECONDS = 1.0;
+    /**
+     * The permanent standby keeps this window of frames (and, per stream, everything since
+     * the last frame the active connection caught up with); above the soft cap the caught-up
+     * frames go regardless of age, so a busy market never reaches the hard cap.
+     */
+    public const HOT_STANDBY_WINDOW_SECONDS = 20.0;
+    public const HOT_STANDBY_MIN_ITEMS = 128;
+    public const HOT_STANDBY_SOFT_MAX_ITEMS = 768;
+    public const HOT_STANDBY_REOPEN_DELAYS_SECONDS = [1.0, 2.0, 4.0, 8.0, 15.0, 30.0];
+    /**
+     * Books (one per bbo message, about 14/s) are held and emitted together as one durable
+     * batch at the latest this long after the first, or at this count, and always before any
+     * other event, switch or stop: their order and timestamps are unchanged. A pending batch
+     * is saved whole in the checkpoint (88 canonical JSON nodes per book): 128 books on top
+     * of full identity windows stay under CanonicalJson::MAX_NODES with a fifth to spare.
+     */
+    public const BOOK_BATCH_SECONDS = 1.0;
+    public const MAX_BOOK_BATCH_EVENTS = 128;
+    /**
+     * A fully covered minute with fewer recorded trades than its closed 1m candle counts is a
+     * hole (see HyperliquidTradeCountAudit). It is always logged; whether the capture then
+     * fails closed is a deployment decision, warn-only until the check has run for days. Not
+     * part of configurationSha256: flipping it must not make earlier datasets unverifiable
+     * (verifyForBaseline rejects such a hole regardless).
+     */
+    public const TRADE_COUNT_BELOW_CANDLE_FAILS_CLOSED = false;
 
     public static function configurationSha256(PaperMarketDataNetwork $network): string
     {
@@ -71,6 +111,19 @@ final readonly class HyperliquidPaperLivePolicy
                 'network_resume_byte_low_water' => self::NETWORK_RESUME_BYTE_LOW_WATER,
                 'funding_refresh_seconds' => self::FUNDING_REFRESH_SECONDS,
                 'reconnect_delays_seconds' => self::RECONNECT_DELAYS_SECONDS,
+                'connection_rotation_seconds' => self::CONNECTION_ROTATION_SECONDS,
+                'rotation_overlap_timeout_seconds' => self::ROTATION_OVERLAP_TIMEOUT_SECONDS,
+                'rotation_retry_seconds' => self::ROTATION_RETRY_SECONDS,
+                'recovery_deadline_seconds' => self::RECOVERY_DEADLINE_SECONDS,
+                'recovery_attempt_timeout_seconds' => self::RECOVERY_ATTEMPT_TIMEOUT_SECONDS,
+                'recovery_max_attempts' => self::RECOVERY_MAX_ATTEMPTS,
+                'recovery_retry_seconds' => self::RECOVERY_RETRY_SECONDS,
+                'hot_standby_window_seconds' => self::HOT_STANDBY_WINDOW_SECONDS,
+                'hot_standby_min_items' => self::HOT_STANDBY_MIN_ITEMS,
+                'hot_standby_soft_max_items' => self::HOT_STANDBY_SOFT_MAX_ITEMS,
+                'hot_standby_reopen_delays_seconds' => self::HOT_STANDBY_REOPEN_DELAYS_SECONDS,
+                'book_batch_seconds' => self::BOOK_BATCH_SECONDS,
+                'max_book_batch_events' => self::MAX_BOOK_BATCH_EVENTS,
             ],
         ]));
     }

@@ -79,6 +79,7 @@ final readonly class FillCostLedgerIngestionService
             $qualityFlags,
         );
         $liquidationFeeUsdt = $this->liquidationFeeUsdt($metadata, $payload, $qualityFlags);
+        $baseQuantity = $this->baseAssetQuantity($fill, $metadata, $qualityFlags);
         $source = $this->source($metadata, $payload);
         $sourceVersion = $this->string($metadata['source_version'] ?? $payload['source_version'] ?? null)
             ?? $this->string($metadata['pnl_source'] ?? $payload['pnl_source'] ?? null)
@@ -107,8 +108,8 @@ final readonly class FillCostLedgerIngestionService
             'fill_role' => $this->fillRole($fill),
             'liquidity_role' => $this->liquidityRole($metadata, $payload),
             'price' => $this->decimal($fill->price),
-            'quantity' => $this->decimal($fill->quantity),
-            'notional' => $this->decimal($fill->price * $fill->quantity),
+            'quantity' => $baseQuantity['quantity'],
+            'notional' => $baseQuantity['notional'],
             'fee_amount' => $fee,
             'fee_currency' => $feeCurrency,
             'fee_usdt' => $feeUsdt,
@@ -121,7 +122,8 @@ final readonly class FillCostLedgerIngestionService
             'source' => $source,
             'source_version' => $sourceVersion,
             'quality_flags' => array_values(array_unique($qualityFlags)),
-            'raw_reference' => $this->rawReference($event->eventType(), $source, $exchangeFillId, $fill->exchangeOrderId, $fill->clientOrderId),
+            'raw_reference' => $this->rawReference($event->eventType(), $source, $exchangeFillId, $fill->exchangeOrderId, $fill->clientOrderId)
+                + $baseQuantity['reference'],
             'paper_provenance' => $paperProvenance,
         ];
 
@@ -450,6 +452,92 @@ final readonly class FillCostLedgerIngestionService
         $qualityFlags[] = 'fee_conversion_missing';
 
         return null;
+    }
+
+    /**
+     * Base-asset quantity and notional of a fill (#132 p). A venue that sizes in contracts (an
+     * OKX swap reports fillSz; the Fake, contracts of its instrument's contract size) declares
+     * quantity_unit "contracts" and the instrument's contract_value: the ledger records quantity
+     * x contract value, so the notional, the VWAP and the gross P&L are in base-asset units, like
+     * the fee, slippage and funding the venue already reports in USDT (left untouched). A fill in
+     * contracts without a valid contract value keeps its reported numbers and is flagged, never
+     * a silent x1; an OKX fill is in contracts even undeclared. "base_asset", a contract value of
+     * 1 and an undeclared fill of another venue are recorded exactly as before.
+     *
+     * @param array<string,mixed> $metadata
+     * @param list<string> $qualityFlags
+     * @return array{quantity: string, notional: string, reference: array<string, string>}
+     */
+    private function baseAssetQuantity(ExchangeFillDto $fill, array $metadata, array &$qualityFlags): array
+    {
+        $reported = [
+            'quantity' => $this->decimal($fill->quantity),
+            'notional' => $this->decimal($fill->price * $fill->quantity),
+            'reference' => [],
+        ];
+        $unit = $metadata['quantity_unit'] ?? null;
+        if ($unit === null) {
+            if ($fill->exchange === Exchange::OKX) {
+                $qualityFlags[] = 'contract_value_missing';
+            }
+
+            return $reported;
+        }
+        if ($unit === 'base_asset') {
+            return $reported;
+        }
+        if ($unit !== 'contracts') {
+            $qualityFlags[] = 'quantity_unit_invalid';
+
+            return $reported;
+        }
+
+        $value = $metadata['contract_value'] ?? null;
+        if ($value === null || $value === '') {
+            $qualityFlags[] = 'contract_value_missing';
+
+            return $reported;
+        }
+        try {
+            if ((!\is_string($value) && !\is_int($value) && !\is_float($value))
+                || (\is_float($value) && !\is_finite($value))
+            ) {
+                throw new \InvalidArgumentException('contract_value_invalid');
+            }
+            $contractValue = BigDecimal::of((string) $value);
+        } catch (\Throwable) {
+            $qualityFlags[] = 'contract_value_invalid';
+
+            return $reported;
+        }
+        if (!$contractValue->isPositive()) {
+            $qualityFlags[] = 'contract_value_invalid';
+
+            return $reported;
+        }
+        if ($contractValue->isEqualTo(BigDecimal::one())) {
+            return $reported;
+        }
+
+        $quantity = BigDecimal::of($reported['quantity'])
+            ->multipliedBy($contractValue)
+            ->toScale(12, RoundingMode::HALF_EVEN);
+        $notional = BigDecimal::of($this->decimal($fill->price))
+            ->multipliedBy($quantity)
+            ->toScale(12, RoundingMode::HALF_EVEN);
+        $canonicalValue = $contractValue->stripTrailingZeros();
+
+        return [
+            'quantity' => (string) $quantity,
+            'notional' => (string) $notional,
+            'reference' => [
+                'quantity_unit' => 'contracts',
+                'contract_quantity' => $reported['quantity'],
+                'contract_value' => $canonicalValue->getScale() < 0
+                    ? (string) $canonicalValue->toScale(0)
+                    : (string) $canonicalValue,
+            ],
+        ];
     }
 
     /**

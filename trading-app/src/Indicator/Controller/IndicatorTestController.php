@@ -939,7 +939,7 @@ class IndicatorTestController extends AbstractController
                 return; // Pas de trous détectés
             }
 
-            // Récupérer les klines manquantes depuis BitMart
+            // Récupérer les klines manquantes depuis l'exchange
             $allNewKlines = [];
             foreach ($missingChunks as $chunk) {
                 try {

@@ -10,6 +10,7 @@ use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\Replay\PaperReplayOrder;
 use App\Trading\Paper\Replay\PaperReplayClock;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderBookSnapshot;
 
@@ -36,7 +37,7 @@ final readonly class PaperCanonicalOrderBookSource
         }
 
         $now = $this->clock->now();
-        if ($trigger->exchangeTimestamp > $now || $trigger->receivedTimestamp > $now) {
+        if ($trigger->exchangeTimestamp > $now || PaperReplayOrder::availableAt($trigger) > $now) {
             return null;
         }
         $projectedEvents = array_values(array_filter(

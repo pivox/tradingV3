@@ -47,7 +47,7 @@ final class ValidateActiveContractsCommand extends Command
             ->addOption('symbols', 's', InputOption::VALUE_OPTIONAL | InputOption::VALUE_IS_ARRAY, 'Filtre: symboles spécifiques (répéter l\'option)')
             ->addOption('side', null, InputOption::VALUE_OPTIONAL, 'long|short pour filtrer le “passé”')
             ->addOption('compiled', null, InputOption::VALUE_NONE, 'Utiliser le registre compilé (CompilerPass) au lieu du TimeframeEvaluator')
-            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: okx)')
             ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)');
     }
 
@@ -85,16 +85,10 @@ final class ValidateActiveContractsCommand extends Command
         $perSymbolValidate = [];
         $passedSymbols = [];
 
-        // Resolve context (default Bitmart/Perpetual)
+        // Resolve context (default OKX/Perpetual)
         $exchangeOpt = $input->getOption('exchange');
         $marketTypeOpt = $input->getOption('market-type');
-        $exchange = Exchange::BITMART;
-        if (is_string($exchangeOpt) && $exchangeOpt !== '') {
-            $exchange = match (strtolower(trim($exchangeOpt))) {
-                'bitmart' => Exchange::BITMART,
-                default => Exchange::BITMART,
-            };
-        }
+        $exchange = ExchangeContext::fromValues($exchangeOpt)->exchange;
         $marketType = MarketType::PERPETUAL;
         if (is_string($marketTypeOpt) && $marketTypeOpt !== '') {
             $marketType = match (strtolower(trim($marketTypeOpt))) {

@@ -54,6 +54,19 @@ final class PaperCanonicalInstrumentSourceTest extends TestCase
         self::assertSame('sha256:' . $lateReceipt->eventId, $snapshot->inputHash);
     }
 
+    public function testATriggerReceivedAfterItsCloseIsUsableAtItsClose(): void
+    {
+        $metadata = $this->okxMetadata('1', '0.1', '2026-08-01T10:00:58.000000Z', '2026-08-01T10:00:58.500000Z');
+        $trigger = $this->trigger('2', '2026-08-01T10:01:06.000000Z');
+        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        $market->restore([$metadata, $trigger]);
+
+        self::assertNotNull((new PaperCanonicalInstrumentSource(
+            $market,
+            new PaperReplayClock(new \DateTimeImmutable('2026-08-01T10:01:00.000000Z')),
+        ))->snapshotFor($this->cell(), $trigger));
+    }
+
     public function testReturnsInstrumentAndTickFromTheSameMetadataRecord(): void
     {
         $metadata = $this->okxMetadata('1', '0.1');
@@ -241,7 +254,7 @@ final class PaperCanonicalInstrumentSourceTest extends TestCase
             self::assertSame('paper_backtest_payload_shape_invalid', $exception->getMessage());
         }
 
-        $newer = $this->trigger('3', '2026-08-01T10:02:01.000000Z', '2026-08-01T10:02:00.000000Z');
+        $newer = $this->trigger('3', '2026-08-01T10:02:01.000000Z', '2026-08-01T10:01:00.000000Z');
         $market->restore([$this->okxMetadata('1', '0.1'), $trigger, $newer]);
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_canonical_strategy_trigger_not_current');
@@ -388,7 +401,7 @@ final class PaperCanonicalInstrumentSourceTest extends TestCase
     private function trigger(
         string $sequence,
         string $receivedTimestamp,
-        string $exchangeTimestamp = '2026-08-01T10:01:00.000000Z',
+        ?string $exchangeTimestamp = null,
     ): PaperMarketEvent {
         return $this->triggerFor(
             PaperMarketDataNetwork::MAINNET,
@@ -404,8 +417,13 @@ final class PaperCanonicalInstrumentSourceTest extends TestCase
         PaperMarketDataVenue $venue,
         string $sequence,
         string $receivedTimestamp = '2026-08-01T10:01:01.000000Z',
-        string $exchangeTimestamp = '2026-08-01T10:01:00.000000Z',
+        ?string $exchangeTimestamp = null,
     ): PaperMarketEvent {
+        // An OKX candle is stamped with its open: the default trigger closes at 10:01.
+        $exchangeTimestamp ??= $venue === PaperMarketDataVenue::OKX
+            ? '2026-08-01T10:00:00.000000Z'
+            : '2026-08-01T10:01:00.000000Z';
+
         return PaperMarketEvent::create(
             $network,
             $venue,

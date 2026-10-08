@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace App\Provider;
 
-use App\Provider\Bitmart\BitmartContractProvider;
 use App\Provider\Entity\Contract;
-use App\Provider\Bitmart\Dto\ContractDto as BitmartContractDto;
 use App\Provider\Repository\ContractRepository;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpKernel\Attribute\AsController;
@@ -18,7 +16,6 @@ class ContractController
 {
     public function __construct(
         private readonly ContractRepository $contractRepository,
-        private readonly BitmartContractProvider $bitmartContractProvider
     ) {}
 
     #[Route(path: '/db', name: 'db', methods: ['GET'])]
@@ -28,29 +25,6 @@ class ContractController
         $normalized = array_map(fn (Contract $contract) => $this->normalizeDatabaseContract($contract), $contracts);
 
         return $this->buildResponse('database', $normalized);
-    }
-
-    #[Route(path: '/bitmart', name: 'bitmart', methods: ['GET'])]
-    public function listFromBitmart(): JsonResponse
-    {
-        $contracts = $this->bitmartContractProvider->getContracts();
-        $normalized = array_map(
-            fn (BitmartContractDto|array $contract) => $this->normalizeBitmartContract($contract),
-            $contracts
-        );
-
-        return $this->buildResponse('bitmart', $normalized);
-    }
-    #[Route(path: '/diff/bitmart', name: 'diff_bitmart', methods: ['GET'])]
-    public function diffApi(): JsonResponse
-    {
-        $contracts = $this->contractRepository->findActiveContracts();
-        $contractsSymbols = array_map(fn ($contract) => $contract->getSymbol(), $contracts);
-        $contractsBySymbol = array_combine($contractsSymbols, $contracts);
-        $contractBitmart = $this->bitmartContractProvider->getContracts();
-        return new JsonResponse(array_filter($contractBitmart, function ($contract) use($contractsBySymbol) {
-            return isset($contractsBySymbol[$contract->symbol]) && $contract->expireTimestamp?->getTimestamp() != $contractsBySymbol[$contract->symbol]->getExpireTimestamp();
-        }));
     }
 
     /**
@@ -106,50 +80,6 @@ class ContractController
             'max_size' => $contract->getMaxSize(),
             'tick_size' => $contract->getTickSize(),
             'multiplier' => $contract->getMultiplier(),
-        ]);
-    }
-
-    private function normalizeBitmartContract(BitmartContractDto|array $contract): array
-    {
-        $payload = $contract instanceof BitmartContractDto ? $contract->toArray() : $contract;
-
-        return $this->formatContractPayload([
-            'symbol' => $payload['symbol'] ?? null,
-            'name' => $payload['name'] ?? ($payload['symbol'] ?? null),
-            'product_type' => $payload['product_type'] ?? null,
-            'open_timestamp' => $payload['open_timestamp'] ?? null,
-            'expire_timestamp' => $payload['expire_timestamp'] ?? null,
-            'settle_timestamp' => $payload['settle_timestamp'] ?? null,
-            'base_currency' => $payload['base_currency'] ?? null,
-            'quote_currency' => $payload['quote_currency'] ?? null,
-            'last_price' => $payload['last_price'] ?? null,
-            'volume_24h' => $payload['volume_24h'] ?? null,
-            'turnover_24h' => $payload['turnover_24h'] ?? null,
-            'index_price' => $payload['index_price'] ?? null,
-            'index_name' => $payload['index_name'] ?? null,
-            'contract_size' => $payload['contract_size'] ?? null,
-            'min_leverage' => $payload['min_leverage'] ?? null,
-            'max_leverage' => $payload['max_leverage'] ?? null,
-            'price_precision' => $payload['price_precision'] ?? null,
-            'vol_precision' => $payload['vol_precision'] ?? null,
-            'max_volume' => $payload['max_volume'] ?? null,
-            'min_volume' => $payload['min_volume'] ?? null,
-            'funding_rate' => $payload['funding_rate'] ?? null,
-            'expected_funding_rate' => $payload['expected_funding_rate'] ?? null,
-            'open_interest' => $payload['open_interest'] ?? null,
-            'open_interest_value' => $payload['open_interest_value'] ?? null,
-            'high_24h' => $payload['high_24h'] ?? null,
-            'low_24h' => $payload['low_24h'] ?? null,
-            'change_24h' => $payload['change_24h'] ?? null,
-            'funding_time' => $payload['funding_time'] ?? null,
-            'market_max_volume' => $payload['market_max_volume'] ?? null,
-            'funding_interval_hours' => $payload['funding_interval_hours'] ?? null,
-            'status' => $payload['status'] ?? null,
-            'delist_time' => $payload['delist_time'] ?? null,
-            'min_size' => $payload['min_size'] ?? null,
-            'max_size' => $payload['max_size'] ?? null,
-            'tick_size' => $payload['tick_size'] ?? null,
-            'multiplier' => $payload['multiplier'] ?? null,
         ]);
     }
 

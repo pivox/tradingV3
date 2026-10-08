@@ -40,7 +40,7 @@ final class OrchestrationContextValidatorTest extends TestCase
             RunCorrelationId::canonical($runId),
             's1',
             'dashA',
-            ['set_id' => 's1', 'dashboard_id' => 'dashA', 'profile' => 'scalper', 'exchange' => 'bitmart'],
+            ['set_id' => 's1', 'dashboard_id' => 'dashA', 'profile' => 'scalper', 'exchange' => 'okx'],
         );
     }
 
@@ -182,7 +182,7 @@ final class OrchestrationContextValidatorTest extends TestCase
     public function testExchangeMismatchIsRejected(): void
     {
         $this->assertCode('ORCHESTRATION_EXCHANGE_MISMATCH', function (): void {
-            $this->validator->validate(null, null, null, null, ['exchange' => 'bitmart', 'cex' => 'okx']);
+            $this->validator->validate(null, null, null, null, ['exchange' => 'hyperliquid', 'cex' => 'okx']);
         });
     }
 

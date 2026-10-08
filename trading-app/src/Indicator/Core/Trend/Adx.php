@@ -81,7 +81,7 @@ class Adx implements IndicatorInterface
 
     /**
      * Séries complètes (ADX, +DI, -DI) – utile pour debug/comparaison.
-     * Lissage Wilder, premier ADX = premier DX (style BitMart).
+     * Lissage Wilder, premier ADX = premier DX.
      * @return array{adx: float[], plus_di: float[], minus_di: float[]}
      */
     public function calculateFull(array $highs, array $lows, array $closes, int $period = 14): array

@@ -6,6 +6,7 @@ namespace App\Trading\Paper\Execution\Persistence;
 
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Common\Enum\Timeframe;
 use App\Entity\OrderIntent;
 use App\Entity\OrderProtection;
 use App\Entity\TradeLineage;
@@ -14,7 +15,7 @@ use App\Service\OrderIntentManager;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\TradeLineageManager;
-use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
+use App\Trading\Paper\Execution\PaperIdentifierAwareRedaction;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
 use Doctrine\ORM\EntityManagerInterface;
@@ -88,8 +89,12 @@ final readonly class PaperCanonicalOrderIntentRecorder implements PaperCanonical
                 throw new \InvalidArgumentException();
             }
             $lineageWire['client_order_id'] = $clientOrderId;
+            // Deterministic trade identity (#132): the same decision always opens the same trade,
+            // whatever the run, the resume or the database; TradeLineageManager would draw a
+            // random one otherwise. The Fake order metadata carries the same id (#132 o).
+            $lineageWire['internal_trade_id'] ??= PaperCanonicalTradeIdentity::internalTradeId($lineage, $decisionKey);
             $intentLineage = LineageContext::fromArray($lineageWire);
-            PaperMarketEventRedactor::assertSafe($provenance);
+            PaperIdentifierAwareRedaction::assertSafe($provenance, PaperIdentifierAwareRedaction::SITE_CELL_PROVENANCE);
         } catch (\Throwable $exception) {
             if ($exception instanceof \InvalidArgumentException
                 && $exception->getMessage() === 'paper_canonical_order_intent_invalid'
@@ -117,6 +122,9 @@ final readonly class PaperCanonicalOrderIntentRecorder implements PaperCanonical
             'strategy_profile' => $plan->modeId,
             'strategy_version' => $plan->modeVersion,
             'timeframe' => $executionTimeframe,
+            // The candle that triggered the decision, in replay time (#132 q): without it the
+            // intent took the current 5m bucket of the wall clock.
+            'candle_open_ts' => self::triggerCandleOpen($plan->observedAt, $executionTimeframe),
             'canonical_protections' => $this->protections($plan),
         ];
         if ($this->intents->validateOrderParams($params) !== null) {
@@ -132,7 +140,7 @@ final readonly class PaperCanonicalOrderIntentRecorder implements PaperCanonical
             'plan' => $plan->toArray(),
             'canonical_identity' => $intentLineage->redacted(),
         ];
-        PaperMarketEventRedactor::assertSafe($rawInputs);
+        PaperIdentifierAwareRedaction::assertSafe($rawInputs, PaperIdentifierAwareRedaction::SITE_CANONICAL_INTENT_RAW_INPUTS);
         return $this->entityManager->getConnection()->transactional(function () use (
             $params,
             $rawInputs,
@@ -296,5 +304,13 @@ final readonly class PaperCanonicalOrderIntentRecorder implements PaperCanonical
         }
 
         return $protections;
+    }
+
+    /** Open time of the execution candle that closed at or just before the decision observation. */
+    private static function triggerCandleOpen(\DateTimeImmutable $observedAt, string $executionTimeframe): int
+    {
+        $seconds = Timeframe::from($executionTimeframe)->getStepInSeconds();
+
+        return intdiv($observedAt->getTimestamp(), $seconds) * $seconds - $seconds;
     }
 }

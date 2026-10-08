@@ -7,10 +7,10 @@ namespace App\Trading\Paper\Execution\Strategy;
 use App\Trading\Lineage\LineageContext;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
+use App\Trading\Paper\Execution\PaperIdentifierAwareRedaction;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
-use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy;
@@ -119,8 +119,8 @@ final readonly class PaperCanonicalPreparedEffect
                     throw new \InvalidArgumentException();
                 }
             }
-            PaperMarketEventRedactor::assertSafe($this->orderIntentIdentity);
-            PaperMarketEventRedactor::assertSafe($provenance);
+            PaperIdentifierAwareRedaction::assertSafe($this->orderIntentIdentity, PaperIdentifierAwareRedaction::SITE_ORDER_INTENT_IDENTITY);
+            PaperIdentifierAwareRedaction::assertSafe($provenance, PaperIdentifierAwareRedaction::SITE_CELL_PROVENANCE);
         } catch (\Throwable $exception) {
             if ($exception instanceof \InvalidArgumentException
                 && $exception->getMessage() === 'paper_canonical_prepared_effect_invalid'

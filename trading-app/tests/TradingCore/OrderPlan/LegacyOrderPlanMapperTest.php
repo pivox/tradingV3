@@ -35,19 +35,19 @@ final class LegacyOrderPlanMapperTest extends TestCase
             leverage: 6,
             pricePrecision: 2,
             contractSize: 0.001,
-            exchangeContext: new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
+            exchangeContext: new ExchangeContext(Exchange::OKX, MarketType::PERPETUAL),
         );
 
         $plan = (new LegacyOrderPlanMapper())->fromLegacy(
             legacy: $legacy,
             profile: 'scalper_micro',
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160440:long:scalper_micro:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160440:long:scalper_micro:v1',
             protectionPlan: $this->protectionPlan(),
         );
 
         self::assertSame('BTCUSDT', $plan->symbol);
         self::assertSame('scalper_micro', $plan->profile);
-        self::assertSame('bitmart', $plan->exchange);
+        self::assertSame('okx', $plan->exchange);
         self::assertSame('perpetual', $plan->marketType);
         self::assertSame('long', $plan->side);
         self::assertSame('limit', $plan->orderType);
@@ -57,9 +57,9 @@ final class LegacyOrderPlanMapperTest extends TestCase
         self::assertSame(6, $plan->leverage);
         self::assertSame(2, $plan->pricePrecision);
         self::assertSame(0.001, $plan->contractSize);
-        self::assertSame('bitmart:perpetual:BTCUSDT:1m:1764160440:long:scalper_micro:v1', $plan->decisionKey);
-        self::assertSame('bitmart:perpetual:BTCUSDT:1m:1764160440:long:scalper_micro:v1', $plan->idempotencyKey);
-        self::assertSame('CIDB6B3948EB6D29D505D7CCCA3FB9A9', $plan->clientOrderId);
+        self::assertSame('okx:perpetual:BTCUSDT:1m:1764160440:long:scalper_micro:v1', $plan->decisionKey);
+        self::assertSame('okx:perpetual:BTCUSDT:1m:1764160440:long:scalper_micro:v1', $plan->idempotencyKey);
+        self::assertSame('CID59651F0416CB3D475B673AB214C99', $plan->clientOrderId);
         self::assertSame(OrderPlanStatus::Valid, $plan->validation->status);
         self::assertTrue($plan->validation->isExecutable);
     }

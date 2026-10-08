@@ -19,7 +19,7 @@ use function PHPUnit\Framework\isInstanceOf;
 
 #[AsCommand(
     name: 'fetch:recent-klines',
-    description: 'Récupère les klines les plus récentes depuis l\'API Bitmart'
+    description: 'Récupère les klines les plus récentes depuis l\'API de l\'exchange'
 )]
 class FetchRecentKlinesCommand extends Command
 {
@@ -82,8 +82,8 @@ class FetchRecentKlinesCommand extends Command
     private function fetchKlinesForSymbol(string $symbol, Timeframe $timeframe, int $limit, SymfonyStyle $io): int
     {
         try {
-            // Récupérer les klines depuis l'API Bitmart
-            $io->writeln("  🔄 Récupération depuis l'API Bitmart...");
+            // Récupérer les klines depuis l'API de l'exchange
+            $io->writeln("  🔄 Récupération depuis l'API de l'exchange...");
 
             $step = $this->convertTimeframeToStep($timeframe);
             $response = $this->mainProvider->getKlineProvider()->getKlines($symbol, $timeframe, $limit);

@@ -217,6 +217,54 @@ final class PaperCanonicalFakeEffectDispatcherTest extends TestCase
         }
     }
 
+    /**
+     * #132 o: the Fake order carries the trade of its intent, and so do its protective orders and
+     * every fill, the stop's included: their fill_cost_ledger rows reach the trade lineage.
+     */
+    public function testTheProtectiveOrdersAndEveryFillCarryTheTradeOfTheIntent(): void
+    {
+        $root = sys_get_temp_dir() . '/paper_canonical_fake_trade_' . bin2hex(random_bytes(6));
+        $effect = PaperCanonicalPreparedEffectCodecTest::fixture(contractSize: 0.01);
+        $expected = $effect->lineage->internalTradeId
+            ?? 'itd:' . substr(hash('sha256', 'paper-canonical-trade:' . $effect->decisionKey), 0, 32);
+        try {
+            $clock = new MockClock('2026-08-10T12:00:00Z');
+            $runtime = (new PaperFakeRuntimeFactory($root, $clock))->forCell($this->cell($effect->provenance));
+            $runtime->applyMarketEvent($this->topOfBook());
+            $dispatcher = new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer(), $clock);
+            $placed = $dispatcher->dispatch($runtime, $effect);
+            self::assertNotNull($placed->execution->exchangeOrderId);
+            $entry = $runtime->adapter->getOrder('BTCUSDT', $placed->execution->exchangeOrderId);
+            self::assertSame($expected, $entry?->metadata['internal_trade_id'] ?? null);
+
+            $cursor = $runtime->eventCursor();
+            $runtime->applyMarketEvent($this->topOfBook('100.08', '100.09', '2'));
+            $protections = array_values(array_filter(
+                $runtime->adapter->getOpenOrders('BTCUSDT'),
+                static fn (ExchangeOrderDto $order): bool => $order->reduceOnly,
+            ));
+            self::assertNotEmpty($protections);
+            foreach ($protections as $protection) {
+                self::assertSame($expected, $protection->metadata['internal_trade_id'] ?? null, (string) $protection->clientOrderId);
+            }
+
+            $runtime->applyMarketEvent($this->topOfBook('98.5', '98.51', '3'));
+            $fills = array_values(array_filter(
+                $dispatcher->normalizeSince($runtime, $cursor),
+                static fn ($event): bool => $event instanceof ExchangeFillReceived,
+            ));
+            self::assertGreaterThanOrEqual(2, \count($fills), 'The entry fill and the stop fill.');
+            $roles = [];
+            foreach ($fills as $fill) {
+                self::assertSame($expected, $fill->fill()->metadata['internal_trade_id'] ?? null);
+                $roles[] = $fill->fill()->clientOrderId === $effect->orderIntentIdentity['client_order_id'] ? 'entry' : 'protection';
+            }
+            self::assertContains('protection', $roles, 'A protective order filled.');
+        } finally {
+            $this->removeRuntime($root);
+        }
+    }
+
     public function testForgedPersistedReservationDescriptorRejectsReplayWithoutMutation(): void
     {
         $root = sys_get_temp_dir() . '/paper_canonical_fake_reservation_forged_' . bin2hex(random_bytes(6));

@@ -11,11 +11,14 @@ use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfigFactory;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperFundingRateClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface;
+use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLivePolicy;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSource;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSourceFactory;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicWebSocketTransportFactoryInterface;
 use App\Trading\Paper\Hyperliquid\Live\PawlHyperliquidPaperPublicWebSocketTransportFactory;
 use PHPUnit\Framework\Attributes\CoversNothing;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 use Symfony\Component\Clock\ClockInterface;
 
@@ -45,6 +48,22 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
         self::assertFalse($container->has(HyperliquidPaperPublicLiveSource::class));
     }
 
+    public function testFactoryReceivesTheApplicationLoggerForTransportDiagnostics(): void
+    {
+        self::bootKernel();
+        $factory = static::getContainer()->get(HyperliquidPaperPublicLiveSourceFactory::class);
+        self::assertInstanceOf(HyperliquidPaperPublicLiveSourceFactory::class, $factory);
+
+        $logger = (new \ReflectionProperty($factory, 'logger'))->getValue($factory);
+
+        self::assertInstanceOf(LoggerInterface::class, $logger);
+        self::assertNotInstanceOf(NullLogger::class, $logger);
+        self::assertSame(
+            HyperliquidPaperLivePolicy::CONNECTION_ROTATION_SECONDS,
+            (new \ReflectionProperty($factory, 'connectionRotationSeconds'))->getValue($factory),
+        );
+    }
+
     public function testFactoryConstructorIsCredentialFreeAndExactlyBounded(): void
     {
         $constructor = (new \ReflectionClass(
@@ -61,6 +80,8 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
             'metadataClient',
             'fundingClient',
             'restClient',
+            'logger',
+            'connectionRotationSeconds',
         ], array_map(
             static fn (\ReflectionParameter $parameter): string => $parameter->getName(),
             $parameters,
@@ -74,6 +95,8 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
             HyperliquidPaperInstrumentMetadataClientInterface::class,
             HyperliquidPaperFundingRateClientInterface::class,
             HyperliquidPaperPublicRestClientInterface::class,
+            LoggerInterface::class,
+            'float',
         ], array_map(
             static function (\ReflectionParameter $parameter): string {
                 $type = $parameter->getType();

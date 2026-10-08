@@ -186,3 +186,7 @@ Local safety checks:
 
 Operations are documented in
 [`docs/handbook/runbooks/okx-private-ws-observability.md`](../../../../docs/handbook/runbooks/okx-private-ws-observability.md).
+
+## Demo write quarantine
+
+`var/okx-demo-execution.quarantine` blocks every OKX demo write, protective ones included (`okx_demo_tripped`). The second line of the file is the reason; `audit_after_failed` means the post-write audit record could not be persisted. The marker is never cleared automatically: an operator checks the audit log and open positions, then deletes the file. `app:exchange:runtime-check okx perpetual --json` reports `kill_switch.tripped` and `kill_switch.trip_reason`.

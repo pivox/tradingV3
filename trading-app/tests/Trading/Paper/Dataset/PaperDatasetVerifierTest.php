@@ -102,6 +102,76 @@ final class PaperDatasetVerifierTest extends TestCase
         }
     }
 
+    /**
+     * @param list<array{string, ?string}|'boundary'> $trades trade id and aggregate count, in file order
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('okxTradeContinuityProvider')]
+    public function testBaselineRequiresContiguousOkxTradeIdsAfterTheInitialBoundary(
+        array $trades,
+        ?string $baselineFailure,
+    ): void {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $sequence = 0;
+        foreach ($trades as $index => $trade) {
+            $timestamp = new \DateTimeImmutable(sprintf('2026-08-21T11:26:22.%03dZ', $index));
+            if ($trade === 'boundary') {
+                $recorder->append(PaperMarketEvent::create(
+                    PaperMarketDataNetwork::MAINNET, PaperMarketDataVenue::OKX, 'BTCUSDT',
+                    PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $timestamp, $timestamp, '1',
+                    [
+                        'native_symbol' => 'BTC-USDT-SWAP', 'reason' => 'initial',
+                        'source_epoch' => 1, 'source_seq_id' => '10',
+                    ],
+                ));
+
+                continue;
+            }
+            [$tradeId, $count] = $trade;
+            $recorder->append(PaperMarketEvent::create(
+                PaperMarketDataNetwork::MAINNET, PaperMarketDataVenue::OKX, 'BTCUSDT',
+                PaperMarketDataChannel::PUBLIC_TRADE, $timestamp, $timestamp, (string) ++$sequence,
+                [
+                    'native_symbol' => 'BTC-USDT-SWAP', 'trade_id' => $tradeId,
+                    'aggregate_count' => $count, 'price' => '100.5', 'size_contracts' => '1',
+                    'taker_side' => 'buy', 'source' => '0', 'source_seq_id' => null,
+                    'origin' => $count === null ? 'rest_recovery' : 'ws_aggregated',
+                ],
+            ));
+        }
+        $recorder->complete();
+        $verifier = new PaperDatasetVerifier();
+
+        // The generic verification (replay, capture) is unchanged; certification is strict.
+        self::assertSame('complete', $verifier->verify($recorder->datasetDirectory())->state->value);
+        try {
+            $verifier->verifyForBaseline($recorder->datasetDirectory());
+            self::assertNull($baselineFailure);
+        } catch (\RuntimeException $exception) {
+            self::assertSame($baselineFailure, $exception->getMessage());
+        }
+    }
+
+    /** @return iterable<string, array{list<array{string, ?string}|'boundary'>, ?string}> */
+    public static function okxTradeContinuityProvider(): iterable
+    {
+        yield 'rest then aggregated websocket ids are contiguous' => [
+            [['100', null], ['101', null], 'boundary', ['102', null], ['105', '3'], ['106', '1']],
+            null,
+        ];
+        yield 'a hole before the initial boundary is not certified here' => [
+            [['90', null], ['101', null], 'boundary', ['102', null]],
+            null,
+        ];
+        yield 'missing ids after the boundary' => [
+            [['100', null], 'boundary', ['101', null], ['104', '2']],
+            'paper_dataset_okx_trade_gap',
+        ];
+        yield 'an aggregate overlapping recorded ids' => [
+            [['100', null], 'boundary', ['101', null], ['102', '2']],
+            'paper_dataset_okx_trade_gap',
+        ];
+    }
+
     private string $testRoot;
 
     protected function setUp(): void

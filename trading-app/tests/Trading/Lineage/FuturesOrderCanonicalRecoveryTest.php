@@ -113,7 +113,7 @@ final class FuturesOrderCanonicalRecoveryTest extends TestCase
     {
         yield 'symbol' => ['setSymbol', 'ETHUSDT', 'canonical_identity_mismatch:symbol'];
         yield 'side' => ['setSide', 4, 'canonical_identity_mismatch:side'];
-        yield 'exchange' => ['setExchange', 'bitmart', 'canonical_identity_mismatch:exchange'];
+        yield 'exchange' => ['setExchange', 'okx', 'canonical_identity_mismatch:exchange'];
         yield 'market' => ['setMarketType', 'spot', 'canonical_identity_mismatch:market_type'];
         yield 'order' => ['setOrderId', 'other-order', 'canonical_identity_mismatch:exchange_order_id'];
         yield 'client' => ['setClientOrderId', 'other-client', 'canonical_identity_mismatch:client_order_id'];

@@ -9,12 +9,13 @@ use App\Trading\Paper\Runtime\PaperReplayReadinessService;
 use App\Trading\Paper\Runtime\PaperReplayStrategySelection;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Command\SignalableCommandInterface;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 #[AsCommand(name: 'app:paper-market:runtime-check', description: 'Check one explicit public Paper replay cell without mutating state.')]
-final class PaperReplayRuntimeCheckCommand extends Command
+final class PaperReplayRuntimeCheckCommand extends Command implements SignalableCommandInterface
 {
     public function __construct(private readonly PaperReplayReadinessService $readiness)
     {
@@ -32,7 +33,24 @@ final class PaperReplayRuntimeCheckCommand extends Command
             ->addOption('setup-id', null, InputOption::VALUE_REQUIRED, 'Exact modern setup ID')
             ->addOption('setup-version', null, InputOption::VALUE_REQUIRED, 'Exact modern setup version')
             ->addOption('side', null, InputOption::VALUE_REQUIRED, 'Exact modern side')
-            ->addOption('run-id', null, InputOption::VALUE_REQUIRED, 'Explicit Paper run ID');
+            ->addOption('run-id', null, InputOption::VALUE_REQUIRED, 'Explicit Paper run ID')
+            ->addOption('dataset-receipt', null, InputOption::VALUE_REQUIRED, 'Absolute private campaign receipt of the verified dataset');
+    }
+
+    /** @return list<int> */
+    public function getSubscribedSignals(): array
+    {
+        return array_values(array_filter([
+            \defined('SIGINT') ? \SIGINT : null,
+            \defined('SIGTERM') ? \SIGTERM : null,
+            \defined('SIGHUP') ? \SIGHUP : null,
+            \defined('SIGQUIT') ? \SIGQUIT : null,
+        ], static fn (?int $signal): bool => $signal !== null));
+    }
+
+    public function handleSignal(int $signal, int|false $previousExitCode = 0): int|false
+    {
+        return 128 + $signal;
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -43,6 +61,7 @@ final class PaperReplayRuntimeCheckCommand extends Command
                 $this->requiredOption($input, 'configuration'),
                 $this->strategySelection($input),
                 $this->requiredOption($input, 'run-id'),
+                $this->optionalOption($input, 'dataset-receipt'),
             );
             $payload = $preparation->readinessPayload();
             $status = $payload['ready'] === true ? Command::SUCCESS : Command::INVALID;

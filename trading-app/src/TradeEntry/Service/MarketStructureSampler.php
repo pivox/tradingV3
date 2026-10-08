@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Service;
 
-use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
+use App\Contract\Provider\MainProviderInterface;
+use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Dto\MarketStructureSnapshot;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
@@ -17,20 +18,21 @@ final class MarketStructureSampler
     private const VOLUME_WINDOW = 20;
 
     public function __construct(
-        private readonly BitmartHttpClientPublic $publicHttpClient,
+        private readonly MainProviderInterface $providers,
         private readonly LoggerInterface $positionsLogger,
         private readonly ClockInterface $clock,
     ) {
     }
 
-    public function sample(string $symbol, float $contractSize, float $midPrice): MarketStructureSnapshot
+    public function sample(string $symbol, float $contractSize, float $midPrice, ?ExchangeContext $context = null): MarketStructureSnapshot
     {
+        $contractProvider = $this->providers->forContext($context)->getContractProvider();
         $depthUsd = null;
         $liquidityScore = null;
         $latencyRestMs = null;
         try {
             $startedAt = microtime(true);
-            $orderBook = $this->publicHttpClient->getOrderBook($symbol, self::ORDERBOOK_LEVELS);
+            $orderBook = $contractProvider->getOrderBook($symbol, self::ORDERBOOK_LEVELS);
             $latencyRestMs = (microtime(true) - $startedAt) * 1000;
             $depthUsd = $this->computeDepthUsd($orderBook, $contractSize);
             if ($depthUsd !== null) {
@@ -51,7 +53,7 @@ final class MarketStructureSampler
             $endTime = $nowUtc->getTimestamp();
             $startTime = max(0, $endTime - (self::VOLUME_WINDOW * 60));
 
-            $klines = $this->publicHttpClient->getMarkPriceKline(
+            $klines = $contractProvider->getMarkPriceKline(
                 $symbol,
                 step: 1,
                 limit: self::VOLUME_WINDOW,

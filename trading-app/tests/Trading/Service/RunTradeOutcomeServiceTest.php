@@ -24,7 +24,7 @@ final class RunTradeOutcomeServiceTest extends TestCase
         $rows = [
             // BTC / s1 / scalper : gagnant clôturé+rapproché, coûts partiels, net estimé.
             $this->row([
-                'symbol' => 'BTCUSDT', 'setId' => 's1', 'mtfProfile' => 'scalper', 'exchange' => 'bitmart',
+                'symbol' => 'BTCUSDT', 'setId' => 's1', 'mtfProfile' => 'scalper', 'exchange' => 'okx',
                 'closeEventId' => 10, 'closeMatchStatus' => 'matched', 'closeMatchedBy' => 'matched_trade_id',
                 'analysisStatus' => 'matched_closed', 'recordedPnlUsdt' => 12.0, 'pnlR' => 1.5,
                 'mfePct' => 2.0, 'maePct' => -0.5, 'holdingTimeSec' => 100.0,
@@ -33,7 +33,7 @@ final class RunTradeOutcomeServiceTest extends TestCase
             ]),
             // BTC / s2 / regular : perdant clôturé+rapproché, aucun coût (unknown).
             $this->row([
-                'symbol' => 'BTCUSDT', 'setId' => 's2', 'mtfProfile' => 'regular', 'exchange' => 'bitmart',
+                'symbol' => 'BTCUSDT', 'setId' => 's2', 'mtfProfile' => 'regular', 'exchange' => 'okx',
                 'closeEventId' => 11, 'closeMatchStatus' => 'matched', 'closeMatchedBy' => 'matched_position_id',
                 'analysisStatus' => 'matched_closed', 'recordedPnlUsdt' => -4.0, 'pnlR' => -1.0,
                 'mfePct' => 0.5, 'maePct' => -1.5, 'holdingTimeSec' => 200.0,
@@ -41,7 +41,7 @@ final class RunTradeOutcomeServiceTest extends TestCase
             ]),
             // ETH / s1 / scalper : non rapproché -> état réel INCONNU (jamais "open confirmé").
             $this->row([
-                'symbol' => 'ETHUSDT', 'setId' => 's1', 'mtfProfile' => 'scalper', 'exchange' => 'bitmart',
+                'symbol' => 'ETHUSDT', 'setId' => 's1', 'mtfProfile' => 'scalper', 'exchange' => 'okx',
                 'closeEventId' => null, 'closeMatchStatus' => 'unmatched', 'closeMatchedBy' => 'unmatched',
                 'analysisStatus' => 'unmatched', 'recordedPnlUsdt' => null, 'pnlR' => null,
                 'mfePct' => 1.0, 'maePct' => -0.2, 'mfeMaeDataQuality' => 'partial',
@@ -90,7 +90,7 @@ final class RunTradeOutcomeServiceTest extends TestCase
         self::assertSame(1, $byProfile['regular']['trade_count']);
 
         $byExchange = $this->byKey($out['by_exchange']);
-        self::assertSame(3, $byExchange['bitmart']['trade_count']);
+        self::assertSame(3, $byExchange['okx']['trade_count']);
     }
 
     public function testAggregatesCertifiedNetOnlyWithoutMixingIncompleteRows(): void

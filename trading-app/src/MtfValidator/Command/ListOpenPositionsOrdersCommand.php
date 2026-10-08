@@ -40,7 +40,7 @@ class ListOpenPositionsOrdersCommand extends Command
         $this
             ->addOption('symbol', 's', InputOption::VALUE_OPTIONAL, 'Filtrer par symbole (optionnel)')
             ->addOption('format', 'f', InputOption::VALUE_REQUIRED, 'Format de sortie (table|json)', 'table')
-            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: okx)')
             ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)')
             ->setHelp('
 Cette commande liste les positions ouvertes et les ordres ouverts en utilisant les mêmes méthodes

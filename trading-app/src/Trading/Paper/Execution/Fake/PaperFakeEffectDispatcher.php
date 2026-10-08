@@ -95,6 +95,6 @@ final readonly class PaperFakeEffectDispatcher
             }
         }
 
-        return $normalized;
+        return PaperFakeEventCausalOrder::order($normalized);
     }
 }

@@ -12,6 +12,7 @@ use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffect;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec;
 use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\Execution\Persistence\PaperReplayBatchJournal;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
@@ -46,7 +47,7 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
         $encoded = $codec->encode($effect);
         $decoded = $codec->decode($encoded);
 
-        self::assertSame('paper-canonical-prepared-effect.v1', $encoded['schema_version']);
+        self::assertSame('paper-canonical-prepared-effect.v2', $encoded['schema_version']);
         self::assertSame($effect->plan->toArray(), $decoded->plan->toArray());
         self::assertSame($effect->admissionProof->toArray(), $decoded->admissionProof->toArray());
         self::assertSame($effect->reservation->stateHash, $decoded->reservation->stateHash);
@@ -63,8 +64,9 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
         $encoded = $codec->encode(self::fixture());
 
         self::assertTrue($codec->supports($encoded));
+        // v1 kept the order-strict wire arrays inside jsonb and can never be decoded back.
         self::assertFalse($codec->supports(array_replace($encoded, [
-            'schema_version' => 'paper-canonical-prepared-effect.v2',
+            'schema_version' => 'paper-canonical-prepared-effect.v1',
         ])));
         self::assertFalse($codec->supports([
             'schema_version' => 2,
@@ -76,11 +78,8 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
     public function testTamperedOrCrossBoundCanonicalPreparedEffectFailsWithOneStableReason(): void
     {
         $encoded = (new PaperCanonicalPreparedEffectCodec())->encode(self::fixture());
-        $reordered = $encoded;
-        $reordered['payload'] = array_reverse($reordered['payload'], true);
-        self::rehash($reordered);
         $cases = [
-            array_replace($encoded, ['schema_version' => 'paper-canonical-prepared-effect.v2']),
+            array_replace($encoded, ['schema_version' => 'paper-canonical-prepared-effect.v1']),
             array_replace($encoded, ['payload_checksum' => str_repeat('0', 64)]),
             self::mutate($encoded, static function (array &$payload): void {
                 $payload['decision_key'] = 'another-decision';
@@ -92,22 +91,31 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
                 $payload['cell_provenance']['run_id'] = 'another-run';
             }),
             self::mutate($encoded, static function (array &$payload): void {
-                $payload['plan']['exchange'] = 'okx';
+                $payload['plan'] = self::mutateWire($payload['plan'], static function (array &$plan): void {
+                    $plan['exchange'] = 'okx';
+                });
             }),
             self::mutate($encoded, static function (array &$payload): void {
-                $payload['admission_proof']['policy']['max_concurrent_positions'] = 99;
+                $payload['admission_proof'] = self::mutateWire($payload['admission_proof'], static function (array &$proof): void {
+                    $proof['policy']['max_concurrent_positions'] = 99;
+                });
             }),
             self::mutate($encoded, static function (array &$payload): void {
-                $payload['admission_proof']['scope']['account_id'] = 'paper:cell:v2:' . str_repeat('f', 64);
+                $payload['admission_proof'] = self::mutateWire($payload['admission_proof'], static function (array &$proof): void {
+                    $proof['scope']['account_id'] = 'paper:cell:v2:' . str_repeat('f', 64);
+                });
             }),
             self::mutate($encoded, static function (array &$payload): void {
-                $payload['admission_proof']['scope']['network'] = 'mainnet';
+                $payload['admission_proof'] = self::mutateWire($payload['admission_proof'], static function (array &$proof): void {
+                    $proof['scope']['network'] = 'mainnet';
+                });
+            }),
+            self::mutate($encoded, static function (array &$payload): void {
+                // Same plan, re-serialized: the wire text must be the exact one the codec wrote.
+                $payload['plan'] = json_encode(json_decode($payload['plan'], true), JSON_PRETTY_PRINT | JSON_PRESERVE_ZERO_FRACTION);
             }),
             self::mutate($encoded, static function (array &$payload): void {
                 $payload['lineage']['unexpected'] = true;
-            }),
-            self::mutate($encoded, static function (array &$payload): void {
-                $payload['lineage'] = array_reverse($payload['lineage'], true);
             }),
             self::mutate($encoded, static function (array &$payload): void {
                 $payload['order_intent_identity']['order_intent_id'] = 0;
@@ -115,7 +123,6 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
             self::mutate($encoded, static function (array &$payload): void {
                 $payload['unexpected'] = true;
             }),
-            $reordered,
         ];
 
         foreach ($cases as $case) {
@@ -125,6 +132,30 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
             } catch (\InvalidArgumentException $exception) {
                 self::assertSame('paper_canonical_prepared_effect_payload_invalid', $exception->getMessage());
             }
+        }
+    }
+
+    /** #132 decision h: jsonb returns object keys shorter-first; the order is not part of the contract. */
+    public function testAnEffectReadBackFromJsonbDecodesToTheSameEffect(): void
+    {
+        $effect = self::fixture();
+        $codec = new PaperCanonicalPreparedEffectCodec();
+        $encoded = $codec->encode($effect);
+        $stored = PaperReplayBatchJournal::asStoredJson($encoded);
+        self::assertNotSame(array_keys($encoded['payload']), array_keys($stored['payload']));
+        self::assertNotSame(array_keys($encoded['payload']['lineage']), array_keys($stored['payload']['lineage']));
+        $reversed = $encoded;
+        $reversed['payload'] = array_reverse($encoded['payload'], true);
+        $reversed['payload']['lineage'] = array_reverse($encoded['payload']['lineage'], true);
+
+        foreach (['jsonb' => $stored, 'reversed' => $reversed] as $label => $readBack) {
+            $decoded = $codec->decode($readBack);
+
+            self::assertSame($effect->plan->toArray(), $decoded->plan->toArray(), $label);
+            self::assertSame($effect->admissionProof->toArray(), $decoded->admissionProof->toArray(), $label);
+            self::assertSame($effect->reservation->stateHash, $decoded->reservation->stateHash, $label);
+            self::assertSame($effect->lineage->toArray(), $decoded->lineage->toArray(), $label);
+            self::assertSame($codec->encode($effect), $codec->encode($decoded), $label);
         }
     }
 
@@ -282,6 +313,16 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
      * @param callable(array<string, mixed>&): void $mutation
      * @return array<string, mixed>
      */
+    /** @param callable(array<string, mixed>&): void $mutation */
+    private static function mutateWire(string $wire, callable $mutation): string
+    {
+        $decoded = json_decode($wire, true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsArray($decoded);
+        $mutation($decoded);
+
+        return json_encode($decoded, JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    }
+
     private static function mutate(array $encoded, callable $mutation): array
     {
         $mutation($encoded['payload']);

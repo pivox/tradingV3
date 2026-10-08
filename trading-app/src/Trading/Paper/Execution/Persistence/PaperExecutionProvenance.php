@@ -77,6 +77,34 @@ final class PaperExecutionProvenance
     }
 
     /**
+     * The same provenance in its canonical key order, when its key SET is exactly the legacy or
+     * the modern one; anything else is returned unchanged and validate() rejects it. A journaled
+     * provenance comes back from PostgreSQL jsonb with its keys shorter-first (#132 decision h).
+     *
+     * @param array<string, mixed> $candidate
+     * @return array<string, mixed>
+     */
+    public static function inCanonicalOrder(array $candidate): array
+    {
+        foreach ([self::MODERN_KEYS, self::KEYS] as $keys) {
+            $actual = array_keys($candidate);
+            $expected = $keys;
+            sort($actual, SORT_STRING);
+            sort($expected, SORT_STRING);
+            if ($actual === $expected) {
+                $ordered = [];
+                foreach ($keys as $key) {
+                    $ordered[$key] = $candidate[$key];
+                }
+
+                return $ordered;
+            }
+        }
+
+        return $candidate;
+    }
+
+    /**
      * @param array<string, mixed> $candidate
      * @return array<string, string>
      */

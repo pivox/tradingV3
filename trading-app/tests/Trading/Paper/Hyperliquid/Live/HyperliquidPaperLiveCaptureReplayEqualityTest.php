@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\Paper\Hyperliquid\Live;
 
+use App\Trading\Paper\Backtesting\PaperBacktestDatasetAdapter;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetRecorder;
 use App\Trading\Paper\Dataset\PaperDatasetState;
@@ -235,7 +236,105 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         (new PaperDatasetVerifier())->verifyForBaseline($directory);
     }
 
+    public function testBestBidAndOfferBooksCertifyAndFeedTheBacktestAndMicrostructureAdapters(): void
+    {
+        [$directory, $captured] = $this->completeDataset(
+            PaperMarketDataNetwork::MAINNET,
+            bestBidAndOfferBook: true,
+        );
+        $books = array_values(array_filter(
+            $captured,
+            static fn (PaperMarketEvent $event): bool => $event->channel === PaperMarketDataChannel::TOP_OF_BOOK,
+        ));
+        self::assertCount(1, $books);
+        self::assertSame('ws_bbo', $books[0]->payload['origin']);
+
+        self::assertSame(
+            PaperDatasetState::COMPLETE,
+            (new PaperDatasetVerifier())->verifyForBaseline($directory)->state,
+        );
+        $adapter = new PaperBacktestDatasetAdapter();
+        $dataset = $adapter->adapt((new PaperDatasetVerifier())->verifyBaselineSnapshot($directory));
+        self::assertCount(1, $dataset->publicBooks);
+        self::assertSame('ws_bbo', $dataset->publicBooks[0]->origin);
+        self::assertSame(['64999', '1', '65001', '1'], [
+            $dataset->publicBooks[0]->bidPrice,
+            $dataset->publicBooks[0]->bidQuantity,
+            $dataset->publicBooks[0]->askPrice,
+            $dataset->publicBooks[0]->askQuantity,
+        ]);
+
+        $records = $adapter->adaptMicrostructureEvents($books, 'sha256:' . str_repeat('a', 64));
+        self::assertSame('ws_bbo', $records['books'][0]->origin);
+    }
+
+    public function testAnUnknownLiveBookOriginStillCannotCertify(): void
+    {
+        $this->assertInvalidLiveCompletion(
+            fn (): array => $this->completeDataset(
+                PaperMarketDataNetwork::MAINNET,
+                bestBidAndOfferBook: true,
+                bookOrigin: 'ws_bbo_v2',
+            ),
+        );
+    }
+
+    /** @return iterable<string, array{int}> */
+    public static function candleCountsNotAboveTheRecordedTrades(): iterable
+    {
+        yield 'equal' => [2];
+        // Hyperliquid's last candle update of a minute can predate its last trades.
+        yield 'candle lagging behind the trades' => [1];
+    }
+
+    #[DataProvider('candleCountsNotAboveTheRecordedTrades')]
+    public function testCoveredMinuteWithAtLeastTheCandleTradeCountCertifies(int $tradeCount): void
+    {
+        [$directory] = $this->completeDataset(
+            PaperMarketDataNetwork::MAINNET,
+            coveredMinuteTradeCount: $tradeCount,
+        );
+
+        self::assertSame(
+            PaperDatasetState::COMPLETE,
+            (new PaperDatasetVerifier())->verifyForBaseline($directory)->state,
+        );
+        self::assertCount(2, array_filter(
+            (new PaperDatasetVerifier())->verifyBaselineSnapshot($directory)->events,
+            static fn (PaperMarketEvent $event): bool =>
+                $event->channel === PaperMarketDataChannel::CANDLE_1M,
+        ));
+    }
+
+    public function testCoveredMinuteWithFewerTradesThanItsCandleCountsCannotCertify(): void
+    {
+        [$directory] = $this->completeDataset(
+            PaperMarketDataNetwork::MAINNET,
+            coveredMinuteTradeCount: 3,
+        );
+
+        // Recording and replay still accept the dataset; only certification rejects the hole.
+        self::assertSame(
+            PaperDatasetState::COMPLETE,
+            (new PaperDatasetVerifier())->verify($directory)->state,
+        );
+        foreach (['verifyForBaseline', 'verifyBaselineSnapshot'] as $method) {
+            try {
+                (new PaperDatasetVerifier())->{$method}($directory);
+                self::fail($method . ' must reject a minute with fewer trades than its candle.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame(
+                    'paper_dataset_hyperliquid_trade_count_below_candle',
+                    $exception->getMessage(),
+                    $method,
+                );
+            }
+        }
+    }
+
     /**
+     * @param int|null $coveredMinuteTradeCount adds a fully covered minute holding two BTC
+     *     trades, followed by a trade of the next minute, whose closed 1m candle counts this
      * @return array{string, list<PaperMarketEvent>}
      */
     private function completeDataset(
@@ -248,6 +347,9 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         int $periodicFundingEpoch = 1,
         bool $multipleCandleFrontiers = false,
         bool $restWarmup = false,
+        ?int $coveredMinuteTradeCount = null,
+        bool $bestBidAndOfferBook = false,
+        ?string $bookOrigin = null,
     ): array
     {
         $datasetId = 'paper-hyperliquid-equality-' . $network->value;
@@ -377,14 +479,37 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
                     'synthetic' => true,
                 ],
             )
-            : $marketNormalizer->liveTopOfBook([
-                'coin' => 'BTC',
-                'levels' => [
-                    [['px' => '64999', 'sz' => '1', 'n' => 1]],
-                    [['px' => '65001', 'sz' => '1', 'n' => 1]],
-                ],
-                'time' => $baseMilliseconds + 2_000,
-            ], 1);
+            : ($bestBidAndOfferBook
+                ? $marketNormalizer->liveTopOfBookFromBbo([
+                    'bbo' => [
+                        ['px' => '64999', 'sz' => '1', 'n' => 1],
+                        ['px' => '65001', 'sz' => '1', 'n' => 1],
+                    ],
+                    'coin' => 'BTC',
+                    'time' => $baseMilliseconds + 2_000,
+                ], 1)
+                : $marketNormalizer->liveTopOfBook([
+                    'coin' => 'BTC',
+                    'levels' => [
+                        [['px' => '64999', 'sz' => '1', 'n' => 1]],
+                        [['px' => '65001', 'sz' => '1', 'n' => 1]],
+                    ],
+                    'time' => $baseMilliseconds + 2_000,
+                ], 1));
+        if ($bookOrigin !== null) {
+            $book = array_pop($events);
+            self::assertInstanceOf(PaperMarketEvent::class, $book);
+            $events[] = PaperMarketEvent::create(
+                network: $network,
+                venue: PaperMarketDataVenue::HYPERLIQUID,
+                symbol: $book->symbol,
+                channel: PaperMarketDataChannel::TOP_OF_BOOK,
+                exchangeTimestamp: $book->exchangeTimestamp,
+                receivedTimestamp: $book->receivedTimestamp,
+                sequence: $book->sequence,
+                payload: ['origin' => $bookOrigin] + $book->payload,
+            );
+        }
         $events[] = $marketNormalizer->closedLiveCandle(HyperliquidCandle::fromApiRow([
                 'T' => $baseMilliseconds + 59_999,
                 'c' => '2',
@@ -420,6 +545,47 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
                     'v' => '4',
                 ], 'BTC', $candle['interval']));
             }
+        }
+        if ($coveredMinuteTradeCount !== null) {
+            $laterNormalizer = new HyperliquidPaperMarketEventNormalizer(
+                $network,
+                $ordinals,
+                new MockClock('2026-07-29T10:05:00Z'),
+            );
+            foreach ([[43, 61_000], [44, 62_000]] as [$tid, $offset]) {
+                $events[] = $laterNormalizer->liveTrade([
+                    'coin' => 'BTC',
+                    'side' => 'A',
+                    'px' => '65001',
+                    'sz' => '0.02',
+                    'hash' => '0xabc' . $tid,
+                    'time' => $baseMilliseconds + $offset,
+                    'tid' => $tid,
+                    'users' => ['0xa', '0xb'],
+                ]);
+            }
+            $events[] = $laterNormalizer->closedLiveCandle(HyperliquidCandle::fromApiRow([
+                'T' => $baseMilliseconds + 119_999,
+                'c' => '65001',
+                'h' => '65001',
+                'i' => '1m',
+                'l' => '65001',
+                'n' => $coveredMinuteTradeCount,
+                'o' => '65001',
+                's' => 'BTC',
+                't' => $baseMilliseconds + 60_000,
+                'v' => '0.04',
+            ], 'BTC', '1m'));
+            $events[] = $laterNormalizer->liveTrade([
+                'coin' => 'BTC',
+                'side' => 'B',
+                'px' => '65002',
+                'sz' => '0.01',
+                'hash' => '0xabc45',
+                'time' => $baseMilliseconds + 121_000,
+                'tid' => 45,
+                'users' => ['0xa', '0xb'],
+            ]);
         }
         if ($periodicFunding) {
             $refreshNormalizer = new HyperliquidPaperMarketEventNormalizer(
@@ -460,6 +626,9 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
                 ->acknowledge($event->eventId);
         }
         $checkpoint = $checkpoint->finalizeCandle('BTC/1m', $baseMilliseconds);
+        if ($coveredMinuteTradeCount !== null) {
+            $checkpoint = $checkpoint->finalizeCandle('BTC/1m', $baseMilliseconds + 60_000);
+        }
         if ($multipleCandleFrontiers) {
             $checkpoint = $checkpoint
                 ->finalizeCandle('BTC/5m', $baseMilliseconds)

@@ -43,9 +43,9 @@ def test_build_job_okx_scalper_payload_is_explicit():
     }
 
 
-def test_build_job_bitmart_scalper_micro_payload_is_explicit():
+def test_build_job_binance_scalper_micro_payload_is_explicit():
     job = build_job(
-        exchange="bitmart",
+        exchange="binance",
         market_type="perpetual",
         profile="scalper_micro",
         workers=8,
@@ -55,13 +55,13 @@ def test_build_job_bitmart_scalper_micro_payload_is_explicit():
     assert job["dry_run"] is False
     assert job["workers"] == 8
     assert job["mtf_profile"] == "scalper_micro"
-    assert job["exchange"] == "bitmart"
+    assert job["exchange"] == "binance"
     assert job["market_type"] == "perpetual"
 
 
 def test_generated_ids_use_exchange_profile_and_cron_suffix():
     assert generate_schedule_id("okx", "scalper", "*/1 * * * *") == "cron-mtf-okx-scalper-1m"
-    assert generate_schedule_id("bitmart", "regular", "*/5 * * * *") == "cron-mtf-bitmart-regular-5m"
+    assert generate_schedule_id("binance", "regular", "*/5 * * * *") == "cron-mtf-binance-regular-5m"
     assert generate_workflow_id("okx", "scalper_micro") == "mtf-okx-scalper-micro-runner"
 
 
@@ -130,7 +130,7 @@ def test_parser_honors_dry_run_environment_default(monkeypatch):
     monkeypatch.setenv("MTF_WORKERS_DRY_RUN", "false")
 
     parser = build_parser()
-    args = parser.parse_args(["create", "--exchange", "bitmart", "--profile", "scalper"])
+    args = parser.parse_args(["create", "--exchange", "binance", "--profile", "scalper"])
     config = resolve_schedule_config(args)
 
     assert config.dry_run is False
@@ -140,7 +140,7 @@ def test_explicit_dry_run_overrides_environment_default(monkeypatch):
     monkeypatch.setenv("MTF_WORKERS_DRY_RUN", "false")
 
     parser = build_parser()
-    args = parser.parse_args(["create", "--exchange", "bitmart", "--profile", "scalper", "--dry-run=true"])
+    args = parser.parse_args(["create", "--exchange", "binance", "--profile", "scalper", "--dry-run=true"])
     config = resolve_schedule_config(args)
 
     assert config.dry_run is True
@@ -228,17 +228,17 @@ def test_create_live_schedule_with_runtime_check_bypass_skips_guardrail_validati
         ),
     )
 
-    # Bitmart is not dry-run-only, so the bypass still creates a live schedule.
+    # Binance is not dry-run-only, so the bypass still creates a live schedule.
     config = ScheduleConfig(
         command="create",
-        exchange="bitmart",
+        exchange="binance",
         market_type="perpetual",
         profile="scalper",
         workers=4,
         dry_run=False,
         cron="*/1 * * * *",
-        schedule_id="cron-mtf-bitmart-scalper-1m",
-        workflow_id="mtf-bitmart-scalper-runner",
+        schedule_id="cron-mtf-binance-scalper-1m",
+        workflow_id="mtf-binance-scalper-runner",
         dry_run_schedule=False,
         skip_runtime_check=True,
     )
@@ -246,7 +246,7 @@ def test_create_live_schedule_with_runtime_check_bypass_skips_guardrail_validati
 
     asyncio.run(create_schedule(client, config))
 
-    assert client.created[0][0] == "cron-mtf-bitmart-scalper-1m"
+    assert client.created[0][0] == "cron-mtf-binance-scalper-1m"
 
 
 def test_create_live_okx_schedule_is_blocked_even_with_runtime_check_bypass():
@@ -295,8 +295,8 @@ def test_resolve_schedule_config_allows_dry_run_okx_create():
 
 
 def test_assert_exchange_schedule_policy_allows_live_for_non_dry_run_only_exchanges():
-    # Bitmart legacy can still go live; only dry-run-only exchanges (OKX, Hyperliquid) are blocked.
-    assert_exchange_schedule_policy("bitmart", dry_run=False) is None
+    # Binance legacy can still go live; only dry-run-only exchanges (OKX, Hyperliquid) are blocked.
+    assert_exchange_schedule_policy("binance", dry_run=False) is None
     assert_exchange_schedule_policy("okx", dry_run=True) is None
     assert_exchange_schedule_policy("hyperliquid", dry_run=True) is None
 

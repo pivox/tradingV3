@@ -48,7 +48,7 @@ class CloseManualCommand extends Command
             ->addOption('closed-at', 'c', InputOption::VALUE_REQUIRED, 'Date de fermeture (format: Y-m-d H:i:s ou Y-m-d H:i:s.u)', null)
             ->addOption('leverage', 'l', InputOption::VALUE_OPTIONAL, 'Levier utilisé', null)
             ->addOption('reason-code', 'r', InputOption::VALUE_OPTIONAL, 'Code de raison de la fermeture', null)
-            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Exchange (ex: bitmart)', null)
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Exchange (ex: okx)', null)
             ->addOption('account-id', null, InputOption::VALUE_OPTIONAL, 'ID du compte', null)
             ->addOption('run-id', null, InputOption::VALUE_OPTIONAL, 'ID du run MTF', null);
     }

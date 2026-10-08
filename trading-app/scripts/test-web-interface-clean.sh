@@ -96,7 +96,7 @@ if echo "$REVALIDATION_RESPONSE" | jq -e '.success' > /dev/null; then
     ETH_CLOSE=$(echo "$REVALIDATION_RESPONSE" | jq -r '.data.contracts_results.ETHUSDT.context.close // "N/A"')
     
     if [ "$BTC_CLOSE" != "N/A" ] && [ "$ETH_CLOSE" != "N/A" ]; then
-        echo "✅ Données klines récupérées depuis BitMart"
+        echo "✅ Données klines récupérées depuis l'exchange"
         echo "📈 BTCUSDT: $BTC_CLOSE USDT"
         echo "📈 ETHUSDT: $ETH_CLOSE USDT"
     else
@@ -145,7 +145,7 @@ echo "  ✅ Page web accessible"
 echo "  ✅ Champ legacy supprimé"
 echo "  ✅ Nouveaux champs présents"
 echo "  ✅ Endpoint des contrats fonctionnel"
-echo "  ✅ Revalidation avec klines BitMart"
+echo "  ✅ Revalidation avec klines de l'exchange"
 echo "  ✅ Fonctions JavaScript complètes"
 echo "  ✅ Styles CSS appliqués"
 echo ""

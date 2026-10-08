@@ -62,8 +62,8 @@ final class TradeLineage implements PaperExecutionProvenanceAwareInterface
     #[ORM\Column(name: 'orchestration_dashboard_id', type: Types::STRING, length: 96, nullable: true)]
     private ?string $orchestrationDashboardId = null;
 
-    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
-    private string $exchange = 'bitmart';
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'okx'])]
+    private string $exchange = 'okx';
 
     #[ORM\Column(name: 'market_data_venue', type: Types::STRING, length: 32, nullable: true)]
     private ?string $marketDataVenue = null;

@@ -7,6 +7,10 @@ namespace App\Trading\Paper\Okx\Live;
 final class OkxPaperAcknowledgedIdentityEntry
 {
     private const SHA256_PATTERN = '/\A[a-f0-9]{64}\z/D';
+    private const EXPANDED_CACHE_LIMIT = 8_192;
+
+    /** @var array<string, array{string, string, string, string}> */
+    private static array $expandedCache = [];
 
     /**
      * @param array{string, string, string, string} $entry
@@ -42,6 +46,15 @@ final class OkxPaperAcknowledgedIdentityEntry
         if (\is_array($entry)) {
             return self::validated($entry);
         }
+        $cached = self::$expandedCache[$entry] ?? null;
+        if ($cached !== null) {
+            // Refresh insertion order so the bounded cache retains the active
+            // checkpoint window while old rolling-history entries age out.
+            unset(self::$expandedCache[$entry]);
+            self::$expandedCache[$entry] = $cached;
+
+            return $cached;
+        }
         if (preg_match('/\Av1:([rwb]):([A-Za-z0-9+\/]+={0,2})\z/D', $entry, $matches) !== 1) {
             throw self::invalid();
         }
@@ -71,7 +84,16 @@ final class OkxPaperAcknowledgedIdentityEntry
             throw self::invalid();
         }
 
-        return self::validated($expanded);
+        $expanded = self::validated($expanded);
+        self::$expandedCache[$entry] = $expanded;
+        if (\count(self::$expandedCache) > self::EXPANDED_CACHE_LIMIT) {
+            $oldest = array_key_first(self::$expandedCache);
+            if ($oldest !== null) {
+                unset(self::$expandedCache[$oldest]);
+            }
+        }
+
+        return $expanded;
     }
 
     /**

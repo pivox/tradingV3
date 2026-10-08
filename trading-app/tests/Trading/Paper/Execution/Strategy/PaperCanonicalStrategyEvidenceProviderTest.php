@@ -67,6 +67,57 @@ final class PaperCanonicalStrategyEvidenceProviderTest extends TestCase
         $evidence->lineage->assertCanonicalIntegrity()->assertExecutableTradeContract();
     }
 
+    /** #132 decision d: a canonical Paper decision carries a deterministic RFC 4122 v5 decision id. */
+    public function testEveryDecisionCarriesADeterministicVersionFiveDecisionId(): void
+    {
+        [$cell, $config] = $this->cell();
+        $provider = new PaperCanonicalStrategyEvidenceProvider(
+            new EffectiveTradingConfigResolver(),
+            new RecordingCanonicalStrategyEvidenceSource($cell, $config),
+        );
+        $other = PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::OKX,
+            'BTCUSDT',
+            PaperMarketDataChannel::CANDLE_15M,
+            new \DateTimeImmutable('2026-08-10T12:14:59Z'),
+            new \DateTimeImmutable('2026-08-10T12:15:00Z'),
+            '2',
+            ['confirmed' => true, 'bar' => '15m'],
+        );
+
+        $first = $provider->evidenceFor($cell, $this->event(), self::DATASET, self::CHECKSUM, self::BUILD);
+        $again = (new PaperCanonicalStrategyEvidenceProvider(
+            new EffectiveTradingConfigResolver(),
+            new RecordingCanonicalStrategyEvidenceSource($cell, $config),
+        ))->evidenceFor($cell, $this->event(), self::DATASET, self::CHECKSUM, self::BUILD);
+        $next = $provider->evidenceFor($cell, $other, self::DATASET, self::CHECKSUM, self::BUILD);
+
+        self::assertNotNull($first);
+        self::assertNotNull($again);
+        self::assertNotNull($next);
+        $decisionId = (string) $first->lineage->decisionId;
+        self::assertMatchesRegularExpression('/\A[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/D', $decisionId);
+        self::assertSame($decisionId, $again->lineage->decisionId);
+        self::assertNotSame($decisionId, $next->lineage->decisionId);
+        $first->lineage->assertTradeBoundary('BTCUSDT', 'long', 'okx', 'perpetual');
+    }
+
+    /** #132 m: one dashboard per Paper run, the run id, as position_trade_analysis_v2 requires. */
+    public function testEveryDecisionNamesItsRunAsItsDashboard(): void
+    {
+        [$cell, $config] = $this->cell();
+        $evidence = (new PaperCanonicalStrategyEvidenceProvider(
+            new EffectiveTradingConfigResolver(),
+            new RecordingCanonicalStrategyEvidenceSource($cell, $config),
+        ))->evidenceFor($cell, $this->event(), self::DATASET, self::CHECKSUM, self::BUILD);
+
+        self::assertNotNull($evidence);
+        self::assertSame($cell->runId, $evidence->lineage->orchestrationDashboardId);
+        self::assertSame($cell->runId, $evidence->lineage->orchestrationRunId);
+        self::assertSame($cell->runId, $evidence->lineage->toArray()['orchestration_dashboard_id'] ?? null);
+    }
+
     public function testMissingSourceEvidenceReturnsNoEvidenceWithoutDefaults(): void
     {
         [$cell] = $this->cell();

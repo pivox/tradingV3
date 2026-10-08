@@ -14,8 +14,8 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
-    name: 'bitmart:fetch-contracts',
-    description: 'Récupère la liste des contrats disponibles sur BitMart Futures'
+    name: 'provider:fetch-contracts',
+    description: 'Récupère la liste des contrats disponibles sur exchange'
 )]
 final class FetchContractsCommand extends Command
 {
@@ -34,13 +34,13 @@ final class FetchContractsCommand extends Command
             ->addOption('save', null, InputOption::VALUE_NONE, 'Sauvegarder les contrats en base de données')
             ->addOption('stats', null, InputOption::VALUE_NONE, 'Afficher les statistiques des contrats en base')
             ->setHelp('
-Cette commande récupère la liste des contrats disponibles sur BitMart Futures.
+Cette commande récupère la liste des contrats disponibles sur exchange.
 
 Exemples:
-  php bin/console bitmart:fetch-contracts
-  php bin/console bitmart:fetch-contracts --symbol=BTCUSDT
-  php bin/console bitmart:fetch-contracts --output=json
-  php bin/console bitmart:fetch-contracts --save
+  php bin/console provider:fetch-contracts
+  php bin/console provider:fetch-contracts --symbol=BTCUSDT
+  php bin/console provider:fetch-contracts --output=json
+  php bin/console provider:fetch-contracts --save
             ');
     }
 
@@ -53,7 +53,7 @@ Exemples:
         $stats = $input->getOption('stats');
 
         try {
-            $io->title('Récupération des contrats BitMart Futures');
+            $io->title('Récupération des contrats exchange');
 
             // Si on demande les statistiques, on les affiche et on sort
             if ($stats) {
@@ -105,7 +105,7 @@ Exemples:
 
         foreach ($contracts as $contract) {
             // Gérer les objets ContractDto et les tableaux
-            if ($contract instanceof \App\Provider\Bitmart\Dto\ContractDto) {
+            if ($contract instanceof \App\Contract\Provider\Dto\ContractDto) {
                 $rows[] = [
                     $contract->symbol ?? 'N/A',
                     $contract->symbol ?? 'N/A', // Utilise le symbole comme nom

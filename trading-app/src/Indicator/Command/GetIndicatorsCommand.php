@@ -42,7 +42,7 @@ final class GetIndicatorsCommand extends Command
             ->addOption('conditions', 'c', InputOption::VALUE_OPTIONAL, 'Évaluer des conditions spécifiques (séparées par des virgules)')
             ->addOption('all-conditions', 'a', InputOption::VALUE_NONE, 'Évaluer toutes les conditions disponibles')
             ->addOption('format', 'f', InputOption::VALUE_OPTIONAL, 'Format de sortie (json, table)', 'table')
-            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: bitmart)')
+            ->addOption('exchange', null, InputOption::VALUE_OPTIONAL, 'Identifiant de l\'exchange (ex: okx)')
             ->addOption('market-type', null, InputOption::VALUE_OPTIONAL, 'Type de marché (perpetual|spot)')
         ;
     }
@@ -67,16 +67,10 @@ final class GetIndicatorsCommand extends Command
         $io->info("Récupération des klines pour {$symbol} sur {$timeframe->value}...");
 
         try {
-            // Résoudre le contexte (défaut Bitmart/Perpetual) et récupérer les klines
+            // Résoudre le contexte (défaut OKX/Perpetual) et récupérer les klines
             $exchangeOpt = $input->getOption('exchange');
             $marketTypeOpt = $input->getOption('market-type');
-            $exchange = Exchange::BITMART;
-            if (is_string($exchangeOpt) && $exchangeOpt !== '') {
-                $exchange = match (strtolower(trim($exchangeOpt))) {
-                    'bitmart' => Exchange::BITMART,
-                    default => Exchange::BITMART,
-                };
-            }
+            $exchange = ExchangeContext::fromValues($exchangeOpt)->exchange;
             $marketType = MarketType::PERPETUAL;
             if (is_string($marketTypeOpt) && $marketTypeOpt !== '') {
                 $marketType = match (strtolower(trim($marketTypeOpt))) {

@@ -96,8 +96,8 @@ final class MtfCoreRunCommand extends Command
                 'exchange',
                 null,
                 InputOption::VALUE_OPTIONAL,
-                'Exchange ciblé (ex: bitmart).',
-                'bitmart'
+                'Exchange ciblé (ex: okx).',
+                'okx'
             )
             ->addOption(
                 'market-type',
@@ -131,7 +131,7 @@ final class MtfCoreRunCommand extends Command
         $exchange         = (string) $input->getOption('exchange');
         $marketType       = (string) $input->getOption('market-type');
         $mtfProfile       = (string) $input->getOption('mtf-profile');
-        $exchangeEnum     = Exchange::tryFrom(strtolower($exchange)) ?? Exchange::BITMART;
+        $exchangeEnum     = ExchangeContext::fromValues($exchange)->exchange;
         $marketTypeEnum   = MarketType::tryFrom(strtolower($marketType)) ?? MarketType::PERPETUAL;
         $context          = new ExchangeContext($exchangeEnum, $marketTypeEnum);
 

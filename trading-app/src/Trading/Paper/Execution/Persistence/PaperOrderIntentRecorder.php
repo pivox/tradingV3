@@ -70,12 +70,15 @@ final readonly class PaperOrderIntentRecorder implements PaperOrderIntentRecorde
             throw new \LogicException('paper_order_intent_validation_failed');
         }
         $this->intents->markReadyToSend($intent);
+        // A legacy Paper intent carries no canonical identity (#132 decision g): its
+        // configuration snapshot stays in the paper provenance columns and is never copied
+        // into config_hash, which would make the live projection treat the order as a
+        // canonical one and require a modern lineage (dry_run, mode, setup) it cannot have.
         $this->lineages->ensureForIntent($intent, $provenance + [
             'internal_trade_id' => $prepared->internalTradeId,
             'profile' => $prepared->mode,
             'run_id' => $provenance['run_id'],
             'origin' => 'paper',
-            'config_hash' => $provenance['configuration_snapshot_id'],
         ]);
 
         $id = $intent->getId();

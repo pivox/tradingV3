@@ -107,7 +107,7 @@ final readonly class PreTradeChecks
 
         $pivotLevels = $this->fetchPivotLevels($symbol, $context);
 
-        $marketSnapshot = $this->marketStructureSampler->sample($symbol, $specs->contractSize->toFloat(), $mid);
+        $marketSnapshot = $this->marketStructureSampler->sample($symbol, $specs->contractSize->toFloat(), $mid, $context);
 
         $this->positionsLogger->debug('pretrade.metrics', [
             'symbol' => $symbol,

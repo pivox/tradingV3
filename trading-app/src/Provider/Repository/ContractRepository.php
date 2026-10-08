@@ -236,7 +236,7 @@ class ContractRepository extends ServiceEntityRepository
      */
     private function contractDtoToArray($contractDto): array
     {
-        if (!$contractDto instanceof \App\Provider\Bitmart\Dto\ContractDto) {
+        if (!$contractDto instanceof \App\Contract\Provider\Dto\ContractDto) {
             throw new \InvalidArgumentException('Expected ContractDto instance');
         }
 
@@ -328,7 +328,7 @@ class ContractRepository extends ServiceEntityRepository
             foreach ($batch as $contractData) {
                 try {
                     // Convertir ContractDto en tableau si nécessaire
-                    if ($contractData instanceof \App\Provider\Bitmart\Dto\ContractDto) {
+                    if ($contractData instanceof \App\Contract\Provider\Dto\ContractDto) {
                         $contractData = $this->contractDtoToArray($contractData);
                     } elseif (is_array($contractData)) {
                         // Normaliser tous les champs BigDecimal dans le tableau

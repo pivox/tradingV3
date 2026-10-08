@@ -50,7 +50,7 @@ final class MtfRunnerServiceWorkerLineageTest extends TestCase
         $environment = $method->invoke(
             $service,
             'BTCUSDT',
-            LineageContext::legacy('BTCUSDT', 'bitmart', 'perpetual', 'regular'),
+            LineageContext::legacy('BTCUSDT', 'okx', 'perpetual', 'regular'),
         );
 
         self::assertSame('', $environment['MTF_CANONICAL_LINEAGE']);
@@ -81,7 +81,7 @@ final class MtfRunnerServiceWorkerLineageTest extends TestCase
         $options = $optionsMethod->invoke(
             $service,
             $request,
-            new ExchangeContext(Exchange::BITMART, MarketType::SPOT),
+            new ExchangeContext(Exchange::OKX, MarketType::SPOT),
             'generated-run-other',
         );
         /** @var string[] $command */

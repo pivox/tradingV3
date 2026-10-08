@@ -4,7 +4,7 @@
 # Environment & Runtime Configuration
 # ===================================
 
-# Include root .env if present (sets RUNTIME, BITMART keys, etc.)
+# Include root .env if present (sets RUNTIME, exchange keys, etc.)
 # Copy .env.example to .env and fill in your values.
 -include .env
 
@@ -106,31 +106,13 @@ restart-trading-app: ## Restart trading-app PHP service
 # ===================================
 
 fetch-contracts:
-	$(CONSOLE) app:bitmart:fetch-contracts
-
-sync-symbol:
-	@if [ -z "$(symbol)" ]; then \
-		echo "❌ Veuillez spécifier le symbole : make sync-symbol symbol=BTCUSDT"; \
-		exit 1; \
-	fi
-	$(CONSOLE) bitmart:kline:sync-all --symbol=$(symbol)
+	$(CONSOLE) provider:fetch-contracts
 
 sync-all-symbols:
 	bash scripts/sync_all.sh
 
-latest:
-	@if [ -z "$(symbol)" ]; then \
-		echo "❌ Veuillez spécifier le symbole : make latest symbol=BTCUSDT [step=1]"; \
-		exit 1; \
-	fi
-	$(CONSOLE) bitmart:kline:latest $(symbol) $(step)
-
-
 show-positions: ## Affiche l'état actuel des positions ouvertes
 	$(CONSOLE) app:evaluate:positions
-
-show-orders: ## Affiche l'état actuel des ordres ouvertes
-	$(CONSOLE) app:bitmart:orders:open
 
 show-pipeline: ## Affiche en continu le pipeline des contrats
 	$(CONSOLE) app:monitor:contract-pipeline --interval=2

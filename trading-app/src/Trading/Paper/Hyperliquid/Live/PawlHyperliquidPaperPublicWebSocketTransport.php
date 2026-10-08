@@ -125,7 +125,7 @@ final class PawlHyperliquidPaperPublicWebSocketTransport implements
                 );
                 $connection->on(
                     'close',
-                    function (mixed $code = null) use (
+                    function (mixed $code = null, mixed $reason = null) use (
                         $connection,
                         $generation,
                         $onClose,
@@ -138,7 +138,10 @@ final class PawlHyperliquidPaperPublicWebSocketTransport implements
 
                         $this->connection = null;
                         $this->resetInboundState();
-                        $onClose(\is_int($code) ? $code : null);
+                        $onClose(
+                            \is_int($code) ? $code : null,
+                            \is_string($reason) ? $reason : null,
+                        );
                     },
                 );
                 $connection->on(

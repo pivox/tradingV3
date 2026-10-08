@@ -198,12 +198,22 @@ final class HyperliquidPaperLiveCheckpointStore
     private function persist(HyperliquidPaperLiveCheckpoint $checkpoint): void
     {
         try {
-            $state = $checkpoint->toArray();
-            $document = [
-                'sha256' => hash('sha256', CanonicalJson::encode($state)),
-                'state' => $state,
-            ];
-            $contents = CanonicalJson::encode($document) . "\n";
+            // The canonical document is {"sha256":…,"state":…}: its keys already sort in
+            // that order, so it embeds the state's canonical encoding verbatim. Reserving
+            // the envelope's nodes, bytes, keys and depth applies exactly the budget of
+            // encoding the whole document, so one encoding serves checksum and file.
+            $stateJson = CanonicalJson::encodeWithReservedBudget(
+                $checkpoint->toArray(),
+                2,
+                75,
+                2,
+                1,
+            );
+            if (\strlen($stateJson) > HyperliquidPaperLiveCheckpoint::MAXIMUM_BYTES) {
+                throw new \InvalidArgumentException();
+            }
+            $contents = '{"sha256":"' . hash('sha256', $stateJson)
+                . '","state":' . $stateJson . "}\n";
             if (\strlen($contents) > HyperliquidPaperLiveCheckpoint::MAXIMUM_BYTES + 256) {
                 throw new \InvalidArgumentException();
             }

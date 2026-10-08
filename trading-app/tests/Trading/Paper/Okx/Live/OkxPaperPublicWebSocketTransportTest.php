@@ -405,9 +405,9 @@ final class OkxPaperPublicWebSocketTransportTest extends TestCase
         self::assertSame(1_048_576, OkxPaperLivePolicy::MAX_FRAME_BYTES);
         self::assertSame(512, OkxPaperLivePolicy::MAX_QUEUED_FRAMES);
         self::assertSame(2_097_152, OkxPaperLivePolicy::MAX_QUEUED_BYTES);
-        self::assertSame(384, OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES);
+        self::assertSame(128, OkxPaperLivePolicy::PAUSE_QUEUED_FRAMES);
         self::assertSame(1_048_576, OkxPaperLivePolicy::PAUSE_QUEUED_BYTES);
-        self::assertSame(256, OkxPaperLivePolicy::RESUME_QUEUED_FRAMES);
+        self::assertSame(64, OkxPaperLivePolicy::RESUME_QUEUED_FRAMES);
         self::assertSame(524_288, OkxPaperLivePolicy::RESUME_QUEUED_BYTES);
         self::assertSame(3, OkxPaperLivePolicy::MAX_RESYNC_ATTEMPTS);
         self::assertSame(900.0, OkxPaperLivePolicy::RESYNC_ATTEMPT_TIMEOUT_SECONDS);

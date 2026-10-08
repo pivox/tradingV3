@@ -100,7 +100,13 @@ final readonly class OkxPaperStreamFrontier
         }
         $overlapCanonical = $canonical;
         if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
-            unset($overlapCanonical['source_fields']['size_contracts']);
+            // A websocket aggregate sums its fills' sizes, and OKX websocket and REST
+            // can disagree on `source` for the same trade (seen in production: 1 on
+            // the websocket, 0 on REST): cross-origin identity ignores both.
+            unset(
+                $overlapCanonical['source_fields']['size_contracts'],
+                $overlapCanonical['source_fields']['source'],
+            );
         }
         if (\in_array($event->channel, [
             PaperMarketDataChannel::CANDLE_1M,

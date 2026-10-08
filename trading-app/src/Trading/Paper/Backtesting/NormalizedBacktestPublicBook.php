@@ -45,7 +45,7 @@ final readonly class NormalizedBacktestPublicBook
             || ($marketDataVenue === 'hyperliquid' && ($quantityUnit !== 'base_asset'
                 || $bidOrderCount !== null
                 || $askOrderCount !== null
-                || $origin !== 'ws_l2_book'))
+                || !\in_array($origin, ['ws_l2_book', 'ws_bbo'], true)))
         ) {
             throw new \InvalidArgumentException('paper_backtest_public_book_invalid');
         }

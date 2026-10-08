@@ -837,7 +837,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
 
 
     /**
-     * Snapshot indicateurs depuis la base UNIQUEMENT (aucun appel Bitmart).
+     * Snapshot indicateurs depuis la base UNIQUEMENT (aucun appel exchange).
      */
     private function getSnapshotFromDatabaseOnly(
         string $symbol,

@@ -57,7 +57,7 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
             self::assertSame(MarketType::PERPETUAL, $event->marketType());
             self::assertSame(
                 $event instanceof ExchangeFillReceived
-                    ? ['source' => 'okx_private_rest_snapshot', 'quantity_decimal' => '0.25']
+                    ? ['source' => 'okx_private_rest_snapshot', 'quantity_decimal' => '0.25', 'quantity_unit' => 'contracts']
                     : ['source' => 'okx_private_rest_snapshot'],
                 $event->payload(),
             );
@@ -527,6 +527,39 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         } finally {
             self::assertSame([], $store->events);
         }
+    }
+
+    public function testFillCarriesContractUnitAndResolvedContractValue(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+        $client = new class implements \App\Exchange\Okx\OkxRestClientInterface {
+            public function publicGet(string $path, array $query = []): array
+            {
+                return ['code' => '0', 'data' => [['instId' => 'BTC-USDT-SWAP', 'ctVal' => '0.01']]];
+            }
+
+            public function privateGet(string $path, array $query = []): array
+            {
+                return ['code' => '0', 'data' => []];
+            }
+
+            public function privatePost(string $path, array $body = []): array
+            {
+                return ['code' => '0', 'data' => []];
+            }
+        };
+        $reconciler = new OkxPrivateRestSnapshotReconciler(
+            new ExchangeEventBus($store, new NullLogger()),
+            $store,
+            new \App\Exchange\Okx\OkxContractValueResolver($client),
+        );
+
+        $reconciler->reconcile($this->snapshot(fills: [$this->fill('3')]));
+
+        $fill = $store->events[0];
+        self::assertInstanceOf(ExchangeFillReceived::class, $fill);
+        self::assertSame('contracts', $fill->fill()->metadata['quantity_unit'] ?? null);
+        self::assertSame('0.01', $fill->fill()->metadata['contract_value'] ?? null);
     }
 
     private function reconciler(SnapshotRecordingProjectionStore $store): OkxPrivateRestSnapshotReconciler

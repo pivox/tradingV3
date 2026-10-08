@@ -389,23 +389,23 @@ def test_resolve_status_branches(success, failed, expected):
 
 
 def test_open_state_fetched_once_per_exchange_market_type(orchestrator_env, monkeypatch):
-    # Trois sets : deux partagent (fake, perpetual), un autre (bitmart, perpetual).
+    # Trois sets : deux partagent (fake, perpetual), un autre (okx, perpetual).
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
     _seed_set(session, dash.id, "a", exchange="fake", market_type="perpetual", symbols=("BTCUSDT",))
     _seed_set(session, dash.id, "b", exchange="fake", market_type="perpetual", symbols=("ETHUSDT",))
-    _seed_set(session, dash.id, "c", exchange="bitmart", market_type="perpetual", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "c", exchange="okx", market_type="perpetual", symbols=("BTCUSDT",))
     fake = _FakeAsyncClient()
     _install_fake_client(monkeypatch, fake)
 
     body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
     assert body["summary"]["total_calls"] == 3
 
-    # Un seul GET open-state par couple distinct => 2 GET (fake, bitmart).
+    # Un seul GET open-state par couple distinct => 2 GET (fake, okx).
     open_state_calls = [c for c in fake.get_calls if c["url"].endswith("/api/exchange/open-state")]
     assert len(open_state_calls) == 2
     pairs = {(c["params"]["exchange"], c["params"]["market_type"]) for c in open_state_calls}
-    assert pairs == {("fake", "perpetual"), ("bitmart", "perpetual")}
+    assert pairs == {("fake", "perpetual"), ("okx", "perpetual")}
 
 
 def test_each_mtf_payload_has_sync_tables_false_and_snapshot(orchestrator_env, monkeypatch):
@@ -430,8 +430,8 @@ def test_live_set_skipped_when_snapshot_fetch_fails(orchestrator_env, monkeypatc
     # Un set live et un set dry-run, même couple ; le fetch open-state échoue (503).
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
-    _seed_set(session, dash.id, "dry", dry_run=True, exchange="bitmart", symbols=("ETHUSDT",))
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "dry", dry_run=True, exchange="fake", symbols=("ETHUSDT",))
     fake = _FakeAsyncClient(open_state_status=503)
     _install_fake_client(monkeypatch, fake)
 
@@ -451,7 +451,7 @@ def test_live_set_skipped_when_snapshot_fetch_fails(orchestrator_env, monkeypatc
 def test_dry_run_proceeds_without_snapshot(orchestrator_env, monkeypatch):
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "dry", dry_run=True, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "dry", dry_run=True, exchange="fake", symbols=("BTCUSDT",))
     fake = _FakeAsyncClient(open_state_status=500)
     _install_fake_client(monkeypatch, fake)
 
@@ -589,7 +589,7 @@ def test_run_level_dry_run_override_forces_live_set_to_dry(orchestrator_env, mon
     # (fail-closed). Avec {"dry_run": true}, il est forcé en dry-run, donc exécuté.
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
     fake = _FakeAsyncClient(open_state_status=503)
     _install_fake_client(monkeypatch, fake)
 
@@ -625,11 +625,11 @@ def test_live_forbidden_exchange_skipped_even_with_snapshot(orchestrator_env, mo
 def test_live_set_skipped_even_with_snapshot(orchestrator_env, monkeypatch):
     # Phase actuelle : la readiness live n'étant pas livrée, assert_set_persistable
     # interdit TOUT set live. Le runner applique la même politique : une ligne ORM
-    # live (écrite hors API), même sur un exchange autorisé (bitmart) et même avec un
+    # live (écrite hors API), même sur un exchange autorisé (fake) et même avec un
     # snapshot disponible, ne doit JAMAIS déclencher un /api/mtf/run live.
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
     fake = _FakeAsyncClient()  # snapshot dispo (200)
     _install_fake_client(monkeypatch, fake)
 
@@ -663,14 +663,14 @@ def test_live_forbidden_exchange_skipped_with_uppercase_name(orchestrator_env, m
 # --------------------------------------------------------------------------
 
 
-def test_live_bitmart_dispatched_when_switch_on_with_snapshot(orchestrator_env, monkeypatch):
-    # Interrupteur ON + bitmart allow-listé + snapshot présent ⇒ le set live est
+def test_live_fake_dispatched_when_switch_on_with_snapshot(orchestrator_env, monkeypatch):
+    # Interrupteur ON + fake allow-listé + snapshot présent ⇒ le set live est
     # réellement dispatché (POST /api/mtf/run avec dry_run=false).
     monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
-    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "bitmart")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "fake")
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
     snapshot = {"open_positions": [], "open_orders": []}
     fake = _FakeAsyncClient(open_state=snapshot)
     _install_fake_client(monkeypatch, fake)
@@ -689,10 +689,10 @@ def test_live_skipped_when_switch_on_but_snapshot_absent(orchestrator_env, monke
     # Live autorisé (ON + allow-listé) mais snapshot indisponible ⇒ skip fail-closed
     # `open_state_unavailable` : on ne trade pas à l'aveugle.
     monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
-    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "bitmart")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "fake")
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
     fake = _FakeAsyncClient(open_state_status=503)
     _install_fake_client(monkeypatch, fake)
 
@@ -711,7 +711,7 @@ def test_live_skipped_when_switch_on_but_snapshot_absent(orchestrator_env, monke
 def test_live_okx_forbidden_even_when_switch_on_and_allowlisted(orchestrator_env, monkeypatch):
     # Bannissement permanent : OKX live reste skippé même interrupteur ON + listé.
     monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
-    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "okx,bitmart")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "okx,fake")
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
     _seed_set(session, dash.id, "okx_live", dry_run=False, exchange="okx", symbols=("BTCUSDT",))
@@ -730,12 +730,12 @@ def test_live_okx_forbidden_even_when_switch_on_and_allowlisted(orchestrator_env
 
 
 def test_live_skipped_when_exchange_not_allowlisted(orchestrator_env, monkeypatch):
-    # Interrupteur ON mais bitmart hors allow-list ⇒ skip fail-closed.
+    # Interrupteur ON mais fake hors allow-list ⇒ skip fail-closed.
     monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
-    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "fake")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "okx")
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
     fake = _FakeAsyncClient()
     _install_fake_client(monkeypatch, fake)
 
@@ -754,10 +754,10 @@ def test_run_level_dry_run_override_forces_dry_even_when_switch_on(orchestrator_
     # Prééminence sécurité : {"dry_run": true} force le dry quel que soit l'état de
     # l'interrupteur (même ON + allow-listé), et même sans snapshot.
     monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
-    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "bitmart")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "fake")
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "live", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
     fake = _FakeAsyncClient(open_state_status=503)
     _install_fake_client(monkeypatch, fake)
 
@@ -807,11 +807,11 @@ def test_dry_run_override_allows_forbidden_exchange(orchestrator_env, monkeypatc
 
 
 def test_conflicting_live_set_ids():
-    a = _make_set("a", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
-    b = _make_set("b", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
-    c = _make_set("c", dry_run=False, exchange="bitmart", symbols=("ETHUSDT",))
-    dry = _make_set("d", dry_run=True, exchange="bitmart", symbols=("BTCUSDT",))
-    empty = _make_set("e", dry_run=False, exchange="bitmart")  # symbols=() => univers complet
+    a = _make_set("a", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
+    b = _make_set("b", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
+    c = _make_set("c", dry_run=False, exchange="fake", symbols=("ETHUSDT",))
+    dry = _make_set("d", dry_run=True, exchange="fake", symbols=("BTCUSDT",))
+    empty = _make_set("e", dry_run=False, exchange="fake")  # symbols=() => univers complet
 
     # a et b partagent BTCUSDT => conflit ; c (ETHUSDT) et dry (dry-run) hors conflit.
     assert orch._conflicting_live_set_ids([a, b, c, dry], force_dry_run=False) == {"a", "b"}
@@ -823,7 +823,7 @@ def test_conflicting_live_set_ids():
     assert orch._conflicting_live_set_ids([a, c], force_dry_run=False) == set()
 
     # Casse différente => même instrument (Symfony normalise en MAJUSCULES).
-    lower = _make_set("low", dry_run=False, exchange="bitmart", symbols=("btcusdt",))
+    lower = _make_set("low", dry_run=False, exchange="fake", symbols=("btcusdt",))
     assert orch._conflicting_live_set_ids([a, lower], force_dry_run=False) == {"a", "low"}
 
 
@@ -836,23 +836,23 @@ def test_conflicting_live_set_ids_normalizes_exchange_market_key():
             symbols=symbols, dry_run=dry_run,
         )
 
-    a = s("a", "bitmart")
+    a = s("a", "fake")
     # Même exchange après normalisation casse/espaces => conflit.
-    assert orch._conflicting_live_set_ids([a, s("b", " Bitmart ")], force_dry_run=False) == {"a", "b"}
+    assert orch._conflicting_live_set_ids([a, s("b", " Fake ")], force_dry_run=False) == {"a", "b"}
     # Casse du market_type normalisée également.
-    assert orch._conflicting_live_set_ids([a, s("c", "bitmart", market_type="PERPETUAL")], force_dry_run=False) == {"a", "c"}
+    assert orch._conflicting_live_set_ids([a, s("c", "fake", market_type="PERPETUAL")], force_dry_run=False) == {"a", "c"}
     # Alias de market_type (perp == perpetual côté Symfony) => conflit.
-    assert orch._conflicting_live_set_ids([a, s("e", "bitmart", market_type="perp")], force_dry_run=False) == {"a", "e"}
+    assert orch._conflicting_live_set_ids([a, s("e", "fake", market_type="perp")], force_dry_run=False) == {"a", "e"}
     # Exchanges réellement différents => pas de conflit.
     assert orch._conflicting_live_set_ids([a, s("d", "okx")], force_dry_run=False) == set()
 
 
 def test_overlapping_live_sets_rejected_with_mixed_exchange_casing(orchestrator_env, monkeypatch):
-    # Deux lignes live « bitmart » et « BITMART » (écrites hors API) ciblant le même
+    # Deux lignes live « fake » et « BITMART » (écrites hors API) ciblant le même
     # symbole partageraient le même snapshot pré-run : rejet fail-closed des deux.
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "live1", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live1", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
     _seed_set(session, dash.id, "live2", dry_run=False, exchange="BITMART", symbols=("BTCUSDT",))
     fake = _FakeAsyncClient()
     _install_fake_client(monkeypatch, fake)
@@ -868,8 +868,8 @@ def test_overlapping_live_sets_rejected_with_mixed_exchange_casing(orchestrator_
 def test_overlapping_live_sets_rejected_before_dispatch(orchestrator_env, monkeypatch):
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "live1", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
-    _seed_set(session, dash.id, "live2", dry_run=False, exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live1", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live2", dry_run=False, exchange="fake", symbols=("BTCUSDT",))
     fake = _FakeAsyncClient()
     _install_fake_client(monkeypatch, fake)
 
@@ -1202,7 +1202,7 @@ def _seed_lock(
     symbol: str,
     *,
     profile: str = "regular",
-    exchange: str = "bitmart",
+    exchange: str = "fake",
     market_type: str = "perpetual",
     ttl_seconds: int = 1800,
     acquired_offset_seconds: int = 0,
@@ -1244,7 +1244,7 @@ def test_lock_acquired_then_released_after_successful_run(orchestrator_env, monk
     # Acquisition réussie -> set exécuté (POST mtf/run) -> lock libéré en fin de run.
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "a", exchange="fake", symbols=("BTCUSDT",))
     fake = _FakeAsyncClient()
     _install_fake_client(monkeypatch, fake)
 
@@ -1264,9 +1264,9 @@ def test_set_skipped_when_symbol_locked_by_other_run(orchestrator_env, monkeypat
     # (ok=false, message "locked"), les AUTRES sets du run continuent.
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "locked", exchange="bitmart", symbols=("BTCUSDT",))
-    _seed_set(session, dash.id, "free", exchange="bitmart", symbols=("ETHUSDT",))
-    # Run concurrent détenant déjà BTCUSDT (regular/bitmart/perpetual).
+    _seed_set(session, dash.id, "locked", exchange="fake", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "free", exchange="fake", symbols=("ETHUSDT",))
+    # Run concurrent détenant déjà BTCUSDT (regular/fake/perpetual).
     _seed_lock(session, "run_other", "BTCUSDT")
     fake = _FakeAsyncClient()
     _install_fake_client(monkeypatch, fake)
@@ -1299,7 +1299,7 @@ def test_expired_lock_is_reclaimed_and_set_runs(orchestrator_env, monkeypatch):
     # Un lock expiré (TTL dépassé) ne bloque pas : il est reclaim, le set s'exécute.
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "a", exchange="fake", symbols=("BTCUSDT",))
     # Lock détenu par un run mort, acquis il y a 2h avec un TTL de 10s => expiré.
     _seed_lock(session, "run_dead", "BTCUSDT", ttl_seconds=10, acquired_offset_seconds=7200)
     fake = _FakeAsyncClient()
@@ -1320,7 +1320,7 @@ def test_partial_lock_leaves_no_residual_lock(orchestrator_env, monkeypatch):
     # verrouillé est skippé, et NE laisse aucun lock résiduel sur BTCUSDT.
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "multi", exchange="bitmart", symbols=("BTCUSDT", "ETHUSDT"))
+    _seed_set(session, dash.id, "multi", exchange="fake", symbols=("BTCUSDT", "ETHUSDT"))
     _seed_lock(session, "run_other", "ETHUSDT")
     fake = _FakeAsyncClient()
     _install_fake_client(monkeypatch, fake)
@@ -1341,7 +1341,7 @@ def test_lock_released_even_when_set_fails(orchestrator_env, monkeypatch):
     # Libération garantie dans le finally même si le set échoue (erreur métier).
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "a", exchange="fake", symbols=("BTCUSDT",))
     _install_fake_client(
         monkeypatch,
         _FakeAsyncClient(mtf_status=500, mtf_body={"status": "error", "message": "boom"}),
@@ -1359,7 +1359,7 @@ def test_lock_released_even_on_dispatch_exception(orchestrator_env, monkeypatch)
     # Libération garantie dans le finally même si le dispatch lève (HTTPError caught).
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "a", exchange="fake", symbols=("BTCUSDT",))
 
     fake = _FakeAsyncClient()
 
@@ -1389,9 +1389,9 @@ def test_queued_lock_ttl_covers_worst_case_run(orchestrator_env, monkeypatch):
 
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
-    _seed_set(session, dash.id, "b", exchange="bitmart", symbols=("ETHUSDT",))
-    _seed_set(session, dash.id, "c", exchange="bitmart", symbols=("XRPUSDT",))
+    _seed_set(session, dash.id, "a", exchange="fake", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "b", exchange="fake", symbols=("ETHUSDT",))
+    _seed_set(session, dash.id, "c", exchange="fake", symbols=("XRPUSDT",))
 
     base = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(orch, "_now", lambda: base)
@@ -1430,7 +1430,7 @@ def test_lock_uses_injected_clock_for_expiry(orchestrator_env, monkeypatch):
 
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "a", exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "a", exchange="fake", symbols=("BTCUSDT",))
 
     base = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
     # Lock qui expire 1s AVANT le now injecté => reclaimable.
@@ -1439,8 +1439,8 @@ def test_lock_uses_injected_clock_for_expiry(orchestrator_env, monkeypatch):
 
     session.add(
         OrchestrationLock(
-            lock_key=repo.build_lock_key("regular", "bitmart", "perpetual", "BTCUSDT"),
-            mtf_profile="regular", exchange="bitmart", market_type="perpetual",
+            lock_key=repo.build_lock_key("regular", "fake", "perpetual", "BTCUSDT"),
+            mtf_profile="regular", exchange="fake", market_type="perpetual",
             symbol="BTCUSDT", run_id="run_old",
             acquired_at=base - timedelta(hours=1),
             expires_at=base - timedelta(seconds=1),
@@ -1963,7 +1963,7 @@ def test_audit_live_off_emits_set_skipped_live_not_enabled(
     # code stable live_not_enabled (relayé depuis live_guard, pas redéfini).
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "live", exchange="bitmart", dry_run=False, symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live", exchange="fake", dry_run=False, symbols=("BTCUSDT",))
     _install_fake_client(monkeypatch, _FakeAsyncClient())
 
     client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)})
@@ -1997,7 +1997,7 @@ def test_audit_locked_set_emits_set_skipped_locked(orchestrator_env, monkeypatch
     # avec le motif locked.
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
-    _seed_set(session, dash.id, "locked", exchange="bitmart", symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "locked", exchange="fake", symbols=("BTCUSDT",))
     _seed_lock(session, "run_other", "BTCUSDT")
     _install_fake_client(monkeypatch, _FakeAsyncClient())
 
@@ -2258,3 +2258,20 @@ def test_audit_reclaim_emits_short_circuit_on_claim_race(
     short = _by_event(audit_records, "run_short_circuit")
     assert [s.audit["reason"] for s in short] == ["reclaim"]
     assert short[0].run_id == "run_reclaim_race"
+
+
+def test_persisted_bitmart_set_is_skipped_with_explicit_error(orchestrator_env, monkeypatch):
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(session, dash.id, "legacy", exchange="bitmart", symbols=("BTCUSDT",))
+    fake = _FakeAsyncClient()
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert fake.get_calls == []
+    assert [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")] == []
+    session.expire_all()
+    run_set = session.scalars(select(RunSet).where(RunSet.set_id == "legacy")).one()
+    assert "unsupported exchange 'bitmart'" in run_set.error

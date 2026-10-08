@@ -83,14 +83,14 @@ final class ContextualOrderProviderTest extends TestCase
                 return true;
             }
         };
-        $spot = new ExchangeContext(Exchange::BITMART, MarketType::SPOT);
+        $spot = new ExchangeContext(Exchange::OKX, MarketType::SPOT);
         $provider = new ContextualOrderProvider($inner, $spot);
 
         self::assertSame($inner, $provider->innerOrderProvider());
 
         $provider->placeOrder('BTCUSDT', OrderSide::BUY, OrderType::LIMIT, 1.0, options: ['client_order_id' => 'ctx-test']);
 
-        self::assertSame('bitmart', $inner->lastOptions['exchange']);
+        self::assertSame('okx', $inner->lastOptions['exchange']);
         self::assertSame('spot', $inner->lastOptions['market_type']);
         self::assertSame('ctx-test', $inner->lastOptions['client_order_id']);
 

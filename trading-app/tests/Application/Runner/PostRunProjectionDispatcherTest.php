@@ -23,7 +23,7 @@ final class PostRunProjectionDispatcherTest extends TestCase
     public function testDispatchesIndicatorPersistenceMessageWithResolvedSymbolsAndTimeframes(): void
     {
         $request = new MtfRunnerRequestDto(
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             profile: 'scalper_micro',
         );
@@ -45,7 +45,7 @@ final class PostRunProjectionDispatcherTest extends TestCase
                 self::assertSame('run-123', $message->runId);
                 self::assertSame('scalper_micro', $message->profile);
                 self::assertSame('2025-12-04 07:12:21', $message->requestedAt);
-                self::assertSame('bitmart', $message->exchange);
+                self::assertSame('okx', $message->exchange);
                 self::assertSame('perpetual', $message->marketType);
 
                 return true;

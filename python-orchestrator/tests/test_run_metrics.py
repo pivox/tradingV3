@@ -65,10 +65,10 @@ def _find(series: List[Dict[str, Any]], **labels: Any) -> Dict[str, Any]:
 def test_counters_increment_and_snapshot_shape():
     run_metrics.observe_run_finished(status="success", total_calls=2, success=2, failed=0)
     run_metrics.observe_set_dispatched(
-        exchange="bitmart", market_type="perpetual", mtf_profile="scalper_micro"
+        exchange="fake", market_type="perpetual", mtf_profile="scalper_micro"
     )
     run_metrics.observe_set_result(
-        exchange="bitmart",
+        exchange="fake",
         market_type="perpetual",
         mtf_profile="scalper_micro",
         ok=True,
@@ -76,9 +76,9 @@ def test_counters_increment_and_snapshot_shape():
         duration_ms=120,
     )
     run_metrics.observe_set_skipped(
-        code="locked", exchange="bitmart", market_type="perpetual", mtf_profile="scalper_micro"
+        code="locked", exchange="fake", market_type="perpetual", mtf_profile="scalper_micro"
     )
-    run_metrics.observe_snapshot_fetch(exchange="bitmart", market_type="perpetual", ok=True)
+    run_metrics.observe_snapshot_fetch(exchange="fake", market_type="perpetual", ok=True)
 
     snap = run_metrics.snapshot()
     assert snap["enabled"] is True
@@ -87,12 +87,12 @@ def test_counters_increment_and_snapshot_shape():
     assert _find(snap["sets"]["dispatched"], mtf_profile="scalper_micro")["value"] == 1
     assert _find(snap["sets"]["results"], ok="true", business_status="success")["value"] == 1
     assert _find(snap["sets"]["skipped"], code="locked")["value"] == 1
-    assert _find(snap["snapshots"], exchange="bitmart", ok="true")["value"] == 1
+    assert _find(snap["snapshots"], exchange="fake", ok="true")["value"] == 1
 
 
 def test_set_result_records_duration_histogram_with_le_buckets():
     run_metrics.observe_set_result(
-        exchange="bitmart",
+        exchange="fake",
         market_type="perpetual",
         mtf_profile="scalper_micro",
         ok=True,
@@ -115,7 +115,7 @@ def test_set_result_records_duration_histogram_with_le_buckets():
 
 def test_missing_business_status_label_normalized_to_unknown():
     run_metrics.observe_set_result(
-        exchange="bitmart",
+        exchange="fake",
         market_type="perpetual",
         mtf_profile="scalper_micro",
         ok=False,
@@ -129,7 +129,7 @@ def test_missing_business_status_label_normalized_to_unknown():
 def test_disabled_registry_is_noop():
     run_metrics.configure(enabled=False)
     run_metrics.observe_set_dispatched(
-        exchange="bitmart", market_type="perpetual", mtf_profile="scalper_micro"
+        exchange="fake", market_type="perpetual", mtf_profile="scalper_micro"
     )
     run_metrics.observe_run_finished(status="success", total_calls=1, success=1, failed=0)
     snap = run_metrics.snapshot()
@@ -146,7 +146,7 @@ def test_observe_is_failsafe_when_registry_explodes(monkeypatch):
     monkeypatch.setattr(run_metrics._REGISTRY, "inc_dispatched", _boom)
     # Ne doit pas propager.
     run_metrics.observe_set_dispatched(
-        exchange="bitmart", market_type="perpetual", mtf_profile="scalper_micro"
+        exchange="fake", market_type="perpetual", mtf_profile="scalper_micro"
     )
 
 
@@ -184,7 +184,7 @@ def test_skipped_live_off_increments_skip_code_without_dispatch(orchestrator_env
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
     # Interrupteur live OFF (défaut) : un set live est skippé fail-closed.
-    _seed_set(session, dash.id, "live", exchange="bitmart", dry_run=False, symbols=("BTCUSDT",))
+    _seed_set(session, dash.id, "live", exchange="fake", dry_run=False, symbols=("BTCUSDT",))
     _install_fake_client(monkeypatch, _FakeAsyncClient())
 
     client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)})
@@ -200,7 +200,7 @@ def test_locked_and_not_materialized_skips_use_stable_codes(orchestrator_env, mo
     client, session = orchestrator_env
     dash = _seed_dashboard(session)
     # `not_materialized` : set valide mais sans symbole concret (aucun POST).
-    _seed_set(session, dash.id, "empty", exchange="bitmart", symbols=())
+    _seed_set(session, dash.id, "empty", exchange="fake", symbols=())
     _install_fake_client(monkeypatch, _FakeAsyncClient())
 
     client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)})

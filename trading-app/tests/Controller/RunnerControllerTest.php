@@ -892,7 +892,7 @@ final class RunnerControllerTest extends TestCase
             'skip_open_state_filter' => true,
         ];
 
-        yield 'real exchange dry-run' => [$base + ['exchange' => 'bitmart', 'dry_run' => true]];
+        yield 'real exchange dry-run' => [$base + ['exchange' => 'okx', 'dry_run' => true]];
         yield 'mutative fake' => [$base + ['exchange' => 'fake', 'dry_run' => false]];
         yield 'parallel Fake worker escapes request-scoped audit' => [array_replace(
             $base,

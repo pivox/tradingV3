@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Trading\Paper\Runtime;
 
+use App\Trading\Paper\Dataset\PaperDatasetVerificationReceipt;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
 use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshotFactory;
 use App\Trading\Paper\Execution\Configuration\PaperPrivateConfigurationReader;
@@ -13,10 +14,13 @@ use App\Trading\Paper\Execution\PaperEventCoordinatorInterface;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Profile\PaperProfileRegistry;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\Replay\PaperReplayClock;
+use App\Trading\Paper\Replay\PaperReplayOrder;
 use App\Trading\Paper\Replay\PaperReplayReader;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
+use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
 use App\TradingCore\Config\Exception\TradingConfigException;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 
@@ -44,14 +48,20 @@ final readonly class PaperReplayReadinessService
         private PaperExecutionStoreInterface $store,
         private PaperReplayCheckpointResolver $checkpoints,
         private EffectiveTradingConfigResolver $effectiveConfigResolver,
+        private PaperDatasetVerificationReceipt $receipts = new PaperDatasetVerificationReceipt(),
     ) {
     }
 
+    /**
+     * @param string|null $receiptPath campaign receipt of a completed baseline verification of
+     *        this dataset: the files are re-hashed and compared instead of verified again
+     */
     public function prepare(
         #[\SensitiveParameter] string $datasetPath,
         #[\SensitiveParameter] string $configurationPath,
         PaperReplayStrategySelection|string $strategy,
         string $runId,
+        #[\SensitiveParameter] ?string $receiptPath = null,
     ): PaperReplayPreparation {
         if (is_string($strategy)) {
             $strategy = PaperReplayStrategySelection::legacy($strategy);
@@ -60,7 +70,9 @@ final readonly class PaperReplayReadinessService
         $configuration = $this->configurationReader->read($configurationPath);
         $snapshot = $this->snapshots->create($configuration);
         try {
-            $manifest = $this->verifier->verifyForBaseline($datasetPath, $this->reader->eventLimit());
+            $manifest = $receiptPath === null
+                ? $this->verifier->verifyForBaseline($datasetPath, $this->reader->eventLimit())
+                : $this->receipts->manifestFor($receiptPath, $datasetPath, $this->reader->eventLimit());
         } catch (\RuntimeException $failure) {
             if ($failure->getMessage() === 'paper_dataset_event_limit_exceeded') {
                 throw new \RuntimeException('paper_replay_event_limit_exceeded');
@@ -109,6 +121,7 @@ final readonly class PaperReplayReadinessService
                 $runId,
             );
             $eligibility = PaperProfileEligibility::BASELINE_ELIGIBLE;
+            $replayOrder = PaperReplayOrder::candleAvailability(self::modernTriggerChannel($effective));
         } else {
             $profile = $strategy->legacyProfile();
             $eligibility = $this->profiles->require($profile);
@@ -119,6 +132,8 @@ final readonly class PaperReplayReadinessService
                 $profile,
                 $runId,
             );
+            // PaperMtfStrategyBridge evaluates a legacy cell on every confirmed 1m candle.
+            $replayOrder = PaperReplayOrder::candleAvailability(PaperMarketDataChannel::CANDLE_1M);
         }
         $this->coordinator->assertReady($cell, $eligibility, array_keys($manifest->symbols));
         try {
@@ -148,7 +163,14 @@ final readonly class PaperReplayReadinessService
             $this->throwNormalizedStateFailure($failure);
         }
         if ($checkpoint !== null) {
-            $this->reader->assertCanResume($datasetPath, $consumerId, $checkpoint, $manifest);
+            $this->reader->assertCanResume(
+                $datasetPath,
+                $consumerId,
+                $checkpoint,
+                $manifest,
+                $receiptPath !== null,
+                $replayOrder,
+            );
         }
 
         return new PaperReplayPreparation(
@@ -158,7 +180,30 @@ final readonly class PaperReplayReadinessService
             $cell,
             $consumerId,
             $checkpoint,
+            replayOrder: $replayOrder,
         );
+    }
+
+    /**
+     * Candle channel whose confirmed candles trigger a modern cell, as the canonical evidence
+     * provider reads it (setup execution timeframe); null for 4h, which has no native channel.
+     */
+    private static function modernTriggerChannel(EffectiveTradingConfigSnapshot $effective): ?PaperMarketDataChannel
+    {
+        $config = $effective->payload();
+        $execution = $config['setup']['ast']['execution']['execution_timeframe'] ?? null;
+        $timeframe = \is_array($execution) && ($execution['state'] ?? null) === 'defined'
+            ? ($execution['value'] ?? null)
+            : null;
+
+        return match ($timeframe) {
+            '1m' => PaperMarketDataChannel::CANDLE_1M,
+            '5m' => PaperMarketDataChannel::CANDLE_5M,
+            '15m' => PaperMarketDataChannel::CANDLE_15M,
+            '1h' => PaperMarketDataChannel::CANDLE_1H,
+            '4h' => null,
+            default => throw new \LogicException('paper_canonical_strategy_execution_timeframe_invalid'),
+        };
     }
 
     private function assertAbsolute(string $path): void

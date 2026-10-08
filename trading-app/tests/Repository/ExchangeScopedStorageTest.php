@@ -114,11 +114,11 @@ final class ExchangeScopedStorageTest extends KernelTestCase
 
     public function testContractRepositoryDefaultsToLegacyContextAndCanSelectAnotherExchange(): void
     {
-        $bitmart = (new Contract())
-            ->setExchange(Exchange::BITMART)
+        $legacyDefault = (new Contract())
+            ->setExchange(Exchange::OKX)
             ->setMarketType(MarketType::PERPETUAL)
             ->setSymbol('BTCUSDT')
-            ->setName('Bitmart BTC');
+            ->setName('Okx BTC');
 
         $binance = (new Contract())
             ->setExchange(Exchange::BINANCE)
@@ -126,14 +126,14 @@ final class ExchangeScopedStorageTest extends KernelTestCase
             ->setSymbol('BTCUSDT')
             ->setName('Binance BTC');
 
-        $this->em->persist($bitmart);
+        $this->em->persist($legacyDefault);
         $this->em->persist($binance);
         $this->em->flush();
 
         /** @var ContractRepository $repository */
         $repository = $this->em->getRepository(Contract::class);
 
-        self::assertSame('Bitmart BTC', $repository->findBySymbol('BTCUSDT')?->getName());
+        self::assertSame('Okx BTC', $repository->findBySymbol('BTCUSDT')?->getName());
         self::assertSame(
             'Binance BTC',
             $repository->findBySymbol(
@@ -147,7 +147,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
     {
         $openTime = new \DateTimeImmutable('2026-05-31 00:00:00', new \DateTimeZone('UTC'));
 
-        $this->em->persist($this->newKline('bitmart', '100', $openTime));
+        $this->em->persist($this->newKline('okx', '100', $openTime));
         $this->em->persist($this->newKline('binance', '200', $openTime));
         $this->em->flush();
 
@@ -173,12 +173,12 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         /** @var IndicatorSnapshotRepository $repository */
         $repository = $this->em->getRepository(IndicatorSnapshot::class);
 
-        $repository->upsert($this->newSnapshot('bitmart', $klineTime, ['rsi' => 51]));
+        $repository->upsert($this->newSnapshot('okx', $klineTime, ['rsi' => 51]));
         $repository->upsert(
             $this->newSnapshot('binance', $klineTime, ['rsi' => 61]),
             new ExchangeContext(Exchange::BINANCE, MarketType::PERPETUAL),
         );
-        $repository->upsert($this->newSnapshot('bitmart', $klineTime, ['rsi' => 52]));
+        $repository->upsert($this->newSnapshot('okx', $klineTime, ['rsi' => 52]));
 
         self::assertSame(52, $repository->findLastBySymbolAndTimeframe('BTCUSDT', Timeframe::TF_1M)?->getValue('rsi'));
         self::assertSame(
@@ -213,14 +213,14 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame(61, $repository->findOneBy(['marketDataVenue' => 'hyperliquid'])?->getValue('rsi'));
     }
 
-    public function testPositionAndOrderIntentRepositoriesFallbackToBitmartOnly(): void
+    public function testPositionAndOrderIntentRepositoriesFallbackToLegacyDefaultOnly(): void
     {
         $this->em->persist((new Position('BTCUSDT', 'LONG'))->setSize('1'));
         $this->em->persist((new Position('BTCUSDT', 'LONG', Exchange::BINANCE, MarketType::PERPETUAL))->setSize('2'));
 
-        $bitmartIntent = $this->newIntent('bitmart', 'shared-client');
+        $legacyDefaultIntent = $this->newIntent('okx', 'shared-client');
         $binanceIntent = $this->newIntent('binance', 'shared-client');
-        $this->em->persist($bitmartIntent);
+        $this->em->persist($legacyDefaultIntent);
         $this->em->persist($binanceIntent);
         $this->em->flush();
 
@@ -232,7 +232,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
 
         self::assertSame('1', $positionRepository->findOneBySymbolSide('BTCUSDT', 'LONG')?->getSize());
         self::assertSame('2', $positionRepository->findOneBySymbolSide('BTCUSDT', 'LONG', $binanceContext)?->getSize());
-        self::assertSame('bitmart', $intentRepository->findOneByClientOrderId('shared-client')?->getExchange());
+        self::assertSame('okx', $intentRepository->findOneByClientOrderId('shared-client')?->getExchange());
         self::assertSame('binance', $intentRepository->findOneByClientOrderId('shared-client', $binanceContext)?->getExchange());
     }
 
@@ -261,7 +261,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame('100', $first->intent->getPrice());
         self::assertSame(1, $first->intent->getSize());
         self::assertCount(1, $this->em->getRepository(OrderIntent::class)->findBy([
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'marketType' => 'perpetual',
             'decisionKey' => $params['decision_key'],
         ]));
@@ -279,7 +279,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         foreach ($cases as $index => $status) {
             $symbol = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'][$index];
             $params = $this->orderIntentParams(
-                decisionKey: sprintf('bitmart:perpetual:%s:1m:%d:long:scalper_micro:v1', $symbol, 1764161200 + ($index * 60)),
+                decisionKey: sprintf('okx:perpetual:%s:1m:%d:long:scalper_micro:v1', $symbol, 1764161200 + ($index * 60)),
                 clientOrderId: 'cid-' . strtolower($status),
                 symbol: $symbol,
             );
@@ -317,7 +317,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
                 OrderIntent::STATUS_CANCELLED => 'SOLUSDT',
             };
             $params = $this->orderIntentParams(
-                decisionKey: sprintf('bitmart:perpetual:%s:1m:%d:long:scalper_micro:v1', $symbol, 1764160800 + ($index * 60)),
+                decisionKey: sprintf('okx:perpetual:%s:1m:%d:long:scalper_micro:v1', $symbol, 1764160800 + ($index * 60)),
                 clientOrderId: 'cid-' . strtolower($status),
                 symbol: $symbol,
             );
@@ -345,31 +345,31 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $manager = $this->orderIntentManager();
         $decisionKey = 'shared:perpetual:BTCUSDT:1m:1764160800:long:scalper_micro:v1';
 
-        $bitmart = $manager->reserveIntent($this->orderIntentParams(
-            exchange: 'bitmart',
+        $legacyDefault = $manager->reserveIntent($this->orderIntentParams(
+            exchange: 'okx',
             decisionKey: $decisionKey,
-            clientOrderId: 'cid-bitmart-shared-decision',
+            clientOrderId: 'cid-okx-shared-decision',
         ));
         $binance = $manager->reserveIntent($this->orderIntentParams(
             exchange: 'binance',
             decisionKey: $decisionKey,
             clientOrderId: 'cid-binance-shared-decision',
         ));
-        $bitmartSpot = $manager->reserveIntent($this->orderIntentParams(
-            exchange: 'bitmart',
+        $legacyDefaultSpot = $manager->reserveIntent($this->orderIntentParams(
+            exchange: 'okx',
             marketType: 'spot',
             decisionKey: $decisionKey,
-            clientOrderId: 'cid-bitmart-spot-shared-decision',
+            clientOrderId: 'cid-okx-spot-shared-decision',
         ));
 
-        self::assertTrue($bitmart->created);
+        self::assertTrue($legacyDefault->created);
         self::assertTrue($binance->created);
-        self::assertTrue($bitmartSpot->created);
-        self::assertNotSame($bitmart->intent->getId(), $binance->intent->getId());
-        self::assertNotSame($bitmart->intent->getId(), $bitmartSpot->intent->getId());
-        self::assertSame('bitmart', $bitmart->intent->getExchange());
+        self::assertTrue($legacyDefaultSpot->created);
+        self::assertNotSame($legacyDefault->intent->getId(), $binance->intent->getId());
+        self::assertNotSame($legacyDefault->intent->getId(), $legacyDefaultSpot->intent->getId());
+        self::assertSame('okx', $legacyDefault->intent->getExchange());
         self::assertSame('binance', $binance->intent->getExchange());
-        self::assertSame('spot', $bitmartSpot->intent->getMarketType());
+        self::assertSame('spot', $legacyDefaultSpot->intent->getMarketType());
     }
 
     public function testOrderIntentReservationBlocksDifferentProfileOnSameExchangeMarketSymbol(): void
@@ -377,12 +377,12 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $manager = $this->orderIntentManager();
 
         $scalper = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
             clientOrderId: 'cid-scalper',
             strategyProfile: 'scalper',
         ));
         $scalperMicro = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
             clientOrderId: 'cid-scalper-micro',
             strategyProfile: 'scalper_micro',
         ));
@@ -393,7 +393,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertTrue($scalperMicro->blocked);
         self::assertSame('cross_profile_symbol_locked', $scalperMicro->reason);
         self::assertSame([
-            'exchange' => 'bitmart',
+            'exchange' => 'okx',
             'market_type' => 'perpetual',
             'symbol' => 'BTCUSDT',
             'current_profile' => 'scalper_micro',
@@ -408,12 +408,12 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $manager = $this->orderIntentManager();
 
         $entry = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
             clientOrderId: 'cid-entry-lock-owner',
             strategyProfile: 'scalper',
         ));
         $closeParams = $this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:close:manual:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160860:close:manual:v1',
             clientOrderId: 'cid-reduce-only-close',
             strategyProfile: 'manual_close',
         );
@@ -429,7 +429,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
 
         /** @var \App\Repository\SymbolExecutionLockRepository $lockRepository */
         $lockRepository = $this->em->getRepository(SymbolExecutionLock::class);
-        $lock = $lockRepository->findActive('bitmart', 'perpetual', 'BTCUSDT');
+        $lock = $lockRepository->findActive('okx', 'perpetual', 'BTCUSDT');
 
         self::assertSame($entry->intent->getId(), $lock?->getOwnerOrderIntentId());
     }
@@ -459,11 +459,11 @@ final class ExchangeScopedStorageTest extends KernelTestCase
     {
         $manager = $this->orderIntentManager();
 
-        $bitmart = $manager->reserveIntent($this->orderIntentParams(
-            exchange: 'bitmart',
+        $legacyDefault = $manager->reserveIntent($this->orderIntentParams(
+            exchange: 'hyperliquid',
             marketType: 'perpetual',
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
-            clientOrderId: 'cid-bitmart-btc',
+            decisionKey: 'hyperliquid:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            clientOrderId: 'cid-hyperliquid-btc',
             strategyProfile: 'scalper',
         ));
         $okx = $manager->reserveIntent($this->orderIntentParams(
@@ -474,22 +474,22 @@ final class ExchangeScopedStorageTest extends KernelTestCase
             strategyProfile: 'scalper_micro',
         ));
         $spot = $manager->reserveIntent($this->orderIntentParams(
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'spot',
-            decisionKey: 'bitmart:spot:BTCUSDT:1m:1764160800:long:scalper_micro:v1',
-            clientOrderId: 'cid-bitmart-spot-btc',
+            decisionKey: 'okx:spot:BTCUSDT:1m:1764160800:long:scalper_micro:v1',
+            clientOrderId: 'cid-okx-spot-btc',
             strategyProfile: 'scalper_micro',
         ));
         $eth = $manager->reserveIntent($this->orderIntentParams(
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'perpetual',
-            decisionKey: 'bitmart:perpetual:ETHUSDT:1m:1764160800:long:scalper_micro:v1',
-            clientOrderId: 'cid-bitmart-eth',
+            decisionKey: 'okx:perpetual:ETHUSDT:1m:1764160800:long:scalper_micro:v1',
+            clientOrderId: 'cid-okx-eth',
             symbol: 'ETHUSDT',
             strategyProfile: 'scalper_micro',
         ));
 
-        self::assertTrue($bitmart->created);
+        self::assertTrue($legacyDefault->created);
         self::assertTrue($okx->created);
         self::assertTrue($spot->created);
         self::assertTrue($eth->created);
@@ -500,14 +500,14 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $manager = $this->orderIntentManager();
 
         $first = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
             clientOrderId: 'cid-first-failed',
             strategyProfile: 'scalper',
         ));
         $manager->markAsFailed($first->intent, 'exchange rejected');
 
         $afterFailure = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
             clientOrderId: 'cid-after-failure',
             strategyProfile: 'scalper_micro',
         ));
@@ -515,7 +515,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
 
         $manager->markAsCancelled($afterFailure->intent);
         $afterCancel = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160920:long:regular:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160920:long:regular:v1',
             clientOrderId: 'cid-after-cancel',
             strategyProfile: 'regular',
         ));
@@ -527,7 +527,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
     {
         $manager = $this->orderIntentManager();
         $invalidParams = $this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
             clientOrderId: 'cid-validation-failed',
             size: 0,
             strategyProfile: 'scalper',
@@ -541,7 +541,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertFalse($manager->validateIntent($reservation->intent, $errors));
 
         $afterValidationFailure = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
             clientOrderId: 'cid-after-validation-failure',
             strategyProfile: 'scalper_micro',
         ));
@@ -554,13 +554,13 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $manager = $this->orderIntentManager();
 
         $first = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
             clientOrderId: 'cid-cancelled-stale-order',
             strategyProfile: 'scalper',
         ));
         $manager->markAsSent($first->intent, 'exchange-cancelled-stale-order');
         $this->em->persist(
-            $this->newFuturesOrder('bitmart', 'exchange-cancelled-stale-order', '1', 'BTCUSDT')
+            $this->newFuturesOrder('okx', 'exchange-cancelled-stale-order', '1', 'BTCUSDT')
                 ->setClientOrderId($first->intent->getClientOrderId())
                 ->setStatus('pending')
         );
@@ -569,7 +569,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $manager->markAsCancelled($first->intent);
 
         $afterCancellation = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
             clientOrderId: 'cid-after-cancelled-stale-order',
             strategyProfile: 'scalper_micro',
         ));
@@ -582,7 +582,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $manager = $this->orderIntentManager();
 
         $first = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
             clientOrderId: 'cid-cancelled-open-position',
             strategyProfile: 'scalper',
         ));
@@ -591,7 +591,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
 
         $manager->markAsCancelled($first->intent);
         $afterCancellation = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
             clientOrderId: 'cid-after-cancelled-open-position',
             strategyProfile: 'scalper_micro',
         ));
@@ -604,21 +604,21 @@ final class ExchangeScopedStorageTest extends KernelTestCase
     {
         $manager = $this->orderIntentManager();
         $this->em->persist(
-            $this->newFuturesOrder('bitmart', 'orphan-open-order', '1', 'BTCUSDT')
+            $this->newFuturesOrder('okx', 'orphan-open-order', '1', 'BTCUSDT')
                 ->setClientOrderId('orphan-open-order-client')
                 ->setStatus('pending')
         );
         $this->em->flush();
 
         $reservation = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
             clientOrderId: 'cid-existing-open-exposure',
             strategyProfile: 'scalper',
         ));
 
         /** @var \App\Repository\SymbolExecutionLockRepository $lockRepository */
         $lockRepository = $this->em->getRepository(SymbolExecutionLock::class);
-        $lock = $lockRepository->findActive('bitmart', 'perpetual', 'BTCUSDT');
+        $lock = $lockRepository->findActive('okx', 'perpetual', 'BTCUSDT');
 
         self::assertTrue($reservation->blocked);
         self::assertSame('cross_profile_symbol_locked', $reservation->reason);
@@ -628,13 +628,13 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame(0, $this->em->getRepository(OrderIntent::class)->count([]));
     }
 
-    public function testFuturesOrderRepositoryTreatsBitmartRawStateAsOpen(): void
+    public function testFuturesOrderRepositoryTreatsRawStateAsOpen(): void
     {
         $this->em->persist(
-            $this->newFuturesOrder('bitmart', 'state-only-open-order', '1', 'BTCUSDT')
+            $this->newFuturesOrder('okx', 'state-only-open-order', '1', 'BTCUSDT')
                 ->setStatus(null)
                 ->setRawData([
-                    'exchange' => 'bitmart',
+                    'exchange' => 'okx',
                     'market_type' => 'perpetual',
                     'state' => 1,
                 ])
@@ -668,12 +668,12 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $manager = $this->orderIntentManager();
 
         $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160800:long:scalper:v1',
             clientOrderId: 'cid-protection-owner',
             strategyProfile: 'scalper',
         ));
         $blockedParams = $this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160860:long:scalper_micro:v1',
             clientOrderId: 'cid-protection-blocked',
             strategyProfile: 'scalper_micro',
         );
@@ -692,7 +692,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $manager = $this->orderIntentManager();
         $owner = $this->expiredLockOwner('BTCUSDT');
         $lock = new SymbolExecutionLock(
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             symbol: 'BTCUSDT',
             ownerOrderIntent: $owner,
@@ -700,11 +700,11 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         );
         $this->em->persist($owner);
         $this->em->persist($lock);
-        $this->em->persist($this->newFuturesOrder('bitmart', 'open-order-btc', '1', 'BTCUSDT')->setStatus('pending'));
+        $this->em->persist($this->newFuturesOrder('okx', 'open-order-btc', '1', 'BTCUSDT')->setStatus('pending'));
         $this->em->flush();
 
         $reservation = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160980:long:scalper_micro:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160980:long:scalper_micro:v1',
             clientOrderId: 'cid-expired-open-order',
             strategyProfile: 'scalper_micro',
         ));
@@ -719,7 +719,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $manager = $this->orderIntentManager();
         $owner = $this->expiredLockOwner('BTCUSDT');
         $lock = new SymbolExecutionLock(
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             symbol: 'BTCUSDT',
             ownerOrderIntent: $owner,
@@ -730,7 +730,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $this->em->flush();
 
         $reservation = $manager->reserveIntent($this->orderIntentParams(
-            decisionKey: 'bitmart:perpetual:BTCUSDT:1m:1764160980:long:scalper_micro:v1',
+            decisionKey: 'okx:perpetual:BTCUSDT:1m:1764160980:long:scalper_micro:v1',
             clientOrderId: 'cid-expired-reclaimed',
             strategyProfile: 'scalper_micro',
         ));
@@ -755,7 +755,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
                 ->setUnrealizedPnl('0')
                 ->mergePayload(['exchange' => 'binance', 'market_type' => 'perpetual'])
         );
-        $this->em->persist($this->newFuturesOrder('bitmart', 'shared-order', '1'));
+        $this->em->persist($this->newFuturesOrder('okx', 'shared-order', '1'));
         $this->em->persist($this->newFuturesOrder('binance', 'shared-order', '2'));
         $this->em->flush();
 
@@ -782,7 +782,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
 
     public function testOrderStatePrefersAndPersistsExactDecimalQuantitiesOnReplay(): void
     {
-        $legacy = $this->newFuturesOrder('bitmart', 'exact-read', '1')
+        $legacy = $this->newFuturesOrder('okx', 'exact-read', '1')
             ->setFilledSize(0)
             ->setQuantityDecimal('1.123456789012345678')
             ->setFilledQuantityDecimal('0.400000000000000001');
@@ -811,7 +811,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
             avgFilledPrice: BigDecimal::of('25000'),
             createdAt: new \DateTimeImmutable('2026-01-01 UTC'),
             updatedAt: new \DateTimeImmutable('2026-01-01 UTC'),
-            raw: ['exchange' => 'bitmart', 'market_type' => 'perpetual'],
+            raw: ['exchange' => 'okx', 'market_type' => 'perpetual'],
         );
         $repository->saveOrder($dto);
         $repository->saveOrder($dto);
@@ -1092,7 +1092,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
 
     public function testOrderStateUsesExactFilledQuantityForAveragePrice(): void
     {
-        $entity = $this->newFuturesOrder('bitmart', 'exact-average', '1')
+        $entity = $this->newFuturesOrder('okx', 'exact-average', '1')
             ->setFilledSize(0)
             ->setQuantityDecimal('1')
             ->setFilledQuantityDecimal('0.4')
@@ -1113,15 +1113,15 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $repository = $this->em->getRepository(MtfState::class);
         $binanceContext = new ExchangeContext(Exchange::BINANCE, MarketType::PERPETUAL);
 
-        $bitmart = $repository->getOrCreateForSymbol('BTCUSDT');
-        $bitmart->set4hSide('long');
+        $legacyDefault = $repository->getOrCreateForSymbol('BTCUSDT');
+        $legacyDefault->set4hSide('long');
 
         $binance = $repository->getOrCreateForSymbol('BTCUSDT', $binanceContext);
         $binance->set4hSide('short');
         $this->em->flush();
 
-        self::assertNotSame($bitmart->getId(), $binance->getId());
-        self::assertSame('bitmart', $repository->getOrCreateForSymbol('BTCUSDT')->getExchange());
+        self::assertNotSame($legacyDefault->getId(), $binance->getId());
+        self::assertSame('okx', $repository->getOrCreateForSymbol('BTCUSDT')->getExchange());
         self::assertSame('long', $repository->getOrCreateForSymbol('BTCUSDT')->get4hSide());
         self::assertSame('binance', $repository->getOrCreateForSymbol('BTCUSDT', $binanceContext)->getExchange());
         self::assertSame('short', $repository->getOrCreateForSymbol('BTCUSDT', $binanceContext)->get4hSide());
@@ -1278,9 +1278,9 @@ final class ExchangeScopedStorageTest extends KernelTestCase
      * @return array<string,mixed>
      */
     private function orderIntentParams(
-        string $exchange = 'bitmart',
+        string $exchange = 'okx',
         string $marketType = 'perpetual',
-        string $decisionKey = 'bitmart:perpetual:BTCUSDT:1m:1764160800:long:scalper_micro:v1',
+        string $decisionKey = 'okx:perpetual:BTCUSDT:1m:1764160800:long:scalper_micro:v1',
         string $clientOrderId = 'cid-reservation',
         string $price = '100',
         int $size = 1,
@@ -1309,8 +1309,8 @@ final class ExchangeScopedStorageTest extends KernelTestCase
 
     private function expiredLockOwner(string $symbol): OrderIntent
     {
-        return $this->newIntent('bitmart', 'cid-expired-owner-' . strtolower($symbol))
-            ->setDecisionKey(sprintf('bitmart:perpetual:%s:1m:1764160800:long:scalper:v1', $symbol))
+        return $this->newIntent('okx', 'cid-expired-owner-' . strtolower($symbol))
+            ->setDecisionKey(sprintf('okx:perpetual:%s:1m:1764160800:long:scalper:v1', $symbol))
             ->setStrategyProfile('scalper')
             ->setStrategyVersion('v1')
             ->setSymbol($symbol)

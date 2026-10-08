@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace App\Command;
 
+use App\Trading\Paper\Certification\Campaign\PaperCertificationCampaignCellDatabases;
 use App\Trading\Paper\Certification\Campaign\PaperCertificationCampaignRunner;
 use App\Trading\Paper\Certification\PaperCertificationMatrixBuilder;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Command\SignalableCommandInterface;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -16,9 +18,11 @@ use Symfony\Component\Console\Output\OutputInterface;
     name: 'app:paper-market:certification-campaign',
     description: 'Run every exact #132 matrix cell in isolated Fake/Paper processes without claiming certification.',
 )]
-final class PaperCertificationCampaignCommand extends Command
+final class PaperCertificationCampaignCommand extends Command implements SignalableCommandInterface
 {
     private const MAX_SPEC_BYTES = 1_048_576;
+
+    private ?int $stopSignal = null;
 
     public function __construct(
         private readonly BoundedDuplicateAwareJsonDecoder $decoder,
@@ -41,7 +45,43 @@ final class PaperCertificationCampaignCommand extends Command
             )
             ->addOption('campaign-id', null, InputOption::VALUE_REQUIRED, 'Stable lowercase campaign identifier')
             ->addOption('state', null, InputOption::VALUE_REQUIRED, 'Absolute private campaign state JSON')
-            ->addOption('cell-timeout-sec', null, InputOption::VALUE_REQUIRED, 'Timeout for each child process', '3600');
+            ->addOption('cell-timeout-sec', null, InputOption::VALUE_REQUIRED, 'Timeout for each child process', '3600')
+            ->addOption(
+                'max-parallel-cells',
+                null,
+                InputOption::VALUE_REQUIRED,
+                'Cells run at the same time (1 = sequential, at most ' . PaperCertificationCampaignRunner::MAX_PARALLEL_CELLS . ')',
+                '1',
+            )
+            ->addOption(
+                'cell-databases',
+                null,
+                InputOption::VALUE_REQUIRED,
+                'Absolute private (0600) JSON file: one dedicated trading_paper database per cell, in cell order',
+            );
+    }
+
+    /** @return list<int> */
+    public function getSubscribedSignals(): array
+    {
+        return array_values(array_filter([
+            \defined('SIGINT') ? \SIGINT : null,
+            \defined('SIGTERM') ? \SIGTERM : null,
+            \defined('SIGHUP') ? \SIGHUP : null,
+            \defined('SIGQUIT') ? \SIGQUIT : null,
+        ], static fn (?int $signal): bool => $signal !== null));
+    }
+
+    /**
+     * The campaign does not exit inside the handler: the runner stops its children, records
+     * the running cells as interrupted (never completed) and returns; the command then exits
+     * with 128 + signal.
+     */
+    public function handleSignal(int $signal, int|false $previousExitCode = 0): int|false
+    {
+        $this->stopSignal ??= $signal;
+
+        return false;
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -52,6 +92,11 @@ final class PaperCertificationCampaignCommand extends Command
             if (!is_int($timeout)) {
                 throw new \InvalidArgumentException('paper_campaign_timeout_invalid');
             }
+            $parallel = filter_var($this->requiredOption($input, 'max-parallel-cells'), FILTER_VALIDATE_INT);
+            if (!is_int($parallel)) {
+                throw new \InvalidArgumentException('paper_campaign_parallelism_invalid');
+            }
+            $cellDatabases = $input->getOption('cell-databases');
             $state = $this->campaign->run(
                 $matrix,
                 $this->requiredOption($input, 'campaign-id'),
@@ -59,6 +104,11 @@ final class PaperCertificationCampaignCommand extends Command
                 $this->datasetMappings($input),
                 $this->requiredOption($input, 'state'),
                 $timeout,
+                $parallel,
+                fn (): bool => $this->stopSignal !== null,
+                \is_string($cellDatabases) && $cellDatabases !== ''
+                    ? PaperCertificationCampaignCellDatabases::fromFile($cellDatabases)
+                    : null,
             );
             $status = $state['status'] === 'completed' ? Command::SUCCESS : Command::FAILURE;
             $payload = $state;
@@ -72,7 +122,7 @@ final class PaperCertificationCampaignCommand extends Command
         }
         $output->writeln(json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
 
-        return $status;
+        return $this->stopSignal !== null ? 128 + $this->stopSignal : $status;
     }
 
     /** @return array<string, mixed> */

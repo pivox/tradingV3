@@ -10,6 +10,7 @@ use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\Replay\PaperReplayOrder;
 use App\Trading\Paper\Replay\PaperReplayClock;
 use Brick\Math\BigDecimal;
 
@@ -57,7 +58,7 @@ final readonly class PaperCanonicalFundingSource
         }
 
         $now = $this->clock->now();
-        if ($trigger->exchangeTimestamp > $now || $trigger->receivedTimestamp > $now) {
+        if ($trigger->exchangeTimestamp > $now || PaperReplayOrder::availableAt($trigger) > $now) {
             return null;
         }
         $events = array_values(array_filter(

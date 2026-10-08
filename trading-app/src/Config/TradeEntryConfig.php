@@ -79,7 +79,7 @@ class TradeEntryConfig
 
     /**
      * Reserved for future use: exchange-side cancel-after timeout.
-     * The Bitmart dead-man switch is currently disabled (set to 0) in ExecutionBox.
+     * The exchange dead-man switch is currently disabled (set to 0) in ExecutionBox.
      */
     public function getCancelAfterTimeoutSec(): int
     {

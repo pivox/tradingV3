@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Service;
 
+use App\Provider\Context\UnsupportedExchangeException;
 use App\Entity\OrderIntent;
 use App\Entity\SymbolExecutionLock;
 use App\Provider\Context\ExchangeContext;
@@ -237,7 +238,10 @@ final class SymbolExecutionLockManager
 
     private function hasOpenPosition(SymbolExecutionLock $lock): bool
     {
-        $context = ExchangeContext::fromValues($lock->getExchange(), $lock->getMarketType());
+        $context = $this->contextForLock($lock);
+        if ($context === null) {
+            return false;
+        }
 
         foreach (['LONG', 'SHORT'] as $side) {
             $position = $this->positions->findOneBySymbolSide($lock->getSymbol(), $side, $context);
@@ -251,10 +255,26 @@ final class SymbolExecutionLockManager
 
     private function hasOpenOrder(SymbolExecutionLock $lock): bool
     {
-        return $this->orders->hasOpenOrderForSymbol(
-            $lock->getSymbol(),
-            ExchangeContext::fromValues($lock->getExchange(), $lock->getMarketType()),
-        );
+        $context = $this->contextForLock($lock);
+        if ($context === null) {
+            return false;
+        }
+
+        return $this->orders->hasOpenOrderForSymbol($lock->getSymbol(), $context);
+    }
+
+    private function contextForLock(SymbolExecutionLock $lock): ?ExchangeContext
+    {
+        try {
+            return ExchangeContext::fromValues($lock->getExchange(), $lock->getMarketType());
+        } catch (UnsupportedExchangeException $e) {
+            $this->logger->warning('symbol_lock.unsupported_exchange_skipped', [
+                'exchange' => $e->rawValue,
+                'symbol' => $lock->getSymbol(),
+            ]);
+
+            return null;
+        }
     }
 
     /**

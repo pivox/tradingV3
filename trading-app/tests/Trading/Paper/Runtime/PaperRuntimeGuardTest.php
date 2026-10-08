@@ -58,10 +58,6 @@ final class PaperRuntimeGuardTest extends TestCase
             ['executionExchange' => Exchange::HYPERLIQUID],
             'paper_execution_exchange_must_be_fake',
         ];
-        yield 'Bitmart exchange' => [
-            ['executionExchange' => Exchange::BITMART],
-            'paper_execution_exchange_must_be_fake',
-        ];
         yield 'Binance exchange' => [
             ['executionExchange' => Exchange::BINANCE],
             'paper_execution_exchange_must_be_fake',

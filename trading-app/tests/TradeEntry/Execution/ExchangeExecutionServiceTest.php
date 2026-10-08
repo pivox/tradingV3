@@ -34,7 +34,6 @@ use App\Exchange\Registry\ExchangeAdapterRegistry;
 use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Execution\EmergencyCloseService;
-use App\TradeEntry\Execution\ExecutionBox;
 use App\TradeEntry\Execution\ExchangeExecutionService;
 use App\TradeEntry\Execution\ProtectionEnforcer;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
@@ -42,7 +41,6 @@ use App\TradeEntry\Policy\IdempotencyPolicy;
 use App\TradeEntry\Policy\OrderModePolicyInterface;
 use App\TradeEntry\Service\TradeEntryMetricsService;
 use App\TradeEntry\Types\Side;
-use App\TradeEntry\Workflow\ExecuteOrderPlan;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
@@ -143,21 +141,6 @@ final class ExchangeExecutionServiceTest extends TestCase
         self::assertCount(1, $this->stopLossOrders($this->adapter));
         self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
         self::assertEqualsWithDelta(0.4, $this->adapter->getOpenPositions('BTCUSDT')[0]->size, 0.000001);
-    }
-
-    public function testBitmartMarketEntryWithoutSeparateProtectionIsRejectedBeforeSubmit(): void
-    {
-        $adapter = new BitmartMarketRejectAdapter();
-        $plan = $this->plan(
-            orderType: 'market',
-            exchangeContext: new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
-        );
-
-        $result = $this->service($adapter)->execute($plan, 'decision-bitmart-market');
-
-        self::assertSame(ExecutionResult::STATUS_ERROR, $result->status);
-        self::assertSame('bitmart_market_entry_without_protection_path', $result->raw['reason']);
-        self::assertSame(0, $adapter->placeOrderCalls);
     }
 
     public function testZeroSizeApiFirstPlanIsSkippedBeforeSubmit(): void
@@ -435,25 +418,6 @@ final class ExchangeExecutionServiceTest extends TestCase
             static fn (ExchangeOrderDto $order): float => $order->remainingQuantity,
             $this->stopLossOrders($this->adapter),
         )), 0.000001);
-    }
-
-    public function testExplicitBitmartContextUsesApiFirstExecution(): void
-    {
-        $execution = (new \ReflectionClass(ExecutionBox::class))->newInstanceWithoutConstructor();
-        $exchangeExecution = (new \ReflectionClass(ExchangeExecutionService::class))->newInstanceWithoutConstructor();
-        $workflow = new ExecuteOrderPlan($execution, $exchangeExecution, new NullLogger());
-        $method = new \ReflectionMethod(ExecuteOrderPlan::class, 'shouldUseApiFirstExecution');
-        $method->setAccessible(true);
-
-        self::assertFalse($method->invoke($workflow, $this->plan(
-            orderType: 'limit',
-            exchangeContext: null,
-            useDefaultExchangeContext: false,
-        )));
-        self::assertTrue($method->invoke($workflow, $this->plan(
-            orderType: 'limit',
-            exchangeContext: new ExchangeContext(Exchange::BITMART, MarketType::PERPETUAL),
-        )));
     }
 
     private function service(?ExchangeAdapterInterface $adapter = null): ExchangeExecutionService
@@ -1245,87 +1209,5 @@ final readonly class CancelVerificationFailureAdapter implements ExchangeAdapter
     public function reconcile(?string $symbol = null): ExchangeReconciliationResult
     {
         return $this->inner->reconcile($symbol);
-    }
-}
-
-final class BitmartMarketRejectAdapter implements ExchangeAdapterInterface
-{
-    public int $placeOrderCalls = 0;
-
-    public function exchange(): Exchange
-    {
-        return Exchange::BITMART;
-    }
-
-    public function marketType(): MarketType
-    {
-        return MarketType::PERPETUAL;
-    }
-
-    public function capabilities(): ExchangeCapabilities
-    {
-        return new ExchangeCapabilities(
-            supportsClientOrderId: true,
-            supportsIoc: true,
-            supportsReduceOnly: true,
-            supportsAttachedStopLossOnEntry: true,
-            supportsAttachedTakeProfitOnEntry: true,
-            supportsTriggerOrders: false,
-        );
-    }
-
-    /**
-     * @return ExchangeBalanceDto[]
-     */
-    public function getBalances(): array
-    {
-        return [];
-    }
-
-    /**
-     * @return ExchangePositionDto[]
-     */
-    public function getOpenPositions(?string $symbol = null): array
-    {
-        return [];
-    }
-
-    /**
-     * @return ExchangeOrderDto[]
-     */
-    public function getOpenOrders(?string $symbol = null): array
-    {
-        return [];
-    }
-
-    public function placeOrder(PlaceOrderRequest $request): PlaceOrderResult
-    {
-        ++$this->placeOrderCalls;
-        throw new \RuntimeException('Bitmart market entry should be rejected before submit');
-    }
-
-    public function cancelOrder(CancelOrderRequest $request): CancelOrderResult
-    {
-        throw new \RuntimeException('cancelOrder should not be called');
-    }
-
-    public function getOrder(string $symbol, string $exchangeOrderId): ?ExchangeOrderDto
-    {
-        return null;
-    }
-
-    public function getOrderBookTop(string $symbol): SymbolBidAskDto
-    {
-        throw new \RuntimeException('getOrderBookTop should not be called');
-    }
-
-    public function setLeverage(string $symbol, int $leverage, string $marginMode): bool
-    {
-        throw new \RuntimeException('setLeverage should not be called');
-    }
-
-    public function reconcile(?string $symbol = null): ExchangeReconciliationResult
-    {
-        throw new \RuntimeException('reconcile should not be called');
     }
 }

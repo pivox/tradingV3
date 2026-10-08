@@ -17,6 +17,8 @@ use App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperFundingRateClientInterface;
 use App\Trading\Paper\Okx\OkxPaperInstrumentMap;
 use App\Trading\Paper\Okx\OkxPaperPublicConfig;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use React\EventLoop\Loop;
 use React\EventLoop\LoopInterface;
 use Symfony\Component\Clock\ClockInterface;
@@ -39,6 +41,7 @@ final readonly class OkxPaperPublicLiveSourceFactory implements PaperPublicLiveS
         private PaperDatasetRecorderFilesystem $filesystem,
         private ?OkxPaperInstrumentMetadataClientInterface $metadataClient = null,
         private ?OkxPaperFundingRateClientInterface $fundingClient = null,
+        private LoggerInterface $logger = new NullLogger(),
     ) {
     }
 
@@ -87,6 +90,8 @@ final readonly class OkxPaperPublicLiveSourceFactory implements PaperPublicLiveS
                 metadataClient: $this->metadataClient,
                 fundingClient: $this->fundingClient,
                 initialHourlyCandleTarget: OkxPaperLivePolicy::INITIAL_HOURLY_CANDLE_TARGET,
+                anchoredTradeJunctions: true,
+                logger: $this->logger,
                 loopPump: new ReactOkxPaperLoopPump($sessionLoop),
             );
         } finally {

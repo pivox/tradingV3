@@ -58,13 +58,13 @@ final class PostRunProjectionDispatcher
                 $runId,
                 $request->profile,
                 $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
-                $request->exchange?->value ?? 'bitmart',
+                $request->exchange?->value ?? 'okx',
                 $request->marketType?->value ?? 'perpetual',
             ));
 
             $this->logger->debug('[MTF Runner] Indicator persistence dispatched', [
                 'run_id' => $runId,
-                'exchange' => $request->exchange?->value ?? 'bitmart',
+                'exchange' => $request->exchange?->value ?? 'okx',
                 'market_type' => $request->marketType?->value ?? 'perpetual',
                 'symbols_count' => count($symbols),
                 'timeframes' => $timeframes,

@@ -21,7 +21,7 @@ final class PlaceOrderRequestTest extends TestCase
     {
         $request = $this->createRequest();
 
-        self::assertSame(Exchange::BITMART, $request->exchange);
+        self::assertSame(Exchange::OKX, $request->exchange);
         self::assertSame(MarketType::PERPETUAL, $request->marketType);
         self::assertSame('BTCUSDT', $request->symbol);
         self::assertSame(ExchangeOrderSide::BUY, $request->side);
@@ -50,7 +50,7 @@ final class PlaceOrderRequestTest extends TestCase
     private function createRequest(?float $price = 25000.0, string $clientOrderId = 'cid-1'): PlaceOrderRequest
     {
         return new PlaceOrderRequest(
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             symbol: 'BTCUSDT',
             side: ExchangeOrderSide::BUY,

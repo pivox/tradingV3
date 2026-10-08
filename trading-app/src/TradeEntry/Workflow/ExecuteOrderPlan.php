@@ -4,15 +4,14 @@ declare(strict_types=1);
 namespace App\TradeEntry\Workflow;
 
 use App\Entity\OrderIntent;
-use App\Exchange\Adapter\BitmartLegacyOrderMapper;
 use App\Service\OrderIntentManager;
 use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\LineageContextException;
 use App\Trading\Lineage\TradeLineageManager;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Execution\ExchangeExecutionService;
-use App\TradeEntry\Execution\ExecutionBox;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
+use App\TradeEntry\Types\Side;
 use App\TradeEntry\Policy\IdempotencyPolicy;
 use App\Logging\Dto\LifecycleContextBuilder;
 use App\Provider\Context\ExchangeContext;
@@ -21,18 +20,13 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class ExecuteOrderPlan
 {
-    private readonly BitmartLegacyOrderMapper $bitmartOrders;
-
     public function __construct(
-        private readonly ExecutionBox $execution,
         private readonly ExchangeExecutionService $exchangeExecution,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
         private readonly ?OrderIntentManager $orderIntentManager = null,
         private readonly ?IdempotencyPolicy $idempotency = null,
         private readonly ?TradeLineageManager $tradeLineageManager = null,
-        ?BitmartLegacyOrderMapper $bitmartOrders = null,
     ) {
-        $this->bitmartOrders = $bitmartOrders ?? new BitmartLegacyOrderMapper();
     }
 
     public function __invoke(
@@ -78,10 +72,7 @@ final class ExecuteOrderPlan
         );
 
         try {
-            $useApiFirstExecution = $this->shouldUseApiFirstExecution($plan);
-            $executionPlan = $useApiFirstExecution
-                ? $this->exchangeExecution->preparePlan($plan, $mode, $executionTf, $decisionKey)
-                : $this->execution->preparePlan($plan, $mode, $executionTf, $decisionKey);
+            $executionPlan = $this->exchangeExecution->preparePlan($plan, $mode, $executionTf, $decisionKey);
 
             if ($decisionKey !== null && trim($decisionKey) !== '' && $this->orderIntentManager !== null) {
                 $clientOrderId = ($this->idempotency ?? new IdempotencyPolicy())->newClientOrderId($decisionKey);
@@ -144,9 +135,7 @@ final class ExecuteOrderPlan
                 $this->syncLineageBeforeExecution($intent, $contextBuilder, $intentIdentity);
             }
 
-            $result = $useApiFirstExecution
-                ? $this->exchangeExecution->execute($executionPlan, $decisionKey, $mode, $executionTf, $clientOrderId, $intent?->getId(), true)
-                : $this->execution->execute($executionPlan, $decisionKey, $contextBuilder, $mode, $executionTf, $clientOrderId, $intent?->getId(), true);
+            $result = $this->exchangeExecution->execute($executionPlan, $decisionKey, $mode, $executionTf, $clientOrderId, $intent?->getId(), true, $contextBuilder);
 
             if ($intentIdentity !== null && $result->exchangeOrderId !== null) {
                 $result = $this->withSubmittedIdentity($result, $intentIdentity);
@@ -204,13 +193,6 @@ final class ExecuteOrderPlan
         }
     }
 
-    private function shouldUseApiFirstExecution(OrderPlanModel $plan): bool
-    {
-        $context = ExchangeContext::resolve($plan->exchangeContext);
-
-        return $plan->exchangeContext !== null || !$context->isLegacyDefault();
-    }
-
     private function withSubmittedIdentity(ExecutionResult $result, LineageContext $intentIdentity): ExecutionResult
     {
         $submittedIdentity = $intentIdentity->withExecution(
@@ -251,7 +233,29 @@ final class ExecuteOrderPlan
             'candle_open_ts' => $this->parsedDecisionKeyPart($decisionKey, 4),
             'strategy_profile' => $this->parsedDecisionKeyPart($decisionKey, 6),
             'strategy_version' => $this->parsedDecisionKeyPart($decisionKey, 7),
-        ] + $this->bitmartOrders->orderIntentExecutionParams($plan, $clientOrderId);
+        ] + $this->orderIntentExecutionParams($plan, $clientOrderId);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function orderIntentExecutionParams(OrderPlanModel $plan, string $clientOrderId): array
+    {
+        return [
+            'side' => $plan->side === Side::Long ? 1 : 4,
+            'type' => $plan->orderType,
+            'open_type' => $plan->openType,
+            'leverage' => $plan->leverage,
+            'position_mode' => OrderIntent::POSITION_MODE_HEDGE,
+            'price' => $plan->orderType === 'limit' ? (string) $plan->entry : null,
+            'size' => $plan->size,
+            'client_order_id' => $clientOrderId,
+            'preset_mode' => ($plan->stop > 0.0 || $plan->takeProfit > 0.0)
+                ? OrderIntent::PRESET_MODE_PRESET_ON_ENTRY
+                : OrderIntent::PRESET_MODE_NONE,
+            'preset_stop_loss_price' => $plan->stop > 0.0 ? (string) $plan->stop : null,
+            'preset_take_profit_price' => $plan->takeProfit > 0.0 ? (string) $plan->takeProfit : null,
+        ];
     }
 
     /**

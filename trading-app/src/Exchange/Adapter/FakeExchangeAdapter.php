@@ -22,6 +22,7 @@ use App\Exchange\Fake\FakeExchangeEvent;
 use App\Exchange\Fake\FakeExchangeFaultOutcome;
 use App\Exchange\Fake\FakeExchangeInjectedException;
 use App\Exchange\Fake\FakeFillCostModel;
+use App\Exchange\Fake\FakeFillQuantityUnit;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOperation;
 use App\Exchange\Fake\FakeExchangeOrderBook;
@@ -414,6 +415,7 @@ final readonly class FakeExchangeAdapter implements
                 'cost_completeness' => 'complete',
                 ...$this->fillLineageMetadata($order),
                 ...$this->fillCostMetadata($event),
+                ...FakeFillQuantityUnit::metadata($order),
             ],
         );
     }

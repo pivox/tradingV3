@@ -67,6 +67,9 @@ final class HyperliquidPaperSourceOrdinal
         'transaction_hash_nibbles',
     ];
 
+    /** Live tops of book: an l2Book snapshot, or a bbo message (one level per side). */
+    private const LIVE_BOOK_ORIGINS = ['ws_l2_book', 'ws_bbo'];
+
     /** @var list<string> */
     private const LIVE_BOOK_PAYLOAD_KEYS = [
         'ask_level_count',
@@ -717,7 +720,7 @@ final class HyperliquidPaperSourceOrdinal
         ?array $validationWitness,
     ): string
     {
-        if (($event->payload['origin'] ?? null) === 'ws_l2_book') {
+        if (\in_array($event->payload['origin'] ?? null, self::LIVE_BOOK_ORIGINS, true)) {
             return $this->canonicalLiveBookIdentity($event, $validationWitness);
         }
 
@@ -859,7 +862,8 @@ final class HyperliquidPaperSourceOrdinal
         );
         if ($sourceEpoch === '' || $bidLevelCount === '' || $askLevelCount === ''
             || !$bid->isLessThan($ask)
-            || ($payload['origin'] ?? null) !== 'ws_l2_book'
+            || !\in_array($payload['origin'] ?? null, self::LIVE_BOOK_ORIGINS, true)
+            || ($payload['origin'] === 'ws_bbo' && ($bidLevelCount !== '1' || $askLevelCount !== '1'))
             || ($payload['synthetic'] ?? null) !== false
             || $sourceBookHash === null
         ) {

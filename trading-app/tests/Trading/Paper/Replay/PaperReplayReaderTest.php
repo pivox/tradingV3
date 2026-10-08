@@ -18,6 +18,7 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Replay\PaperReplayCheckpoint;
 use App\Trading\Paper\Replay\PaperReplayCheckpointStore;
 use App\Trading\Paper\Replay\PaperReplayClock;
+use App\Trading\Paper\Replay\PaperReplayOrder;
 use App\Trading\Paper\Replay\PaperReplayReader;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -65,6 +66,52 @@ final class PaperReplayReaderTest extends TestCase
         self::assertSame(0, $yielded);
         self::assertNull($reader->currentEventIndex());
         self::assertSame('2026-07-19T09:00:00.000000Z', $clock->now()->format('Y-m-d\TH:i:s.u\Z'));
+    }
+
+    public function testAReceiptVerifiedReadYieldsExactlyTheVerifiedRead(): void
+    {
+        $dataset = $this->completeDataset([
+            $this->event('BTCUSDT', PaperMarketDataChannel::TOP_OF_BOOK, '1', '2026-07-19T10:00:02Z', '2026-07-19T10:00:03Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::TOP_OF_BOOK, '2', '2026-07-19T10:00:01Z', '2026-07-19T10:00:04Z'),
+            $this->event('ETHUSDT', PaperMarketDataChannel::TOP_OF_BOOK, '1', '2026-07-19T10:00:01Z', '2026-07-19T10:00:05Z'),
+        ]);
+        $verified = [];
+        foreach ($this->reader(new PaperReplayClock()) ->read($dataset['directory'], 'paper.worker-01') as $index => $event) {
+            $verified[] = [$index, CanonicalJson::encode($event->toArray())];
+        }
+        $receiptClock = new PaperReplayClock();
+        $fromReceipt = [];
+        foreach ($this->reader($receiptClock)->read($dataset['directory'], 'paper.worker-01', null, $dataset['manifest'], false, true) as $index => $event) {
+            $fromReceipt[] = [$index, CanonicalJson::encode($event->toArray())];
+        }
+
+        self::assertCount(3, $verified);
+        self::assertSame($verified, $fromReceipt);
+        self::assertSame('2026-07-19T10:00:05.000000Z', $receiptClock->now()->format('Y-m-d\TH:i:s.u\Z'));
+    }
+
+    public function testAReceiptVerifiedReadNeverConsumesBytesOtherThanTheVerifiedOnes(): void
+    {
+        $dataset = $this->completeDataset([
+            $this->event('BTCUSDT', PaperMarketDataChannel::TOP_OF_BOOK, '1', '2026-07-19T10:00:01Z', '2026-07-19T10:00:02Z'),
+        ]);
+        // Another self-consistent event (valid payload hash and event id): under a receipt the
+        // redaction scan is skipped, so only the checksum pinned by the receipt must stop it.
+        $sensitive = $this->event('BTCUSDT', PaperMarketDataChannel::TOP_OF_BOOK, '1', '2026-07-19T10:00:01Z', '2026-07-19T10:00:02Z', ['price' => '30001.0']);
+        file_put_contents($dataset['directory'] . '/events.ndjson', CanonicalJson::encode($sensitive->toArray()) . "\n");
+        $reader = $this->reader(new PaperReplayClock());
+        $yielded = 0;
+
+        try {
+            foreach ($reader->read($dataset['directory'], 'paper.worker-01', null, $dataset['manifest'], false, true) as $_event) {
+                ++$yielded;
+            }
+            self::fail('Bytes other than the verified ones must never be consumed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_checksum_mismatch', $exception->getMessage());
+        }
+        self::assertSame(0, $yielded);
+        self::assertNull($reader->currentEventIndex());
     }
 
     public function testSortsByExactBusinessKeyAndAdvancesAMonotoneObservationWatermark(): void
@@ -479,6 +526,84 @@ final class PaperReplayReaderTest extends TestCase
         }
     }
 
+    public function testCandleAvailabilityOrderReplaysCandlesAtTheirCloseAndTheTriggerLast(): void
+    {
+        $events = $this->candleAvailabilityEvents();
+        $dataset = $this->completeDataset($events);
+
+        foreach ([
+            'candle_1m' => [PaperMarketDataChannel::CANDLE_1M, [0, 1, 3, 2, 4]],
+            'candle_5m' => [PaperMarketDataChannel::CANDLE_5M, [0, 1, 2, 3, 4]],
+        ] as $label => [$trigger, $expectedOrder]) {
+            $clock = new PaperReplayClock(new \DateTimeImmutable('2026-07-19T10:00:00Z'));
+            $reader = $this->reader($clock);
+            $yielded = [];
+            foreach ($reader->read(
+                $dataset['directory'],
+                'paper.worker-01',
+                order: PaperReplayOrder::candleAvailability($trigger),
+            ) as $event) {
+                $yielded[] = [$event->eventId, $clock->now()->format('H:i:s.u')];
+            }
+
+            // b2 was received after the close: the clock never moves back to a candle close.
+            self::assertSame([
+                [$events[$expectedOrder[0]]->eventId, '10:04:30.100000'],
+                [$events[$expectedOrder[1]]->eventId, '10:05:00.200000'],
+                [$events[$expectedOrder[2]]->eventId, '10:05:00.200000'],
+                [$events[$expectedOrder[3]]->eventId, '10:05:00.200000'],
+                [$events[$expectedOrder[4]]->eventId, '10:05:00.600000'],
+            ], $yielded, $label);
+        }
+    }
+
+    public function testCandleAvailabilityOrderObservesACandleAtItsCloseNotAtItsReception(): void
+    {
+        $events = $this->candleAvailabilityEvents();
+        $dataset = $this->completeDataset([$events[0], $events[2], $events[3]]);
+        $clock = new PaperReplayClock(new \DateTimeImmutable('2026-07-19T10:00:00Z'));
+        $observed = [];
+
+        foreach ($this->reader($clock)->read(
+            $dataset['directory'],
+            'paper.worker-01',
+            order: PaperReplayOrder::candleAvailability(PaperMarketDataChannel::CANDLE_1M),
+        ) as $event) {
+            $observed[$event->channel->value] = $clock->now()->format('H:i:s.u');
+        }
+
+        self::assertSame([
+            'top_of_book' => '10:04:30.100000',
+            'candle_5m' => '10:05:00.000000',
+            'candle_1m' => '10:05:00.000000',
+        ], $observed);
+    }
+
+    public function testResumingUnderAnotherReplayOrderFailsClosed(): void
+    {
+        $events = $this->candleAvailabilityEvents();
+        $dataset = $this->completeDataset($events);
+        $order = PaperReplayOrder::candleAvailability(PaperMarketDataChannel::CANDLE_1M);
+        // Position 2 under the availability order (the 5m candle), position 0 in exchange time.
+        $checkpoint = $this->checkpoint($dataset['manifest'], 'paper.worker-01', $events[3], 2);
+
+        $reader = $this->reader(new PaperReplayClock(new \DateTimeImmutable('2026-07-19T10:00:00Z')));
+        $reader->assertCanResume($dataset['directory'], 'paper.worker-01', $checkpoint, $dataset['manifest'], order: $order);
+        $resumed = iterator_to_array($reader->read($dataset['directory'], 'paper.worker-01', $checkpoint, order: $order), false);
+        self::assertSame([$events[2]->eventId, $events[4]->eventId], array_map(
+            static fn (PaperMarketEvent $event): string => $event->eventId,
+            $resumed,
+        ));
+
+        try {
+            $this->reader(new PaperReplayClock(new \DateTimeImmutable('2026-07-19T10:00:00Z')))
+                ->assertCanResume($dataset['directory'], 'paper.worker-01', $checkpoint, $dataset['manifest']);
+            self::fail('A checkpoint taken under another replay order must not resume.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_replay_checkpoint_event_mismatch', $exception->getMessage());
+        }
+    }
+
     public function testResumeSkipsExactlyThroughCheckpointAndYieldsTheFollowingEvent(): void
     {
         $events = [
@@ -842,6 +967,175 @@ final class PaperReplayReaderTest extends TestCase
         self::assertFalse($generator->valid());
     }
 
+    public function testStreamsTheExactFormerSortOrderAndObservationClockFromDisk(): void
+    {
+        $random = new \Random\Randomizer(new \Random\Engine\Mt19937(20261003));
+        $timestamps = [
+            '2026-07-19T10:00:00.000000Z',
+            '2026-07-19T10:00:00.000001Z',
+            '2026-07-19T10:00:00.500000Z',
+            '2026-07-19T10:00:01.000000Z',
+        ];
+        $channels = [
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            PaperMarketDataChannel::PUBLIC_TRADE,
+            PaperMarketDataChannel::CANDLE_1M,
+            PaperMarketDataChannel::CANDLE_5M,
+        ];
+        /** @var array<string, int> $nextSequences file order must keep each stream's sequence increasing */
+        $nextSequences = [];
+        $events = [];
+        for ($index = 0; $index < 400; ++$index) {
+            $symbol = $random->getInt(0, 1) === 0 ? 'BTCUSDT' : 'ETHUSDT';
+            $channel = $channels[$random->getInt(0, \count($channels) - 1)];
+            $stream = $symbol . '/' . $channel->value;
+            $sequence = null;
+            if ($random->getInt(0, 3) !== 0) {
+                $nextSequences[$stream] = ($nextSequences[$stream] ?? $random->getInt(1, 20)) + $random->getInt(1, 12);
+                $sequence = $nextSequences[$stream] . '';
+            }
+            $exchange = $timestamps[$random->getInt(0, \count($timestamps) - 1)];
+            $received = (new \DateTimeImmutable($exchange))
+                ->modify('+' . $random->getInt(0, 3_000_000) . ' microseconds')
+                ->format('Y-m-d\TH:i:s.u\Z');
+            $events[] = $this->event($symbol, $channel, $sequence, $exchange, $received, ['n' => (string) $index]);
+        }
+        $dataset = $this->completeDataset($events);
+        $clock = new PaperReplayClock(new \DateTimeImmutable($timestamps[0]));
+        $reader = $this->reader($clock);
+
+        $entries = [];
+        foreach ($events as $position => $event) {
+            $entries[] = ['event' => $event, 'input_index' => $position];
+        }
+        usort($entries, PaperReplayEventIndexTest::formerBusinessComparator(...));
+        $expectedClock = new \DateTimeImmutable($timestamps[0]);
+        $expected = [];
+        foreach ($entries as $position => $entry) {
+            $observedAt = max($entry['event']->exchangeTimestamp, $entry['event']->receivedTimestamp);
+            if ($position === 0 || $observedAt > $expectedClock) {
+                $expectedClock = $observedAt;
+            }
+            $expected[] = [$position, $entry['event']->toArray(), $expectedClock->format('Y-m-d\TH:i:s.u\Z')];
+        }
+
+        $actual = [];
+        foreach ($reader->read($dataset['directory'], 'paper.worker-01') as $position => $event) {
+            $actual[] = [$position, $event->toArray(), $clock->now()->format('Y-m-d\TH:i:s.u\Z')];
+        }
+
+        self::assertSame($expected, $actual);
+    }
+
+    public function testReplaysTheValidatedSnapshotWhenTheEventsFileIsRewrittenAfterLoading(): void
+    {
+        $events = [
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '1', '2026-07-19T10:00:00.000000Z', '2026-07-19T10:00:00.100000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '2', '2026-07-19T10:00:01.000000Z', '2026-07-19T10:00:01.100000Z'),
+        ];
+        $dataset = $this->completeDataset($events);
+        $eventsPath = $dataset['directory'] . '/events.ndjson';
+        $clock = new PaperReplayClock($events[0]->exchangeTimestamp);
+        $reader = new PaperReplayReader(
+            new PaperDatasetVerifier(),
+            new PaperReplayCheckpointStore(),
+            $clock,
+            filesystem: new EventsInPlaceRewriteAtBoundaryFilesystem(
+                $eventsPath,
+                'paper_replay_dataset_after_sort',
+                '2026-07-19T10:00:01.100000Z',
+                '2026-07-19T10:00:01.900000Z',
+            ),
+        );
+
+        $replayed = [];
+        foreach ($reader->read($dataset['directory'], 'paper.worker-01') as $event) {
+            $replayed[] = [$event->toArray(), $clock->now()->format('Y-m-d\TH:i:s.u\Z')];
+        }
+
+        // Like the former in-memory load, replay yields the loaded, verified events.
+        self::assertStringContainsString('2026-07-19T10:00:01.900000Z', (string) file_get_contents($eventsPath));
+        self::assertSame([
+            [$events[0]->toArray(), '2026-07-19T10:00:00.100000Z'],
+            [$events[1]->toArray(), '2026-07-19T10:00:01.100000Z'],
+        ], $replayed);
+    }
+
+    public function testRejectsATamperedSpillRecordBeforeItsYield(): void
+    {
+        $events = [
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '1', '2026-07-19T10:00:00.000000Z', '2026-07-19T10:00:00.100000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '2', '2026-07-19T10:00:01.000000Z', '2026-07-19T10:00:01.100000Z'),
+        ];
+        $dataset = $this->completeDataset($events);
+        $filesystem = new SpillReadTamperingFilesystem();
+        $reader = new PaperReplayReader(
+            new PaperDatasetVerifier(),
+            new PaperReplayCheckpointStore(),
+            new PaperReplayClock($events[0]->exchangeTimestamp),
+            filesystem: $filesystem,
+        );
+        $generator = $reader->read($dataset['directory'], 'paper.worker-01');
+
+        self::assertSame($events[0]->eventId, $generator->current()->eventId);
+        $filesystem->tamper = true;
+        try {
+            $generator->next();
+            self::fail('A spill record that differs from its digest must block the next yield.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_replay_spill_corrupt', $exception->getMessage());
+        }
+
+        self::assertSame(0, $reader->currentEventIndex());
+        self::assertFalse($generator->valid());
+    }
+
+    public function testRejectsASpillCreateOrWriteFailureBeforeAnyYield(): void
+    {
+        $event = $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '1', '2026-07-19T10:00:00.000000Z', '2026-07-19T10:00:00.100000Z');
+        $dataset = $this->completeDataset([$event]);
+        foreach (['paper_replay_spill_create', 'paper_replay_spill_write'] as $operation) {
+            $reader = new PaperReplayReader(
+                new PaperDatasetVerifier(),
+                new PaperReplayCheckpointStore(),
+                new PaperReplayClock($event->exchangeTimestamp),
+                filesystem: new SpillFailingFilesystem($operation),
+            );
+            $yielded = 0;
+
+            try {
+                foreach ($reader->read($dataset['directory'], 'paper.worker-01') as $_event) {
+                    ++$yielded;
+                }
+                self::fail('A spill failure must be rejected before any yield: ' . $operation);
+            } catch (\RuntimeException $exception) {
+                self::assertSame('paper_replay_spill_failed', $exception->getMessage(), $operation);
+            }
+
+            self::assertSame(0, $yielded, $operation);
+            self::assertNull($reader->currentEventIndex(), $operation);
+        }
+    }
+
+    public function testKeepsTheSpillUnlinkedWhileReplaying(): void
+    {
+        $events = [
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '1', '2026-07-19T10:00:00.000000Z', '2026-07-19T10:00:00.100000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '2', '2026-07-19T10:00:01.000000Z', '2026-07-19T10:00:01.100000Z'),
+        ];
+        $dataset = $this->completeDataset($events);
+        $pattern = rtrim(sys_get_temp_dir(), '/') . '/paper-replay-spill-*';
+        $before = glob($pattern) ?: [];
+        $generator = $this->reader(new PaperReplayClock($events[0]->exchangeTimestamp))
+            ->read($dataset['directory'], 'paper.worker-01');
+
+        self::assertSame($events[0]->eventId, $generator->current()->eventId);
+        // No path to reopen, and nothing left behind even if the process is killed now.
+        self::assertSame($before, glob($pattern) ?: []);
+        $generator->next();
+        self::assertSame($events[1]->eventId, $generator->current()->eventId);
+    }
+
     private function assertRejectsEventsInPlaceSizeChange(bool $append): void
     {
         $event = $this->event(
@@ -878,6 +1172,22 @@ final class PaperReplayReaderTest extends TestCase
         self::assertSame($before['dev'], $after['dev']);
         self::assertSame($before['ino'], $after['ino']);
         self::assertSame($append ? $before['size'] + 1 : $before['size'] - 1, $after['size']);
+    }
+
+    /**
+     * b1, b2 (received after the close), the 1m and 5m candles closing at 10:05, b3.
+     *
+     * @return list<PaperMarketEvent>
+     */
+    private function candleAvailabilityEvents(): array
+    {
+        return [
+            $this->event('BTCUSDT', PaperMarketDataChannel::TOP_OF_BOOK, '1', '2026-07-19T10:04:30.000000Z', '2026-07-19T10:04:30.100000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::TOP_OF_BOOK, '2', '2026-07-19T10:04:59.900000Z', '2026-07-19T10:05:00.200000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::CANDLE_1M, null, '2026-07-19T10:04:00.000000Z', '2026-07-19T10:05:06.000000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::CANDLE_5M, null, '2026-07-19T10:00:00.000000Z', '2026-07-19T10:05:07.000000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::TOP_OF_BOOK, '3', '2026-07-19T10:05:00.500000Z', '2026-07-19T10:05:00.600000Z'),
+        ];
     }
 
     private function reader(PaperReplayClock $clock): PaperReplayReader
@@ -1322,6 +1632,42 @@ final class EventsInPlaceSizeChangeAfterEofFilesystem extends PaperDatasetRecord
                 }
             } finally {
                 fclose($handle);
+            }
+        }
+
+        return parent::pathStat($path, $operation);
+    }
+}
+
+final class EventsInPlaceRewriteAtBoundaryFilesystem extends PaperDatasetRecorderFilesystem
+{
+    private bool $rewritten = false;
+
+    public function __construct(
+        private readonly string $eventsPath,
+        private readonly string $boundaryOperation,
+        private readonly string $search,
+        private readonly string $replacement,
+    ) {
+    }
+
+    /** @return array<string, mixed>|false */
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
+    {
+        if ($operation === $this->boundaryOperation && !$this->rewritten) {
+            $this->rewritten = true;
+            $contents = file_get_contents($this->eventsPath);
+            if (!\is_string($contents) || \strlen($this->search) !== \strlen($this->replacement)) {
+                throw new \RuntimeException('Unable to read events before in-place rewrite.');
+            }
+            $rewritten = str_replace($this->search, $this->replacement, $contents);
+            $handle = fopen($this->eventsPath, 'r+b');
+            if ($rewritten === $contents
+                || $handle === false
+                || fwrite($handle, $rewritten) !== \strlen($rewritten)
+                || !fclose($handle)
+            ) {
+                throw new \RuntimeException('Unable to inject in-place events rewrite.');
             }
         }
 

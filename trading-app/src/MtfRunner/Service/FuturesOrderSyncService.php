@@ -10,6 +10,7 @@ use App\Entity\FuturesOrder;
 use App\Entity\FuturesOrderTrade;
 use App\Entity\FuturesPlanOrder;
 use App\Provider\Context\ExchangeContext;
+use App\Provider\Context\UnsupportedExchangeException;
 use App\Repository\FuturesOrderRepository;
 use App\Repository\FuturesOrderTradeRepository;
 use App\Repository\FuturesPlanOrderRepository;
@@ -35,7 +36,7 @@ class FuturesOrderSyncService
     }
 
     /**
-     * Synchronise un ordre depuis les données de l'API BitMart
+     * Synchronise un ordre depuis les données de l'API de l'exchange
      * @param array<string,mixed> $orderData Données de l'API (order detail, order history, open orders)
      */
     public function syncOrderFromApi(array $orderData): ?FuturesOrder
@@ -44,6 +45,9 @@ class FuturesOrderSyncService
             $orderId = $this->extractString($orderData, 'order_id');
             $clientOrderId = $this->extractString($orderData, 'client_order_id');
             $context = $this->resolveContext($orderData);
+            if ($context === null) {
+                return null;
+            }
 
             if (!$orderId && !$clientOrderId) {
                 $this->logger->warning('[FuturesOrderSync] Missing order_id and client_order_id', [
@@ -186,7 +190,7 @@ class FuturesOrderSyncService
     }
 
     /**
-     * Synchronise un ordre planifié depuis les données de l'API BitMart
+     * Synchronise un ordre planifié depuis les données de l'API de l'exchange
      * @param array<string,mixed> $orderData Données de l'API (plan order)
      */
     public function syncPlanOrderFromApi(array $orderData): ?FuturesPlanOrder
@@ -195,6 +199,9 @@ class FuturesOrderSyncService
             $orderId = $this->extractString($orderData, 'order_id');
             $clientOrderId = $this->extractString($orderData, 'client_order_id');
             $context = $this->resolveContext($orderData);
+            if ($context === null) {
+                return null;
+            }
 
             if (!$orderId && !$clientOrderId) {
                 $this->logger->warning('[FuturesOrderSync] Missing order_id and client_order_id for plan order', [
@@ -286,7 +293,7 @@ class FuturesOrderSyncService
     }
 
     /**
-     * Synchronise un trade depuis les données de l'API BitMart
+     * Synchronise un trade depuis les données de l'API de l'exchange
      * @param array<string,mixed> $tradeData Données de l'API (order trade)
      */
     public function syncTradeFromApi(array $tradeData): ?FuturesOrderTrade
@@ -294,6 +301,9 @@ class FuturesOrderSyncService
         try {
             $tradeId = $this->extractString($tradeData, 'trade_id');
             $context = $this->resolveContext($tradeData);
+            if ($context === null) {
+                return null;
+            }
             $generatedTradeId = false;
             if (!$tradeId) {
                 // Essayer d'utiliser un identifiant alternatif ou générer un ID temporaire
@@ -344,7 +354,7 @@ class FuturesOrderSyncService
                 if ($clientOrderId !== null && $futuresOrder->getClientOrderId() !== $clientOrderId) {
                     throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:client_order_id');
                 }
-                $futuresOrder->requireLineageContext()->assertTradeBoundary(
+                $futuresOrder->requireLineageContext()->assertExecutionBoundary(
                     $symbol,
                     self::canonicalTradeSide($side),
                     $context->exchange->value,
@@ -409,88 +419,6 @@ class FuturesOrderSyncService
             3, 4 => 'SHORT',
             default => throw new \App\Trading\Lineage\LineageContextException('canonical_identity_invalid:side'),
         };
-    }
-
-    /**
-     * Synchronise un ordre depuis un événement WebSocket
-     * @param array<string,mixed> $eventData Données normalisées de l'événement WebSocket
-     */
-    public function syncOrderFromWebSocket(array $eventData): ?FuturesOrder
-    {
-        // Mapper les champs WebSocket normalisés vers le format API
-        $filledSize = $eventData['deal_size'] ?? $eventData['filled_size'] ?? null;
-
-        $normalized = [
-            'exchange' => $eventData['exchange'] ?? null,
-            'market_type' => $eventData['market_type'] ?? $eventData['marketType'] ?? null,
-            'order_id' => $eventData['order_id'] ?? null,
-            'client_order_id' => $eventData['client_order_id'] ?? null,
-            'symbol' => $eventData['symbol'] ?? null,
-            'side' => $eventData['side'] ?? null,
-            'type' => $eventData['type'] ?? null,
-            'status' => $this->mapWebSocketStateToStatus($eventData['state'] ?? null, $filledSize),
-            'price' => $eventData['price'] ?? null,
-            'size' => $eventData['size'] ?? null,
-            'filled_size' => $filledSize,
-            'filled_notional' => null, // Pas disponible dans WebSocket
-            'open_type' => $eventData['open_type'] ?? null,
-            'position_mode' => $eventData['position_mode'] ?? null,
-            'leverage' => $eventData['leverage'] ?? null,
-            'fee' => null, // Pas disponible dans WebSocket
-            'fee_currency' => null,
-            'account' => null,
-            'filled_time' => null,
-            'created_time' => null,
-            'updated_time' => $eventData['update_time_ms'] ?? $eventData['update_time'] ?? null,
-        ];
-
-        return $this->syncOrderFromApi(array_merge($normalized, ['_ws_event' => true]));
-    }
-
-    /**
-     * Mappe l'état WebSocket vers le statut de l'ordre
-     * 
-     * États BitMart WebSocket:
-     * - 1 = APPROVAL (en attente d'approbation)
-     * - 2 = CHECK (en vérification)
-     * - 4 = FINISH (terminé)
-     * 
-     * Le statut final dépend aussi de deal_size pour distinguer filled vs cancelled
-     */
-    private function mapWebSocketStateToStatus(?int $state, mixed $filledSize = null): ?string
-    {
-        if ($state === null) {
-            return null;
-        }
-
-        // Mapping BitMart WebSocket state to status
-        return match ($state) {
-            1 => 'pending',      // APPROVAL
-            2 => 'pending',      // CHECK
-            4 => $this->mapFilledStateFromExecutedSize($filledSize),
-            default => 'unknown',
-        };
-    }
-
-    private function mapFilledStateFromExecutedSize(mixed $filledSize): ?string
-    {
-        if ($filledSize === null) {
-            return null; // Attendre des données complémentaires pour déterminer le statut final
-        }
-
-        if (is_numeric($filledSize)) {
-            $executed = (float) $filledSize;
-
-            if ($executed > 0.0) {
-                return 'filled';
-            }
-
-            if ($executed === 0.0) {
-                return 'cancelled';
-            }
-        }
-
-        return null;
     }
 
     /** @param array<string,mixed> $data */
@@ -610,15 +538,20 @@ class FuturesOrderSyncService
     /**
      * @param array<string,mixed> $data
      */
-    private function resolveContext(array $data): ExchangeContext
+    private function resolveContext(array $data): ?ExchangeContext
     {
+        $exchange = $data['exchange'] ?? null;
         try {
             return new ExchangeContext(
-                Exchange::from(strtolower((string)($data['exchange'] ?? ExchangeContext::exchangeValue(null)))),
-                MarketType::from(strtolower((string)($data['market_type'] ?? $data['marketType'] ?? ExchangeContext::marketTypeValue(null)))),
+                ExchangeContext::fromValues($exchange)->exchange,
+                MarketType::tryFrom(strtolower((string)($data['market_type'] ?? $data['marketType'] ?? ExchangeContext::marketTypeValue(null)))) ?? ExchangeContext::legacyDefault()->marketType,
             );
-        } catch (\ValueError) {
-            return ExchangeContext::legacyDefault();
+        } catch (UnsupportedExchangeException $e) {
+            $this->logger->warning('[FuturesOrderSync] Skipping row with unsupported exchange', [
+                'exchange' => $e->rawValue,
+            ]);
+
+            return null;
         }
     }
 }

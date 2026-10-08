@@ -1,11 +1,11 @@
 # TradeEntry – Guide complet
 
-Le module TradeEntry convertit un signal MTF (`SymbolResultDto`) en ordres Bitmart (levier, prix, taille, SL/TP). Tout est orchestré par `App\TradeEntry\Service\TradeEntryService` via quatre workflows:
+Le module TradeEntry convertit un signal MTF (`SymbolResultDto`) en ordres exchange (levier, prix, taille, SL/TP). Tout est orchestré par `App\TradeEntry\Service\TradeEntryService` via quatre workflows:
 
 1. **BuildPreOrder** → collecte la réalité exchange (`Policy\PreTradeChecks`).
 2. **BuildOrderPlan** → calcule zone, prix, stops, TP, leverage et taille.
-3. **ExecuteOrderPlan** → soumet levier + ordre (limit/market) via `Execution\ExecutionBox`.
-4. **AttachTpSl** → fixe ou complète les TP/SL selon la config (via `TpSlAttacher` et `TpSlTwoTargetsService`).
+3. **ExecuteOrderPlan** → soumet levier + ordre (limit/market) via `Execution\ExchangeExecutionService`.
+4. **AttachTpSl** → fixe ou complète les TP/SL selon la config (via `TpSlTwoTargetsService`).
 
 ```
 TradeEntryService::buildAndExecute()
@@ -15,7 +15,7 @@ TradeEntryService::buildAndExecute()
     │     ├─ EntryZoneCalculator / Filters
     │     └─ OrderPlanBox → OrderPlanBuilder
     ├─ Workflow\ExecuteOrderPlan
-    │     └─ Execution\ExecutionBox (Idempotency, Maker/Taker policy, watchers)
+    │     └─ Execution\ExchangeExecutionService (Idempotency, adapters API-first)
     └─ Workflow\AttachTpSl (preset ou rattrapage)
 ```
 
@@ -27,7 +27,7 @@ Le module gère tous les cas : manque d’ATR, pivots éloignés, spreads trop
 
 Les profils TradeEntry (`config/app/trade_entry*.yaml`) décrivent les defaults utilisés par le builder :
 
-- `defaults` : risk_pct_percent, initial_margin_usdt, r_multiple, order_type (`limit` par défaut), open_type (`isolated`), order_mode (Bitmart `mode`), `stop_from` (`atr` ou `pivot`), fallback (`atr|risk|none`), `atr_k`, `market_max_spread_pct`, politiques TP, etc.
+- `defaults` : risk_pct_percent, initial_margin_usdt, r_multiple, order_type (`limit` par défaut), open_type (`isolated`), order_mode (`mode` de l'exchange), `stop_from` (`atr` ou `pivot`), fallback (`atr|risk|none`), `atr_k`, `market_max_spread_pct`, politiques TP, etc.
 - `leverage` : floor, exchange_cap, max_loss_pct (cap SL vs initial_margin_usdt), per_symbol_caps (regex), timeframe_multipliers, rounding.
 - `decision` : `allowed_execution_timeframes` (guard côté TradeEntry).
 - `post_validation.entry_zone.*` : paramètres zone (pivot/vwap, k_atr, w_min/w_max, ttl…).
@@ -36,7 +36,7 @@ Les profils TradeEntry (`config/app/trade_entry*.yaml`) décrivent les defaults 
 `TradeEntryRequestBuilder::fromMtfSignal()` consomme `SymbolResultDto` (symbol, side, execution_tf, price, ATR) et construit un `TradeEntryRequest`. Points importants :
 
 - **ATR requis** si `stop_from='atr'` : ordre rejeté (`null`) lorsque ATR absent ou ≤0 (log `atr_required_but_invalid`).
-- **Multiplicateur de timeframe (execution)** : `trade_entry.leverage.timeframe_multipliers[execution_tf]` est appliqué juste avant la soumission (ExecutionBox) pour scaler `size` et `leverage` (fallback TF `5m`). Le plan (SL/TP/prix) n'est pas recalculé.
+- **Multiplicateur de timeframe (execution)** : `trade_entry.leverage.timeframe_multipliers[execution_tf]` est appliqué juste avant la soumission (`ExchangeExecutionService::preparePlan`) pour scaler `size` et `leverage` (fallback TF `5m`). Le plan (SL/TP/prix) n'est pas recalculé.
 - **Market entry** : si `market_entry.enabled=true` + TF autorisé + ADX1h ≥ min, alors `order_type` devient `market` (avec log `market_entry.decision`).
 - **Guard sur le spread** : pour les market orders, `PreTradeChecks` rejettera si `spreadPct > market_max_spread_pct`.
 - **Deviation overrides** : `ZoneDeviationOverrideStore` permet de pousser un `zone_max_deviation_pct` spécifique par mode/symbole (outil d’ops).
@@ -117,24 +117,16 @@ Pour `order_type=market`, on prend simplement `bestAsk` ou `bestBid`.
 - Caps additionnels : `exchange_cap`, regex `per_symbol_caps`, `floor`, min/max exchange, rounding (`ceil|floor|round`).
 - Si `stopPct` absent → exception (log `order_plan.leverage.missing_stop_pct`).
 
-`ExecutionBox` soumet ensuite le levier via `OrderProvider::submitLeverage` avant l’ordre.
+`ExchangeExecutionService` soumet ensuite le levier avant l’ordre.
 
 ---
 
 ## 6. Execution (limit/market)
 
-`ExecutionBox::execute()` :
+`ExecuteOrderPlan` route toujours l'exécution via `ExchangeExecutionService` (adapters API-first par exchange). `ExecutionBox` ne conserve que `preparePlan()` (multiplicateur de TF, politique de mode d'ordre) et `applyEndOfZoneFallback()` :
 
-1. `IdempotencyPolicy` génère un `client_order_id`.
-2. Soumet levier (`submitLeverage`) + log response.
-3. **Market orders** :
-   - Soumission via `executeMarketOrder()` avec watchers WS/REST (timeouts 3s WS, 10s total) + vérification via `getPlanOrders`.
-4. **Limit orders** :
-   - `TpSlAttacher::presetInSubmitPayload()` délègue l'encodage legacy Bitmart à `BitmartLegacyOrderMapper`.
-   - `orderModePolicy` force MakerOnly ou Taker selon config, puis l'adapter convertit vers le mode exchange.
-   - Dead-man switch Bitmart désactivé (`cancel_after_timeout=0`), un watcher interne (`LimitFillWatchMessage`) annule l’ordre si non rempli sous 120s.
-   - `MakerTakerSwitchPolicy` peut convertir une LIMIT en IOC taker si la zone expire ou si le spread est trop élevé (cf. `applyMakerTakerSwitch`).
-   - `applyEndOfZoneFallback()` autorise un passage en taker (market ou limit capée) lorsque la zone va expirer, le spread ≤ `maxSpreadBps` et le prix reste dans la zone.
+- `orderModePolicy` force MakerOnly ou Taker selon config.
+- `applyEndOfZoneFallback()` autorise un passage en taker (market ou limit capée) lorsque la zone va expirer, le spread ≤ `maxSpreadBps` et le prix reste dans la zone.
 
 Si `plan->leverage < 1` → skip direct (`execution.leverage_below_min`). Tous les événements importants sont loggés (`order_journey.*`).
 
@@ -142,7 +134,6 @@ Si `plan->leverage < 1` → skip direct (`execution.leverage_below_min`). Tous l
 
 ## 7. Attachement TP/SL
 
-- `TpSlAttacher` gère la pré‑injection des ordres stop/take dans le payload Bitmart (plan orders).
 - En cas d’échec ou de besoin asynchrone (`process_tp_sl` coté runner), `TpSlTwoTargetsService` recalculera les deux TP (ex : target1/target2) et repositionnera SL.
 
 ---
@@ -168,7 +159,6 @@ Si `plan->leverage < 1` → skip direct (`execution.leverage_below_min`). Tous l
 - **Nouveaux profils TradeEntry** : ajouter `config/app/trade_entry.<mode>.yaml` + activer via `TradeEntryModeContext`.
 - **Entry zone custom** : modifier `EntryZoneCalculator` ou brancher de nouveaux `EntryZoneFilters`.
 - **Nouvelles politiques** : implémenter `OrderModePolicyInterface` (ex: forcer IOC/Maker selon symboles) ou étendre `MakerTakerSwitchPolicy`.
-- **Watchers** : `ExecutionBox` envoie `LimitFillWatchMessage` sur Messenger. Les handlers peuvent être adaptés (annulation, notification).
 - **Tests** : utilisez `TradeEntryBacktestService` / `TradeEntryMetricsService` pour rejouer un plan sur des données historiques.
 
 ---
@@ -183,7 +173,7 @@ Si `plan->leverage < 1` → skip direct (`execution.leverage_below_min`). Tous l
 | `EntryZoneCalculator` | Calcule la zone pivot/vwap. |
 | `OrderPlanBuilder` | Prix, stops, TP, sizing, leverage. |
 | `DynamicLeverageService` | Implémentation `LeverageServiceInterface`. |
-| `ExecutionBox` | Submit levier + order, watchers, fallback taker. |
-| `TpSlAttacher` / `TpSlTwoTargetsService` | SL/TP automatiques. |
+| `ExecutionBox` | Préparation du plan (multiplicateur TF), fallback taker fin de zone. |
+| `TpSlTwoTargetsService` | SL/TP automatiques. |
 
 Ce README couvre toutes les briques utilisées quotidiennement. Pour ajouter un use case spécifique ou comprendre un log `order_journey.*`, remonter vers les classes citées ci-dessus. Toute nouvelle fonctionnalité doit mettre à jour ce document (risk sizing, TP policies, watchers, etc.) afin que l’équipe garde une vision exhaustive du module. Bonne construction de trades !

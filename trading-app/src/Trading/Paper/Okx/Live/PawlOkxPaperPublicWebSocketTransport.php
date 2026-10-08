@@ -106,13 +106,13 @@ final class PawlOkxPaperPublicWebSocketTransport implements OkxPaperPausableWebS
                 );
                 $connection->on(
                     'close',
-                    function (mixed $code = null) use ($connection, $generation, $onClose): void {
+                    function (mixed $code = null, mixed $reason = null) use ($connection, $generation, $onClose): void {
                         if ($generation !== $this->generation || $connection !== $this->connection) {
                             return;
                         }
 
                         $this->connection = null;
-                        $onClose(is_int($code) ? $code : null);
+                        $onClose(is_int($code) ? $code : null, is_string($reason) ? $reason : null);
                     },
                 );
                 $connection->on(

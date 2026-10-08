@@ -142,7 +142,7 @@ final class LineageReadServiceTest extends TestCase
         $this->expectExceptionCode(409);
 
         $this->service([$lineageA, $lineageB])->search(
-            LineageReadCriteria::forVenueIdentifier('exchange_order_id', 'EX-1', 'bitmart', 'perpetual', limit: 10, offset: 0),
+            LineageReadCriteria::forVenueIdentifier('exchange_order_id', 'EX-1', 'okx', 'perpetual', limit: 10, offset: 0),
         );
     }
 
@@ -246,7 +246,7 @@ final class LineageReadServiceTest extends TestCase
     private function lineage(string $internalTradeId): TradeLineage
     {
         return (new TradeLineage($internalTradeId, 'client-' . $internalTradeId, 'BTCUSDT'))
-            ->setExchange('bitmart')
+            ->setExchange('okx')
             ->setMarketType('perpetual')
             ->setOrigin('orchestrator')
             ->setRunId('run-1')
@@ -260,7 +260,7 @@ final class LineageReadServiceTest extends TestCase
     private function intent(int $id, string $internalTradeId): OrderIntent
     {
         $intent = (new OrderIntent())
-            ->setExchange('bitmart')
+            ->setExchange('okx')
             ->setMarketType('perpetual')
             ->setSymbol('BTCUSDT')
             ->setSide(1)
@@ -282,7 +282,7 @@ final class LineageReadServiceTest extends TestCase
     private function event(string $type, ?string $internalTradeId): TradeLifecycleEvent
     {
         return (new TradeLifecycleEvent('BTCUSDT', $type, new \DateTimeImmutable('2026-06-25T10:00:00+00:00')))
-            ->setExchange('bitmart')
+            ->setExchange('okx')
             ->setMarketType('perpetual')
             ->setInternalTradeId($internalTradeId)
             ->setOrderId('EX-1')

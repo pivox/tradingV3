@@ -14,7 +14,6 @@ use App\Service\OrderIntentManager;
 use App\Logging\Dto\LifecycleContextBuilder;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Execution\ExchangeExecutionService;
-use App\TradeEntry\Execution\ExecutionBox;
 use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\TradeEntry\Workflow\ExecuteOrderPlan;
 use App\Trading\Lineage\TradeLineageManager;
@@ -74,7 +73,6 @@ final class ExecuteOrderPlanLineageSyncTest extends KernelTestCase
         );
 
         $workflow = new ExecuteOrderPlan(
-            $this->uninitialized(ExecutionBox::class),
             $this->uninitialized(ExchangeExecutionService::class),
             new NullLogger(),
             $this->orderIntentManager(),
@@ -96,7 +94,6 @@ final class ExecuteOrderPlanLineageSyncTest extends KernelTestCase
             ->withTradeId('itd-from-mtf');
 
         $workflow = new ExecuteOrderPlan(
-            $this->uninitialized(ExecutionBox::class),
             $this->uninitialized(ExchangeExecutionService::class),
             new NullLogger(),
             $this->orderIntentManager(),
@@ -132,7 +129,6 @@ final class ExecuteOrderPlanLineageSyncTest extends KernelTestCase
             ]);
 
         $workflow = new ExecuteOrderPlan(
-            $this->uninitialized(ExecutionBox::class),
             $this->uninitialized(ExchangeExecutionService::class),
             new NullLogger(),
             $this->orderIntentManager(),
@@ -186,7 +182,6 @@ final class ExecuteOrderPlanLineageSyncTest extends KernelTestCase
     public function testSubmittedCanonicalIdentityOverridesConflictingProviderRawIdentity(): void
     {
         $workflow = new ExecuteOrderPlan(
-            $this->uninitialized(ExecutionBox::class),
             $this->uninitialized(ExchangeExecutionService::class),
             new NullLogger(),
         );
@@ -249,7 +244,6 @@ final class ExecuteOrderPlanLineageSyncTest extends KernelTestCase
         $lineages->ensureForIntent($intent, $identity);
 
         return [new ExecuteOrderPlan(
-            $this->uninitialized(ExecutionBox::class),
             $this->uninitialized(ExchangeExecutionService::class),
             new NullLogger(),
             $this->orderIntentManager(),
@@ -261,7 +255,7 @@ final class ExecuteOrderPlanLineageSyncTest extends KernelTestCase
     private function persistReadyIntent(): OrderIntent
     {
         $intent = (new OrderIntent())
-            ->setExchange(Exchange::BITMART)
+            ->setExchange(Exchange::OKX)
             ->setMarketType(MarketType::PERPETUAL)
             ->setSymbol('BTCUSDT')
             ->setSide(1)
@@ -271,7 +265,7 @@ final class ExecuteOrderPlanLineageSyncTest extends KernelTestCase
             ->setSize(1)
             ->setClientOrderId('cid-lineage-missing')
             ->setPresetMode(OrderIntent::PRESET_MODE_NONE)
-            ->setDecisionKey('bitmart:perpetual:BTCUSDT:1m:1764161200:long:scalper:v1')
+            ->setDecisionKey('okx:perpetual:BTCUSDT:1m:1764161200:long:scalper:v1')
             ->markAsReadyToSend();
 
         $this->em->persist($intent);

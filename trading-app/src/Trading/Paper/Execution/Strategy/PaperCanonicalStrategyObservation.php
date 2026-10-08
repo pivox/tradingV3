@@ -6,7 +6,6 @@ namespace App\Trading\Paper\Execution\Strategy;
 
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
-use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
 
 final readonly class PaperCanonicalStrategyObservation
 {
@@ -48,7 +47,7 @@ final readonly class PaperCanonicalStrategyObservation
         ];
         $payloadToInspect = $payload;
         unset($payloadToInspect['source_event_id']);
-        PaperMarketEventRedactor::assertSafe($payloadToInspect);
+        PaperRedactionVerdictMemo::assertSafe($payloadToInspect);
 
         return new self($cell->id, $event->eventId, $result->status, $result->reasonCode, $payload);
     }

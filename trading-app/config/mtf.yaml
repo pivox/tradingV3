@@ -6,15 +6,6 @@ mtf:
     task_queue: 'mtf_minute_queue'
     workflow_id: 'mtf-minute-workflow'
   
-  # Configuration BitMart
-  bitmart:
-    api_key: '%env(BITMART_API_KEY)%'
-    secret_key: '%env(BITMART_SECRET_KEY)%'
-    base_url: '%env(BITMART_BASE_URL)%'
-    ws_url: '%env(BITMART_WS_PRIVATE_URL)%'
-    timeout: 30
-    max_retries: 3
-  
   # Configuration du rate limiting
   rate_limiter:
     capacity: '%env(int:MTF_RATE_LIMIT_CAPACITY)%'

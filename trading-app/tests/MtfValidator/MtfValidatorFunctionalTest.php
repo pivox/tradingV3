@@ -48,7 +48,7 @@ final class MtfValidatorFunctionalTest extends KernelTestCase
             skipOpenStateFilter: false,
             userId: null,
             ipAddress: null,
-            exchange: Exchange::BITMART,
+            exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
         );
 

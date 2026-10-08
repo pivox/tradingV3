@@ -467,7 +467,6 @@ final class ExportSymbolDataCommand extends Command
             'positions' => $logDir . '/positions-' . $dateStr . '.log',
             'mtf' => $logDir . '/mtf-' . $dateStr . '.log',
             'signals' => $logDir . '/signals-' . $dateStr . '.log',
-            'bitmart' => $logDir . '/bitmart-' . $dateStr . '.log',
             'provider' => $logDir . '/provider-' . $dateStr . '.log',
             'indicators' => $logDir . '/indicators-' . $dateStr . '.log',
             'dev' => $logDir . '/dev-' . $dateStr . '.log',

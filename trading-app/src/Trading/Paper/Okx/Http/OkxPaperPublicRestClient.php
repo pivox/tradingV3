@@ -15,6 +15,8 @@ final readonly class OkxPaperPublicRestClient implements OkxPaperPublicRestClien
     private const REQUEST_TIMEOUT_SECONDS = 10.0;
     private const MAX_RESPONSE_BYTES = 1_048_576;
     private const RETRY_DELAYS_SECONDS = [0.25, 0.5, 1.0, 2.0, 4.0];
+    /** OKX codes of transient server conditions: unavailable, timeout, busy, system error. */
+    private const TRANSIENT_API_CODES = ['50001', '50004', '50013', '50026'];
 
     public function __construct(
         private HttpClientInterface $httpClient,
@@ -183,9 +185,14 @@ final readonly class OkxPaperPublicRestClient implements OkxPaperPublicRestClien
                 ]);
                 $status = $response->getStatusCode();
 
-                if ($status === 429) {
+                if ($status === 429 || $status >= 500) {
                     $response->cancel();
-                    $this->retryOrFail($attempt);
+                    $this->retryOrFail(
+                        $attempt,
+                        $status === 429
+                            ? 'okx_paper_public_rate_limit_retry_exhausted'
+                            : sprintf('okx_paper_public_http_error_%d', $status),
+                    );
 
                     continue;
                 }
@@ -196,7 +203,12 @@ final readonly class OkxPaperPublicRestClient implements OkxPaperPublicRestClien
 
                 $payload = $this->decode($this->readBoundedBody($response));
                 if ($payload['code'] === '50011') {
-                    $this->retryOrFail($attempt);
+                    $this->retryOrFail($attempt, 'okx_paper_public_rate_limit_retry_exhausted');
+
+                    continue;
+                }
+                if (\in_array($payload['code'], self::TRANSIENT_API_CODES, true)) {
+                    $this->retryOrFail($attempt, 'okx_paper_public_api_error_' . $payload['code']);
 
                     continue;
                 }
@@ -207,7 +219,10 @@ final readonly class OkxPaperPublicRestClient implements OkxPaperPublicRestClien
 
                 return $this->validateData($endpoint, $requestedLimit, $payload['data']);
             } catch (TransportExceptionInterface) {
-                throw new \RuntimeException('okx_paper_public_transport_error');
+                // Timeouts and network failures are transient: retried within the
+                // same bounded budget (one limiter token per attempt). A coherent
+                // but invalid response is never retried.
+                $this->retryOrFail($attempt, 'okx_paper_public_transport_error');
             }
         }
     }
@@ -228,10 +243,10 @@ final readonly class OkxPaperPublicRestClient implements OkxPaperPublicRestClien
         return $body;
     }
 
-    private function retryOrFail(int $attempt): void
+    private function retryOrFail(int $attempt, string $exhaustedReason): void
     {
         if (!isset(self::RETRY_DELAYS_SECONDS[$attempt])) {
-            throw new \RuntimeException('okx_paper_public_rate_limit_retry_exhausted');
+            throw new \RuntimeException($exhaustedReason);
         }
 
         $this->clock->sleep(self::RETRY_DELAYS_SECONDS[$attempt]);

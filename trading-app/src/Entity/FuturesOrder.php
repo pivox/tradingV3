@@ -41,8 +41,8 @@ class FuturesOrder
     #[ORM\JoinColumn(name: 'order_intent_id', referencedColumnName: 'id', nullable: true, onDelete: 'SET NULL')]
     private ?OrderIntent $orderIntent = null;
 
-    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
-    private string $exchange = 'bitmart';
+    #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'okx'])]
+    private string $exchange = 'okx';
 
     #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
     private string $marketType = 'perpetual';
@@ -166,7 +166,7 @@ class FuturesOrder
             throw new LineageContextException('canonical_identity_mismatch:exchange_order_id');
         }
 
-        $source->assertTradeBoundary(
+        $source->assertExecutionBoundary(
             $this->symbol,
             self::canonicalSide($this->side),
             $this->exchange,
@@ -190,7 +190,7 @@ class FuturesOrder
             throw new LineageContextException('canonical_identity_missing:order_intent_predecessor');
         }
 
-        $context->assertTradeBoundary(
+        $context->assertExecutionBoundary(
             $this->symbol,
             self::canonicalSide($this->side),
             $this->exchange,

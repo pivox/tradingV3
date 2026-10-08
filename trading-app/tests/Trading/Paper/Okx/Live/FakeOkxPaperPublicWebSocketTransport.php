@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\Paper\Okx\Live;
 
-use App\Trading\Paper\Okx\Live\OkxPaperPublicWebSocketTransportInterface;
+use App\Trading\Paper\Okx\Live\OkxPaperPausableWebSocketTransportInterface;
 
-final class FakeOkxPaperPublicWebSocketTransport implements OkxPaperPublicWebSocketTransportInterface
+final class FakeOkxPaperPublicWebSocketTransport implements OkxPaperPausableWebSocketTransportInterface
 {
     /** @var list<string> */
     public array $connections = [];
@@ -15,7 +15,11 @@ final class FakeOkxPaperPublicWebSocketTransport implements OkxPaperPublicWebSoc
     public array $sent = [];
 
     public int $closeCount = 0;
+    public int $pauseCount = 0;
+    public int $resumeCount = 0;
+    public ?\Closure $afterResume = null;
     public ?\Throwable $sendError = null;
+    public ?\Closure $afterSend = null;
 
     /** @var list<array{open: \Closure, message: \Closure, close: \Closure, error: \Closure}> */
     private array $callbacks = [];
@@ -43,11 +47,23 @@ final class FakeOkxPaperPublicWebSocketTransport implements OkxPaperPublicWebSoc
         }
 
         $this->sent[] = $message;
+        ($this->afterSend ?? static function (): void {})($message);
     }
 
     public function close(): void
     {
         ++$this->closeCount;
+    }
+
+    public function pause(): void
+    {
+        ++$this->pauseCount;
+    }
+
+    public function resume(): void
+    {
+        ++$this->resumeCount;
+        ($this->afterResume ?? static function (): void {})();
     }
 
     public function open(?int $attempt = null): void

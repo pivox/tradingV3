@@ -48,6 +48,22 @@ final class PaperCanonicalOrderBookSourceTest extends TestCase
         self::assertSame(1, $snapshot->sourceEpoch);
     }
 
+    public function testATriggerReceivedAfterItsCloseIsUsableAtItsClose(): void
+    {
+        $book = $this->book('1', '99', '101', '2026-08-01T10:00:58.000000Z', '2026-08-01T10:00:58.500000Z');
+        $trigger = $this->trigger('2', '2026-08-01T10:01:06.000000Z');
+        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        $market->restore([$book, $trigger]);
+
+        $snapshot = (new PaperCanonicalOrderBookSource(
+            $market,
+            new PaperReplayClock(new \DateTimeImmutable('2026-08-01T10:01:00.000000Z')),
+        ))->snapshotFor($this->cell(), $trigger);
+
+        self::assertNotNull($snapshot);
+        self::assertSame('sha256:' . $book->eventId, $snapshot->inputHash);
+    }
+
     public function testReturnsNoEvidenceWhenTheOnlyAppliedBookIsNotYetObservable(): void
     {
         $book = $this->book('1', '99', '101', '2026-08-01T10:00:58.000000Z', '2026-08-01T10:01:02.000000Z');
@@ -111,7 +127,7 @@ final class PaperCanonicalOrderBookSourceTest extends TestCase
     {
         $book = $this->book('1', '99', '101', '2026-08-01T10:00:58.000000Z', '2026-08-01T10:00:59.000000Z');
         $trigger = $this->trigger('2', '2026-08-01T10:01:01.000000Z');
-        $newer = $this->trigger('3', '2026-08-01T10:02:01.000000Z', '2026-08-01T10:02:00.000000Z');
+        $newer = $this->trigger('3', '2026-08-01T10:02:01.000000Z', '2026-08-01T10:01:00.000000Z');
         $market = new PaperMarketStateProjector(new PaperKlineProvider());
         $market->restore([$book, $trigger, $newer]);
 
@@ -227,10 +243,11 @@ final class PaperCanonicalOrderBookSourceTest extends TestCase
         );
     }
 
+    /** An OKX candle is stamped with its open: the default trigger closes at 10:01. */
     private function trigger(
         string $sequence,
         string $receivedTimestamp,
-        string $exchangeTimestamp = '2026-08-01T10:01:00.000000Z',
+        string $exchangeTimestamp = '2026-08-01T10:00:00.000000Z',
     ): PaperMarketEvent {
         return PaperMarketEvent::create(
             PaperMarketDataNetwork::MAINNET,

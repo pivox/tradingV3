@@ -37,7 +37,7 @@ DEFAULT_URL = os.getenv("MTF_WORKERS_URL", "http://trading-app-nginx:80/api/mtf/
 DEFAULT_CRON = os.getenv("MTF_WORKERS_CRON", "*/1 * * * *")
 DEFAULT_WORKERS = int(os.getenv("MTF_WORKERS_COUNT", "4"))
 
-SUPPORTED_EXCHANGES = {"bitmart", "binance", "fake", "hyperliquid", "okx"}
+SUPPORTED_EXCHANGES = {"binance", "fake", "hyperliquid", "okx"}
 SUPPORTED_MARKET_TYPES = {"perpetual", "spot"}
 SUPPORTED_PROFILES = {"regular", "scalper", "scalper_micro"}
 

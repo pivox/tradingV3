@@ -13,8 +13,11 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 
 final readonly class HyperliquidPaperLiveCheckpoint
 {
-    public const SCHEMA_VERSION = 3;
-    public const POLICY_VERSION = 4;
+    public const SCHEMA_VERSION = 5;
+    public const POLICY_VERSION = 8;
+    public const ROTATION_CAUSE_ROTATION = 'rotation';
+    public const ROTATION_CAUSE_RECOVERY = 'recovery';
+    private const ROTATION_CAUSES = [self::ROTATION_CAUSE_ROTATION, self::ROTATION_CAUSE_RECOVERY];
     public const MAXIMUM_BYTES = 1_048_576;
     public const MAXIMUM_ACKNOWLEDGED_IDENTITIES =
         HyperliquidPaperLivePolicy::MAX_ACKNOWLEDGED_EVENT_IDENTITIES;
@@ -46,6 +49,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
      * @param list<array{identity_hash: string, assignment_digest: string}> $tradeIdentityHistory
      * @param array{last_received_at: string|null, last_ping_at: string|null, pong_deadline_at: string|null} $heartbeat
      * @param array{requested: bool} $healthyStop
+     * @param array{target_connection_epoch: int, started_at: string, cause: string}|null $rotation
      */
     private function __construct(
         public int $schemaVersion,
@@ -70,6 +74,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
         public int $reconnectAttempt,
         public array $heartbeat,
         public array $healthyStop,
+        public ?array $rotation,
     ) {
     }
 
@@ -105,6 +110,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
                 'pong_deadline_at' => null,
             ],
             'healthy_stop' => ['requested' => false],
+            'rotation' => null,
         ]);
     }
 
@@ -135,6 +141,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
                 'reconnect_attempt',
                 'heartbeat',
                 'healthy_stop',
+                'rotation',
             ]);
             if ($state['schema_version'] !== self::SCHEMA_VERSION
                 || $state['policy_version'] !== self::POLICY_VERSION
@@ -170,14 +177,6 @@ final readonly class HyperliquidPaperLiveCheckpoint
                 throw new \InvalidArgumentException();
             }
             $failureReason = self::failureReason($state['failure_reason']);
-            if (($state['phase'] === 'failed' && $failureReason === null)
-                || ($failureReason !== null
-                    && $state['phase'] !== 'failed'
-                    && $state['continuity'])
-            ) {
-                throw new \InvalidArgumentException();
-            }
-
             $subscriptions = self::subscriptions($state['subscriptions']);
             $ordinalState = HyperliquidPaperSourceOrdinal::restore(
                 $state['ordinal_state'],
@@ -186,9 +185,6 @@ final readonly class HyperliquidPaperLiveCheckpoint
             $pendingContinuation = self::pendingContinuation(
                 $state['pending_continuation'],
             );
-            if (($pendingEvent === null) !== ($pendingContinuation === null)) {
-                throw new \InvalidArgumentException();
-            }
             $currentCandles = self::currentCandles($state['current_candles']);
             $frontiers = self::frontiers($state['finalized_candle_frontiers']);
             $initialCandleWindowEnds = self::initialCandleWindowEnds(
@@ -198,21 +194,21 @@ final readonly class HyperliquidPaperLiveCheckpoint
             $tradeIdentityHistory = self::tradeIdentityHistory(
                 $state['trade_identity_history'],
             );
-            if ($pendingEvent !== null
-                && \in_array($pendingEvent->eventId, $acknowledged, true)
-            ) {
-                throw new \InvalidArgumentException();
-            }
             $heartbeat = self::heartbeat($state['heartbeat']);
             $healthyStop = self::healthyStop($state['healthy_stop']);
-            if ($state['phase'] === 'complete'
-                && (!$healthyStop['requested']
-                    || $pendingEvent !== null
-                    || $currentCandles !== []
-                    || !$state['continuity'])
-            ) {
-                throw new \InvalidArgumentException();
-            }
+            $rotation = self::rotation($state['rotation'], $state['connection_epoch']);
+            self::assertInvariants(
+                phase: $state['phase'],
+                failureReason: $failureReason,
+                continuity: $state['continuity'],
+                pendingEvent: $pendingEvent,
+                pendingContinuation: $pendingContinuation,
+                currentCandles: $currentCandles,
+                acknowledgedIdentities: $acknowledged,
+                healthyStop: $healthyStop,
+                rotation: $rotation,
+                connectionEpoch: $state['connection_epoch'],
+            );
 
             $checkpoint = new self(
                 schemaVersion: self::SCHEMA_VERSION,
@@ -237,6 +233,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
                 reconnectAttempt: $state['reconnect_attempt'],
                 heartbeat: $heartbeat,
                 healthyStop: $healthyStop,
+                rotation: $rotation,
             );
             if (\strlen(CanonicalJson::encode($checkpoint->toArray())) > self::MAXIMUM_BYTES) {
                 throw new \InvalidArgumentException();
@@ -274,7 +271,73 @@ final readonly class HyperliquidPaperLiveCheckpoint
             'reconnect_attempt' => $this->reconnectAttempt,
             'heartbeat' => $this->heartbeat,
             'healthy_stop' => $this->healthyStop,
+            'rotation' => $this->rotation,
         ];
+    }
+
+    /**
+     * Marks a switch towards the next connection epoch as in progress, so a restart can tell
+     * that it interrupted one: a planned make-before-break rotation, or the recovery of a
+     * connection that was lost while streaming.
+     */
+    public function beginRotation(
+        string $startedAt,
+        string $cause = self::ROTATION_CAUSE_ROTATION,
+    ): self {
+        if ($this->rotation !== null || $this->phase !== 'streaming') {
+            throw self::invalid();
+        }
+
+        $rotation = [
+            'target_connection_epoch' => $this->connectionEpoch + 1,
+            'started_at' => $startedAt,
+            'cause' => $cause,
+        ];
+        $connectionEpoch = $this->connectionEpoch;
+
+        return $this->derive([
+            'rotation' => self::guard(
+                static fn (): ?array => self::rotation($rotation, $connectionEpoch),
+            ),
+        ]);
+    }
+
+    public function abortRotation(): self
+    {
+        return $this->derive(['rotation' => null]);
+    }
+
+    /** The active connection died during a rotation: its standby now serves a recovery. */
+    public function markRotationRecovery(): self
+    {
+        if ($this->rotation === null) {
+            throw self::invalid();
+        }
+
+        return $this->derive([
+            'rotation' => [...$this->rotation, 'cause' => self::ROTATION_CAUSE_RECOVERY],
+        ]);
+    }
+
+    /**
+     * The standby connection took over: it is now the active connection epoch, and no ping
+     * sent on the retired connection is awaited anymore.
+     */
+    public function completeRotation(): self
+    {
+        if ($this->rotation === null) {
+            throw self::invalid();
+        }
+
+        return $this->derive([
+            'connectionEpoch' => $this->rotation['target_connection_epoch'],
+            'rotation' => null,
+            'heartbeat' => [
+                'last_received_at' => $this->heartbeat['last_received_at'],
+                'last_ping_at' => $this->heartbeat['last_ping_at'],
+                'pong_deadline_at' => null,
+            ],
+        ]);
     }
 
     /** @param array<string, mixed> $continuation */
@@ -295,9 +358,11 @@ final readonly class HyperliquidPaperLiveCheckpoint
             throw self::invalid();
         }
 
-        return $this->with([
-            'pending_event' => $event->toArray(),
-            'pending_continuation' => $continuation,
+        return $this->derive([
+            'pendingEvent' => $event,
+            'pendingContinuation' => self::guard(
+                static fn (): ?array => self::pendingContinuation($continuation),
+            ),
         ]);
     }
 
@@ -316,10 +381,10 @@ final readonly class HyperliquidPaperLiveCheckpoint
             array_shift($acknowledged);
         }
 
-        return $this->with([
-            'pending_event' => null,
-            'pending_continuation' => null,
-            'acknowledged_identities' => $acknowledged,
+        return $this->derive([
+            'pendingEvent' => null,
+            'pendingContinuation' => null,
+            'acknowledgedIdentities' => $acknowledged,
         ]);
     }
 
@@ -350,7 +415,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
             array_shift($history);
         }
 
-        return $this->with(['trade_identity_history' => $history]);
+        return $this->derive(['tradeIdentityHistory' => $history]);
     }
 
     /** @param array<string, mixed> $candle */
@@ -371,7 +436,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
         $candles[$stream] = $candle;
         ksort($candles, \SORT_STRING);
 
-        return $this->with(['current_candles' => $candles]);
+        return $this->derive(['currentCandles' => $candles]);
     }
 
     public function finalizeCandle(string $stream, int $startTime): self
@@ -392,9 +457,9 @@ final readonly class HyperliquidPaperLiveCheckpoint
             unset($candles[$stream]);
         }
 
-        return $this->with([
-            'current_candles' => $candles,
-            'finalized_candle_frontiers' => $frontiers,
+        return $this->derive([
+            'currentCandles' => $candles,
+            'finalizedCandleFrontiers' => $frontiers,
         ]);
     }
 
@@ -403,16 +468,31 @@ final readonly class HyperliquidPaperLiveCheckpoint
         $reason = self::failureReason($reason)
             ?? throw self::invalid();
 
-        return $this->with([
+        return $this->derive([
             'continuity' => false,
-            'failure_reason' => $reason,
+            'failureReason' => $reason,
         ]);
     }
 
     /** @param array<string, mixed> $ordinalState */
     public function withOrdinalState(array $ordinalState): self
     {
-        return $this->with(['ordinal_state' => $ordinalState]);
+        return $this->derive([
+            'ordinalState' => self::guard(
+                static fn (): array => HyperliquidPaperSourceOrdinal::restore(
+                    $ordinalState,
+                )->snapshot(),
+            ),
+        ]);
+    }
+
+    /**
+     * Records the cursor of a live ordinal. The ordinal validated every event it
+     * restored or committed, so its snapshot is canonical and is not re-parsed.
+     */
+    public function withOrdinals(HyperliquidPaperSourceOrdinal $ordinals): self
+    {
+        return $this->derive(['ordinalState' => $ordinals->snapshot()]);
     }
 
     /** @param array{BTC: string|null, ETH: string|null} $ends */
@@ -425,14 +505,18 @@ final readonly class HyperliquidPaperLiveCheckpoint
             }
         }
 
-        return $this->with(['initial_candle_window_ends' => $ends]);
+        return $this->derive(['initialCandleWindowEnds' => $ends]);
     }
 
     public function withPhase(string $phase): self
     {
-        return $this->with([
+        if (!\in_array($phase, self::PHASES, true)) {
+            throw self::invalid();
+        }
+
+        return $this->derive([
             'phase' => $phase,
-            'failure_reason' => $phase === 'failed'
+            'failureReason' => $phase === 'failed'
                 ? ($this->failureReason ?? 'hyperliquid_paper_public_protocol_error')
                 : $this->failureReason,
         ]);
@@ -443,27 +527,27 @@ final readonly class HyperliquidPaperLiveCheckpoint
         $reason = self::failureReason($reason)
             ?? throw self::invalid();
 
-        return $this->with([
+        return $this->derive([
             'phase' => 'failed',
-            'failure_reason' => $reason,
-            'pending_event' => null,
-            'pending_continuation' => null,
+            'failureReason' => $reason,
+            'pendingEvent' => null,
+            'pendingContinuation' => null,
         ]);
     }
 
     public function requestHealthyStop(): self
     {
-        return $this->with([
+        return $this->derive([
             'phase' => 'stopping',
-            'healthy_stop' => ['requested' => true],
+            'healthyStop' => ['requested' => true],
         ]);
     }
 
     public function completeHealthyStop(): self
     {
-        return $this->with([
+        return $this->derive([
             'phase' => 'complete',
-            'current_candles' => [],
+            'currentCandles' => [],
         ]);
     }
 
@@ -477,13 +561,13 @@ final readonly class HyperliquidPaperLiveCheckpoint
             return $this->fail('hyperliquid_paper_public_reconnect_exhausted');
         }
 
-        return $this->with([
+        return $this->derive([
             'phase' => 'reconnecting',
-            'failure_reason' => $reason,
+            'failureReason' => $reason,
             'continuity' => false,
-            'connection_epoch' => $this->connectionEpoch + 1,
-            'source_epoch' => $this->sourceEpoch + 1,
-            'reconnect_attempt' => $this->reconnectAttempt + 1,
+            'connectionEpoch' => $this->connectionEpoch + 1,
+            'sourceEpoch' => $this->sourceEpoch + 1,
+            'reconnectAttempt' => $this->reconnectAttempt + 1,
             'heartbeat' => [
                 'last_received_at' => null,
                 'last_ping_at' => null,
@@ -497,19 +581,100 @@ final readonly class HyperliquidPaperLiveCheckpoint
         ?string $lastPingAt,
         ?string $pongDeadlineAt,
     ): self {
-        return $this->with([
-            'heartbeat' => [
+        return $this->derive([
+            'heartbeat' => self::guard(static fn (): array => self::heartbeat([
                 'last_received_at' => $lastReceivedAt,
                 'last_ping_at' => $lastPingAt,
                 'pong_deadline_at' => $pongDeadlineAt,
-            ],
+            ])),
         ]);
     }
 
-    /** @param array<string, mixed> $changes */
-    private function with(array $changes): self
+    /**
+     * Derives a checkpoint from this instance, which was fully validated when it was
+     * created. Callers pass values they validated themselves, keyed by constructor
+     * parameter name; unchanged fields keep their validated values, so only the
+     * cross-field invariants are checked again. State read from disk always goes
+     * through fromArray() instead.
+     *
+     * @param array<string, mixed> $changes
+     */
+    private function derive(array $changes): self
     {
-        return self::fromArray(array_replace($this->toArray(), $changes));
+        $fields = get_object_vars($this);
+        foreach ($changes as $name => $value) {
+            if (!\array_key_exists($name, $fields)) {
+                throw new \LogicException('hyperliquid_paper_live_checkpoint_field_unknown');
+            }
+            $fields[$name] = $value;
+        }
+        self::guard(static fn () => self::assertInvariants(
+            phase: $fields['phase'],
+            failureReason: $fields['failureReason'],
+            continuity: $fields['continuity'],
+            pendingEvent: $fields['pendingEvent'],
+            pendingContinuation: $fields['pendingContinuation'],
+            currentCandles: $fields['currentCandles'],
+            acknowledgedIdentities: $fields['acknowledgedIdentities'],
+            healthyStop: $fields['healthyStop'],
+            rotation: $fields['rotation'],
+            connectionEpoch: $fields['connectionEpoch'],
+        ));
+
+        return new self(...$fields);
+    }
+
+    /**
+     * @param array<string, mixed>|null $pendingContinuation
+     * @param array<string, array<string, mixed>> $currentCandles
+     * @param list<string> $acknowledgedIdentities
+     * @param array{requested: bool} $healthyStop
+     * @param array{target_connection_epoch: int, started_at: string, cause: string}|null $rotation
+     */
+    private static function assertInvariants(
+        string $phase,
+        ?string $failureReason,
+        bool $continuity,
+        ?PaperMarketEvent $pendingEvent,
+        ?array $pendingContinuation,
+        array $currentCandles,
+        array $acknowledgedIdentities,
+        array $healthyStop,
+        ?array $rotation,
+        int $connectionEpoch,
+    ): void {
+        if (($rotation !== null
+                && $rotation['target_connection_epoch'] !== $connectionEpoch + 1)
+            || ($phase === 'failed' && $failureReason === null)
+            || ($failureReason !== null && $phase !== 'failed' && $continuity)
+            || (($pendingEvent === null) !== ($pendingContinuation === null))
+            || ($pendingEvent !== null
+                && \in_array($pendingEvent->eventId, $acknowledgedIdentities, true))
+            || ($phase === 'complete'
+                && (!$healthyStop['requested']
+                    || $pendingEvent !== null
+                    || $currentCandles !== []
+                    || $rotation !== null
+                    || !$continuity))
+        ) {
+            throw new \InvalidArgumentException();
+        }
+    }
+
+    /**
+     * @template T
+     *
+     * @param callable(): T $validation
+     *
+     * @return T
+     */
+    private static function guard(callable $validation): mixed
+    {
+        try {
+            return $validation();
+        } catch (\Throwable) {
+            throw self::invalid();
+        }
     }
 
     /** @return list<array{method: string, subscription: array<string, string>}> */
@@ -709,6 +874,35 @@ final readonly class HyperliquidPaperLiveCheckpoint
 
         /** @var array{last_received_at: string|null, last_ping_at: string|null, pong_deadline_at: string|null} $value */
         return $value;
+    }
+
+    /** @return array{target_connection_epoch: int, started_at: string, cause: string}|null */
+    private static function rotation(mixed $value, mixed $connectionEpoch): ?array
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (!\is_array($value) || array_is_list($value) || !\is_int($connectionEpoch)) {
+            throw new \InvalidArgumentException();
+        }
+        self::assertExactKeys($value, ['target_connection_epoch', 'started_at', 'cause']);
+        if (($value['target_connection_epoch'] ?? null) !== $connectionEpoch + 1
+            || !\is_string($value['started_at'] ?? null)
+            || \DateTimeImmutable::createFromFormat(
+                '!Y-m-d\TH:i:s.u\Z',
+                $value['started_at'],
+                new \DateTimeZone('UTC'),
+            ) === false
+            || !\in_array($value['cause'] ?? null, self::ROTATION_CAUSES, true)
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        return [
+            'target_connection_epoch' => $value['target_connection_epoch'],
+            'started_at' => $value['started_at'],
+            'cause' => $value['cause'],
+        ];
     }
 
     /** @return array{requested: bool} */

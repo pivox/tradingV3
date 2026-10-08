@@ -360,7 +360,7 @@ final class OrderPlanValidatorTest extends TestCase
         $plan = new OrderPlan(
             symbol: 'BTCUSDT',
             profile: 'scalper_micro',
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'perpetual',
             side: 'long',
             orderType: 'limit',
@@ -417,7 +417,7 @@ final class OrderPlanValidatorTest extends TestCase
     private function plan(
         string $symbol = 'BTCUSDT',
         string $profile = 'scalper_micro',
-        string $exchange = 'bitmart',
+        string $exchange = 'okx',
         string $marketType = 'perpetual',
         string $instrument = 'BTCUSDT',
         string $side = 'long',
@@ -457,7 +457,7 @@ final class OrderPlanValidatorTest extends TestCase
         return new OrderPlan(
             symbol: 'BTCUSDT',
             profile: 'scalper_micro',
-            exchange: 'bitmart',
+            exchange: 'okx',
             marketType: 'perpetual',
             side: 'long',
             orderType: 'limit',

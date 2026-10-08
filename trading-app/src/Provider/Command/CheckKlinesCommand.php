@@ -15,7 +15,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
-    name: 'bitmart:check-klines',
+    name: 'provider:check-klines',
     description: 'Vérifie les klines stockées en base de données'
 )]
 final class CheckKlinesCommand extends Command
@@ -38,11 +38,11 @@ final class CheckKlinesCommand extends Command
 Cette commande permet de vérifier les klines stockées en base de données.
 
 Exemples:
-  php bin/console bitmart:check-klines
-  php bin/console bitmart:check-klines BTCUSDT
-  php bin/console bitmart:check-klines BTCUSDT --timeframe=4h --limit=20
-  php bin/console bitmart:check-klines --stats
-  php bin/console bitmart:check-klines BTCUSDT --gaps
+  php bin/console provider:check-klines
+  php bin/console provider:check-klines BTCUSDT
+  php bin/console provider:check-klines BTCUSDT --timeframe=4h --limit=20
+  php bin/console provider:check-klines --stats
+  php bin/console provider:check-klines BTCUSDT --gaps
             ');
     }
 

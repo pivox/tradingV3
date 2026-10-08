@@ -165,8 +165,12 @@ final readonly class PaperMarketEvent
 
     /**
      * @param array<string, mixed> $data
+     * @param bool $payloadRedactionVerified skip only the payload redaction scan, for bytes whose
+     *        SHA-256 the caller compares - before any use of the event - with the fingerprint
+     *        of a dataset a complete verification (redaction scan included) accepted; every
+     *        other check (shape, enums, sequence, payload hash, event id) still runs
      */
-    public static function fromArray(#[\SensitiveParameter] array $data): self
+    public static function fromArray(#[\SensitiveParameter] array $data, bool $payloadRedactionVerified = false): self
     {
         if (!isset($data['schema_version']) || !\is_int($data['schema_version'])) {
             throw new \InvalidArgumentException('paper_market_schema_version_unsupported');
@@ -217,7 +221,9 @@ final readonly class PaperMarketEvent
         }
 
         self::assertValidSequence($data['sequence']);
-        PaperMarketEventRedactor::assertSafe($data['payload']);
+        if (!$payloadRedactionVerified) {
+            PaperMarketEventRedactor::assertSafe($data['payload']);
+        }
         $detachedPayload = self::detachPayload($data['payload']);
         $payload = $detachedPayload['payload'];
         $exchangeTimestamp = self::parseTimestamp($data['exchange_timestamp']);

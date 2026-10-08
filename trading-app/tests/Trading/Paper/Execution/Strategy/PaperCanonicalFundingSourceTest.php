@@ -86,6 +86,20 @@ final class PaperCanonicalFundingSourceTest extends TestCase
         self::assertSame('sha256:' . $lateReceipt->eventId, $snapshot->inputHash);
     }
 
+    public function testATriggerReceivedAfterItsCloseIsUsableAtItsClose(): void
+    {
+        $funding = $this->funding('1', '0.0001', '2026-08-01T10:00:58Z', '2026-08-01T10:00:58.500Z');
+        $trigger = $this->trigger('2', '2026-08-01T10:01:06Z');
+        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        $market->restore([$funding, $trigger]);
+
+        $snapshot = (new PaperCanonicalFundingSource($market, new PaperReplayClock(new \DateTimeImmutable('2026-08-01T10:01:00Z'))))
+            ->snapshotFor($this->cell(), $trigger, 28800);
+
+        self::assertNotNull($snapshot);
+        self::assertSame('sha256:' . $funding->eventId, $snapshot->inputHash);
+    }
+
     public function testReturnsNoEvidenceWhenRateIsMissingOrNotYetReceived(): void
     {
         $trigger = $this->trigger('2', '2026-08-01T10:01:01Z');
@@ -131,7 +145,7 @@ final class PaperCanonicalFundingSourceTest extends TestCase
             self::assertSame('paper_canonical_funding_evidence_invalid', $exception->getMessage());
         }
 
-        $newer = $this->trigger('3', '2026-08-01T10:02:01Z', '2026-08-01T10:02:00Z');
+        $newer = $this->trigger('3', '2026-08-01T10:02:01Z', '2026-08-01T10:01:00Z');
         $market->restore([$funding, $trigger, $newer]);
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_canonical_strategy_trigger_not_current');
@@ -185,7 +199,8 @@ final class PaperCanonicalFundingSourceTest extends TestCase
         );
     }
 
-    private function trigger(string $sequence, string $received, string $exchange = '2026-08-01T10:01:00Z'): PaperMarketEvent
+    /** An OKX candle is stamped with its open: the default trigger closes at 10:01. */
+    private function trigger(string $sequence, string $received, string $exchange = '2026-08-01T10:00:00Z'): PaperMarketEvent
     {
         return PaperMarketEvent::create(
             PaperMarketDataNetwork::MAINNET, PaperMarketDataVenue::OKX, 'BTCUSDT',

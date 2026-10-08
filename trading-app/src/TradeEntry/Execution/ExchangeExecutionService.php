@@ -4,13 +4,11 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Execution;
 
-use App\Common\Enum\Exchange;
 use App\Config\TradeEntryConfigResolver;
 use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Contract\ExchangeAdapterInterface;
 use App\Exchange\Dto\CancelOrderRequest;
 use App\Exchange\Dto\CancelOrderResult;
-use App\Exchange\Dto\ExchangeCapabilities;
 use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Dto\PlaceOrderResult;
@@ -26,10 +24,16 @@ use App\TradeEntry\Policy\IdempotencyPolicy;
 use App\TradeEntry\Policy\OrderModePolicyInterface;
 use App\TradeEntry\Types\Side;
 use Psr\Log\LoggerInterface;
+use App\Logging\Dto\LifecycleContextBuilder;
+use App\TradeEntry\Message\LimitFillWatchMessage;
+use Symfony\Component\Messenger\MessageBusInterface;
+use Symfony\Component\Messenger\Stamp\DelayStamp;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class ExchangeExecutionService
 {
+    private const LIMIT_WATCH_INITIAL_DELAY_MS = 5000;
+
     public function __construct(
         private readonly ExchangeAdapterRegistryInterface $adapters,
         private readonly ProtectionEnforcer $protectionEnforcer,
@@ -37,6 +41,7 @@ final class ExchangeExecutionService
         private readonly OrderModePolicyInterface $orderModePolicy,
         private readonly TradeEntryConfigResolver $tradeEntryConfigResolver,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
+        private readonly ?MessageBusInterface $restingEntryBus = null,
     ) {
     }
 
@@ -48,6 +53,7 @@ final class ExchangeExecutionService
         ?string $clientOrderId = null,
         ?int $orderIntentId = null,
         bool $planPrepared = false,
+        ?LifecycleContextBuilder $contextBuilder = null,
     ): ExecutionResult
     {
         if (!$planPrepared) {
@@ -66,6 +72,8 @@ final class ExchangeExecutionService
             $clientOrderId,
             $orderIntentId,
             true,
+            [],
+            $contextBuilder,
         );
     }
 
@@ -80,6 +88,7 @@ final class ExchangeExecutionService
         ?int $orderIntentId = null,
         bool $planPrepared = false,
         array $executionMetadata = [],
+        ?LifecycleContextBuilder $contextBuilder = null,
     ): ExecutionResult {
         if (!$planPrepared) {
             $plan = $this->preparePlan($plan, $mode, $executionTf, $decisionKey);
@@ -98,34 +107,8 @@ final class ExchangeExecutionService
         }
         $clientOrderId ??= $this->idempotency->newClientOrderId($decisionKey);
         $capabilities = $adapter->capabilities();
-        if ($this->shouldRejectUnprotectableBitmartMarket($context, $plan, $capabilities)) {
-            $this->positionsLogger->error('exchange_execution.entry_rejected_unprotectable_market', [
-                'symbol' => $plan->symbol,
-                'exchange' => $context->exchange->value,
-                'market_type' => $context->marketType->value,
-                'order_type' => $plan->orderType,
-                'client_order_id' => $clientOrderId,
-                'decision_key' => $decisionKey,
-                'reason' => 'bitmart_market_entry_without_protection_path',
-            ]);
-
-            return new ExecutionResult(
-                clientOrderId: $clientOrderId,
-                exchangeOrderId: null,
-                status: ExecutionResult::STATUS_ERROR,
-                raw: [
-                    'reason' => 'bitmart_market_entry_without_protection_path',
-                    'exchange' => $context->exchange->value,
-                    'market_type' => $context->marketType->value,
-                    'order_type' => $plan->orderType,
-                    'supports_trigger_orders' => $capabilities->supportsTriggerOrders,
-                    'supports_attached_stop_loss_on_entry' => $capabilities->supportsAttachedStopLossOnEntry,
-                ],
-            );
-        }
         $attachedStopLossRequested = $capabilities->supportsAttachedStopLossOnEntry
-            && $plan->stop > 0.0
-            && !($context->exchange === Exchange::BITMART && $plan->orderType === 'market');
+            && $plan->stop > 0.0;
         $attachedTakeProfitRequested = $attachedStopLossRequested
             && $capabilities->supportsAttachedTakeProfitOnEntry
             && $plan->takeProfit > 0.0;
@@ -145,6 +128,33 @@ final class ExchangeExecutionService
         $leverageSet = null;
         if ($capabilities->requiresSeparateLeverageSubmit || $capabilities->supportsPerSymbolLeverage) {
             $leverageSet = $adapter->setLeverage($plan->symbol, $plan->leverage, $plan->openType);
+            if ($leverageSet === false) {
+                $this->positionsLogger->error('exchange_execution.leverage_setup_failed', [
+                    'symbol' => $plan->symbol,
+                    'leverage' => $plan->leverage,
+                    'client_order_id' => $clientOrderId,
+                    'decision_key' => $decisionKey,
+                ]);
+
+                return new ExecutionResult(
+                    clientOrderId: $clientOrderId,
+                    exchangeOrderId: null,
+                    status: ExecutionResult::STATUS_ERROR,
+                    raw: [
+                        'reason' => 'leverage_setup_failed',
+                        'leverage' => $plan->leverage,
+                        'leverage_submit_success' => false,
+                    ],
+                );
+            }
+        }
+
+        $positionBaseline = null;
+        if ($this->restingEntryBus instanceof MessageBusInterface) {
+            try {
+                $positionBaseline = $this->positionSize($adapter, $plan);
+            } catch (\Throwable) {
+            }
         }
 
         try {
@@ -192,6 +202,11 @@ final class ExchangeExecutionService
         }
 
         if (!$this->entryFilled($entryResult) && $this->entryActive($entryResult)) {
+            $resting = $this->seedRestingEntryWatch($plan, $context, $entryResult, $clientOrderId, $decisionKey, $mode, $contextBuilder, $leverageSet, $positionBaseline);
+            if ($resting instanceof ExecutionResult) {
+                return $resting;
+            }
+
             $cancel = $this->cancelEntryRemainder($adapter, $plan, $entryResult, $decisionKey);
             if (($cancel['filled_after_cancel'] ?? false) === true) {
                 $protection = $this->protectionEnforcer->emergencyCloseAfterEntryRisk(
@@ -285,6 +300,80 @@ final class ExchangeExecutionService
         return $this->executionResultFromProtection($clientOrderId, $entryResult, $protection, $leverageSet);
     }
 
+    private function seedRestingEntryWatch(
+        OrderPlanModel $plan,
+        ExchangeContext $context,
+        PlaceOrderResult $entryResult,
+        string $clientOrderId,
+        ?string $decisionKey,
+        ?string $mode,
+        ?LifecycleContextBuilder $contextBuilder,
+        ?bool $leverageSet,
+        ?float $positionBaseline,
+    ): ?ExecutionResult {
+        if (!$this->restingEntryBus instanceof MessageBusInterface
+            || $plan->orderType !== 'limit'
+            || !\in_array($plan->orderMode, [1, 4], true)
+            || $entryResult->exchangeOrderId === null
+            || $positionBaseline === null
+        ) {
+            return null;
+        }
+
+        $ttlSec = $this->tradeEntryConfigResolver->resolve($mode)->getLimitOrderTtlSec();
+        $lifecycle = $contextBuilder?->toArray() ?? [];
+        $lifecycle['exchange'] ??= $context->exchange->value;
+        $lifecycle['market_type'] ??= $context->marketType->value;
+
+        try {
+            $this->restingEntryBus->dispatch(
+                new LimitFillWatchMessage(
+                    symbol: $plan->symbol,
+                    exchangeOrderId: $entryResult->exchangeOrderId,
+                    clientOrderId: $clientOrderId,
+                    side: strtoupper($this->entryOrderSide($plan->side)->value),
+                    cancelAfterSec: $ttlSec,
+                    tries: 0,
+                    decisionKey: $decisionKey,
+                    lifecycleContext: $lifecycle,
+                    mode: $mode,
+                    plan: $plan->toWatchSnapshot(),
+                    positionBaseline: $positionBaseline,
+                ),
+                [new DelayStamp(self::LIMIT_WATCH_INITIAL_DELAY_MS)],
+            );
+        } catch (\Throwable $e) {
+            $this->positionsLogger->critical('exchange_execution.limit_watch_seed_failed', [
+                'symbol' => $plan->symbol,
+                'exchange_order_id' => $entryResult->exchangeOrderId,
+                'decision_key' => $decisionKey,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        $this->positionsLogger->info('exchange_execution.limit_watch.scheduled', [
+            'symbol' => $plan->symbol,
+            'exchange_order_id' => $entryResult->exchangeOrderId,
+            'client_order_id' => $clientOrderId,
+            'watch_seconds' => $ttlSec,
+            'decision_key' => $decisionKey,
+        ]);
+
+        return new ExecutionResult(
+            clientOrderId: $clientOrderId,
+            exchangeOrderId: $entryResult->exchangeOrderId,
+            status: ExecutionResult::STATUS_ENTRY_SUBMITTED,
+            raw: [
+                'reason' => 'entry_resting_limit_watch_scheduled',
+                'order' => $this->placeOrderResultPayload($entryResult),
+                'watch_seconds' => $ttlSec,
+                'leverage_submit_success' => $leverageSet,
+            ],
+        );
+    }
+
     public function preparePlan(
         OrderPlanModel $plan,
         ?string $mode = null,
@@ -353,19 +442,10 @@ final class ExchangeExecutionService
                 'decision_key' => $decisionKey,
                 'order_intent_id' => $orderIntentId,
                 'source' => 'exchange_execution_service',
+                'contract_size' => $plan->contractSize,
+                'stop_loss_price' => $plan->stop,
             ] + $executionMetadata,
         );
-    }
-
-    private function shouldRejectUnprotectableBitmartMarket(
-        ExchangeContext $context,
-        OrderPlanModel $plan,
-        ExchangeCapabilities $capabilities,
-    ): bool {
-        return $context->exchange === Exchange::BITMART
-            && $plan->orderType === 'market'
-            && $plan->stop > 0.0
-            && !$capabilities->supportsTriggerOrders;
     }
 
     private function skipBelowMinimum(
@@ -438,6 +518,7 @@ final class ExchangeExecutionService
                 symbol: $plan->symbol,
                 exchangeOrderId: $entryResult->exchangeOrderId,
                 clientOrderId: $entryResult->clientOrderId,
+                metadata: ['write_kind' => 'protective', 'reason' => 'entry_remainder'],
             ));
         } catch (\Throwable $e) {
             $this->positionsLogger->critical('exchange_execution.entry_cancel_exception', [

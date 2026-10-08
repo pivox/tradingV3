@@ -9,6 +9,8 @@ use App\Indicator\Message\IndicatorSnapshotPersistRequestMessage;
 use App\Indicator\Message\IndicatorSnapshotProjectionMessage;
 use App\Indicator\Service\IndicatorSnapshotProjector;
 use App\Provider\Context\ExchangeContext;
+use App\Provider\Context\UnsupportedExchangeException;
+use Symfony\Component\Messenger\Exception\UnrecoverableMessageHandlingException;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Messenger\Attribute\AsMessageHandler;
@@ -34,7 +36,11 @@ final class IndicatorSnapshotPersistRequestMessageHandler
         }
 
         $referenceTime = $this->resolveReferenceTime($message->requestedAt);
-        $exchangeContext = ExchangeContext::fromValues($message->exchange, $message->marketType);
+        try {
+            $exchangeContext = ExchangeContext::fromValues($message->exchange, $message->marketType);
+        } catch (UnsupportedExchangeException $exception) {
+            throw new UnrecoverableMessageHandlingException($exception->getMessage(), 0, $exception);
+        }
 
         foreach ($symbols as $symbol) {
             try {

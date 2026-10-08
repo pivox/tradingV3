@@ -157,7 +157,8 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         $result = (new CanonicalSetupRuleRuntime([]))->evaluate(
             $this->dayTradingLineage(),
             [
-                '4h' => self::indicatorInput('4h', '2026-08-10T08:00:00Z'),
+                // Newest CLOSED 4h candle at 10:00 (04:00-08:00); 08:00 would still be open.
+                '4h' => self::indicatorInput('4h', '2026-08-10T04:00:00Z'),
                 '1h' => self::indicatorInput('1h', '2026-08-10T09:00:00Z'),
                 '15m' => self::indicatorInput('15m', '2026-08-10T09:45:00Z'),
                 '5m' => self::indicatorInput('5m', '2026-08-10T09:55:00Z'),
@@ -179,7 +180,8 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         $result = (new CanonicalSetupRuleRuntime([]))->evaluate(
             $this->dayTradingLineage(),
             [
-                '4h' => self::indicatorInput('4h', '2026-08-10T08:00:00Z'),
+                // Newest CLOSED 4h candle at 10:00 (04:00-08:00); 08:00 would still be open.
+                '4h' => self::indicatorInput('4h', '2026-08-10T04:00:00Z'),
                 '1h' => self::indicatorInput('1h', '2026-08-10T09:00:00Z'),
                 '15m' => self::indicatorInput('15m', '2026-08-10T09:45:00Z'),
                 '5m' => self::indicatorInput('5m', '2026-08-10T09:00:00Z'),
@@ -190,6 +192,7 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
 
         self::assertFalse($result->passed);
         self::assertSame('critical_timeframe_stale', $result->reasonCode);
+        self::assertSame('5m', $result->trace['rejection']['timeframe']);
         self::assertSame('15m', $result->trace['execution_timeframe']);
         self::assertSame('sha256:', substr((string) $result->trace['config_hash'], 0, 7));
     }
@@ -199,7 +202,8 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         $result = (new CanonicalSetupRuleRuntime($this->passingConditions()))->evaluate(
             $this->dayTradingLineage(),
             [
-                '4h' => self::indicatorInput('4h', '2026-08-10T08:00:00Z'),
+                // Newest CLOSED 4h candle at 10:00 (04:00-08:00); 08:00 would still be open.
+                '4h' => self::indicatorInput('4h', '2026-08-10T04:00:00Z'),
                 '1h' => self::indicatorInput('1h', '2026-08-10T09:00:00Z', ['adx' => 25.0]),
                 '15m' => self::indicatorInput('15m', '2026-08-10T09:45:00Z'),
                 '5m' => self::indicatorInput('5m', '2026-08-10T09:55:00Z'),

@@ -64,12 +64,11 @@ final class FakeOnlyExchangeCallAuditTest extends TestCase
         );
     }
 
-    public function testServicesDoNotDecorateBitmartClientsForFakeAudit(): void
+    public function testServicesDecorateOkxAndHyperliquidClientsForFakeAudit(): void
     {
         $services = file_get_contents(__DIR__ . '/../../../config/services.yaml');
 
         self::assertIsString($services);
-        self::assertStringNotContainsString('app.http_client.exchange_guard.bitmart', $services);
         self::assertStringContainsString('app.http_client.exchange_guard.okx', $services);
         self::assertStringContainsString('app.http_client.exchange_guard.hyperliquid', $services);
     }

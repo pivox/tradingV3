@@ -108,6 +108,15 @@ final class PaperCanonicalOrderIntentRecorderTest extends KernelTestCase
         self::assertSame($effect->lineage->setupId, $lineage->getSetupId());
         self::assertSame($effect->provenance['run_id'], $lineage->getRunId());
         self::assertSame($effect->provenance['strategy_profile'], $lineage->getProfile());
+        // #132: the trade identity is derived from the decision, never drawn at random.
+        $expectedTradeId = 'itd:' . substr(hash('sha256', 'paper-canonical-trade:' . $effect->decisionKey), 0, 32);
+        self::assertSame($expectedTradeId, $lineage->getInternalTradeId());
+        self::assertSame($expectedTradeId, $intent->getInternalTradeId());
+        // #132 q: the candle that triggered the decision, in replay time, never the wall clock.
+        $step = \App\Common\Enum\Timeframe::from($effect->executionTimeframe)->getStepInSeconds();
+        $expectedCandleOpen = intdiv($effect->plan->observedAt->getTimestamp(), $step) * $step - $step;
+        self::assertSame($expectedCandleOpen, $intent->getCandleOpenTs()?->getTimestamp());
+        self::assertLessThanOrEqual($effect->plan->observedAt->getTimestamp(), $expectedCandleOpen + $step, 'The candle closed by the observation.');
         $lifecycle = (new TradeLineageManager($lineages, $this->em, new NullLogger()))
             ->lifecycleExtra($lineage);
         foreach (PaperExecutionProvenance::MODERN_KEYS as $key) {

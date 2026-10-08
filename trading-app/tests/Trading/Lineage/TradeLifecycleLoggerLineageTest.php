@@ -55,7 +55,7 @@ final class TradeLifecycleLoggerLineageTest extends KernelTestCase
             qty: '1',
             price: '100',
             runId: 'run-1',
-            exchange: 'bitmart',
+            exchange: 'okx',
             extra: [
                 'internal_trade_id' => 'itd-logger-1',
                 'trade_id' => 'itd-logger-1',
@@ -108,7 +108,7 @@ final class TradeLifecycleLoggerLineageTest extends KernelTestCase
             qty: '1',
             price: '100',
             runId: 'run-2',
-            exchange: 'bitmart',
+            exchange: 'okx',
             extra: [
                 'internal_trade_id' => str_repeat('i', 140),
                 'internal_position_id' => str_repeat('p', 140),
