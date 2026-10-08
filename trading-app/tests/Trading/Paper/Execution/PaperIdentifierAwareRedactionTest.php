@@ -376,7 +376,7 @@ final class PaperIdentifierAwareRedactionTest extends TestCase
 
     private static function cellADescriptor(): string
     {
-        $descriptor = file_get_contents(\dirname(__DIR__, 3) . '/Fixtures/PaperExecution/reservation-descriptor-redactor-false-positive.json');
+        $descriptor = file_get_contents(\dirname(__DIR__, 3) . '/Fixtures/PaperRedaction/reservation-descriptor-redactor-false-positive.json');
         self::assertIsString($descriptor);
         self::assertSame($descriptor, ReservationDescriptor::decode($descriptor)->encoded());
 
