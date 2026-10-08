@@ -69,6 +69,7 @@ nav:
       - "Recette runtime orchestrateur #188": reports/orchestrator-runtime-final-report.md
       - "Decision pre-mutative demo/testnet": reports/pre-mutative-demo-readiness-decision.md
       - "Baseline bad trades #132": reports/bad-trades-baseline.md
+      - "Récap 2026-10-08 OKX + Hyperliquid": recap-2026-10-08-okx-hyperliquid.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 
