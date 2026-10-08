@@ -1326,7 +1326,7 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
             {
             }
 
-            public function current(): ExchangeReadinessReport
+            public function current(?\App\TradingCore\Config\EffectiveTradingConfigRequest $identity = null): ExchangeReadinessReport
             {
                 return new ExchangeReadinessReport(
                     exchange: Exchange::HYPERLIQUID,

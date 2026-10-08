@@ -26,6 +26,7 @@ use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Hyperliquid\HyperliquidActionFactory;
 use App\Exchange\Hyperliquid\HyperliquidAssetResolver;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
+use App\Exchange\Hyperliquid\HyperliquidMutationReadinessProof;
 use App\Exchange\Hyperliquid\HyperliquidRestClientInterface;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
 use Psr\Clock\ClockInterface;
@@ -42,7 +43,13 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
         private HyperliquidActionFactory $actions,
         private HyperliquidConfig $config,
         private ClockInterface $clock,
+        private ?HyperliquidMutationReadinessProof $mutationProof = null,
     ) {
+    }
+
+    public function withMutationProof(HyperliquidMutationReadinessProof $proof): self
+    {
+        return new self($this->client, $this->assets, $this->actions, $this->config, $this->clock, $proof);
     }
 
     public function exchange(): Exchange
@@ -153,6 +160,7 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
 
     public function placeOrder(PlaceOrderRequest $request): PlaceOrderResult
     {
+        $this->assertMutationProven();
         $this->assertContext($request->exchange, $request->marketType);
         $this->config->assertTradingConfigured();
         $request = $this->withHyperliquidExecutionPrice($request);
@@ -215,6 +223,7 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
 
     public function cancelOrder(CancelOrderRequest $request): CancelOrderResult
     {
+        $this->assertMutationProven();
         $this->assertContext($request->exchange, $request->marketType);
         $this->config->assertTradingConfigured();
         $assetId = $this->assets->assetId($request->symbol);
@@ -263,6 +272,7 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
 
     public function setLeverage(string $symbol, int $leverage, string $marginMode): bool
     {
+        $this->assertMutationProven();
         $this->config->assertTradingConfigured();
         $response = $this->client->exchange($this->actions->updateLeverage(
             $this->assets->assetId($symbol),
@@ -544,6 +554,13 @@ final readonly class HyperliquidExchangeAdapter implements ExchangeAdapterInterf
         }
 
         return null;
+    }
+
+    private function assertMutationProven(): void
+    {
+        if (!$this->mutationProof instanceof HyperliquidMutationReadinessProof) {
+            throw new \LogicException('hyperliquid_mutation_requires_testnet_port');
+        }
     }
 
     private function assertContext(Exchange $exchange, MarketType $marketType): void

@@ -23,10 +23,12 @@ use App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceProviderInterface;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface;
 use App\Provider\Hyperliquid\HyperliquidNonceManagerInterface;
 use App\Provider\Hyperliquid\HyperliquidNonceScope;
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Execution\Dto\ExecutionRequest;
 use App\TradingCore\Execution\Dto\ExecutionResult;
 use App\TradingCore\Execution\Enum\ExecutionMode;
 use App\TradingCore\Execution\Enum\ExecutionStatus;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\Execution\Port\ExecutionPortInterface;
 use App\TradingCore\Execution\Safety\DemoTradingKillSwitchService;
 use App\TradingCore\Execution\Safety\DemoTradingMutationAttempt;
@@ -105,7 +107,7 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
             return $this->tripAndFail($plan, $correlationId, $reason);
         }
 
-        $initialReport = $this->reportOrNull();
+        $initialReport = $this->reportOrNull($request);
         $initialReasons = $this->initialReasons($request, $initialReport);
         if ($initialReasons !== []) {
             return $this->completeAttempt(
@@ -197,7 +199,7 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
     ): ExecutionResult
     {
         $plan = $request->orderPlan;
-        $report = $this->reportOrNull();
+        $report = $this->reportOrNull($request);
         $reasons = $this->initialReasons($request, $report);
         if ($reasons !== [] || !($report instanceof ExchangeReadinessReport)) {
             return $this->rejected($plan, 'hyperliquid_testnet_revalidation_rejected', $reasons ?: ['readiness_report_unavailable']);
@@ -515,10 +517,37 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         return array_values(array_unique($reasons));
     }
 
-    private function reportOrNull(): ?ExchangeReadinessReport
+    private function reportOrNull(ExecutionRequest $request): ?ExchangeReadinessReport
     {
         try {
-            return $this->readiness->current();
+            return $this->readiness->current($this->identity($request));
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function identity(ExecutionRequest $request): ?EffectiveTradingConfigRequest
+    {
+        $raw = $request->metadata['canonical_identity'] ?? null;
+        if (!is_array($raw)) {
+            return null;
+        }
+        foreach (['mode_id', 'mode_version', 'setup_id', 'setup_version', 'exchange', 'environment', 'side'] as $field) {
+            if (!is_string($raw[$field] ?? null)) {
+                return null;
+            }
+        }
+        try {
+            return new EffectiveTradingConfigRequest(
+                $raw['mode_id'],
+                $raw['mode_version'],
+                $raw['setup_id'],
+                $raw['setup_version'],
+                $raw['exchange'],
+                $raw['environment'],
+                $raw['side'],
+                ShadowExecutionCapability::tryFrom((string) ($raw['execution_capability'] ?? '')),
+            );
         } catch (\Throwable) {
             return null;
         }

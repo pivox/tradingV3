@@ -19,6 +19,7 @@ use App\Exchange\Readiness\ExchangeReadinessEvaluator;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Registry\ExchangeProviderBundle;
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface;
 use Psr\Clock\ClockInterface;
 
@@ -42,10 +43,10 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
     ) {
     }
 
-    public function current(): ExchangeReadinessReport
+    public function current(?EffectiveTradingConfigRequest $identity = null): ExchangeReadinessReport
     {
         $warnings = [];
-        $runtimeConfig = $this->runtimeConfig($warnings);
+        $runtimeConfig = $this->runtimeConfig($identity, $warnings);
         $maxNotional = $runtimeConfig->maxNotional;
         if ($maxNotional !== null && (!is_finite($maxNotional) || $maxNotional <= 0.0)) {
             $warnings[] = 'positive_max_notional_required';
@@ -475,10 +476,15 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
     }
 
     /** @param list<string> $warnings */
-    private function runtimeConfig(array &$warnings): HyperliquidMutationReadinessConfig
+    private function runtimeConfig(?EffectiveTradingConfigRequest $identity, array &$warnings): HyperliquidMutationReadinessConfig
     {
+        if (!$identity instanceof EffectiveTradingConfigRequest) {
+            $warnings[] = 'canonical_identity_required';
+
+            return HyperliquidMutationReadinessConfig::failClosed();
+        }
         try {
-            return $this->readinessConfig->current();
+            return $this->readinessConfig->forIdentity($identity);
         } catch (\Throwable) {
             $warnings[] = 'hyperliquid_readiness_config_unavailable';
 

@@ -58,6 +58,33 @@ final class HyperliquidExchangeAdapterTest extends TestCase
         self::assertSame($this->expectedCloid('cid-hl-1'), $client->lastExchangeAction['orders'][0]['c'] ?? null);
     }
 
+    public function testWritesAreRefusedWithoutAGateProof(): void
+    {
+        $client = new FakeHyperliquidClient();
+        $adapter = $this->adapter($client, proven: false);
+        $calls = [
+            fn () => $adapter->placeOrder($this->placeOrderRequest()),
+            fn () => $adapter->cancelOrder(new CancelOrderRequest(
+                exchange: Exchange::HYPERLIQUID,
+                marketType: MarketType::PERPETUAL,
+                symbol: 'BTCUSDC',
+                exchangeOrderId: null,
+                clientOrderId: 'cid-hl-1',
+            )),
+            fn () => $adapter->setLeverage('BTCUSDC', 2, 'isolated'),
+        ];
+
+        foreach ($calls as $call) {
+            try {
+                $call();
+                self::fail('Write must be refused without a readiness proof.');
+            } catch (\LogicException $exception) {
+                self::assertSame('hyperliquid_mutation_requires_testnet_port', $exception->getMessage());
+            }
+        }
+        self::assertSame([], $client->lastExchangeAction);
+    }
+
     public function testMapsCancelByClientOrderId(): void
     {
         $client = new FakeHyperliquidClient();
@@ -138,11 +165,11 @@ final class HyperliquidExchangeAdapterTest extends TestCase
         $config->assertMainnetAllowed();
     }
 
-    private function adapter(?FakeHyperliquidClient $client = null): HyperliquidExchangeAdapter
+    private function adapter(?FakeHyperliquidClient $client = null, bool $proven = true): HyperliquidExchangeAdapter
     {
         $client ??= new FakeHyperliquidClient();
 
-        return new HyperliquidExchangeAdapter(
+        $adapter = new HyperliquidExchangeAdapter(
             $client,
             new HyperliquidAssetResolver($client),
             new HyperliquidActionFactory(),
@@ -154,6 +181,8 @@ final class HyperliquidExchangeAdapterTest extends TestCase
             ),
             $this->fixedClock(),
         );
+
+        return $proven ? $adapter->withMutationProof(\App\Exchange\Hyperliquid\HyperliquidMutationReadinessProof::issuedBy(new \App\TradingCore\Execution\Hyperliquid\HyperliquidMutationReadinessGate(), 'scalping@1.1.0/scalping.pullback.long@1.1.0/long', str_repeat('a', 64))) : $adapter;
     }
 
     private function placeOrderRequest(): PlaceOrderRequest

@@ -27,7 +27,7 @@ final class HyperliquidExchangeAdapterContractTest extends ExchangeAdapterContra
     {
         $client = new ContractHyperliquidClient();
         $actions = new HyperliquidActionFactory();
-        $this->adapter = new HyperliquidExchangeAdapter(
+        $this->adapter = (new HyperliquidExchangeAdapter(
             $client,
             new HyperliquidAssetResolver($client),
             $actions,
@@ -38,7 +38,7 @@ final class HyperliquidExchangeAdapterContractTest extends ExchangeAdapterContra
                 testnetAccountAddress: '0x0000000000000000000000000000000000000001',
             ),
             $this->fixedClock(),
-        );
+        ))->withMutationProof(\App\Exchange\Hyperliquid\HyperliquidMutationReadinessProof::issuedBy(new \App\TradingCore\Execution\Hyperliquid\HyperliquidMutationReadinessGate(), 'scalping@1.1.0/scalping.pullback.long@1.1.0/long', str_repeat('a', 64)));
     }
 
     protected function adapter(): ExchangeAdapterInterface

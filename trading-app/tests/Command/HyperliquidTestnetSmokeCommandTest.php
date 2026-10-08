@@ -113,8 +113,53 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         $exitCode = $tester->execute($this->input($this->planFile()));
 
         self::assertSame(Command::FAILURE, $exitCode);
-        self::assertSame("Smoke execution refused: mutation readiness blocked.\n", $tester->getDisplay());
+        self::assertStringEndsWith("Smoke execution refused: mutation readiness blocked.\n", $tester->getDisplay());
         self::assertSame(1, $probe->calls);
+        self::assertSame(0, $port->calls);
+    }
+
+    public function testPrintsOneVerdictPerGateConditionAndPlacesNothingWhenTestnetTradingFlagIsOff(): void
+    {
+        $port = new SmokeTestPort($this->accepted());
+        $config = new HyperliquidConfig(
+            environment: 'testnet',
+            apiBaseUri: 'https://api.hyperliquid-testnet.xyz',
+            network: 'testnet',
+            mainnetEnabled: false,
+            globalDemoTradingEnabled: true,
+            testnetTradingEnabled: false,
+            testnetAccountAddress: '0x1111111111111111111111111111111111111111',
+            testnetAgentAddress: '0x2222222222222222222222222222222222222222',
+        );
+        $tester = $this->tester($port, config: $config);
+
+        $exitCode = $tester->execute($this->input($this->planFile()));
+
+        $lines = explode("\n", trim($tester->getDisplay()));
+        $verdicts = array_values(array_filter($lines, static fn (string $line): bool => str_starts_with($line, 'verdict ')));
+        self::assertSame(Command::FAILURE, $exitCode);
+        self::assertCount(28, $verdicts);
+        self::assertContains('verdict fail hyperliquid_testnet_trading_must_be_enabled', $verdicts);
+        self::assertContains('verdict pass hyperliquid_exchange_required', $verdicts);
+        self::assertSame(
+            ['verdict fail hyperliquid_testnet_trading_must_be_enabled'],
+            array_values(array_filter($verdicts, static fn (string $line): bool => str_starts_with($line, 'verdict fail'))),
+        );
+        self::assertSame('Smoke execution refused: mutation readiness blocked.', end($lines));
+        self::assertSame(0, $port->calls);
+    }
+
+    public function testRefusesInvalidCanonicalIdentityBeforeReadiness(): void
+    {
+        $port = new SmokeTestPort($this->accepted());
+        $probe = new SmokeTestReadinessProbe($this->report());
+        $tester = $this->tester($port, $probe);
+
+        $exitCode = $tester->execute(['--mode-id' => 'scalper_micro'] + $this->input($this->planFile()));
+
+        self::assertSame(Command::FAILURE, $exitCode);
+        self::assertSame("Smoke execution refused: canonical identity invalid.\n", $tester->getDisplay());
+        self::assertSame(0, $probe->calls);
         self::assertSame(0, $port->calls);
     }
 
@@ -127,7 +172,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         $exitCode = $tester->execute($this->input($this->planFile()));
 
         self::assertSame(Command::FAILURE, $exitCode);
-        self::assertSame("Smoke execution refused: mutation readiness blocked.\n", $tester->getDisplay());
+        self::assertStringEndsWith("Smoke execution refused: mutation readiness blocked.\n", $tester->getDisplay());
         self::assertSame(1, $probe->calls);
         self::assertSame(0, $port->calls);
     }
@@ -417,7 +462,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         $exitCode = $tester->execute($this->input($this->planFile()));
 
         self::assertSame(Command::SUCCESS, $exitCode);
-        self::assertSame("status=accepted\nclient_order_id=CID-HL-1\nexchange_order_id=123456789\n", $tester->getDisplay());
+        self::assertStringEndsWith("status=accepted\nclient_order_id=CID-HL-1\nexchange_order_id=123456789\n", $tester->getDisplay());
         self::assertStringNotContainsString('secret', $tester->getDisplay());
         self::assertSame(1, $port->calls);
         self::assertNotNull($port->request);
@@ -449,7 +494,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         $exitCode = $tester->execute($this->input($this->planFile()));
 
         self::assertSame(Command::FAILURE, $exitCode);
-        self::assertSame("status=ambiguous\n", $tester->getDisplay());
+        self::assertStringEndsWith("status=ambiguous\n", $tester->getDisplay());
     }
 
     /** @return iterable<string, array{?string,?string,array<string,mixed>}> */
@@ -479,7 +524,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         $exitCode = $tester->execute($this->input($this->planFile()));
 
         self::assertSame(Command::FAILURE, $exitCode);
-        self::assertSame('status=' . $status->value . "\n", $tester->getDisplay());
+        self::assertStringEndsWith('status=' . $status->value . "\n", $tester->getDisplay());
     }
 
     /** @return iterable<string, array{ExecutionStatus}> */
@@ -499,7 +544,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         $exitCode = $tester->execute($this->input($this->planFile()));
 
         self::assertSame(Command::FAILURE, $exitCode);
-        self::assertSame("Smoke execution failed.\n", $tester->getDisplay());
+        self::assertStringEndsWith("Smoke execution failed.\n", $tester->getDisplay());
         self::assertSame(1, $port->calls);
     }
 
@@ -533,7 +578,14 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
     /** @return array<string,mixed> */
     private function input(string $path, mixed $confirmation = self::CONFIRMATION, mixed $decision = self::DECISION): array
     {
-        $input = ['plan-file' => $path];
+        $input = [
+            'plan-file' => $path,
+            '--mode-id' => 'scalping',
+            '--mode-version' => '1.1.0',
+            '--setup-id' => 'scalping.pullback.long',
+            '--setup-version' => '1.1.0',
+            '--side' => 'long',
+        ];
         if ($confirmation !== null) {
             $input['--confirm'] = $confirmation;
         }
@@ -719,7 +771,7 @@ final class SmokeTestReadinessProbe implements HyperliquidMutationReadinessProbe
     ) {
     }
 
-    public function current(): ExchangeReadinessReport
+    public function current(?\App\TradingCore\Config\EffectiveTradingConfigRequest $identity = null): ExchangeReadinessReport
     {
         ++$this->calls;
         if ($this->exception instanceof \Throwable) {

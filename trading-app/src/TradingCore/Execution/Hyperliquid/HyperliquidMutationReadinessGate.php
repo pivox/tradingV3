@@ -7,6 +7,7 @@ namespace App\TradingCore\Execution\Hyperliquid;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
+use App\Exchange\Hyperliquid\HyperliquidMutationReadinessProof;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 
@@ -18,36 +19,54 @@ final class HyperliquidMutationReadinessGate
     public function blockingReasons(ExchangeReadinessReport $report, HyperliquidConfig $config): array
     {
         $reasons = [];
+        foreach ($this->verdicts($report, $config) as $condition => $passed) {
+            $passed || $reasons[] = $condition;
+        }
 
-        $report->exchange === Exchange::HYPERLIQUID || $reasons[] = 'hyperliquid_exchange_required';
-        $report->marketType === MarketType::PERPETUAL || $reasons[] = 'perpetual_market_required';
-        $report->environment === 'testnet' || $reasons[] = 'testnet_environment_required';
-        $config->configuredEnvironment() === 'testnet' || $reasons[] = 'hyperliquid_testnet_environment_required';
-        $config->normalizedNetwork() === 'testnet' || $reasons[] = 'hyperliquid_testnet_network_required';
-        $config->apiBaseUri() === self::TESTNET_ENDPOINT || $reasons[] = 'hyperliquid_testnet_endpoint_required';
-        $config->globalDemoTradingEnabled || $reasons[] = 'global_demo_trading_must_be_enabled';
-        $config->testnetTradingEnabled || $reasons[] = 'hyperliquid_testnet_trading_must_be_enabled';
-        $report->readyLevel === ExchangeReadinessLevel::DemoTestnetCandidate || $reasons[] = 'demo_testnet_candidate_required';
-        $report->accountReadable || $reasons[] = 'account_readable_not_proven';
-        $report->permissionsRead || $reasons[] = 'read_permission_not_proven';
-        $report->permissionsTrade || $reasons[] = 'trade_permission_not_proven';
-        $report->collateralReadable || $reasons[] = 'collateral_readable_not_proven';
-        $report->privateObservability || $reasons[] = 'private_observability_not_ready';
-        $report->pollingReady || $reasons[] = 'hyperliquid_polling_not_ready';
-        $report->demoTestnetWriteGuard || $reasons[] = 'demo_testnet_write_guard_not_ready';
-        $report->stopLossCapability || $reasons[] = 'stop_loss_capability_not_ready';
-        $report->signerConfigured || $reasons[] = 'hyperliquid_signer_not_configured';
-        $report->signerMatchesAccount || $reasons[] = 'hyperliquid_signer_account_relation_not_ready';
-        $report->nonceStoreReady || $reasons[] = 'hyperliquid_nonce_store_not_ready';
-        $report->mainnetWriteGuard || $reasons[] = 'mainnet_write_guard_not_ready';
-        !$config->mainnetEnabled || $reasons[] = 'hyperliquid_mainnet_must_be_disabled';
-        !$report->killSwitch || $reasons[] = 'kill_switch_enabled';
-        $this->hasProfileEvidence($report) || $reasons[] = 'effective_config_profile_required';
-        $this->hasConfigHash($report) || $reasons[] = 'effective_config_hash_required';
-        $this->hasAllowList($report) || $reasons[] = 'market_allow_list_required';
-        $this->hasPositiveMaxNotional($report) || $reasons[] = 'positive_max_notional_required';
+        return $reasons;
+    }
 
-        return array_values(array_unique($reasons));
+    public function issueProof(ExchangeReadinessReport $report, HyperliquidConfig $config): ?HyperliquidMutationReadinessProof
+    {
+        if ($this->blockingReasons($report, $config) !== [] || $report->blockingErrors !== []) {
+            return null;
+        }
+
+        return HyperliquidMutationReadinessProof::issuedBy($this, (string) $report->configProfile, (string) $report->configHash);
+    }
+
+    /** @return array<string, bool> condition (the blocking reason it raises when failing) => passed */
+    public function verdicts(ExchangeReadinessReport $report, HyperliquidConfig $config): array
+    {
+        return [
+            'hyperliquid_exchange_required' => $report->exchange === Exchange::HYPERLIQUID,
+            'perpetual_market_required' => $report->marketType === MarketType::PERPETUAL,
+            'testnet_environment_required' => $report->environment === 'testnet',
+            'hyperliquid_testnet_environment_required' => $config->configuredEnvironment() === 'testnet',
+            'hyperliquid_testnet_network_required' => $config->normalizedNetwork() === 'testnet',
+            'hyperliquid_testnet_endpoint_required' => $config->apiBaseUri() === self::TESTNET_ENDPOINT,
+            'global_demo_trading_must_be_enabled' => $config->globalDemoTradingEnabled,
+            'hyperliquid_testnet_trading_must_be_enabled' => $config->testnetTradingEnabled,
+            'demo_testnet_candidate_required' => $report->readyLevel === ExchangeReadinessLevel::DemoTestnetCandidate,
+            'account_readable_not_proven' => $report->accountReadable,
+            'read_permission_not_proven' => $report->permissionsRead,
+            'trade_permission_not_proven' => $report->permissionsTrade,
+            'collateral_readable_not_proven' => $report->collateralReadable,
+            'private_observability_not_ready' => $report->privateObservability,
+            'hyperliquid_polling_not_ready' => $report->pollingReady,
+            'demo_testnet_write_guard_not_ready' => $report->demoTestnetWriteGuard,
+            'stop_loss_capability_not_ready' => $report->stopLossCapability,
+            'hyperliquid_signer_not_configured' => $report->signerConfigured,
+            'hyperliquid_signer_account_relation_not_ready' => $report->signerMatchesAccount,
+            'hyperliquid_nonce_store_not_ready' => $report->nonceStoreReady,
+            'mainnet_write_guard_not_ready' => $report->mainnetWriteGuard,
+            'hyperliquid_mainnet_must_be_disabled' => !$config->mainnetEnabled,
+            'kill_switch_enabled' => !$report->killSwitch,
+            'effective_config_profile_required' => $this->hasProfileEvidence($report),
+            'effective_config_hash_required' => $this->hasConfigHash($report),
+            'market_allow_list_required' => $this->hasAllowList($report),
+            'positive_max_notional_required' => $this->hasPositiveMaxNotional($report),
+        ];
     }
 
     private function hasProfileEvidence(ExchangeReadinessReport $report): bool

@@ -1495,7 +1495,7 @@ final class TestnetPortAttemptStore implements HyperliquidExecutionAttemptStoreI
 final readonly class TestnetPortReadinessProbe implements HyperliquidMutationReadinessProbeInterface
 {
     public function __construct(private ExchangeReadinessReport $report) {}
-    public function current(): ExchangeReadinessReport { return $this->report; }
+    public function current(?\App\TradingCore\Config\EffectiveTradingConfigRequest $identity = null): ExchangeReadinessReport { return $this->report; }
 }
 
 final class TestnetPortMetadataProvider implements HyperliquidInstrumentMetadataProviderInterface
