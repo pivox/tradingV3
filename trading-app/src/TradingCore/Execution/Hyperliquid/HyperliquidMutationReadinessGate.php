@@ -10,6 +10,8 @@ use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Hyperliquid\HyperliquidMutationReadinessProof;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
+use Psr\Clock\ClockInterface;
+use Symfony\Component\Clock\Clock;
 
 final class HyperliquidMutationReadinessGate
 {
@@ -17,9 +19,12 @@ final class HyperliquidMutationReadinessGate
 
     private readonly string $proofSecret;
 
-    public function __construct()
+    private readonly ClockInterface $clock;
+
+    public function __construct(?ClockInterface $clock = null, private readonly int $proofLifetimeSeconds = 60)
     {
         $this->proofSecret = random_bytes(32);
+        $this->clock = $clock ?? new Clock();
     }
 
     /** @return list<string> */
@@ -33,27 +38,49 @@ final class HyperliquidMutationReadinessGate
         return $reasons;
     }
 
-    public function issueProof(ExchangeReadinessReport $report, HyperliquidConfig $config): ?HyperliquidMutationReadinessProof
+    public function issueProof(ExchangeReadinessReport $report, HyperliquidConfig $config, string $side): ?HyperliquidMutationReadinessProof
     {
-        if ($this->blockingReasons($report, $config) !== [] || $report->blockingErrors !== []) {
+        if ($this->blockingReasons($report, $config) !== [] || $report->blockingErrors !== [] || !in_array($side, ['long', 'short'], true)) {
             return null;
         }
 
         $profile = (string) $report->configProfile;
         $configHash = (string) $report->configHash;
-        $issuedAt = time();
+        $symbols = array_values($report->allowedSymbols);
+        $maxNotional = (float) $report->maxNotional;
+        $issuedAt = $this->clock->now()->getTimestamp();
 
-        return new HyperliquidMutationReadinessProof($profile, $configHash, $issuedAt, $this->mac($profile, $configHash, $issuedAt));
+        return new HyperliquidMutationReadinessProof(
+            $profile,
+            $configHash,
+            $side,
+            $symbols,
+            $maxNotional,
+            $issuedAt,
+            $this->mac($profile, $configHash, $side, $symbols, $maxNotional, $issuedAt),
+        );
     }
 
     public function isGenuine(HyperliquidMutationReadinessProof $proof): bool
     {
-        return hash_equals($this->mac($proof->profile, $proof->configHash, $proof->issuedAt), $proof->mac);
+        $age = $this->clock->now()->getTimestamp() - $proof->issuedAt;
+
+        return $age >= 0
+            && $age <= $this->proofLifetimeSeconds
+            && hash_equals(
+                $this->mac($proof->profile, $proof->configHash, $proof->side, $proof->allowedSymbols, $proof->maxNotional, $proof->issuedAt),
+                $proof->mac,
+            );
     }
 
-    private function mac(string $profile, string $configHash, int $issuedAt): string
+    /** @param list<string> $symbols */
+    private function mac(string $profile, string $configHash, string $side, array $symbols, float $maxNotional, int $issuedAt): string
     {
-        return hash_hmac('sha256', json_encode([$profile, $configHash, $issuedAt], JSON_THROW_ON_ERROR), $this->proofSecret);
+        return hash_hmac(
+            'sha256',
+            json_encode([$profile, $configHash, $side, $symbols, $maxNotional, $issuedAt], JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION),
+            $this->proofSecret,
+        );
     }
 
     /** @return array<string, bool> condition (the blocking reason it raises when failing) => passed */

@@ -85,10 +85,91 @@ final class HyperliquidExchangeAdapterTest extends TestCase
         self::assertSame([], $client->lastExchangeAction);
     }
 
+    /** @return iterable<string, array{string}> */
+    public static function scopeViolations(): iterable
+    {
+        yield 'symbol' => ['proof_scope_symbol'];
+        yield 'notional' => ['proof_scope_notional'];
+        yield 'side' => ['proof_scope_side'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('scopeViolations')]
+    public function testPlaceOrderIsRefusedOutsideTheProofScope(string $violation): void
+    {
+        $client = new FakeHyperliquidClient();
+        $cleared = match ($violation) {
+            'proof_scope_symbol' => new \App\Tests\Support\ClearedHyperliquidMutationGate(),
+            'proof_scope_notional' => new \App\Tests\Support\ClearedHyperliquidMutationGate(maxNotional: 100.0),
+            default => new \App\Tests\Support\ClearedHyperliquidMutationGate(side: 'short'),
+        };
+        $request = $this->placeOrderRequest();
+        if ($violation === 'proof_scope_symbol') {
+            $request = new PlaceOrderRequest(...[...get_object_vars($request), 'symbol' => 'ETHUSDC']);
+        }
+
+        try {
+            $this->adapter($client, cleared: $cleared)->placeOrder($request);
+            self::fail('Out-of-scope write must be refused.');
+        } catch (\LogicException $exception) {
+            self::assertSame($violation, $exception->getMessage());
+        }
+        self::assertSame([], $client->lastExchangeAction);
+    }
+
+    public function testCancelAndLeverageAreCheckedForSymbolOnly(): void
+    {
+        $client = new FakeHyperliquidClient();
+        $adapter = $this->adapter($client, cleared: new \App\Tests\Support\ClearedHyperliquidMutationGate(side: 'short', maxNotional: 1.0));
+
+        self::assertTrue($adapter->setLeverage('BTCUSDC', 2, 'isolated'));
+        foreach ([
+            fn () => $adapter->setLeverage('ETHUSDC', 2, 'isolated'),
+            fn () => $adapter->cancelOrder(new CancelOrderRequest(Exchange::HYPERLIQUID, MarketType::PERPETUAL, 'ETHUSDC', null, 'cid-hl-1')),
+        ] as $call) {
+            try {
+                $call();
+                self::fail('Out-of-scope symbol must be refused.');
+            } catch (\LogicException $exception) {
+                self::assertSame('proof_scope_symbol', $exception->getMessage());
+            }
+        }
+        self::assertTrue($adapter->cancelOrder(new CancelOrderRequest(Exchange::HYPERLIQUID, MarketType::PERPETUAL, 'BTCUSDC', null, 'cid-hl-1'))->cancelled);
+    }
+
+    public function testExpiredProofIsRefused(): void
+    {
+        $clock = new \Symfony\Component\Clock\MockClock('2026-01-01T00:00:00Z');
+        $cleared = new \App\Tests\Support\ClearedHyperliquidMutationGate(clock: $clock, lifetime: 60);
+        $client = new FakeHyperliquidClient();
+        $adapter = $this->adapter($client, cleared: $cleared);
+
+        self::assertTrue($adapter->placeOrder($this->placeOrderRequest())->accepted);
+        $clock->sleep(61);
+
+        $this->expectExceptionObject(new \LogicException('hyperliquid_mutation_requires_testnet_port'));
+        $adapter->placeOrder($this->placeOrderRequest());
+    }
+
+    public function testFreshProofIsRefusedWhenTheDurableKillSwitchIsTripped(): void
+    {
+        $client = new FakeHyperliquidClient();
+        $killSwitch = new \App\Tests\Support\ToggleHyperliquidKillSwitch();
+        $adapter = $this->adapter($client, killSwitch: $killSwitch);
+        $killSwitch->tripped = true;
+
+        try {
+            $adapter->placeOrder($this->placeOrderRequest());
+            self::fail('Tripped kill switch must refuse writes.');
+        } catch (\LogicException $exception) {
+            self::assertSame('hyperliquid_mutation_kill_switch_tripped', $exception->getMessage());
+        }
+        self::assertSame([], $client->lastExchangeAction);
+    }
+
     public function testHandBuiltProofIsRejectedByTheAdapter(): void
     {
         $client = new FakeHyperliquidClient();
-        $forged = new \App\Exchange\Hyperliquid\HyperliquidMutationReadinessProof('p', str_repeat('a', 64), time(), str_repeat('0', 64));
+        $forged = new \App\Exchange\Hyperliquid\HyperliquidMutationReadinessProof('p', str_repeat('a', 64), 'long', ['BTCUSDT'], 1.0e6, time(), str_repeat('0', 64));
         $adapter = $this->adapter($client, proven: false)->withMutationProof($forged);
 
         try {
@@ -190,7 +271,7 @@ final class HyperliquidExchangeAdapterTest extends TestCase
         $config->assertMainnetAllowed();
     }
 
-    private function adapter(?FakeHyperliquidClient $client = null, bool $proven = true, ?\App\Tests\Support\ClearedHyperliquidMutationGate $cleared = null): HyperliquidExchangeAdapter
+    private function adapter(?FakeHyperliquidClient $client = null, bool $proven = true, ?\App\Tests\Support\ClearedHyperliquidMutationGate $cleared = null, ?\App\Tests\Support\ToggleHyperliquidKillSwitch $killSwitch = null): HyperliquidExchangeAdapter
     {
         $cleared ??= new \App\Tests\Support\ClearedHyperliquidMutationGate();
         $client ??= new FakeHyperliquidClient();
@@ -207,6 +288,7 @@ final class HyperliquidExchangeAdapterTest extends TestCase
             ),
             $this->fixedClock(),
             $cleared->gate,
+            $killSwitch ?? new \App\Tests\Support\ToggleHyperliquidKillSwitch(),
         );
 
         return $proven ? $adapter->withMutationProof($cleared->proof) : $adapter;

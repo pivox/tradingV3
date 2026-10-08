@@ -40,6 +40,7 @@ final class HyperliquidExchangeAdapterContractTest extends ExchangeAdapterContra
             ),
             $this->fixedClock(),
             $cleared->gate,
+            new \App\Tests\Support\ToggleHyperliquidKillSwitch(),
         ))->withMutationProof($cleared->proof);
     }
 

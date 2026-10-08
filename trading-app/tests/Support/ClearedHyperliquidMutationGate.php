@@ -16,10 +16,17 @@ final class ClearedHyperliquidMutationGate
 {
     public readonly HyperliquidMutationReadinessGate $gate;
     public readonly HyperliquidMutationReadinessProof $proof;
+    private readonly float $maxNotional;
 
-    public function __construct(string $profile = 'scalping_1_1_0.pullback.long_1_1_0.long')
-    {
-        $this->gate = new HyperliquidMutationReadinessGate();
+    public function __construct(
+        string $profile = 'scalping_1_1_0.pullback.long_1_1_0.long',
+        string $side = 'long',
+        float $maxNotional = 1_000_000.0,
+        ?\Psr\Clock\ClockInterface $clock = null,
+        int $lifetime = 60,
+    ) {
+        $this->gate = new HyperliquidMutationReadinessGate($clock, $lifetime);
+        $this->maxNotional = $maxNotional;
         $proof = $this->gate->issueProof($this->report($profile), new HyperliquidConfig(
             environment: 'testnet',
             apiBaseUri: 'https://api.hyperliquid-testnet.xyz',
@@ -29,7 +36,7 @@ final class ClearedHyperliquidMutationGate
             testnetTradingEnabled: true,
             testnetAccountAddress: '0x1111111111111111111111111111111111111111',
             testnetAgentAddress: '0x2222222222222222222222222222222222222222',
-        ));
+        ), $side);
         $this->proof = $proof ?? throw new \LogicException('gate_not_cleared');
     }
 
@@ -61,7 +68,7 @@ final class ClearedHyperliquidMutationGate
             killSwitch: false,
             allowedSymbols: ['BTCUSDT'],
             allowedMarkets: ['perpetual'],
-            maxNotional: 25.0,
+            maxNotional: $this->maxNotional,
             configHash: str_repeat('a', 64),
             blockingErrors: [],
             warnings: [],
