@@ -255,7 +255,7 @@ const OrchestrationCockpitPage = () => {
     // en `ok=false` / `payload_sent=null` — aucun /api/mtf/run n'est envoyé. Ce
     // garde précède la vérif de matérialisation côté runner, donc on l'applique en
     // premier ici. Cocher « Forcer dry-run » les rend dry → exécutables.
-    const liveRefusedSets = enabledMtfSets.filter((s) => !effectiveDryRun(s));
+    const liveRefusedSets = enabledMtfSets.filter((s) => s.runnable !== false && !effectiveDryRun(s));
     // OKX/Hyperliquid : live interdit même après readiness (politique permanente) ;
     // les autres (fake) ne sont refusés que dans la phase actuelle.
     const forbiddenLiveSets = liveRefusedSets.filter((s) => LIVE_FORBIDDEN_EXCHANGES.includes(s.exchange));
@@ -266,7 +266,12 @@ const OrchestrationCockpitPage = () => {
     // n'appelle pas Symfony. On juge la matérialisation sur `effective_payload`,
     // LE payload effectif calculé par l'API Python (SetRead.effective_payload,
     // PY-007) : `null` ⇔ non matérialisé, exactement comme côté runner.
-    const effectiveDrySets = enabledMtfSets.filter((s) => effectiveDryRun(s));
+    // Les sets d'un exchange retiré (`runnable === false`, ex. bitmart) ne sont
+    // jamais exécutables : l'API les marque `unsupported_reason` et le runner les
+    // finit en échec. Ils bloquent le run comme un set non matérialisé.
+    const unsupportedSets = enabledMtfSets.filter((s) => s.runnable === false);
+    const supportedSets = enabledMtfSets.filter((s) => s.runnable !== false);
+    const effectiveDrySets = supportedSets.filter((s) => effectiveDryRun(s));
     const runnableSets = effectiveDrySets.filter((s) => s.effective_payload != null);
     const pendingMaterializationSets = effectiveDrySets.filter((s) => s.effective_payload == null);
     // Les deux autres états de set, à distinguer dans la preview : les sets
@@ -462,6 +467,7 @@ const OrchestrationCockpitPage = () => {
                             // l'opérateur doit rafraîchir (matérialisation) ou cocher
                             // « Forcer dry-run » / retirer le set live.
                             || pendingMaterializationSets.length > 0
+                            || unsupportedSets.length > 0
                             || liveRefusedSets.length > 0
                         }
                     >
@@ -483,6 +489,15 @@ const OrchestrationCockpitPage = () => {
                             <div className="alert alert-warning">
                                 Ce dashboard est <strong>inactif</strong> : un run renverrait
                                 <code> no_sets</code> (0 appel). Activez-le pour l'exécuter.
+                            </div>
+                        )}
+                        {dashboardEnabled && unsupportedSets.length > 0 && (
+                            <div className="alert alert-danger">
+                                {unsupportedSets.length} set(s) actif(s) sur un exchange{' '}
+                                <strong>non supporté</strong> (
+                                <code>{unsupportedSets[0].unsupported_reason}</code>) :{' '}
+                                {unsupportedSets.map((s) => `${s.set_id} (${s.exchange})`).join(', ')}.
+                                Le run est <strong>bloqué</strong> : désactivez ou supprimez ces sets.
                             </div>
                         )}
                         {dashboardEnabled && pendingMaterializationSets.length > 0 && (
@@ -579,10 +594,18 @@ const OrchestrationCockpitPage = () => {
 
                         {/* Sets non exécutés, regroupés par raison d'exclusion. */}
                         {(pendingMaterializationSets.length > 0
+                            || unsupportedSets.length > 0
                             || liveRefusedSets.length > 0
                             || disabledSets.length > 0
                             || nonMtfRunSets.length > 0) && (
                             <ul className="cockpit-excluded">
+                                {unsupportedSets.length > 0 && (
+                                    <li>
+                                        <strong>Exchange non supporté</strong> (
+                                        {unsupportedSets[0].unsupported_reason}) :{' '}
+                                        {unsupportedSets.map((s) => s.set_id).join(', ')}
+                                    </li>
+                                )}
                                 {pendingMaterializationSets.length > 0 && (
                                     <li>
                                         <strong>Non matérialisé(s)</strong> (payload <code>null</code>, refresh requis) :{' '}

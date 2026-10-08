@@ -689,6 +689,13 @@ class SetUpdate(BaseModel):
         )
 
 
+UNSUPPORTED_EXCHANGE_REASON = "unsupported_exchange"
+
+
+def _is_supported_exchange(exchange: object) -> bool:
+    return getattr(exchange, "value", exchange) in {e.value for e in Exchange}
+
+
 class SetRead(BaseModel):
     """Représentation d'un set persistant renvoyée par l'API."""
 
@@ -716,6 +723,17 @@ class SetRead(BaseModel):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
+    def runnable(self) -> bool:
+        """``False`` pour un set persisté sur un exchange retiré (non exécutable)."""
+        return _is_supported_exchange(self.exchange)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def unsupported_reason(self) -> Optional[str]:
+        return None if self.runnable else UNSUPPORTED_EXCHANGE_REASON
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
     def effective_payload(self) -> Optional[dict]:
         """Payload ``/api/mtf/run`` réellement envoyé pour ce set (PY-007).
 
@@ -738,6 +756,8 @@ class SetRead(BaseModel):
         """
         from app.services.symfony_client import effective_set_payload
 
+        if not self.runnable:
+            return None
         return effective_set_payload(self)
 
 
