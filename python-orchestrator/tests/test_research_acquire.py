@@ -8,6 +8,7 @@ import fcntl
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -184,6 +185,88 @@ def test_rejects_inrepo_symlink_conflict_and_cap(tmp_path: Path) -> None:
     with client_for(unused) as client, pytest.raises(AcquisitionError, match="capacity"):
         acquire(cap_root, START, END, symbols=("BTCUSDT",), client=client,
                 reserve_bytes=0, root_cap_bytes=cap)
+
+
+def test_tail_retry_capacity_counts_only_new_page_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opening = int(datetime.fromisoformat("2026-10-09T00:00:00+00:00").timestamp() * 1000)
+    start, end = "2026-10-09T00:00:00Z", "2026-10-09T16:42:00Z"
+    now = datetime(2026, 10, 9, 17, 0, tzinfo=UTC)
+
+    def row(timestamp: int) -> list[object]:
+        return [timestamp, "100", "102", "99", "101", "2", timestamp + 59999,
+                "200", 3, "1", "100", "0"]
+
+    first_page = json.dumps([row(opening + index * 60000) for index in range(1000)],
+                            separators=(",", ":")).encode()
+    second_page = json.dumps([row(opening + index * 60000) for index in (1000, 1001)],
+                             separators=(",", ":")).encode()
+    second_page_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal second_page_calls
+        if request.url.host == "data.binance.vision":
+            return httpx.Response(404)
+        cursor = int(request.url.params["startTime"])
+        if cursor == opening:
+            return httpx.Response(200, content=first_page,
+                                  headers={"Content-Type": "application/json"})
+        second_page_calls += 1
+        if second_page_calls <= 3:
+            return httpx.Response(500)
+        return httpx.Response(200, content=second_page,
+                              headers={"Content-Type": "application/json"})
+
+    root = tmp_path / "retry_tail_capacity"
+    with client_for(handler) as client:
+        partial = acquire(root, start, end, symbols=("BTCUSDT",), now=now,
+                          client=client, reserve_bytes=0)
+    assert not partial.complete
+    assert partial.sources[0]["status"] == "http_error"
+    assert len(partial.sources[0]["pages"]) == 1
+    assert (root / partial.sources[0]["pages"][0]["raw_path"]).read_bytes() == first_page
+
+    reserve = 1024
+    stored_before_retry = acquire_module._root_size(root)
+    free_budget = stored_before_retry + len(second_page) + reserve
+    monkeypatch.setattr(
+        acquire_module.shutil,
+        "disk_usage",
+        lambda _: SimpleNamespace(free=free_budget - acquire_module._root_size(root)),
+    )
+    with client_for(handler) as client:
+        resumed = acquire(root, start, end, symbols=("BTCUSDT",), now=now,
+                          client=client, reserve_bytes=reserve)
+
+    assert resumed.complete
+    assert resumed.sources[0]["status"] == "ok"
+    assert resumed.sources[0]["count"] == 1002
+    assert second_page_calls == 4
+
+
+def test_additional_storage_bytes_requires_identical_regular_file(tmp_path: Path) -> None:
+    payload = b"verified bytes"
+    path = tmp_path / "page.json"
+    assert acquire_module._additional_storage_bytes(path, payload) == len(payload)
+    path.write_bytes(payload)
+    assert acquire_module._additional_storage_bytes(path, payload) == 0
+    with pytest.raises(AcquisitionError, match="stored bytes conflict"):
+        acquire_module._additional_storage_bytes(path, b"different bytes")
+
+    outside = tmp_path / "outside"
+    outside.write_bytes(payload)
+    symlink = tmp_path / "page-link.json"
+    symlink.symlink_to(outside)
+    with pytest.raises(AcquisitionError, match="missing or unsafe stored file"):
+        acquire_module._additional_storage_bytes(symlink, payload)
+
+    external_dir = tmp_path / "external-dir"
+    external_dir.mkdir()
+    parent_symlink = tmp_path / "parent-link"
+    parent_symlink.symlink_to(external_dir, target_is_directory=True)
+    with pytest.raises(AcquisitionError, match="symlink artifact directory"):
+        acquire_module._additional_storage_bytes(parent_symlink / "page.json", payload)
 
 
 def test_recent_tail_pagination_cutoff_and_empty(tmp_path: Path) -> None:

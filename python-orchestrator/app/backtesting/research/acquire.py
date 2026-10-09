@@ -190,6 +190,16 @@ def _atomic_file(path: Path, data: bytes) -> None:
             temp.unlink()
 
 
+def _additional_storage_bytes(path: Path, data: bytes) -> int:
+    if any(parent.is_symlink() for parent in path.parents):
+        raise AcquisitionError("symlink artifact directory")
+    if path.exists() or path.is_symlink():
+        if _read_file(path, max_bytes=len(data)) != data:
+            raise AcquisitionError("stored bytes conflict")
+        return 0
+    return len(data)
+
+
 def _manifest_write(path: Path, manifest: dict) -> None:
     data = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
     temp = path.with_name(f".manifest.{os.getpid()}.tmp")
@@ -325,9 +335,12 @@ def _archive(root: Path, source: ArchiveSource, start: datetime, end: datetime,
                           status="checksum_error", error=f"checksum HTTP {exc.status}")
         digest = verify_checksum(raw, checksum.decode("utf-8"), source.filename)
         parsed = parse_archive(raw, source, start, end)
-        capacity(len(raw) + len(checksum))
         raw_path = f"archives/{source.kind}/{source.filename}"
         checksum_path = raw_path + ".CHECKSUM"
+        capacity(
+            _additional_storage_bytes(root / raw_path, raw)
+            + _additional_storage_bytes(root / checksum_path, checksum)
+        )
         _atomic_file(root / raw_path, raw)
         _atomic_file(root / checksum_path, checksum)
         return _entry(source, symbol=source.symbol, kind=source.kind, start=start, end=end,
@@ -377,8 +390,8 @@ def _tail(root: Path, symbol: str, start: datetime, end: datetime, client: httpx
                 raise ArchiveError("REST page order")
             if page_rows[-1][0] >= cutoff_ms:
                 raise ArchiveError("REST page beyond end")
-            capacity(len(raw))
             path = f"rest/{symbol}/{cursor}.json"
+            capacity(_additional_storage_bytes(root / path, raw))
             _atomic_file(root / path, raw)
             pages.append({"url": url, "raw_path": path, "sha256": hashlib.sha256(raw).hexdigest(),
                           "size": len(raw)})
