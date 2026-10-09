@@ -291,6 +291,33 @@ def test_transport_truncation_retries_and_keeps_partial_bytes(tmp_path):
     assert (tmp_path / "truncated" / "exchangeInfo.raw.json.partial").read_bytes() == b'{"symbols":'
 
 
+@pytest.mark.parametrize("final_failure", ["transport", "forbidden"])
+def test_earlier_partial_bytes_survive_later_empty_retry_failures(tmp_path, final_failure):
+    calls = []
+
+    class FirstInterrupted(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'{"symbols":'
+            raise httpx.ReadError("first attempt truncated")
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(200, stream=FirstInterrupted())
+        if final_failure == "forbidden":
+            return httpx.Response(403)
+        raise httpx.ReadError("no response bytes")
+
+    root = tmp_path / "earlier-partial"
+    with client(handler) as http:
+        result = sc.capture(root, **HYPOTHESES, client=http, sleep=lambda _: None)
+    assert not result["retrieval_complete"]
+    assert result["metadata"]["partial_attempt"] == 1
+    assert (root / result["metadata"]["partial_raw_path"]).read_bytes() == b'{"symbols":'
+    assert result["metadata"]["partial_sha256"] == hashlib.sha256(b'{"symbols":').hexdigest()
+    assert len(calls) == (3 if final_failure == "transport" else 2)
+
+
 @pytest.mark.parametrize("retry_after", ["invalid", "nan"])
 def test_retry_header_fallback(retry_after):
     delays = []

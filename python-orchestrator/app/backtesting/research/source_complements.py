@@ -39,10 +39,12 @@ class ComplementError(ValueError):
 
 
 class FetchError(ComplementError):
-    def __init__(self, message: str, *, status: int | None = None, partial: bytes = b""):
+    def __init__(self, message: str, *, status: int | None = None, partial: bytes = b"",
+                 partial_attempt: int | None = None):
         super().__init__(message)
         self.status = status
         self.partial = partial
+        self.partial_attempt = partial_attempt
 
 
 def _hash(value: dict) -> str:
@@ -223,6 +225,8 @@ def _fetch(client: httpx.Client, url: str, cap: int, sleep: Callable) -> bytes:
                 or not START_MS <= int(query["startTime"][0]) <= END_MS
                 or query["endTime"] != [str(END_MS - 1)] or query["limit"] != [str(PAGE_LIMIT)]):
             raise ComplementError("unapproved public URL")
+    last_partial = b""
+    partial_attempt = None
     for attempt in range(3):
         body = bytearray()
         try:
@@ -238,16 +242,22 @@ def _fetch(client: httpx.Client, url: str, cap: int, sleep: Callable) -> bytes:
                             delay = 0.2 * 2**attempt
                         sleep(min(2, max(0, delay)))
                         continue
-                    raise FetchError("HTTP response rejected", status=status)
+                    raise FetchError("HTTP response rejected", status=status,
+                                     partial=last_partial, partial_attempt=partial_attempt)
                 for chunk in response.iter_bytes():
                     available = cap - len(body)
                     body.extend(chunk[:available])
                     if len(chunk) > available:
-                        raise FetchError("response size cap", partial=bytes(body))
+                        raise FetchError("response size cap", partial=bytes(body),
+                                         partial_attempt=attempt + 1)
                 return bytes(body)
         except httpx.TransportError as exc:
+            if body:
+                last_partial = bytes(body)
+                partial_attempt = attempt + 1
             if attempt == 2:
-                raise FetchError("transport failed", partial=bytes(body)) from exc
+                raise FetchError("transport failed", partial=last_partial,
+                                 partial_attempt=partial_attempt) from exc
             sleep(0.2 * 2**attempt)
     raise ComplementError("retry bound exhausted")
 
@@ -272,7 +282,8 @@ def capture(root: Path, *, contract_size: float, leverage_cap: float,
             if exc.partial:
                 _write(root, name + ".partial", exc.partial)
                 entry.update(partial_raw_path=name + ".partial",
-                             partial_sha256=hashlib.sha256(exc.partial).hexdigest())
+                             partial_sha256=hashlib.sha256(exc.partial).hexdigest(),
+                             partial_attempt=exc.partial_attempt)
             raise
         _write(root, name, raw)
         entry.update(raw_path=name, raw_sha256=hashlib.sha256(raw).hexdigest(),
