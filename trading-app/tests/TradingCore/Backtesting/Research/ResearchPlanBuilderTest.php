@@ -90,6 +90,21 @@ final class ResearchPlanBuilderTest extends TestCase
         self::assertSame('research_portfolio_daily_loss_exceeded', $rejection['reason_code']);
     }
 
+    public function testPortfolioDependentRejectionsBindEachValidatedPortfolioHash(): void
+    {
+        [$builder, $signal, $portfolio] = self::fixture();
+        $rejections = [];
+        foreach ([28.0, 29.0] as $reservedRisk) {
+            $portfolio['reserved_risk_quote'] = $reservedRisk;
+            $portfolio['portfolio_hash'] = CanonicalBacktestRuleEvaluator::canonicalHash(array_diff_key($portfolio, ['portfolio_hash' => true]));
+            $rejection = $builder->build($signal, 2, $portfolio);
+            self::assertSame('research_portfolio_daily_loss_exceeded', $rejection['reason_code']);
+            self::assertSame($portfolio['portfolio_hash'], $rejection['portfolio_hash'] ?? null);
+            $rejections[] = $rejection;
+        }
+        self::assertNotSame($rejections[0]['portfolio_hash'], $rejections[1]['portfolio_hash']);
+    }
+
     public function testB1TraceDigestFormsRemainEquivalent(): void
     {
         [$builder, $signal, $portfolio] = self::fixture();

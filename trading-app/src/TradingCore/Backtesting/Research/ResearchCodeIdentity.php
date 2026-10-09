@@ -6,41 +6,48 @@ namespace App\TradingCore\Backtesting\Research;
 
 use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluator;
 
-/** Content identity for the local research-plan arithmetic and protocol code. */
+/** Content identity for the frozen application and installed dependencies. */
 final class ResearchCodeIdentity
 {
-    private const FILES = [
-        'Command/ResearchPlanWorkerCommand.php',
-        'TradingCore/Backtesting/Research/ResearchCodeIdentity.php',
-        'TradingCore/Backtesting/Research/ResearchVariant.php',
-        'TradingCore/Backtesting/Research/ResearchInstrumentAssumptions.php',
-        'TradingCore/Backtesting/Research/ResearchCostAssumptions.php',
-        'TradingCore/Backtesting/Research/ResearchPlanBuilder.php',
-        'TradingCore/Backtesting/Research/ResearchPlanSession.php',
-        'TradingCore/OrderPlan/Canonical/EntryZonePriceMath.php',
-        'TradingCore/OrderPlan/Canonical/ProtectionPriceMath.php',
-        'TradingCore/OrderPlan/Canonical/NetRCostMath.php',
-        'TradingCore/OrderPlan/Canonical/CanonicalExecutionPolicy.php',
-        'TradingCore/OrderPlan/Canonical/CanonicalHoldingBoundary.php',
-        'TradingCore/Risk/Canonical/CanonicalRiskEngine.php',
-        'TradingCore/Risk/Canonical/CanonicalRiskCalculationRequest.php',
-        'TradingCore/Risk/Canonical/CanonicalCostSnapshot.php',
-        'TradingCore/Risk/Canonical/CanonicalRiskPolicy.php',
-        'TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioDecimal.php',
-        'TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioPolicy.php',
-    ];
+    public const SCOPE = 'research_plan_app_php_vendor_config_content_v2';
+    public const CHECK_POLICY = 'content_at_open_and_close_immutable_appdir_during_session';
 
-    public static function current(): string
+    public static function current(?string $appRoot = null): string
     {
-        $sourceRoot = dirname(__DIR__, 3);
+        $appRoot ??= dirname(__DIR__, 4);
         $digests = [];
-        foreach (self::FILES as $relative) {
-            $digest = hash_file('sha256', $sourceRoot . '/' . $relative);
+        foreach (['src', 'vendor', 'config'] as $directory) {
+            $path = $appRoot . '/' . $directory;
+            if (!is_dir($path) || is_link($path)) {
+                throw new \InvalidArgumentException('research_plan_code_file_missing');
+            }
+            $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS));
+            foreach ($iterator as $file) {
+                if ($file->isLink() || !$file->isFile()) {
+                    throw new \InvalidArgumentException('research_plan_code_file_missing');
+                }
+                if ($directory === 'src' && $file->getExtension() !== 'php') {
+                    continue;
+                }
+                $relative = substr($file->getPathname(), strlen($appRoot) + 1);
+                $digest = hash_file('sha256', $file->getPathname());
+                if ($digest === false) {
+                    throw new \InvalidArgumentException('research_plan_code_file_missing');
+                }
+                $digests[$relative] = $digest;
+            }
+        }
+        foreach (['bin/console', 'composer.json', 'composer.lock', 'symfony.lock'] as $relative) {
+            $path = $appRoot . '/' . $relative;
+            if (!is_file($path) || is_link($path)) {
+                throw new \InvalidArgumentException('research_plan_code_file_missing');
+            }
+            $digest = hash_file('sha256', $path);
             if ($digest === false) {
                 throw new \InvalidArgumentException('research_plan_code_file_missing');
             }
             $digests[$relative] = $digest;
         }
-        return CanonicalBacktestRuleEvaluator::canonicalHash($digests);
+        return CanonicalBacktestRuleEvaluator::canonicalHash(['scope' => self::SCOPE, 'files' => $digests]);
     }
 }

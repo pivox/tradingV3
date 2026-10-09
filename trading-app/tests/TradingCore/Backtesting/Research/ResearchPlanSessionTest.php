@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Backtesting\Research;
 
 use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluator;
+use App\TradingCore\Backtesting\Research\ResearchCodeIdentity;
 use App\TradingCore\Backtesting\Research\ResearchPlanSession;
 use App\TradingCore\Backtesting\Research\ResearchVariant;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
@@ -25,6 +26,8 @@ final class ResearchPlanSessionTest extends TestCase
         $opened = $session->open($open);
         self::assertSame('research-plan-opened.v1', $opened['schema_version']);
         self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $opened['research_code_hash']);
+        self::assertSame(ResearchCodeIdentity::SCOPE, $opened['code_hash_scope']);
+        self::assertSame(ResearchCodeIdentity::CHECK_POLICY, $opened['code_identity_check_policy']);
         $result = $session->append(['schema_version' => 'research-plan-signal.v1', 'session_id' => 'plan-reference',
             'signal_index' => 2, 'signal' => $signal, 'portfolio' => $portfolio]);
         self::assertSame('research-plan.v1', $result['schema_version']);
@@ -33,6 +36,8 @@ final class ResearchPlanSessionTest extends TestCase
         $closed = $session->close(['schema_version' => 'research-plan-close.v1', 'session_id' => 'plan-reference', 'expected_signals' => 1]);
         self::assertSame('complete', $closed['completion']);
         self::assertSame(1, $closed['planned']);
+        self::assertSame($opened['research_code_hash'], $closed['research_code_hash']);
+        self::assertSame(ResearchCodeIdentity::CHECK_POLICY, $closed['code_identity_check_policy']);
     }
 
     public function testOpenAcceptsEveryCatalogVariantAfterJsonRoundTripAndKeyReorder(): void
@@ -50,6 +55,67 @@ final class ResearchPlanSessionTest extends TestCase
             $wireOpen = json_decode(json_encode($open, JSON_THROW_ON_ERROR), true, 128, JSON_THROW_ON_ERROR);
             $opened = (new ResearchPlanSession(new EffectiveTradingConfigResolver()))->open($wireOpen);
             self::assertSame($variant->hash, $opened['variant_hash'], $variant->id);
+        }
+    }
+
+    public function testAppendKeepsFrozenCodeIdentityAndCloseDetectsPersistentMutation(): void
+    {
+        self::withCodeFixture(static function (string $root): void {
+            [$open, $signal, $portfolio] = self::frames();
+            $session = new ResearchPlanSession(new EffectiveTradingConfigResolver(), $root);
+            $session->open($open);
+            file_put_contents("$root/src/runtime.php", '<?php return 2;');
+            $result = $session->append(['schema_version' => 'research-plan-signal.v1', 'session_id' => 'plan-reference',
+                'signal_index' => 2, 'signal' => $signal, 'portfolio' => $portfolio]);
+            self::assertSame('research-plan.v1', $result['schema_version']);
+            try {
+                $session->close(['schema_version' => 'research-plan-close.v1', 'session_id' => 'plan-reference', 'expected_signals' => 1]);
+                self::fail('Close must detect persistent code changes.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('research_plan_code_changed', $exception->getMessage());
+            }
+        });
+    }
+
+    public function testCodeRotationBetweenSessionsChangesOpenFingerprint(): void
+    {
+        self::withCodeFixture(static function (string $root): void {
+            [$open] = self::frames();
+            $open['expected_signals'] = 0;
+            $first = (new ResearchPlanSession(new EffectiveTradingConfigResolver(), $root))->open($open);
+            file_put_contents("$root/src/runtime.php", '<?php return 2;');
+            $second = (new ResearchPlanSession(new EffectiveTradingConfigResolver(), $root))->open($open);
+            self::assertNotSame($first['research_code_hash'], $second['research_code_hash']);
+        });
+    }
+
+    /** @param \Closure(string): void $assertions */
+    private static function withCodeFixture(\Closure $assertions): void
+    {
+        $root = sys_get_temp_dir() . '/research-session-code-' . bin2hex(random_bytes(8));
+        $directories = [$root, "$root/src", "$root/vendor", "$root/config", "$root/bin"];
+        $files = ['src/runtime.php' => '<?php return 1;', 'vendor/runtime.php' => '<?php return 1;',
+            'config/services.yaml' => 'services: one', 'bin/console' => '<?php return 1;',
+            'composer.json' => '{}', 'composer.lock' => '{}', 'symfony.lock' => '{}'];
+        try {
+            foreach ($directories as $directory) {
+                self::assertTrue(mkdir($directory));
+            }
+            foreach ($files as $relative => $contents) {
+                self::assertSame(strlen($contents), file_put_contents("$root/$relative", $contents));
+            }
+            $assertions($root);
+        } finally {
+            foreach (array_keys($files) as $relative) {
+                if (is_file("$root/$relative")) {
+                    unlink("$root/$relative");
+                }
+            }
+            foreach (array_reverse($directories) as $directory) {
+                if (is_dir($directory)) {
+                    rmdir($directory);
+                }
+            }
         }
     }
 

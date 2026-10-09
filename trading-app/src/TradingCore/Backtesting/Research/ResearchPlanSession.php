@@ -36,6 +36,7 @@ final class ResearchPlanSession
     public function __construct(
         #[Autowire(service: EffectiveTradingConfigResolver::class)]
         private readonly EffectiveTradingConfigResolverInterface $resolver,
+        private readonly ?string $codeRoot = null,
     ) {
     }
 
@@ -105,6 +106,7 @@ final class ResearchPlanSession
         $instruments = ResearchInstrumentAssumptions::fromArray($frame['instrument_assumptions']);
         $costs = ResearchCostAssumptions::fromArray($frame['cost_assumptions']);
         $costs->profile($frame['cost_profile']);
+        $codeHash = ResearchCodeIdentity::current($this->codeRoot);
         $builders = [];
         foreach ($frame['source_runs'] as $run) {
             if (!is_array($run) || array_is_list($run)) {
@@ -117,7 +119,7 @@ final class ResearchPlanSession
             }
             $instruments->forSymbol($symbol);
             $builders[$symbol] = new ResearchPlanBuilder($policy, $portfolioPolicy, $variant, $instruments, $costs,
-                $frame['cost_profile'], $expectedBaseline, $run);
+                $frame['cost_profile'], $expectedBaseline, $run, $codeHash);
         }
         $this->active = true;
         $this->sessionId = $frame['session_id'];
@@ -126,7 +128,7 @@ final class ResearchPlanSession
         $this->rejections = $this->lastIndex = [];
         $this->builders = $builders;
         $this->fileHashes = $fileHashes;
-        $this->codeHash = ResearchCodeIdentity::current();
+        $this->codeHash = $codeHash;
 
         return ['schema_version' => 'research-plan-opened.v1', 'session_id' => $this->sessionId,
             'variant_id' => $variant->id, 'variant_hash' => $variant->hash,
@@ -134,7 +136,8 @@ final class ResearchPlanSession
             'instrument_assumptions_hash' => $instruments->hash, 'cost_assumptions_hash' => $costs->hash,
             'cost_profile' => $frame['cost_profile'], 'source_run_count' => count($builders),
             'expected_signals' => $this->expectedSignals, 'research_code_hash' => $this->codeHash,
-            'code_hash_scope' => 'research_plan_direct_dependencies_v1',
+            'code_hash_scope' => ResearchCodeIdentity::SCOPE,
+            'code_identity_check_policy' => ResearchCodeIdentity::CHECK_POLICY,
             'execution_authority' => 'none'];
     }
 
@@ -151,7 +154,7 @@ final class ResearchPlanSession
             || !is_array($frame['signal']) || !is_array($frame['portfolio'])) {
             throw new \InvalidArgumentException('research_plan_signal_frame_invalid');
         }
-        $this->assertFilesUnchanged();
+        $this->assertFilesUnchanged(false);
         $symbol = $frame['signal']['symbol'] ?? null;
         if (!is_string($symbol) || !isset($this->builders[$symbol])) {
             throw new \InvalidArgumentException('research_plan_signal_source_unbound');
@@ -187,11 +190,13 @@ final class ResearchPlanSession
             || $this->received !== $this->expectedSignals) {
             throw new \InvalidArgumentException('research_plan_close_invalid');
         }
-        $this->assertFilesUnchanged();
+        $this->assertFilesUnchanged(true);
         $this->active = false;
         return ['schema_version' => 'research-plan-summary.v1', 'session_id' => $this->sessionId,
             'received' => $this->received, 'planned' => $this->planned,
             'rejected' => $this->received - $this->planned, 'rejection_counts' => $this->rejections,
+            'research_code_hash' => $this->codeHash, 'code_hash_scope' => ResearchCodeIdentity::SCOPE,
+            'code_identity_check_policy' => ResearchCodeIdentity::CHECK_POLICY,
             'completion' => 'complete', 'execution_authority' => 'none'];
     }
 
@@ -225,9 +230,9 @@ final class ResearchPlanSession
         }
     }
 
-    private function assertFilesUnchanged(): void
+    private function assertFilesUnchanged(bool $checkCode): void
     {
-        if (ResearchCodeIdentity::current() !== $this->codeHash) {
+        if ($checkCode && ResearchCodeIdentity::current($this->codeRoot) !== $this->codeHash) {
             throw new \InvalidArgumentException('research_plan_code_changed');
         }
         foreach ($this->fileHashes as $file => $expected) {
