@@ -83,11 +83,13 @@ def plan(sig, view, *, quantity=2, leverage=1, stop=95, target=110):
     return p
 
 
-def simulator(config=None, builder=None):
+def simulator(config=None, builder=None, *, prime=True):
     ledger = {key: [] for key in ('events', 'trades', 'cashflows', 'rejections')}
     sim = PortfolioSimulator(config or assumptions(), builder or (lambda s,v: plan(s,v)),
         event_sink=ledger['events'].append, trade_sink=ledger['trades'].append,
         cashflow_sink=ledger['cashflows'].append, rejection_sink=ledger['rejections'].append)
+    if prime:
+        sim.prime(bars(sim.assumptions.start_ms-60000,symbols=sim.assumptions.symbols))
     return sim, ledger
 
 
@@ -540,12 +542,12 @@ def test_actual_php_research_plan_schema_cost_parity_and_portfolio_hash():
     math=p['instrument_math']; cost=p['cost_model']
     i=InstrumentAssumptions(**{k:D(str(v)) if isinstance(v,(int,float)) else v for k,v in math.items()})
     c=CostAssumptions(**{k:D(str(v)) if k.endswith('_rate') else v for k,v in cost.items() if not k.endswith('_role')})
-    config=RunAssumptions(t-60000,t+120000,'training',symbols,((symbols[0],i),),c,
+    config=RunAssumptions(t,t+120000,'training',symbols,((symbols[0],i),),c,
         tuple((k,p[k]) for k in IDENTITY),((symbols[0],tuple((k,p[k]) for k in SOURCE)),),
         FundingCoverage('verified_complete',HASH,((symbols[0],0),)),
         'adverse_possible_credit_certain.v1','last_known_close.v1')
-    sim,ledger=simulator(config,builder=lambda s,v:p)
-    sim.advance(bars(t-60000,symbols=symbols),signals=(Signal(2,fixture['signal']),))
+    sim,ledger=simulator(config,builder=lambda s,v:p,prime=False)
+    sim.prime(bars(t-60000,symbols=symbols),signals=(Signal(2,fixture['signal']),))
     assert sim.view()['pending_entries']==1, ledger['rejections']
     assert sim.view()['portfolio_hash'] != fixture['portfolio']['portfolio_hash']  # reservation now committed
     sim.advance(bars(t,symbols=symbols,low='100',high='102',close='101'))
@@ -593,3 +595,117 @@ def test_genuine_self_consistent_plan_still_must_respect_cap_minimum_and_grid(qu
     sim,ledger=simulator(builder=lambda s,v:plan(s,v,quantity=quantity))
     sim.advance(bars(START),signals=(signal(START+60000),))
     assert ledger['rejections'][0]['reason_code']=='research_plan_geometry_invalid'
+
+
+def test_prime_exact_start_signal_and_funding_before_admission_without_pnl():
+    counts=tuple((s,1 if s==SYMBOLS[0] else 0) for s in SYMBOLS)
+    config=assumptions(minutes=2,funding=FundingCoverage('verified_complete',HASH,counts))
+    holder={}; admission_observations=[]
+    def builder(s,v):
+        admission_observations.append((holder['sim'].funding_counts[SYMBOLS[0]],v['pending_entries'],v['open_positions'],v['equity_quote']))
+        return plan(s,v)
+    sim,ledger=simulator(config,builder=builder,prime=False)
+    holder['sim']=sim
+    view=sim.prime(bars(START-60000),funding=(FundingEvent(SYMBOLS[0],START,D('.001')),),
+                   signals=(signal(START),))
+    assert view['as_of_ms']==START
+    assert view['pending_entries']==1 and view['open_positions']==0
+    assert sim.processed_batches==0 and sim.wallet==100000
+    assert sim.funding_counts[SYMBOLS[0]]==1
+    assert admission_observations==[(1,0,0,100000)]
+    assert not ledger['cashflows']
+    sim.advance(bars(START))
+    sim.advance(bars(START+60000))
+    result=sim.finish()
+    assert result['start_ms']==START and result['processed_batches']==2
+    assert result['completion']=='complete'
+    assert ledger['trades'][0]['decision_ms']==START
+    assert ledger['trades'][0]['funding_quote']==0
+
+
+def test_funding_at_exclusive_end_is_rejected_without_charging_or_advancing():
+    sim,ledger=simulator(assumptions(minutes=2),prime=False)
+    sim.prime(bars(START-60000),signals=(signal(START),))
+    sim.advance(bars(START))
+    previous=(sim.wallet,sim.view(),len(ledger['cashflows']))
+    with pytest.raises(ValueError,match='funding_event_invalid'):
+        sim.advance(bars(START+60000),funding=(FundingEvent(SYMBOLS[0],START+120000,D('.001')),))
+    assert (sim.wallet,sim.view(),len(ledger['cashflows']))==previous
+    assert sim.funding_counts[SYMBOLS[0]]==0
+    sim.advance(bars(START+60000))
+    assert sim.finish()['completion']=='complete'
+
+
+@pytest.mark.parametrize('invalid', ['future_marks','missing_marks','wrong_funding','duplicate_funding','future_signal'])
+def test_prime_invalid_input_leaves_startup_unchanged_and_retryable(invalid):
+    sim,ledger=simulator(prime=False)
+    seed=bars(START-60000); funding=(); signals=()
+    if invalid=='future_marks': seed=bars(START)
+    if invalid=='missing_marks': seed=seed[:-1]
+    if invalid=='wrong_funding': funding=(FundingEvent(SYMBOLS[0],START+1,D('.001')),)
+    if invalid=='duplicate_funding': funding=(FundingEvent(SYMBOLS[0],START,D('.001')),)*2
+    if invalid=='future_signal': signals=(signal(START+60000),)
+    with pytest.raises(ValueError): sim.prime(seed,funding=funding,signals=signals)
+    assert sim.marks=={} and sim.processed_batches==0 and sim.wallet==100000
+    assert not sim.funding_counts and not sim.pending and not sim.last_signals
+    assert not any(ledger.values())
+    sim.prime(bars(START-60000),signals=(signal(START),))
+    assert sim.view()['pending_entries']==1
+
+
+def test_prime_required_once_and_startup_planner_failure_is_terminal():
+    sim,_=simulator(prime=False)
+    with pytest.raises(ValueError,match='not_primed'): sim.advance(bars(START))
+    with pytest.raises(ValueError,match='not_primed'): sim.finish()
+    sim.prime(bars(START-60000))
+    with pytest.raises(ValueError,match='already_primed'): sim.prime(bars(START-60000))
+    def fail(s,v): raise RuntimeError('startup planner unavailable')
+    sim,_=simulator(builder=fail,prime=False)
+    with pytest.raises(RuntimeError): sim.prime(bars(START-60000),signals=(signal(START),))
+    with pytest.raises(ValueError,match='failed'): sim.prime(bars(START-60000))
+    with pytest.raises(ValueError,match='failed'): sim.advance(bars(START))
+
+
+def test_primed_exact_start_stream_remains_deterministic_across_chunks():
+    outputs=[]
+    stream=[bars(START+i*60000) for i in range(3)]
+    for chunks in ((stream,),(stream[:1],stream[1:])):
+        sim,ledger=simulator(assumptions(minutes=3),prime=False)
+        sim.prime(bars(START-60000),signals=(signal(START),))
+        for chunk in chunks:
+            for batch in chunk: sim.advance(batch)
+        outputs.append((sim.finish(),ledger))
+    assert outputs[0]==outputs[1]
+
+
+@pytest.mark.parametrize('field', ['variant_id','dataset_id','signal_run_id'])
+@pytest.mark.parametrize('bad', [['mutable'], {'mutable':'value'}, '', 'bad id', 'a'*97])
+def test_mutable_or_invalid_provenance_identifier_is_rejected_before_creation(field,bad):
+    if field=='variant_id':
+        identity=tuple((k,bad if k==field else v) for k,v in IDENTITY.items())
+        with pytest.raises(ValueError,match='bindings'): assumptions(identity=identity)
+    else:
+        source=tuple((k,bad if k==field else v) for k,v in SOURCE.items())
+        with pytest.raises(ValueError,match='source_identity'):
+            assumptions(sources=tuple((s,source) for s in SYMBOLS))
+
+
+@pytest.mark.parametrize('bad', [['mutable'], {'mutable':'value'}, '', 'not-a-date', '2026-99-09T00:00:00Z'])
+def test_instrument_metadata_text_is_validated_and_cannot_carry_mutable_values(bad):
+    with pytest.raises(ValueError,match='instrument'):
+        instrument(metadata_retrieved_at=bad)
+    with pytest.raises(ValueError,match='instrument'):
+        instrument(metadata_raw_sha256=bad)
+
+
+def test_observed_funding_one_millisecond_before_end_is_in_phase():
+    counts=tuple((s,1 if s==SYMBOLS[0] else 0) for s in SYMBOLS)
+    config=assumptions(minutes=2,funding=FundingCoverage('verified_complete',HASH,counts))
+    sim,ledger=simulator(config,prime=False)
+    sim.prime(bars(START-60000),signals=(signal(START),))
+    sim.advance(bars(START))
+    at=config.end_ms-1
+    sim.advance(bars(START+60000),funding=(FundingEvent(SYMBOLS[0],at,D('.001')),))
+    flow=next(x for x in ledger['cashflows'] if x['kind']=='funding')
+    assert flow['timestamp_ms']==at and flow['amount_quote']==D('-.2')
+    assert sim.finish()['completion']=='complete'
