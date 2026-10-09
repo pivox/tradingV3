@@ -82,4 +82,25 @@ final class ResearchSignalWorkerCommandTest extends TestCase
         }
         self::assertSame($outputs[0], $outputs[1]);
     }
+
+    public function testActualProductionConsoleUsesNoDatabaseForResearchSignals(): void
+    {
+        $open = ResearchSignalSessionTest::openFrame(minutes: 15);
+        $payload = $this->encode($open)
+            . $this->encode(['schema_version' => 'research-signal-candles.v1', 'session_id' => $open['session_id'], 'candles' => array_map(ResearchRollingWindowsTest::candle(...), range(0, 14))])
+            . $this->encode(['schema_version' => 'research-signal-close.v1', 'session_id' => $open['session_id']]);
+        $process = new \Symfony\Component\Process\Process([PHP_BINARY, '-d', 'display_errors=stderr', 'bin/console', 'app:research:signals', '--no-debug'], dirname(__DIR__, 2), [
+            'APP_ENV' => 'prod', 'APP_DEBUG' => '0', 'APP_SECRET' => 'research-integration-test',
+            'SYMFONY_DOTENV_PATH' => '/dev/null',
+            'DATABASE_URL' => 'postgresql://research:research@127.0.0.1:1/research?serverVersion=16&charset=utf8',
+        ]);
+        $process->setTimeout(60);
+        $process->setInput($payload);
+        $process->run();
+        self::assertTrue($process->isSuccessful(), $process->getOutput() . $process->getErrorOutput());
+        $frames = array_map(static fn (string $line): array => json_decode($line, true, 128, JSON_THROW_ON_ERROR), explode("\n", trim($process->getOutput())));
+        self::assertSame(['research-signal-opened.v1', 'research-signal-batch-accepted.v1', 'research-signal-summary.v1'], array_column($frames, 'schema_version'));
+        self::assertSame('complete', $frames[2]['completion']);
+        self::assertSame(15, $frames[2]['consumed_candles']);
+    }
 }

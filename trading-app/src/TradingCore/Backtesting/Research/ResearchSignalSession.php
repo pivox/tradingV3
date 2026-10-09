@@ -10,9 +10,12 @@ use App\Trading\Lineage\LineageContext;
 use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluator;
 use App\TradingCore\Backtesting\Indicator\CanonicalPhpIndicatorCalculator;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Config\EffectiveTradingConfigResolverInterface;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
+use App\TradingCore\Rules\Catalog\ConditionCatalogResolver;
 use App\TradingCore\Setup\SetupContractLoader;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /** Local candle research only; owns no transport, persistence or execution gateway. */
 final class ResearchSignalSession
@@ -45,8 +48,11 @@ final class ResearchSignalSession
     private int $evaluated = 0;
     private int $passed = 0;
     private int $beforeScore = 0;
+    private bool $baselineInvalid = false;
+    private string $catalogVersion = '';
 
     public function __construct(
+        #[Autowire(service: EffectiveTradingConfigResolver::class)]
         private readonly EffectiveTradingConfigResolverInterface $resolver,
         private readonly CanonicalSetupRuleRuntime $runtime,
         private readonly CanonicalPhpIndicatorCalculator $calculator,
@@ -88,6 +94,21 @@ final class ResearchSignalSession
             $fileHashes[$file] = 'sha256:' . $digest;
         }
         $setup = (new SetupContractLoader())->load($request->setupId, $request->setupVersion);
+        $setupDocument = $setup->toArray();
+        try {
+            $catalog = (new ConditionCatalogResolver())->forSetupDocument($setupDocument);
+            if ($this->hashDigest($catalog->stableHash()) !== $this->hashDigest($snapshot['condition_catalog_hash'])) {
+                throw new \InvalidArgumentException('research_baseline_catalog_invalid');
+            }
+        } catch (\Throwable $exception) {
+            throw new \InvalidArgumentException('research_baseline_catalog_invalid', previous: $exception);
+        }
+        // This pinned catalog is a rule input outside the resolver's ordered config layers.
+        $catalogPath = dirname(__DIR__, 4) . '/' . $setupDocument['data_condition_contract']['condition_catalog_hash']['source'];
+        $catalogDigest = hash_file('sha256', $catalogPath);
+        if ($catalogDigest === false) { throw new \InvalidArgumentException('research_baseline_file_unavailable'); }
+        $fileHashes[$catalogPath] = 'sha256:' . $catalogDigest;
+        $this->catalogVersion = $catalog->catalogVersion;
         $this->baseline = ['config_hash' => $snapshot['config_hash'], 'condition_catalog_hash' => $snapshot['condition_catalog_hash'], 'snapshot_hash' => $snapshot['snapshot_hash'], 'setup_hash' => $setup->stableHash(), 'file_hashes' => $fileHashes, 'mode_risk' => $snapshot['config']['mode']['risk']];
         $this->lineage = LineageContext::fromOrchestratorPayload([
             ...$request->toArray(), 'side' => 'LONG', 'origin' => LineageContext::ORIGIN_REPLAY,
@@ -103,6 +124,7 @@ final class ResearchSignalSession
         $this->snapshot = $snapshot;
         $this->contextCache = $this->compactContextCache = $this->contextTimes = $this->diagnosticCounts = [];
         $this->consumed = $this->warmup = $this->evaluated = $this->passed = $this->beforeScore = 0;
+        $this->baselineInvalid = false;
         $this->windows = new ResearchRollingWindows($frame['symbol'], $frame['start_ms'], $frame['end_ms']);
         return ['schema_version' => 'research-signal-opened.v1', ...$this->identity(), 'effective_config_snapshot' => $this->snapshot, 'indicator_engine_version' => 'php_fallback_v1'];
     }
@@ -165,11 +187,7 @@ final class ResearchSignalSession
         $evaluatedAt = self::instant($tick);
         $decision = $this->runtime->evaluate($this->lineage, $contexts, new \DateTimeImmutable($evaluatedAt));
         $trace = $decision->trace; unset($trace['plan_cache_hit']);
-        foreach (['setup_hash', 'config_hash'] as $key) {
-            if (isset($trace[$key]) && $trace[$key] !== $this->baseline[$key]) {
-                throw new \InvalidArgumentException('research_baseline_identity_changed');
-            }
-        }
+        $this->assertRuntimeBaselineIdentity($trace);
         if (array_key_exists('evaluated_at', $trace)) { $trace['evaluated_at'] = $evaluatedAt; }
         ++$this->evaluated; if ($decision->passed) { ++$this->passed; }
         $sampleCount = $this->diagnosticCounts[$decision->reasonCode] ?? 0;
@@ -187,9 +205,51 @@ final class ResearchSignalSession
     {
         foreach ($this->baseline['file_hashes'] as $file => $expected) {
             if (!is_file($file) || 'sha256:' . hash_file('sha256', $file) !== $expected) {
-                throw new \InvalidArgumentException('research_baseline_file_changed');
+                $this->invalidateBaseline('research_baseline_file_changed');
             }
         }
+    }
+
+    /** @param array<string, mixed> $trace */
+    private function assertRuntimeBaselineIdentity(array $trace): void
+    {
+        $expected = [
+            'schema_version' => 'canonical-setup-rule-runtime.v1',
+            'mode_id' => $this->snapshot['request']['mode_id'],
+            'mode_version' => $this->snapshot['request']['mode_version'],
+            'setup_id' => $this->snapshot['request']['setup_id'],
+            'setup_version' => $this->snapshot['request']['setup_version'],
+            'side' => $this->snapshot['request']['side'],
+            'catalog_version' => $this->catalogVersion,
+        ];
+        foreach ($expected as $key => $value) {
+            if (($trace[$key] ?? null) !== $value) {
+                $this->invalidateBaseline('research_baseline_identity_changed');
+            }
+        }
+        foreach ([
+            'setup_hash' => $this->baseline['setup_hash'],
+            'config_hash' => $this->baseline['config_hash'],
+            'catalog_hash' => $this->baseline['condition_catalog_hash'],
+        ] as $key => $hash) {
+            $observed = $this->hashDigest($trace[$key] ?? null);
+            if ($observed === null || $observed !== $this->hashDigest($hash)) {
+                $this->invalidateBaseline('research_baseline_identity_changed');
+            }
+        }
+    }
+
+    private function hashDigest(mixed $hash): ?string
+    {
+        if (!is_string($hash)) { return null; }
+        $digest = str_starts_with($hash, 'sha256:') ? substr($hash, 7) : $hash;
+        return preg_match('/\A[0-9a-f]{64}\z/D', $digest) === 1 ? $digest : null;
+    }
+
+    private function invalidateBaseline(string $reason): never
+    {
+        $this->baselineInvalid = true;
+        throw new \InvalidArgumentException($reason);
     }
 
     /** @return array<string, mixed> */
@@ -206,6 +266,7 @@ final class ResearchSignalSession
     {
         ResearchCandle::exactKeys($frame, $keys);
         if ($this->windows === null) { throw new \InvalidArgumentException('research_session_not_open'); }
+        if ($this->baselineInvalid) { throw new \InvalidArgumentException('research_baseline_session_invalid'); }
         if ($frame['schema_version'] !== $schema || $frame['session_id'] !== $this->binding['session_id']) { throw new \InvalidArgumentException('research_session_frame_mismatch'); }
     }
 

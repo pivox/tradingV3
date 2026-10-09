@@ -191,4 +191,51 @@ final class ResearchSignalSessionTest extends TestCase
         self::assertSame(1, $summary['evaluated_ticks']);
         self::assertSame($summary['evaluated_ticks'], $summary['passed_rules'] + $summary['failed_rules']);
     }
+
+    public function testChangedPinnedCatalogFileStopsSessionBeforeAnotherBatch(): void
+    {
+        $path = dirname(__DIR__, 4) . '/config/trading/condition_catalog/1.0.0.yaml';
+        $original = file_get_contents($path);
+        self::assertIsString($original);
+        $session = self::session();
+        $session->open(self::openFrame(minutes: 15));
+        try {
+            file_put_contents($path, $original . "\n# catalog drift regression fixture\n");
+            try {
+                $session->appendBatch(['schema_version' => 'research-signal-candles.v1', 'session_id' => 'training-BTCUSDT', 'candles' => [ResearchRollingWindowsTest::candle(0)]]);
+                self::fail('A changed pinned catalog file must terminate the session.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('research_baseline_file_changed', $exception->getMessage());
+            }
+        } finally {
+            file_put_contents($path, $original);
+        }
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('research_baseline_session_invalid');
+        $session->close(['schema_version' => 'research-signal-close.v1', 'session_id' => 'training-BTCUSDT']);
+    }
+
+    public function testInjectedCatalogMismatchIsInfrastructureFailureRatherThanRejectedOpportunity(): void
+    {
+        $catalogLoader = new \App\TradingCore\Rules\Catalog\ConditionCatalogLoader();
+        $document = \Symfony\Component\Yaml\Yaml::parseFile(dirname(__DIR__, 4) . '/config/trading/condition_catalog/1.0.0.yaml');
+        $document['input_freshness_seconds']['indicator_snapshot']['1m'] = 181;
+        $catalog = $catalogLoader->load($document);
+        $session = new ResearchSignalSession(new EffectiveTradingConfigResolver(), new CanonicalSetupRuleRuntime([], $catalog), self::calculator());
+        $session->open(self::openFrame(minutes: 60000));
+        try {
+            for ($offset = 0; $offset < 60000; $offset += 1440) {
+                $records = [];
+                for ($i = $offset; $i < min(60000, $offset + 1440); ++$i) { $records[] = ResearchRollingWindowsTest::candle($i); }
+                $session->appendBatch(['schema_version' => 'research-signal-candles.v1', 'session_id' => 'training-BTCUSDT', 'candles' => $records]);
+            }
+            self::fail('Runtime catalog mismatch must terminate before counting a rule rejection.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('research_baseline_identity_changed', $exception->getMessage());
+        }
+        // Neither successful closure nor a failed strategy count is allowed after identity loss.
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('research_baseline_session_invalid');
+        $session->close(['schema_version' => 'research-signal-close.v1', 'session_id' => 'training-BTCUSDT']);
+    }
 }
