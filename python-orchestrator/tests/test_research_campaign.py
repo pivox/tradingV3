@@ -182,6 +182,40 @@ def test_legitimate_planner_rejection_and_malformed_error_differ(tmp_path,monkey
     assert not (kwargs['output_root']/'summary.json').exists()
 
 
+@pytest.mark.parametrize('reason',['research_portfolio_exposure_exceeded','research_number_invalid'])
+def test_planner_plan_rejected_by_kernel_cannot_publish_complete(tmp_path,monkeypatch,reason):
+    kwargs,_,_ = fixture(tmp_path,monkeypatch,passed=True)
+    Builder.positive = True
+    original = c.PortfolioSimulator._validate_plan
+    def rejected(simulator,plan,signal,view):
+        original(simulator,plan,signal,view)  # The PHP-shaped plan is otherwise valid.
+        raise ValueError(reason)
+    monkeypatch.setattr(c.PortfolioSimulator,'_validate_plan',rejected)
+    with pytest.raises(c.CampaignError,match='admission counts'): c.run_campaign(**kwargs)
+    out = kwargs['output_root']
+    assert json.loads((out/'status.json').read_text())['status'] == 'failed'
+    assert not (out/'summary.json').exists()
+    assert len((out/'plans.partial.ndjson').read_text().splitlines()) == 1
+    assert json.loads((out/'rejections.partial.ndjson').read_text())['reason_code'] == reason
+
+
+@pytest.mark.parametrize('changed',['planner','kernel_summary'])
+def test_planner_and_kernel_admission_count_binding(tmp_path,monkeypatch,changed):
+    kwargs,_,_ = fixture(tmp_path,monkeypatch,passed=True)
+    Builder.positive = True
+    owner = Builder if changed == 'planner' else c.PortfolioSimulator
+    name = 'close' if changed == 'planner' else 'finish'
+    original = getattr(owner,name)
+    def mismatched(instance):
+        result = original(instance)
+        result['planned' if changed == 'planner' else 'admitted_plans'] = 0
+        return result
+    monkeypatch.setattr(owner,name,mismatched)
+    with pytest.raises(c.CampaignError,match='admission counts'): c.run_campaign(**kwargs)
+    assert json.loads((kwargs['output_root']/'status.json').read_text())['status'] == 'failed'
+    assert not (kwargs['output_root']/'summary.json').exists()
+
+
 @pytest.mark.parametrize('mutation',['incomplete','hash','signal_hash','chronology','count','source','code','baseline','window','passed','boundary'])
 def test_input_tampering_is_failure_with_evidence(tmp_path,monkeypatch,mutation):
     kwargs,report,_ = fixture(tmp_path,monkeypatch)

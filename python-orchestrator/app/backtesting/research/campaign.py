@@ -373,7 +373,8 @@ def run_campaign(dataset_root: Path, signal_root: Path | tuple[Path,...], output
                 simulator = PortfolioSimulator(assumptions,build,
                     event_sink=lambda row:evidence.emit('events',row),
                     trade_sink=lambda row:evidence.emit('trades',row),
-                    cashflow_sink=lambda row:evidence.emit('cashflows',row),rejection_sink=rejected)
+                    cashflow_sink=lambda row:evidence.emit('cashflows',row),rejection_sink=rejected,
+                    marked_sink=lambda row:evidence.emit('marked-equity',row))
                 def passed_signals(symbol):
                     root,selection,meta,opened,_ = bindings[symbol]
                     for signal in _scan(root,selection,meta,opened,deadline):
@@ -415,6 +416,9 @@ def run_campaign(dataset_root: Path, signal_root: Path | tuple[Path,...], output
                 if (simulator.attempted_signals != counters['passed_rules']
                     or planner_summary['received'] != counters['passed_rules']):
                     raise CampaignError('planner or signal counts incomplete')
+                if (planner_summary['planned'] != simulator.admitted_plans
+                    or kernel_summary['admitted_plans'] != simulator.admitted_plans):
+                    raise CampaignError('planner and kernel admission counts differ')
             if (signals._code_hashes(app_dir,fake_worker=False) != b1_code or _runner_code() != runner_code
                 or hashlib.sha256(_read(dataset_root/'manifest.json',64*1024**2)).hexdigest() != inventory.acquisition_manifest_sha256
                 or _input(instrument_path,MAX_REPORT)[1] != instrument_sha

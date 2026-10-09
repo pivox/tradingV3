@@ -299,11 +299,16 @@ class PortfolioSimulator:
                  event_sink: Callable[[Mapping[str, Any]], None],
                  trade_sink: Callable[[Mapping[str, Any]], None],
                  cashflow_sink: Callable[[Mapping[str, Any]], None],
-                 rejection_sink: Callable[[Mapping[str, Any]], None]):
+                 rejection_sink: Callable[[Mapping[str, Any]], None],
+                 marked_sink: Callable[[Mapping[str, Any]], None] | None = None):
         self._assumptions = assumptions
         self.builder = plan_builder
         self.event_sink, self.trade_sink = event_sink, trade_sink
         self.cashflow_sink, self.rejection_sink = cashflow_sink, rejection_sink
+        self.marked_sink = marked_sink
+        self._marked_wallet = None
+        self._marked_positions = False
+        self._marked_cash_dirty = False
         self.wallet = D('100000')
         self.daily_realized = ZERO
         self.total_cashflow = ZERO
@@ -366,6 +371,7 @@ class PortfolioSimulator:
         self.wallet += amount
         self.daily_realized += amount
         self.total_cashflow += amount
+        self._marked_cash_dirty = True
         position.cashflow += amount
         self.cashflow_sink({'schema_version': 'research-cashflow.v1', 'plan_hash': position.plan['plan_hash'],
             'symbol': position.plan['symbol'], 'kind': kind, 'timestamp_ms': at,
@@ -524,6 +530,23 @@ class PortfolioSimulator:
         self.maximum_drawdown = max(self.maximum_drawdown, self.peak_equity-equity)
         self.maximum_risk = max(self.maximum_risk, balances['reserved_risk_quote'])
         self.maximum_exposure = max(self.maximum_exposure,balances['open_notional_quote']+balances['pending_notional_quote'])
+        self._marked_sample()
+
+    def _marked_sample(self, *, kind: str = 'boundary') -> None:
+        """Sparse evidence for the existing statistics sampling, not a new mark model.
+
+        Flat unchanged wallets cannot change equity. Active positions must emit
+        every completed minute; initial/terminal samples bind the whole clock.
+        """
+        if self.marked_sink is not None and (kind != 'boundary' or self.positions
+                or self._marked_positions or self._marked_cash_dirty or self.wallet != self._marked_wallet):
+            self.marked_sink({'schema_version':'research-marked-equity.v1',
+                'timestamp_ms':self.now,'processed_batches':self.processed_batches,
+                'kind':kind,'mark_source':'last_known_close.v1',
+                'marks':{key:self.marks[p.plan['symbol']] for key,p in self.positions.items()}})
+            self._marked_wallet = self.wallet
+            self._marked_positions = bool(self.positions)
+            self._marked_cash_dirty = False
 
     def _validate_candles(self, candles: Sequence[Candle], open_ms: int) -> dict[str, Candle]:
         if len(candles) != len(self.assumptions.symbols):
@@ -582,6 +605,7 @@ class PortfolioSimulator:
             for event in funding:
                 self.funding_counts[event.symbol] += 1
             self.primed = True
+            self._marked_sample(kind='initial')
             self._admit_signals(tuple(signals))
         except Exception:
             self.failed = True
@@ -725,6 +749,7 @@ class PortfolioSimulator:
             raise ValueError('research_wallet_unreconciled')
         self.finished = True
         self._statistics()
+        self._marked_sample(kind='terminal')
         return {'schema_version':'research-portfolio-summary.v1',**dict(self.assumptions.identity),
             'start_ms':self.assumptions.start_ms,'end_ms':self.assumptions.end_ms,
             'phase':self.assumptions.phase,'symbol_priority':self.assumptions.symbols,

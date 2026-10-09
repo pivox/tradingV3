@@ -14,7 +14,7 @@ from .portfolio_simulator import number
 from .signals import _private_output
 from .signal_sources import SignalError
 
-LEDGERS = ('plans','rejections','events','trades','cashflows','funding-events')
+LEDGERS = ('plans','rejections','events','trades','cashflows','funding-events','marked-equity')
 MAX_LINE = 2*1024**2
 TERMINAL_STATUS_BYTES = 8192
 
