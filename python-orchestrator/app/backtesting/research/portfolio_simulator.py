@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, fields
+from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
 import hashlib
 import math
@@ -64,6 +65,20 @@ def digest(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r'(sha256:)?[a-f0-9]{64}', value) is not None
 
 
+def identifier(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,95}', value) is not None
+
+
+def utc_metadata_instant(value: Any) -> bool:
+    if not isinstance(value, str) or re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', value) is None:
+        return False
+    try:
+        datetime.strptime(value, '%Y-%m-%dT%H:%M:%SZ')
+    except ValueError:
+        return False
+    return True
+
+
 def daily_capacity(equity: Decimal, realized: Decimal, unrealized: Decimal,
                    reserved: Decimal) -> Decimal:
     """CanonicalPortfolioAdmissionEngine: aggregate unrealized, then loss floor."""
@@ -109,7 +124,7 @@ class InstrumentAssumptions:
         if (min(self.tick_size, self.quantity_step, self.min_quantity, self.contract_size) <= 0
             or self.max_quantity < self.min_quantity or self.min_notional < 5
             or not 1 <= self.leverage_cap_assumed <= 2 or self.mmr_proxy_rate >= 1
-            or self.liquidation_fee_rate >= 1 or not self.metadata_retrieved_at
+            or self.liquidation_fee_rate >= 1 or not utc_metadata_instant(self.metadata_retrieved_at)
             or not digest(self.metadata_raw_sha256)):
             raise ValueError('research_instrument_invalid')
 
@@ -210,11 +225,14 @@ class RunAssumptions:
             or not isinstance(self.costs, CostAssumptions)
             or tuple(s for s,_ in self.sources) != self.symbols
             or set(dict(self.identity)) != set(IDENTITY_FIELDS) or len(self.identity) != len(IDENTITY_FIELDS)
+            or not identifier(dict(self.identity).get('variant_id'))
             or any(not digest(v) for k,v in self.identity if k != 'variant_id')):
             raise ValueError('research_bindings_invalid')
         for _, source in self.sources:
             if (type(source) is not tuple or any(type(p) is not tuple or len(p) != 2 for p in source)
                 or set(dict(source)) != set(SOURCE_FIELDS) or len(source) != len(SOURCE_FIELDS)
+                or not identifier(dict(source).get('dataset_id'))
+                or not identifier(dict(source).get('signal_run_id'))
                 or not digest(dict(source)['dataset_sha256']) or not digest(dict(source)['signal_output_sha256'])):
                 raise ValueError('research_source_identity_invalid')
         if (not isinstance(self.funding, FundingCoverage)
@@ -290,6 +308,7 @@ class PortfolioSimulator:
         self.processed_batches = 0
         self.finished = False
         self.failed = False
+        self.primed = False
         self.last_signals: dict[str, tuple[int, int]] = {}
         self.funding_counts: Counter[str] = Counter()
         self.rejection_counts: Counter[str] = Counter()
@@ -494,24 +513,25 @@ class PortfolioSimulator:
         self.maximum_risk = max(self.maximum_risk, balances['reserved_risk_quote'])
         self.maximum_exposure = max(self.maximum_exposure,balances['open_notional_quote']+balances['pending_notional_quote'])
 
-    def advance(self, candles: Sequence[Candle], *, funding: Sequence[FundingEvent] = (),
-                signals: Sequence[Signal] = ()) -> dict[str, Any]:
-        if self.finished or self.failed:
-            raise ValueError('research_simulator_finished_or_failed')
-        if self.now >= self.assumptions.end_ms or len(candles) != len(self.assumptions.symbols):
+    def _validate_candles(self, candles: Sequence[Candle], open_ms: int) -> dict[str, Candle]:
+        if len(candles) != len(self.assumptions.symbols):
             raise ValueError('research_coverage_gap')
         batch = {c.symbol:c for c in candles}
         if set(batch) != set(self.assumptions.symbols) or len(batch) != len(candles):
             raise ValueError('research_coverage_gap')
         for c in candles:
             c.validate()
-            if c.open_ms != self.now:
+            if c.open_ms != open_ms:
                 raise ValueError('research_coverage_gap')
-        boundary = self.now+MINUTE
+        return batch
+
+    def _validate_funding(self, funding: Sequence[FundingEvent], *, startup: bool = False) -> None:
         seen = set()
         for event in funding:
-            if (event.symbol not in batch or type(event.timestamp_ms) is not int
-                or not self.now < event.timestamp_ms <= boundary
+            if (event.symbol not in self.assumptions.symbols or type(event.timestamp_ms) is not int
+                or not self.assumptions.start_ms <= event.timestamp_ms < self.assumptions.end_ms
+                or (event.timestamp_ms != self.assumptions.start_ms if startup
+                    else not self.now < event.timestamp_ms <= self.now+MINUTE)
                 or not isinstance(event.rate,D) or not event.rate.is_finite() or abs(event.rate) >= 1
                 or (event.symbol,event.timestamp_ms) in seen
                 or ((event.mark_price is None) != (event.mark_observed_ms is None))
@@ -520,12 +540,54 @@ class PortfolioSimulator:
                     or event.mark_observed_ms != event.timestamp_ms))):
                 raise ValueError('research_funding_event_invalid')
             seen.add((event.symbol,event.timestamp_ms))
+
+    def _validate_signals(self, signals: Sequence[Signal], boundary: int) -> None:
         seen_symbols = set()
         for s in signals:
             self._validate_signal(s,boundary)
             if s.payload['symbol'] in seen_symbols or boundary >= self.assumptions.end_ms:
                 raise ValueError('research_signal_duplicate_or_outside_window')
             seen_symbols.add(s.payload['symbol'])
+
+    def prime(self, prephase_candles: Sequence[Candle], *,
+              funding: Sequence[FundingEvent] = (), signals: Sequence[Signal] = ()) -> dict[str, Any]:
+        """Initialize exactly at phase start with the complete preceding minute.
+
+        These closes become known at start_ms and never count as phase bars.
+        Exact-start funding observations count before any signal is admitted;
+        there is no prephase position and therefore no startup funding PnL.
+        Input validation is atomic; planner/sink failures invalidate the run.
+        """
+        if self.finished or self.failed:
+            raise ValueError('research_simulator_finished_or_failed')
+        if self.primed:
+            raise ValueError('research_simulator_already_primed')
+        batch = self._validate_candles(prephase_candles,self.assumptions.start_ms-MINUTE)
+        self._validate_funding(funding,startup=True)
+        self._validate_signals(signals,self.assumptions.start_ms)
+        try:
+            self.marks = {s:c.close for s,c in batch.items()}
+            for event in funding:
+                self.funding_counts[event.symbol] += 1
+            self.primed = True
+            self._admit_signals(tuple(signals))
+        except Exception:
+            self.failed = True
+            raise
+        return self.view()
+
+    def advance(self, candles: Sequence[Candle], *, funding: Sequence[FundingEvent] = (),
+                signals: Sequence[Signal] = ()) -> dict[str, Any]:
+        if self.finished or self.failed:
+            raise ValueError('research_simulator_finished_or_failed')
+        if not self.primed:
+            raise ValueError('research_simulator_not_primed')
+        if self.now >= self.assumptions.end_ms:
+            raise ValueError('research_coverage_gap')
+        batch = self._validate_candles(candles,self.now)
+        boundary = self.now+MINUTE
+        self._validate_funding(funding)
+        self._validate_signals(signals,boundary)
         try:
             self._advance(batch,tuple(funding),tuple(signals),boundary)
         except Exception:
@@ -591,6 +653,9 @@ class PortfolioSimulator:
         self.now = boundary
         self.processed_batches += 1
         self._statistics()
+        self._admit_signals(signals)
+
+    def _admit_signals(self, signals: tuple[Signal,...]) -> None:
         for s in sorted(signals,key=lambda s:self.assumptions.symbols.index(s.payload['symbol'])):
             self.attempted_signals += 1
             self.last_signals[s.payload['symbol']] = (s.index,self.now)
@@ -617,6 +682,8 @@ class PortfolioSimulator:
     def finish(self) -> dict[str, Any]:
         if self.finished or self.failed:
             raise ValueError('research_simulator_finished_or_failed')
+        if not self.primed:
+            raise ValueError('research_simulator_not_primed')
         if self.now != self.assumptions.end_ms or self.processed_batches != (self.assumptions.end_ms-self.assumptions.start_ms)//MINUTE:
             raise ValueError('research_source_incomplete')
         if any(self.funding_counts[s] != n for s,n in self.assumptions.funding.expected_counts):
