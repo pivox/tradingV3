@@ -97,6 +97,14 @@ between every publication step. Existing or ambiguous claims fail closed.
 Preflight failures before claiming do not consume holdout; an existing claim
 does, even if no terminal artifact was written.
 
+Preflight rejects output placement outside the signal writer's permitted
+locations and budgets that cannot even enter the signal stage. A lowered
+persistent byte cap must leave strictly more than the mandatory signal-report
+reservation after the terminal reserve, encoded authority/contract/claim and
+existing lock bytes. Recheck lock size under the lock before publication.
+This entry check is not a promise that the complete campaign will fit; later
+bounded-capacity failures still consume the claim and retain partial evidence.
+
 Any post-claim crash, failed run, incomplete funding or partial evidence remains
 recorded and consumes the evaluation. There is no automatic re-evaluation under
 another output root. Arithmetic verification of retained ledgers is allowed;
