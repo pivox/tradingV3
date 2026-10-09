@@ -38,6 +38,10 @@ class ComplementError(ValueError):
     """Evidence or private-storage precondition failed closed."""
 
 
+class StorageCapError(ComplementError):
+    """Stop retrieval while preserving capacity for its final status."""
+
+
 class FetchError(ComplementError):
     def __init__(self, message: str, *, status: int | None = None, partial: bytes = b"",
                  partial_attempt: int | None = None):
@@ -52,6 +56,15 @@ def _hash(value: dict) -> str:
 
 
 def _json(raw: bytes):
+    def invalid_constant(value):
+        raise ComplementError("non-standard JSON constant")
+
+    def finite_float(value):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ComplementError("non-finite JSON number")
+        return number
+
     def pairs(items):
         result = {}
         for key, value in items:
@@ -60,7 +73,8 @@ def _json(raw: bytes):
             result[key] = value
         return result
     try:
-        return json.loads(raw, object_pairs_hook=pairs)
+        return json.loads(raw, object_pairs_hook=pairs, parse_constant=invalid_constant,
+                          parse_float=finite_float)
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise ComplementError("invalid JSON evidence") from exc
 
@@ -86,6 +100,10 @@ def _hypotheses(contract_size, leverage_cap, mmr_proxy_rate, liquidation_fee_rat
     if not (contract_size > 0 and 1 <= leverage_cap <= 2 and 0 < mmr_proxy_rate < 1
             and 0 <= liquidation_fee_rate < 1):
         raise ComplementError("research hypotheses outside campaign limits")
+    try:
+        _canonical_json(values)
+    except ValueError as exc:
+        raise ComplementError("hypotheses outside canonical evidence domain") from exc
     return values
 
 
@@ -161,6 +179,10 @@ def funding_rows(raw: bytes, symbol: str, start: int, end: int) -> list[dict]:
         _number(row.get("fundingRate"))
         if "markPrice" in row:
             _number(row["markPrice"], positive=True)
+        try:
+            _canonical_json(row)
+        except ValueError as exc:
+            raise ComplementError("funding row is not representable in canonical evidence") from exc
         previous = timestamp
     return rows
 
@@ -192,9 +214,13 @@ def _fresh_root(root: Path) -> Path:
     return root
 
 
-def _write(root: Path, name: str, data: bytes) -> None:
-    if sum(item.stat().st_size for item in root.iterdir()) + len(data) > ROOT_CAP:
-        raise ComplementError("root storage cap")
+def _check_space(root: Path, size: int, reserve: int = 0) -> None:
+    if sum(item.stat().st_size for item in root.iterdir()) + size + reserve > ROOT_CAP:
+        raise StorageCapError("root storage cap (including final status reserve)")
+
+
+def _write(root: Path, name: str, data: bytes, *, reserve: int = 0) -> None:
+    _check_space(root, len(data), reserve)
     fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", suffix=".tmp", dir=root)
     temporary = Path(temporary_name)
     try:
@@ -208,8 +234,18 @@ def _write(root: Path, name: str, data: bytes) -> None:
         temporary.unlink()
 
 
-def _write_json(root: Path, name: str, value: dict) -> None:
-    _write(root, name, (json.dumps(value, sort_keys=True, indent=2, allow_nan=False) + "\n").encode())
+def _json_bytes(value: dict) -> bytes:
+    return (json.dumps(value, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
+
+
+def _status_reserve(value: dict) -> int:
+    # Exact observation duplication plus room for bounded error/page metadata and
+    # the remaining ten-pair not-attempted entries after a storage refusal.
+    return len(_json_bytes(dict(value, status_hash="sha256:" + "0" * 64))) + 4096
+
+
+def _write_json(root: Path, name: str, value: dict, *, reserve: int = 0) -> None:
+    _write(root, name, _json_bytes(value), reserve=reserve)
 
 
 def _fetch(client: httpx.Client, url: str, cap: int, sleep: Callable) -> bytes:
@@ -266,11 +302,13 @@ def capture(root: Path, *, contract_size: float, leverage_cap: float,
             mmr_proxy_rate: float, liquidation_fee_rate: float,
             client: httpx.Client | None = None, sleep: Callable = time.sleep) -> dict:
     hypotheses = _hypotheses(contract_size, leverage_cap, mmr_proxy_rate, liquidation_fee_rate)
-    root = _fresh_root(root)
     result = dict(schema_version="research-source-complements.v1", retrieval_complete=False,
                   start_ms=START_MS, end_exclusive_ms=END_MS, symbols=list(SYMBOLS),
                   metadata={"status": "not_attempted"}, funding=[], hypotheses=hypotheses)
-    _write_json(root, "status.initial.json", result)
+    if len(_json_bytes(result)) + _status_reserve(result) > ROOT_CAP:
+        raise StorageCapError("root storage cap cannot hold initial and final status")
+    root = _fresh_root(root)
+    _write_json(root, "status.initial.json", result, reserve=_status_reserve(result))
     owned = client is None
     http = client if client is not None else httpx.Client(trust_env=False, follow_redirects=False)
     def download(url: str, cap: int, name: str, entry: dict) -> bytes:
@@ -280,12 +318,12 @@ def capture(root: Path, *, contract_size: float, leverage_cap: float,
             entry.update(status="http_error" if exc.status else "failed", error=str(exc),
                          http_status=exc.status)
             if exc.partial:
-                _write(root, name + ".partial", exc.partial)
+                _write(root, name + ".partial", exc.partial, reserve=_status_reserve(result))
                 entry.update(partial_raw_path=name + ".partial",
                              partial_sha256=hashlib.sha256(exc.partial).hexdigest(),
                              partial_attempt=exc.partial_attempt)
             raise
-        _write(root, name, raw)
+        _write(root, name, raw, reserve=_status_reserve(result))
         entry.update(raw_path=name, raw_sha256=hashlib.sha256(raw).hexdigest(),
                      source_url=url, retrieved_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
         return raw
@@ -294,8 +332,8 @@ def capture(root: Path, *, contract_size: float, leverage_cap: float,
         try:
             body = download(EXCHANGE_URL, EXCHANGE_CAP, "exchangeInfo.raw.json", metadata)
             manifest, evidence = instrument_manifest(body, metadata["retrieved_at"], **hypotheses)
-            _write_json(root, "instrument-assumptions.json", manifest)
-            _write_json(root, "precision-evidence.json", evidence)
+            _write_json(root, "instrument-assumptions.json", manifest, reserve=_status_reserve(result))
+            _write_json(root, "precision-evidence.json", evidence, reserve=_status_reserve(result))
             metadata.update(status="captured", manifest_hash=manifest["manifest_hash"],
                             evidence_hash=evidence["evidence_hash"])
         except ComplementError as exc:
@@ -318,6 +356,10 @@ def capture(root: Path, *, contract_size: float, leverage_cap: float,
                     entry["pages"].append(page_entry)
                     body = download(url, FUNDING_CAP, f"funding-{symbol}-{page:02d}.raw.json", page_entry)
                     rows = funding_rows(body, symbol, cursor, END_MS)
+                    projected = dict(result, funding=[
+                        dict(item, observations=entry["observations"] + rows) if item is entry else item
+                        for item in result["funding"]])
+                    _check_space(root, 0, _status_reserve(projected))
                     page_entry["status"] = "validated"
                     entry["observations"].extend(rows)
                     if len(rows) < PAGE_LIMIT:
@@ -330,14 +372,17 @@ def capture(root: Path, *, contract_size: float, leverage_cap: float,
             except ComplementError as exc:
                 entry.update(status="http_error" if isinstance(exc, FetchError) and exc.status else
                              "failed" if isinstance(exc, FetchError) else "rejected", error=str(exc))
-                refused = isinstance(exc, FetchError) and exc.status in (403, 451)
+                refused = isinstance(exc, StorageCapError) or (
+                    isinstance(exc, FetchError) and exc.status in (403, 451))
         result["retrieval_complete"] = all(entry["retrieval_complete"] for entry in result["funding"])
         return result
     finally:
-        result["status_hash"] = _hash(result)
-        _write_json(root, "status.json", result)
-        if owned:
-            http.close()
+        try:
+            result["status_hash"] = _hash(result)
+            _write_json(root, "status.json", result)
+        finally:
+            if owned:
+                http.close()
 
 
 def main(argv: list[str] | None = None, *, client: httpx.Client | None = None) -> int:

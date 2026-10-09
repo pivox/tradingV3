@@ -125,6 +125,49 @@ def test_unknown_or_unsafe_hypotheses_rejected(hypotheses):
         sc.instrument_manifest(raw(metadata()), "2026-10-09T06:00:00Z", **hypotheses)
 
 
+@pytest.mark.parametrize("value", [1e20, 2**63])
+def test_noncanonical_hypotheses_refused_before_creating_root(tmp_path, value):
+    root = tmp_path / "bad-hypotheses"
+    with client(lambda _: pytest.fail("invalid hypotheses must not fetch")) as http:
+        with pytest.raises(sc.ComplementError, match="canonical"):
+            sc.capture(root, **dict(HYPOTHESES, contract_size=value), client=http)
+    assert not root.exists()
+
+
+@pytest.mark.parametrize("payload_size", [2000, 4500, 20000])
+def test_storage_exhaustion_retains_bounded_final_status(tmp_path, monkeypatch, payload_size):
+    monkeypatch.setattr(sc, "ROOT_CAP", 42000)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.url.path.endswith("exchangeInfo"):
+            return httpx.Response(200, json=metadata())
+        return httpx.Response(200, json=[{
+            "symbol": request.url.params["symbol"], "fundingTime": sc.START_MS,
+            "fundingRate": "0.0001", "evidence": "x" * payload_size}])
+
+    root = tmp_path / "bounded-status"
+    with client(handler) as http:
+        result = sc.capture(root, **HYPOTHESES, client=http)
+    assert not result["retrieval_complete"]
+    assert json.loads((root / "status.json").read_bytes()) == result
+    assert sum(path.stat().st_size for path in root.iterdir()) <= sc.ROOT_CAP
+    failed = [entry for entry in result["funding"] if entry["status"] == "rejected"]
+    assert len(failed) == 1 and "storage cap" in failed[0]["error"]
+    assert len(calls) < 11
+    assert all(entry["status"] in {"observed", "rejected", "not_attempted"}
+               for entry in result["funding"])
+
+
+def test_unusable_storage_budget_refused_before_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(sc, "ROOT_CAP", 1)
+    root = tmp_path / "too-small"
+    with pytest.raises(sc.ComplementError, match="storage cap"):
+        sc.capture(root, **HYPOTHESES)
+    assert not root.exists()
+
+
 @pytest.mark.parametrize("rows", [None, [{}], [{"symbol": "BAD", "fundingTime": sc.START_MS,
     "fundingRate": "0"}], [{"symbol": SYMBOLS[0], "fundingTime": sc.END_MS,
     "fundingRate": "0"}], [{"symbol": SYMBOLS[0], "fundingTime": sc.START_MS,
@@ -316,6 +359,24 @@ def test_earlier_partial_bytes_survive_later_empty_retry_failures(tmp_path, fina
     assert (root / result["metadata"]["partial_raw_path"]).read_bytes() == b'{"symbols":'
     assert result["metadata"]["partial_sha256"] == hashlib.sha256(b'{"symbols":').hexdigest()
     assert len(calls) == (3 if final_failure == "transport" else 2)
+
+
+@pytest.mark.parametrize("extra", ["NaN", "Infinity", "-Infinity", "1e400", "{}", "9223372036854775808"])
+def test_invalid_extra_funding_value_is_rejected_with_final_status(tmp_path, extra):
+    def handler(request):
+        if request.url.path.endswith("exchangeInfo"):
+            return httpx.Response(200, json=metadata())
+        symbol = request.url.params["symbol"]
+        payload = ('[{"symbol":"' + symbol + '","fundingTime":' + str(sc.START_MS) +
+                   ',"fundingRate":"0.0001","extra":' + extra + '}]').encode()
+        return httpx.Response(200, content=payload)
+
+    root = tmp_path / "invalid-extra"
+    with client(handler) as http:
+        result = sc.capture(root, **HYPOTHESES, client=http)
+    assert not result["retrieval_complete"]
+    assert all(entry["status"] == "rejected" for entry in result["funding"])
+    assert json.loads((root / "status.json").read_text())["retrieval_complete"] is False
 
 
 @pytest.mark.parametrize("retry_after", ["invalid", "nan"])
