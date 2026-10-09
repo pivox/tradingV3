@@ -690,6 +690,8 @@ def prepare_claim(authority: CampaignAuthority,output_root: Path,*,timeout: floa
             not 0<timeout<=OVERALL_SECONDS or isinstance(max_output_bytes,bool) or
             not isinstance(max_output_bytes,int) or not TERMINAL_RESERVE<max_output_bytes<=OVERALL_BYTES):
         raise HoldoutError('resource_limits_lower_only')
+    if max_output_bytes<=METADATA_BYTES+TERMINAL_RESERVE:
+        raise HoldoutError('signal_report_capacity_required')
     output = Path(output_root)
     if (authority.anchor/'claim.json').exists(): raise HoldoutError('already_claimed')
     _fresh_output(output,authority)
@@ -723,15 +725,27 @@ def prepare_claim(authority: CampaignAuthority,output_root: Path,*,timeout: floa
             'verifier_seconds':VERIFIER_SECONDS,'unit_seconds':VERIFIER_SECONDS,'cleanup_seconds':10},
         'preflight_elapsed_seconds':time.monotonic()-started}
     raw = canonical_bytes(contract)
-    if len(raw)>METADATA_BYTES or len(raw)+TERMINAL_RESERVE>max_output_bytes:
+    if len(raw)>METADATA_BYTES:
         raise HoldoutError('metadata_capacity_exceeded')
+    expected = canonical_bytes({'campaign_id':CAMPAIGN_ID,'registry':str(authority.registry),
+        'protocol_hash':config['protocol_hash']})
+    claim_raw = canonical_bytes({'schema_version':'research-holdout-claim.v1','campaign_id':CAMPAIGN_ID,
+        'authority_hash':authority.authority_hash,'contract_hash':hash_bytes(raw),
+        'output_root':str(output),'run_id':uuid.uuid4().hex})
+    # The shared budget charges these three inode-unique publications plus any
+    # retained lock bytes. B1 needs strictly more than its report reservation.
+    minimum = len(expected)+len(raw)+len(claim_raw)+METADATA_BYTES+TERMINAL_RESERVE
+    lock_path = authority.anchor/'.claim.lock'
+    lock_bytes = _safe_path(lock_path,private=True).stat().st_size if lock_path.exists() or lock_path.is_symlink() else 0
+    if max_output_bytes<=minimum+lock_bytes:
+        raise HoldoutError('signal_report_capacity_required')
     if shutil.disk_usage(output.parent).free-len(raw)-TERMINAL_RESERVE<DISK_RESERVE:
         raise HoldoutError('disk_reserve_required')
     if time.monotonic()-started>=timeout: raise HoldoutError('preflight_deadline')
     try: authority.anchor.mkdir(mode=0o700)
     except FileExistsError: pass
     _safe_path(authority.anchor,directory=True,private=True)
-    lock_fd = os.open(authority.anchor/'.claim.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    lock_fd = os.open(lock_path,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
     with os.fdopen(lock_fd,'r+b') as lock:
         info = os.fstat(lock.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)!=0o600:
@@ -741,8 +755,9 @@ def prepare_claim(authority: CampaignAuthority,output_root: Path,*,timeout: floa
         if (authority.anchor/'claim.json').exists(): raise HoldoutError('already_claimed')
         entries = {p.name for p in authority.anchor.iterdir()}
         if entries-{'authority.json','.claim.lock'}: raise HoldoutError('ambiguous_claim_state')
-        expected = canonical_bytes({'campaign_id':CAMPAIGN_ID,'registry':str(authority.registry),
-            'protocol_hash':config['protocol_hash']})
+        # Recheck after acquiring the lock: it may have grown since preflight.
+        if max_output_bytes<=minimum+os.fstat(lock.fileno()).st_size:
+            raise HoldoutError('signal_report_capacity_required')
         if 'authority.json' in entries:
             _, existing = _read_json(authority.anchor/'authority.json',METADATA_BYTES,private=True)
             if existing!=expected: raise HoldoutError('anchor_authority_conflict')
@@ -750,9 +765,6 @@ def prepare_claim(authority: CampaignAuthority,output_root: Path,*,timeout: floa
         # Contract has no execution authority. Interruption here is retained and
         # blocks future claims. Claim link publication permanently consumes C2b.
         _publish_bytes(authority.anchor/'contract.json',raw)
-        claim_raw = canonical_bytes({'schema_version':'research-holdout-claim.v1','campaign_id':CAMPAIGN_ID,
-            'authority_hash':authority.authority_hash,'contract_hash':hash_bytes(raw),
-            'output_root':str(output),'run_id':uuid.uuid4().hex})
         try:
             _publish_bytes(authority.anchor/'claim.json',claim_raw)
         except BaseException as exc:

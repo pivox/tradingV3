@@ -348,9 +348,11 @@ def test_before_claim_link_failure_never_publishes_terminal(fixture,monkeypatch)
 
 def test_report_bundle_capacity_is_aggregate_and_failure_publishes_nothing(fixture):
     from app.backtesting.research import holdout
-    auth=fixture.claim(max_output_bytes=100000); fixture.output.mkdir(mode=0o700)
+    auth=fixture.claim(max_output_bytes=h.METADATA_BYTES+h.TERMINAL_RESERVE+100000); fixture.output.mkdir(mode=0o700)
     remaining=h.remaining_limits(auth)['bytes']
-    padding=fixture.output/'padding'; padding.write_bytes(b'x'*(remaining-15)); padding.chmod(0o600)
+    padding=fixture.output/'padding'
+    with padding.open('wb') as stream: stream.truncate(remaining-15)
+    padding.chmod(0o600)
     with pytest.raises(h.HoldoutError,match='report_capacity'):
         holdout._publish_artifacts(auth,[(fixture.output/'report.json',b'a'*10),
                                        (fixture.output/'report.csv',b'b'*10)])
@@ -539,8 +541,11 @@ def test_failure_inventory_reports_its_bounded_fragment_without_full_hash_claim(
 
 def test_failure_terminal_byte_accounting_deduplicates_hardlinks(fixture):
     from app.backtesting.research import holdout
-    auth=fixture.claim(max_output_bytes=100000); fixture.output.mkdir(mode=0o700)
-    path=fixture.output/'partial'; path.write_bytes(b'x'*70000); path.chmod(0o600)
+    budget=h.METADATA_BYTES+h.TERMINAL_RESERVE+100000
+    auth=fixture.claim(max_output_bytes=budget); fixture.output.mkdir(mode=0o700)
+    path=fixture.output/'partial'
+    with path.open('wb') as stream: stream.truncate(budget-30000)
+    path.chmod(0o600)
     os.link(path,fixture.output/'same-inode')
     contract=json.loads(auth.contract_bytes)
     holdout._publish_batch_failure_best_effort(auth,contract,holdout._pending_units(contract),RuntimeError('failed'))

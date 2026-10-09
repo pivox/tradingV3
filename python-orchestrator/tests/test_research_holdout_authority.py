@@ -701,6 +701,51 @@ def test_preclaim_output_validation_does_not_require_future_signal_parent(fixtur
     assert not (fixture.output/'signals').exists()
 
 
+@pytest.mark.parametrize('extra', [-1,0,h_module.TERMINAL_RESERVE,
+    h_module.TERMINAL_RESERVE+1])
+def test_signal_report_reservation_rejected_before_claim(fixture,extra):
+    f=fixture; h=f.module
+    with pytest.raises(h.HoldoutError,match='signal_report_capacity_required'):
+        f.claim(max_output_bytes=h.METADATA_BYTES+extra)
+    assert not f.output.exists()
+    assert not f.anchor.exists()
+
+
+@pytest.mark.parametrize('grow_under_lock', [False,True])
+def test_signal_reservation_includes_existing_lock_before_publication(fixture,monkeypatch,grow_under_lock):
+    f=fixture; h=f.module
+    f.anchor.mkdir(mode=0o700)
+    lock=f.anchor/'.claim.lock'
+    with lock.open('wb') as stream: stream.truncate(0 if grow_under_lock else 100000)
+    lock.chmod(0o600)
+    if grow_under_lock:
+        original=h.os.open
+        def opened(path,flags,*args,**kwargs):
+            if Path(path)==lock and flags & os.O_CREAT:
+                with lock.open('r+b') as stream: stream.truncate(100000)
+            return original(path,flags,*args,**kwargs)
+        monkeypatch.setattr(h.os,'open',opened)
+    with pytest.raises(h.HoldoutError,match='signal_report_capacity_required'):
+        f.claim(max_output_bytes=h.METADATA_BYTES+h.TERMINAL_RESERVE+100000)
+    assert {p.name for p in f.anchor.iterdir()}=={'.claim.lock'}
+    assert not f.output.exists()
+    assert lock.stat().st_size==100000
+
+
+def test_valid_limited_budget_leaves_signal_reserve_after_exact_anchor_accounting(fixture):
+    f=fixture; h=f.module
+    f.anchor.mkdir(mode=0o700)
+    lock=f.anchor/'.claim.lock'; lock.write_bytes(b'kept lock bytes'); lock.chmod(0o600)
+    budget=h.METADATA_BYTES+h.TERMINAL_RESERVE+100000
+    auth=f.claim(max_output_bytes=budget)
+    remaining=h.remaining_limits(auth)
+    assert remaining['bytes']>h.METADATA_BYTES
+    assert remaining['used_bytes']==sum(p.stat().st_size for p in f.anchor.iterdir())
+    assert remaining['bytes']==budget-remaining['used_bytes']-h.TERMINAL_RESERVE
+    assert not f.output.exists()
+    assert lock.read_bytes()==b'kept lock bytes'
+
+
 @pytest.mark.parametrize('kwargs', [
     {'operation':'unknown'}, {'operation':'signals','source_start':'wrong'},
     {'operation':'signals','score_start':'wrong'}, {'operation':'signals','end':'wrong'},
