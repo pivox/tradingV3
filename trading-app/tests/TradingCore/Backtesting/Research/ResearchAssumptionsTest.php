@@ -70,6 +70,27 @@ final class ResearchAssumptionsTest extends TestCase
         ResearchCostAssumptions::fromArray($manifest);
     }
 
+    public function testCostProfileObjectOrderDoesNotChangeMeaningOrHash(): void
+    {
+        $manifest = self::costs();
+        $expected = ResearchCostAssumptions::fromArray($manifest);
+        $manifest['profiles'] = ['adverse' => $manifest['profiles']['adverse'], 'baseline' => $manifest['profiles']['baseline']];
+        $actual = ResearchCostAssumptions::fromArray($manifest);
+        self::assertSame($expected->hash, $actual->hash);
+        self::assertSame($expected->profile('baseline'), $actual->profile('baseline'));
+        self::assertSame($expected->profile('adverse'), $actual->profile('adverse'));
+    }
+
+    public function testUnknownCostProfileStillRejectsWithRecomputedHash(): void
+    {
+        $manifest = self::costs();
+        $manifest['profiles']['extra'] = $manifest['profiles']['baseline'];
+        $manifest['assumption_hash'] = CanonicalBacktestRuleEvaluator::canonicalHash(array_diff_key($manifest, ['assumption_hash' => true]));
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('research_cost_assumptions_invalid');
+        ResearchCostAssumptions::fromArray($manifest);
+    }
+
     /** @return array<string, mixed> */
     public static function instruments(): array
     {
