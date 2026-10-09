@@ -14,8 +14,11 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
+
+from app.modern_trading_contracts import CanonicalEffectiveConfigSnapshot, _canonical_json
 
 from .binance_history import SYMBOLS
 from .signal_sources import (SignalError, SourceSelection, _ms, iter_verified_candles,
@@ -30,7 +33,29 @@ CODE_FILES = (
     "src/TradingCore/Backtesting/Research/ResearchSignalSession.php",
     "src/TradingCore/Backtesting/Research/ResearchCandle.php",
     "src/TradingCore/Backtesting/Research/ResearchRollingWindows.php",
+    "src/TradingCore/Backtesting/Indicator/CanonicalPhpIndicatorCalculator.php",
+    "src/TradingCore/Backtesting/Indicator/CanonicalIndicatorNumericSeries.php",
+    "src/TradingCore/Backtesting/Indicator/CanonicalFiniteSeriesValidator.php",
+    "src/TradingCore/Backtesting/CanonicalBacktestRuleEvaluator.php",
+    "src/MtfValidator/Policy/CanonicalSetupRuleRuntime.php",
+    "src/TradingCore/Config/EffectiveTradingConfigResolver.php",
 )
+TIMEFRAME_MS = {"1m": 60000, "5m": 300000, "15m": 900000,
+                "1h": 3600000, "4h": 14400000}
+CONTEXT_FIELDS = frozenset(("open_ms", "available_ms", "research_window_hash", "close",
+                            "rsi", "ema_20", "ema_50", "ema_200", "macd_hist", "vwap", "atr",
+                            "adx", "ma9", "ma21", "bb_upper", "bb_middle", "bb_lower",
+                            "ema", "ema_prev", "ema_200_slope", "macd", "pullback_age_bars",
+                            "volume_ratio", "ma_21_plus_k_atr"))
+RESULT_FIELDS = frozenset(("schema_version", "session_id", "source", "execution", "baseline",
+                           "symbol", "evaluated_ms", "evaluated_at", "passed", "reason_code",
+                           "numeric_context_hash", "contexts", "trace_hash", "verdicts", "trace",
+                           "result_hash"))
+SUMMARY_FIELDS = frozenset(("schema_version", "session_id", "source", "execution", "baseline",
+                            "symbol", "consumed_candles", "warmup_unavailable", "before_score_start",
+                            "evaluated_ticks", "passed_rules", "failed_rules", "first_source_open_ms",
+                            "last_source_open_ms", "source_available_end_ms", "promised_end_ms",
+                            "score_start_ms", "completion"))
 
 
 def _encode(frame: dict) -> bytes:
@@ -69,9 +94,13 @@ def _private_output(root: Path, dataset_root: Path) -> Path:
         raise SignalError("output root outside repositories and dataset required")
     cursor = Path(root.anchor)
     for part in root.parts[1:]:
+        if (cursor / ".git").exists() or (cursor / ".git").is_symlink():
+            raise SignalError("output root inside another repository")
         cursor /= part
         if cursor.is_symlink():
             raise SignalError("symlink output path")
+    if (root.parent / ".git").exists() or (root.parent / ".git").is_symlink():
+        raise SignalError("output root inside another repository")
     if not root.parent.is_dir():
         raise SignalError("output parent directory required")
     root.mkdir(mode=0o700)
@@ -93,15 +122,32 @@ def _atomic_json(path: Path, data: dict) -> None:
             temporary.unlink()
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _code_hashes(app_dir: Path, *, fake_worker: bool) -> dict[str, str]:
-    paths = [Path(__file__), Path(__file__).with_name("signal_sources.py")]
+    paths = [Path(__file__), Path(__file__).with_name("signal_sources.py"),
+             Path(__file__).with_name("binance_history.py"),
+             Path(__file__).resolve().parents[2] / "modern_trading_contracts.py"]
     if not fake_worker:
-        paths.extend(app_dir / name for name in CODE_FILES)
+        paths.extend(app_dir / name for name in
+                     ("bin/console", "composer.json", "composer.lock", "vendor/composer/installed.json"))
+        paths.extend(sorted((app_dir / "src").rglob("*.php")))
+        paths.extend(sorted(path for path in (app_dir / "config").rglob("*")
+                            if path.is_file() and path.suffix in {".php", ".yaml", ".yml", ".xml"}))
+        paths.extend(sorted((app_dir / "vendor").rglob("*.php")))
+        if any(not (app_dir / name).is_file() for name in CODE_FILES):
+            raise SignalError("required worker source unavailable")
     hashes: dict[str, str] = {}
     for path in paths:
         if not path.is_file() or path.is_symlink():
             raise SignalError("worker or runner code unavailable")
-        hashes[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+        hashes[str(path)] = _file_sha256(path)
     return hashes
 
 
@@ -159,34 +205,123 @@ def _terminate(proc: subprocess.Popen[bytes]) -> None:
         proc.wait(timeout=2)
 
 
-def _identity(frame: dict, opened: dict, session_id: str, selection: SourceSelection) -> None:
+def _identity(frame: dict, opened: dict, session_id: str, selection: SourceSelection,
+              *, require_symbol: bool = True) -> None:
     source = {"dataset_id": "research-" + selection.dataset_sha256[:24],
               "dataset_sha256": selection.dataset_sha256,
               "source_venue": "binance_usdm", "source_network": "mainnet",
               "market_type": "perpetual"}
     if (frame.get("session_id") != session_id or frame.get("source") != source
-            or (frame.get("symbol") not in (None, selection.symbol))):
+            or (require_symbol and frame.get("symbol") != selection.symbol)
+            or (not require_symbol and "symbol" in frame)):
         raise SignalError("worker source or session identity conflict")
     if opened:
         if frame.get("execution") != opened.get("execution") or frame.get("baseline") != opened.get("baseline"):
             raise SignalError("worker execution or baseline changed")
 
 
-def _validate_opened(frame: dict, session_id: str, selection: SourceSelection) -> None:
-    if frame.get("schema_version") != "research-signal-opened.v1":
+def _sha256_canonical(value: dict) -> str:
+    try:
+        return "sha256:" + hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+    except (ValueError, TypeError) as exc:
+        raise SignalError("worker canonical payload invalid") from exc
+
+
+def _hash_shape(value: object, *, prefix: bool = True) -> bool:
+    pattern = r"sha256:[0-9a-f]{64}" if prefix else r"[0-9a-f]{64}"
+    return isinstance(value, str) and re.fullmatch(pattern, value) is not None
+
+
+def _verify_baseline_files(baseline: dict, app_dir: Path, ordered_files: list[str]) -> None:
+    hashes = baseline.get("file_hashes")
+    if (not isinstance(hashes, dict) or len(hashes) != len(ordered_files) + 1
+            or not set(ordered_files).issubset(hashes)):
+        raise SignalError("worker baseline file set invalid")
+    for name, expected in hashes.items():
+        if not isinstance(name, str) or not _hash_shape(expected):
+            raise SignalError("worker baseline file hash invalid")
+        path = Path(name)
+        if not path.is_absolute() or ".." in path.parts:
+            raise SignalError("worker baseline file path invalid")
+        try:
+            path.relative_to(app_dir)
+        except ValueError as exc:
+            raise SignalError("worker baseline file outside app") from exc
+        if (not path.is_file() or path.is_symlink()
+                or any(parent.is_symlink() for parent in path.parents if parent != app_dir)):
+            raise SignalError("worker baseline file unavailable")
+        if "sha256:" + _file_sha256(path) != expected:
+            raise SignalError("worker baseline file changed")
+
+
+def _validate_opened(frame: dict, session_id: str, selection: SourceSelection,
+                     app_dir: Path) -> None:
+    if (frame.get("schema_version") != "research-signal-opened.v1"
+            or set(frame) != {"schema_version", "session_id", "source", "execution",
+                              "baseline", "effective_config_snapshot", "indicator_engine_version"}):
         raise SignalError("worker open acknowledgement missing")
-    _identity(frame, {}, session_id, selection)
+    _identity(frame, {}, session_id, selection, require_symbol=False)
     execution = frame.get("execution")
-    if (not isinstance(execution, dict)
-            or any(execution.get(key) != value for key, value in {
+    expected_execution = {
                 "mode_id": "day_trading", "mode_version": "1.1.0",
                 "setup_id": "day_trading.trend_continuation.long", "setup_version": "1.1.0",
                 "exchange": "fake", "environment": "local", "side": "long",
-                "execution_capability": "backtest"}.items())
-            or not isinstance(frame.get("baseline"), dict)
-            or not isinstance(frame.get("effective_config_snapshot"), dict)
-            or frame.get("indicator_engine_version") != "php_fallback_v1"):
+                "execution_capability": "backtest"}
+    if (execution != expected_execution or frame.get("indicator_engine_version") != "php_fallback_v1"):
         raise SignalError("worker baseline or protocol identity invalid")
+    snapshot = frame.get("effective_config_snapshot")
+    baseline = frame.get("baseline")
+    if not isinstance(snapshot, dict) or not isinstance(baseline, dict):
+        raise SignalError("worker baseline or snapshot invalid")
+    try:
+        verified = CanonicalEffectiveConfigSnapshot.model_validate(snapshot)
+    except ValueError as exc:
+        raise SignalError("worker effective snapshot invalid") from exc
+    if (snapshot.get("request") != execution or verified.executable is not True
+            or verified.blockers or set(baseline) != {"config_hash", "condition_catalog_hash",
+                                                 "snapshot_hash", "setup_hash", "file_hashes",
+                                                 "mode_risk"}
+            or any(baseline.get(key) != snapshot.get(key) for key in
+                   ("config_hash", "condition_catalog_hash", "snapshot_hash"))
+            or not _hash_shape(baseline.get("setup_hash"), prefix=False)
+            or not isinstance(baseline.get("mode_risk"), dict)
+            or not baseline["mode_risk"]
+            or baseline["mode_risk"] != snapshot["config"]["mode"].get("risk")):
+        raise SignalError("worker baseline snapshot conflict")
+    _verify_baseline_files(baseline, app_dir, snapshot["ordered_files"])
+
+
+def _validate_result(frame: dict, tick: int) -> None:
+    if (set(frame) != RESULT_FIELDS or not isinstance(frame.get("reason_code"), str)
+            or not frame["reason_code"] or not isinstance(frame.get("verdicts"), dict)
+            or not frame["verdicts"]):
+        raise SignalError("worker result shape invalid")
+    instant = datetime.fromtimestamp(tick / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+    if frame.get("evaluated_at") != instant:
+        raise SignalError("worker result availability timestamp invalid")
+    contexts = frame.get("contexts")
+    if not isinstance(contexts, dict) or set(contexts) != set(TIMEFRAME_MS):
+        raise SignalError("worker context set invalid")
+    for timeframe, step in TIMEFRAME_MS.items():
+        item = contexts[timeframe]
+        available = tick // step * step
+        if (not isinstance(item, dict) or set(item) != CONTEXT_FIELDS
+                or type(item.get("available_ms")) is not int
+                or type(item.get("open_ms")) is not int
+                or item["available_ms"] != available
+                or item["open_ms"] != available - step
+                or not _hash_shape(item.get("research_window_hash"))):
+            raise SignalError("worker context availability invalid")
+    for key in ("numeric_context_hash", "trace_hash", "result_hash"):
+        if not _hash_shape(frame.get(key)):
+            raise SignalError("worker result hash invalid")
+    trace = frame.get("trace")
+    if trace is not None:
+        if not isinstance(trace, dict) or not trace or frame["trace_hash"] != _sha256_canonical(trace):
+            raise SignalError("worker trace hash conflict")
+    if frame["result_hash"] != _sha256_canonical({key: value for key, value in frame.items()
+                                                  if key != "result_hash"}):
+        raise SignalError("worker result hash conflict")
 
 
 def _run_symbol(root: Path, out: Path, app_dir: Path, selection: SourceSelection,
@@ -262,7 +397,7 @@ def _run_symbol(root: Path, out: Path, app_dir: Path, selection: SourceSelection
                 if schema == "research-signal-error.v1":
                     raise SignalError("worker structured error: " + str(frame.get("reason_code")))
                 if not opened:
-                    _validate_opened(frame, session_id, selection)
+                    _validate_opened(frame, session_id, selection, app_dir)
                     opened = frame
                     return
                 if summary is not None:
@@ -277,15 +412,7 @@ def _run_symbol(root: Path, out: Path, app_dir: Path, selection: SourceSelection
                     if tick != next_eval or type(frame.get("passed")) is not bool:
                         raise SignalError("worker result chronology or verdict invalid")
                     next_eval += 900000
-                    contexts = frame.get("contexts")
-                    if not isinstance(contexts, dict) or any(
-                        not isinstance(item, dict) or type(item.get("available_ms")) is not int
-                        or item["available_ms"] > tick for item in contexts.values()
-                    ):
-                        raise SignalError("worker context availability invalid")
-                    for key in ("numeric_context_hash", "trace_hash", "result_hash"):
-                        if not isinstance(frame.get(key), str) or re.fullmatch(r"sha256:[0-9a-f]{64}", frame[key]) is None:
-                            raise SignalError("worker result hash invalid")
+                    _validate_result(frame, tick)
                     raw = line + b"\n"
                     if _is_scored_tick(tick, _ms(selection.score_start), _ms(selection.end)):
                         results_file.write(raw)
@@ -311,6 +438,11 @@ def _run_symbol(root: Path, out: Path, app_dir: Path, selection: SourceSelection
                     since_ack = 0
                     return
                 if schema == "research-signal-summary.v1":
+                    numeric = SUMMARY_FIELDS - {"schema_version", "session_id", "source",
+                                                "execution", "baseline", "symbol", "completion"}
+                    if (set(frame) != SUMMARY_FIELDS
+                            or any(type(frame.get(key)) is not int for key in numeric)):
+                        raise SignalError("worker summary shape invalid")
                     _identity(frame, opened, session_id, selection)
                     summary = frame
                     return
@@ -371,6 +503,8 @@ def _run_symbol(root: Path, out: Path, app_dir: Path, selection: SourceSelection
                     or results != selection.expected_evaluations
                     or any(summary.get(key) != value for key, value in expected.items())):
                 raise SignalError("worker completion or count conflict")
+            _verify_baseline_files(opened["baseline"], app_dir,
+                                   opened["effective_config_snapshot"]["ordered_files"])
             results_file.flush()
             os.fsync(results_file.fileno())
             boundary_file.flush()
@@ -396,6 +530,7 @@ def _run_symbol(root: Path, out: Path, app_dir: Path, selection: SourceSelection
             "boundary_sha256": boundary_digest.hexdigest(),
             "result_sha256": result_digest.hexdigest(), "dataset_sha256": selection.dataset_sha256,
             "manifest_sha256": selection.manifest_sha256, "baseline": opened["baseline"],
+            "effective_config_snapshot": opened["effective_config_snapshot"],
             "execution": opened["execution"], "indicator_engine_version": opened["indicator_engine_version"],
             "elapsed_seconds": elapsed, "sampled_child_vm_hwm_bytes": peak_rss,
             "candles_per_second": selection.expected_candles / elapsed if elapsed > 0 else None,
