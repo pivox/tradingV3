@@ -34,6 +34,90 @@ def client_for(handler):
     return httpx.Client(transport=httpx.MockTransport(handler), timeout=30)
 
 
+def initial_identity(symbols: tuple[str, ...] = ("BTCUSDT",)) -> dict:
+    return {
+        "schema": acquire_module.SCHEMA,
+        "source": acquire_module.SOURCE,
+        "symbols": list(symbols),
+        "start": acquire_module._utc(START).isoformat(),
+        "end": acquire_module._utc(END).isoformat(),
+        "include_funding": False,
+    }
+
+
+def write_interrupted_initial_root(root: Path, identity: dict) -> Path:
+    root.mkdir(mode=0o700)
+    os.chmod(root, 0o700)
+    lock = root / ".writer.lock"
+    lock.write_bytes(b"")
+    os.chmod(lock, 0o600)
+    manifest_tmp = root / ".manifest.12345.tmp"
+    manifest_tmp.write_text(json.dumps(
+        {"identity": identity, "complete": False, "sources": []},
+        sort_keys=True, indent=2,
+    ) + "\n")
+    os.chmod(manifest_tmp, 0o600)
+    return manifest_tmp
+
+
+def test_recovers_interrupted_initial_manifest_only_for_matching_private_root(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "interrupted"
+    identity = initial_identity()
+    manifest_tmp = write_interrupted_initial_root(root, identity)
+
+    with client_for(lambda _: httpx.Response(404)) as client:
+        result = acquire(root, START, END, symbols=("BTCUSDT",),
+                         client=client, reserve_bytes=0)
+
+    assert not result.complete
+    assert result.manifest_path.exists()
+    assert not manifest_tmp.exists()
+    assert json.loads(result.manifest_path.read_text())["identity"] == identity
+
+
+def test_rejects_interrupted_initial_manifest_for_another_identity(tmp_path: Path) -> None:
+    root = tmp_path / "foreign_identity"
+    write_interrupted_initial_root(root, initial_identity(("ETHUSDT",)))
+
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("network should not be called"))) as client:
+        with pytest.raises(AcquisitionError, match="identity"):
+            acquire(root, START, END, symbols=("BTCUSDT",),
+                    client=client, reserve_bytes=0)
+    assert (root / ".manifest.12345.tmp").exists()
+    assert not (root / "manifest.json").exists()
+
+
+def test_rejects_interrupted_initial_root_without_provable_identity(tmp_path: Path) -> None:
+    root = tmp_path / "ambiguous_interrupted"
+    root.mkdir(mode=0o700)
+    os.chmod(root, 0o700)
+    lock = root / ".writer.lock"
+    lock.write_bytes(b"")
+    os.chmod(lock, 0o600)
+
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("network should not be called"))) as client:
+        with pytest.raises(AcquisitionError, match="identity"):
+            acquire(root, START, END, symbols=("BTCUSDT",),
+                    client=client, reserve_bytes=0)
+    assert lock.exists()
+    assert not (root / "manifest.json").exists()
+
+
+def test_rejects_interrupted_initial_root_with_non_private_permissions(tmp_path: Path) -> None:
+    root = tmp_path / "non_private_interrupted"
+    temp = write_interrupted_initial_root(root, initial_identity())
+    os.chmod(root, 0o750)
+
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("network should not be called"))) as client:
+        with pytest.raises(AcquisitionError, match="identity"):
+            acquire(root, START, END, symbols=("BTCUSDT",),
+                    client=client, reserve_bytes=0)
+    assert temp.exists()
+    assert not (root / "manifest.json").exists()
+
+
 def test_archive_success_manifest_resume_and_tamper(tmp_path: Path) -> None:
     raw = fixture_zip()
     calls: list[str] = []
@@ -114,6 +198,20 @@ def test_forbidden_does_not_retry_and_invalid_checksum(tmp_path: Path) -> None:
     with client_for(bad_hash) as client:
         result = acquire(tmp_path / "bad_hash", START, END, symbols=("BTCUSDT",),
                          client=client, reserve_bytes=0)
+    assert result.sources[0]["status"] == "checksum_error"
+
+
+def test_non_utf8_archive_checksum_is_checksum_error(tmp_path: Path) -> None:
+    raw = fixture_zip()
+
+    def invalid_encoding(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(".CHECKSUM"):
+            return httpx.Response(200, content=b"\xff\xfe")
+        return httpx.Response(200, content=raw)
+
+    with client_for(invalid_encoding) as client:
+        result = acquire(tmp_path / "invalid_checksum_encoding", START, END,
+                         symbols=("BTCUSDT",), client=client, reserve_bytes=0)
     assert result.sources[0]["status"] == "checksum_error"
 
 
