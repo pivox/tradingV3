@@ -35,6 +35,12 @@ IDENTITY_FIELDS = ('base_setup_hash', 'base_config_hash', 'base_catalog_hash',
     'base_snapshot_hash', 'variant_id', 'variant_hash', 'instrument_assumptions_hash',
     'cost_assumptions_hash', 'research_code_hash')
 SOURCE_FIELDS = ('dataset_id', 'dataset_sha256', 'signal_run_id', 'signal_output_sha256')
+_B1_BASELINE_BINDINGS = (
+    ('setup_hash', 'base_setup_hash'),
+    ('config_hash', 'base_config_hash'),
+    ('condition_catalog_hash', 'base_catalog_hash'),
+    ('snapshot_hash', 'base_snapshot_hash'),
+)
 
 
 def number(value: Any) -> Decimal:
@@ -438,6 +444,12 @@ class PortfolioSimulator:
             or any(p['source'].get(k) != v for k,v in (('source_venue','binance_usdm'),('source_network','mainnet'),('market_type','perpetual')))
             or canonical_hash({k:v for k,v in p.items() if k != 'result_hash'}) != p['result_hash']):
             raise ValueError('research_signal_invalid')
+        baseline = p.get('baseline')
+        identity = dict(self.assumptions.identity)
+        if (not isinstance(baseline, Mapping)
+            or any(baseline.get(signal_key) != identity[run_key]
+                   for signal_key,run_key in _B1_BASELINE_BINDINGS)):
+            raise ValueError('research_signal_baseline_invalid')
         old = self.last_signals.get(symbol)
         if old and (s.index <= old[0] or boundary <= old[1]):
             raise ValueError('research_signal_duplicate_or_out_of_order')
@@ -634,6 +646,11 @@ class PortfolioSimulator:
                 if event.timestamp_ms == boundary and exiting:
                     continue
                 uncertain_exit = exiting and outcomes[key][1] not in ('holding_deadline','midnight')
+                # fill_boundary_ms records when the completed OHLC becomes known,
+                # not an entry execution at that instant. A surviving prior-bar
+                # fill occurred in [open_ms,boundary), so its exposure immediately
+                # before exact-boundary funding is certain for either rate sign.
+                # Plans admitted at this boundary arrive only after settlement.
                 ambiguous = event.timestamp_ms < boundary and (key not in old_keys or uncertain_exit)
                 if ambiguous:
                     self._event('funding_path',event.timestamp_ms,p.plan,ambiguous=True)
@@ -661,6 +678,10 @@ class PortfolioSimulator:
             self.last_signals[s.payload['symbol']] = (s.index,self.now)
             view = self.view()
             result = self.builder(s,FrozenJsonDict(view))
+            # A callback contract/protocol failure invalidates the experiment;
+            # it must not become a normal rejected candidate or zero-trade run.
+            if not isinstance(result, Mapping):
+                raise ValueError('research_plan_response_invalid')
             try:
                 if result.get('schema_version') == 'research-plan-rejection.v1':
                     raise ValueError(str(result['reason_code']))
