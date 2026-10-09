@@ -1,0 +1,39 @@
+# Research campaign execution runner (C1)
+
+Integrate verified sources, B1 signal artifacts, persistent B2b plans and the B2c portfolio kernel. This is one explicit variant/cost scenario/phase per invocation, not automatic strategy publication. C2 separately owns aggregate ranking, selection freeze, final holdout authorization and the user report.
+
+## Prerequisites and strict scope
+
+- Read actual `research/signals.py`, `signal_sources.py`, `funding.py` (reader branch when pending), `portfolio_simulator.py`, PHP ResearchPlanSession/Builder/Variant. Dependency branches are merged into this isolated worktree for development; parent integrates subsequent review fixes before PR.
+- Existing plans/spec define all risk/clock/source invariants. No new indicator math, rule AST edits, live adapters, DB, credentials, network fetch or risk cap changes. No2026 strategy/profit evaluation in this initial runner. B1 and B2b must use the same stable Symfony app directory; do not rewrite path-bound snapshot hashes to fit another checkout.
+- Produce focused `research/plans.py` (persistent bridge), `research/campaign.py` (verified streaming composition/CLI), optionally one artifact/ledger helper. Avoid one giant module or unrelated refactors. At most two concurrently scheduled actual campaign workers; this CLI itself runs one.
+
+## Persistent research plan bridge
+
+- Spawn argv without shell with the same explicit nonsecret isolated Symfony environment as the signal worker; DOTENV=/dev/null, unreachable DB, PHP display_errors=stderr. Open exactly one process per variant/scenario/phase, not per signal. Drain bounded stderr concurrently; bound lines/total bytes/time and terminate/reap only the child owned by this run.
+- Derive the exact 13 closed variant selections from the frozen catalogue and B1 baseline hashes. It is acceptable to serialize the declared immutable diffs in Python; B2b validates them against its own catalogue. Never duplicate geometry/risk math. Normalize with existing PHP-compatible canonical JSON and prove all13 wire selections against the actual command.
+- `research-plan-open.v1` binds exact validated B1 baseline, source_run entries per selected symbol, immutable instrument/cost manifests/profile and expected passed signal count. `signal_index` remains physical index in that symbol's scored B1 file, even when failed B1 rules are not sent to the planner. Close count includes every signal actually sent; failed rule denominator is retained separately from the verified B1 stream.
+- Validate opened/session/scope/hashes, every rejection/plan and explicit summary/exit0. Recompute plan hashes, match source/signal/variant/assumption/portfolio identities and index. Hashes are integrity, not authorization. A planner error or malformed reply aborts the run with evidence, never turns into an apparently legitimate zero-trade strategy result. Retain rejection context including validated portfolio hash.
+
+## Source composition and event clock
+
+- Accept only complete, strictly validated B1 reports and scored NDJSON artifacts from exact source/scored windows. Revalidate file hashes, baseline/code/protocol identities, source subset digest, every signal hash and chronology/count; preserve the full denominator. Never use `.boundary.ndjson` as a scored signal. Report failed/incomplete B1 inputs as input failures.
+- Consume the exact verified candle source selection referenced by each B1 report. Do not create a different subset identity by cropping away warmup. Stream past warmup and retain the latest closed pre-phase minute for kernel initialization; thereafter provide all symbols' one-minute batches in fixed approved priority. No forward fills, unequal series, dropped leading/end signals or future data.
+- Kernel currently needs a reviewed explicit initialization API to handle a signal/funding event exactly at inclusive phase start; coordinate with parent and adapt to that final API, rather than skipping START or shifting the experiment dates. All later events follow its documented boundary order. Final window is exclusive; no signal/settlement outside it.
+- Integrate the funding reader's verified actual timestamp/rate/optional observed mark, preserving CSV interval metadata and raw hashes in evidence. Honor interval-change/inconclusive diagnostics and API-tail hypothesis labels. No silent missing=zero, eight-hour assumption or synthetic event padding. Initial funded simulation windows are2023–2024 training or2025 validation.
+- `verified_complete` kernel coverage, if used, means independently verified requested source window and passed continuity checks under the explicitly recorded diagnostic policy; it must NEVER erase raw `observed_only` provenance or imply exchange-certified financing. Missing/gap/ambiguous scored-window coverage stays inconclusive. Preserve the full reader inventory and its hash in the run manifest. Warmup-only interval uncertainty is reported but is not automatically a missing cost for a later scored window.
+- Build immutable kernel instrument/cost types from the validated PHP manifests and actual plan cost model. Fees remain genuine Fake maker/taker assumptions, not historical Binance tariffs. Parent-frozen cost file: private `20261009T060000Z-campaign-assumptions-r1/cost-assumptions.json`; instrument file: private `20261009T060000Z-source-complements-r1/instrument-assumptions.json`. No hidden defaults for precision/MMR/costs.
+
+## Private evidence and ledger
+
+- Fresh absolute0700 output directory outside every Git repository and outside source roots; no symlinks/foreign root chmod/overwrites. Atomic0600 immutable files with explicit disk cap and free-space reserve. Do not reuse a directory from a failed run.
+- Initial manifest freezes phase/windows/universe/order, variant/cost inputs, every source/report/code fingerprint and execution policy labels. Append bounded NDJSON plans/rejections/events/trades/cashflows via sinks; record B1 rule counters separately. Complete publication is atomic only after candle/funding/signal counts, planner summary and portfolio/wallet reconciliation pass. Keep partial files/status on any failure.
+- Emit deterministic summary JSON with kernel counts, final wallet, total gross/net PnL, fees, funding, spread/slippage, trade counts, marked drawdown/exposure, source quality and all immutable identities. Serialize Decimal without lossy PnL accumulation; presentation floats are never the ledger of record. Undefined ratios are null with reason, not infinity or fabricated zeros.
+- Replay ledger cashflows/trades independently to check wallet and trade totals before `complete`; an input-complete but evidence-inconclusive run remains inconclusive. Zero trades is a valid count, not proof of profitability. Preserve all rejected/negative/failed candidates later via C2 registration.
+- No mid-run resume claim. C2 may reuse a finished immutable per-variant result only after full identity/hash verification. Interrupted units restart with a fresh run identity; do not silently drop partial evidence.
+
+## Tests and actual benchmark
+
+TDD fake persistent process framing/backpressure/timeouts/malformed hashes, actual13-variant open/close handshake, source tampering/gaps/endpoints, same-time ordering, funding quality mapping, initialization, zero and positive synthetic fixture runs, failure artifacts and independent reconciliation. No lowered95%coverage or exclusions. Tests that boot real PHP use explicit isolated env and no DB, never user dotenv.
+
+After tests and parent integration, run one real baseline BTC/ETH January2023 simulation using the final stable appdir and matching regenerated B1 artifacts if necessary. All real failed/zero runs remain preserved. No full historical simulation or additional variants until that benchmark reports verified counts, wall time and resource/storage estimates. Parent may run long B1 training generation independently while this integration is built.
