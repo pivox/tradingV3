@@ -4,9 +4,6 @@ declare(strict_types=1);
 
 namespace App\TradingCore\OrderPlan\Canonical;
 
-use Brick\Math\BigDecimal;
-use Brick\Math\RoundingMode;
-
 final class CanonicalProtectionEngine
 {
     public function calculate(CanonicalProtectionRequest $request): CanonicalProtectionDecision
@@ -31,55 +28,9 @@ final class CanonicalProtectionEngine
 
         $stopInput = $this->stopInput($request);
         $this->validateStopInput($stopInput, $request);
-        $entry = self::decimal($zone->entryPrice);
-        $tick = self::decimal($zone->tickSize);
-        $buffer = self::decimal($policy->stop->bufferRate);
-        if ($policy->stop->kind === 'atr') {
-            if ($policy->stop->atrMultiplier === null) {
-                throw new CanonicalOrderPlanException('canonical_protection_atr_required');
-            }
-            $distance = self::decimal($stopInput->value)
-                ->multipliedBy(self::decimal($policy->stop->atrMultiplier))
-                ->plus($entry->multipliedBy($buffer));
-            $rawStop = $risk->side === 'long' ? $entry->minus($distance) : $entry->plus($distance);
-        } else {
-            $pivot = self::decimal($stopInput->value);
-            $rawStop = $risk->side === 'long'
-                ? $pivot->multipliedBy(BigDecimal::one()->minus($buffer))
-                : $pivot->multipliedBy(BigDecimal::one()->plus($buffer));
-        }
-
-        $stop = self::quantize($rawStop, $tick, $risk->side === 'long' ? RoundingMode::FLOOR : RoundingMode::CEILING);
-        if ($stop->isLessThanOrEqualTo(BigDecimal::zero())) {
-            throw new CanonicalOrderPlanException('canonical_protection_stop_invalid');
-        }
-        if (($risk->side === 'long' && !$stop->isLessThan($entry)) || ($risk->side === 'short' && !$stop->isGreaterThan($entry))) {
-            throw new CanonicalOrderPlanException('canonical_protection_stop_polarity_invalid');
-        }
-        $riskDistance = $entry->minus($stop)->abs();
-        if ($riskDistance->isZero()) {
-            throw new CanonicalOrderPlanException('canonical_protection_stop_polarity_invalid');
-        }
-
-        $targets = [];
-        foreach ($policy->targets as $targetPolicy) {
-            $reward = $riskDistance->multipliedBy(self::decimal($targetPolicy->riskMultiple));
-            $rawTarget = $risk->side === 'long' ? $entry->plus($reward) : $entry->minus($reward);
-            $target = self::quantize($rawTarget, $tick, $risk->side === 'long' ? RoundingMode::FLOOR : RoundingMode::CEILING);
-            if (
-                $target->isLessThanOrEqualTo(BigDecimal::zero())
-                || ($risk->side === 'long' && !$target->isGreaterThan($entry))
-                || ($risk->side === 'short' && !$target->isLessThan($entry))
-            ) {
-                throw new CanonicalOrderPlanException('canonical_protection_target_polarity_invalid', ['target_id' => $targetPolicy->id]);
-            }
-            $targets[] = new CanonicalProtectionTarget(
-                $targetPolicy->id,
-                $target->toFloat(),
-                $targetPolicy->riskMultiple,
-                $targetPolicy->liquidityRole,
-            );
-        }
+        $prices = ProtectionPriceMath::calculate(
+            $policy->stop, $policy->targets, $risk->side, $zone->entryPrice, $zone->tickSize, $stopInput->value,
+        );
 
         return new CanonicalProtectionDecision(
             modeId: $risk->modeId,
@@ -91,10 +42,10 @@ final class CanonicalProtectionEngine
             side: $risk->side,
             symbol: $zone->symbol,
             marketType: $zone->marketType,
-            entryPrice: $entry->toFloat(),
-            stopPrice: $stop->toFloat(),
-            riskDistance: $riskDistance->toFloat(),
-            targets: $targets,
+            entryPrice: $prices['entry_price'],
+            stopPrice: $prices['stop_price'],
+            riskDistance: $prices['risk_distance'],
+            targets: $prices['targets'],
             oldestObservedAt: min($zone->oldestObservedAt, $stopInput->observedAt),
             computedAt: $zone->computedAt,
             configHash: $policy->configHash,
@@ -148,15 +99,5 @@ final class CanonicalProtectionEngine
         if (!\is_finite($value) || $value <= 0.0) {
             throw new CanonicalOrderPlanException($reasonCode);
         }
-    }
-
-    private static function decimal(float $value): BigDecimal
-    {
-        return CanonicalOrderPlanDecimal::fromFloat($value, 'canonical_protection_value_invalid');
-    }
-
-    private static function quantize(BigDecimal $value, BigDecimal $tick, int $roundingMode): BigDecimal
-    {
-        return $value->dividedBy($tick, 0, $roundingMode)->multipliedBy($tick);
     }
 }
