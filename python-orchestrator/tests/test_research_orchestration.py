@@ -193,28 +193,113 @@ def test_malformed_report_and_unsafe_inventory(setup):
 
 
 def test_stop_only_owned_group_and_escalates(monkeypatch):
-    calls = []
-    monkeypatch.setattr(o.os, 'killpg', lambda pid, sig: calls.append((pid, sig)))
-    child = Child(None); child.pid = 123456
-    def wait(timeout):
-        calls.append(('wait', timeout))
-        if len(calls) == 2: raise o.subprocess.TimeoutExpired('synthetic', timeout)
-    child.wait = wait
-    o._stop(child)
-    assert calls[0] == (child.pid, o.signal.SIGTERM)
-    assert calls[2] == (child.pid, o.signal.SIGKILL)
-    o._stop(Child(0))
+    calls, clock = [], Clock()
+    child = Child(0); child.pid = 123456  # Leader exited; descendant ignores TERM.
+    def killpg(pid, sig):
+        calls.append((pid, sig))
+        if any(s == o.signal.SIGKILL for _, s in calls[:-1]): raise ProcessLookupError()
+    monkeypatch.setattr(o.os, 'killpg', killpg)
+    o._stop(child, clock=clock, sleep=clock.sleep)
+    assert (child.pid, o.signal.SIGTERM) in calls
+    assert (child.pid, o.signal.SIGKILL) in calls
+    assert all(pid == child.pid for pid, _ in calls)
+    assert 5 <= clock.value <= 10
 
 
 def test_stop_handles_child_exit_race_and_graceful_exit(monkeypatch):
-    child = Child(None); child.pid = 123456; waits = []
-    child.wait = lambda timeout: waits.append(timeout)
-    monkeypatch.setattr(o.os, 'killpg', lambda *args: None)
+    child = Child(None); child.pid = 123456; calls = []
+    def exited(pid, sig):
+        calls.append(sig)
+        if sig == 0: raise ProcessLookupError()
+    monkeypatch.setattr(o.os, 'killpg', exited)
     o._stop(child)
     def gone(*args): raise ProcessLookupError()
     monkeypatch.setattr(o.os, 'killpg', gone)
     o._stop(child)
-    assert waits == [5, 5]
+    assert calls == [o.signal.SIGTERM, 0]
+
+
+def test_stop_group_that_survives_kill_is_bounded_failure(monkeypatch):
+    child = Child(0); child.pid = 123456; clock = Clock()
+    monkeypatch.setattr(o.os, 'killpg', lambda *args: None)
+    with pytest.raises(o.OrchestrationError, match='group'):
+        o._stop(child, clock=clock, sleep=clock.sleep)
+    assert 10 <= clock.value < 11
+
+
+@pytest.mark.parametrize('stage', ['protocol', 'replay', 'freeze', 'report'])
+def test_real_deadline_interrupts_production_stages_and_retains_failure(production, setup, monkeypatch, stage):
+    from dataclasses import replace
+    import time
+    c = replace(production[0], timeout=.05)
+    stages = o.Stages()
+    stages.snapshot = lambda config: {'synthetic':'identity'}
+    events = []
+    def delay(label):
+        events.append(label)
+        if stage == label: time.sleep(.2)
+    if stage == 'protocol':
+        original = o.FundingReader
+        def funding(*args, **kwargs):
+            delay('protocol')
+            return original(*args, **kwargs)
+        monkeypatch.setattr(o, 'FundingReader', funding)
+    class Registry:
+        def __init__(self, root, protocol, **kwargs): self.root = root
+        def __enter__(self): return self
+        def __exit__(self, *args): events.append('closed')
+    monkeypatch.setattr(o.e, 'ExperimentRegistry', Registry)
+    # Emulate C2's Exception handler: deadline must escape it and stop execution.
+    def schedule(*args):
+        try: delay('replay')
+        except Exception: events.append('wrongly_swallowed')
+        return []
+    monkeypatch.setattr(o.e, 'schedule_batch', schedule)
+    monkeypatch.setattr(o.e, 'freeze_selection', lambda *args: delay('freeze') or {'selection_state':'no_eligible_candidate'})
+    monkeypatch.setattr(o.e, 'write_reports', lambda *args: delay('report') or {})
+    started = time.monotonic()
+    with pytest.raises(o.DeadlineExpired):
+        o.run(c, stages=stages, popen=setup[4], stop=lambda child:None)
+    assert time.monotonic()-started < .15
+    terminal = json.loads((c.evidence_root/'terminal.json').read_text())
+    assert terminal['state'] == 'failed' and terminal['error_type'] == 'DeadlineExpired'
+    assert 'wrongly_swallowed' not in events
+    if stage != 'protocol': assert events[-1] == 'closed'
+    assert not c.report_root.exists()
+
+
+def test_deadline_guard_restores_signal_handler_and_existing_timer():
+    import time
+    prior_handler = o.signal.getsignal(o.signal.SIGALRM)
+    prior_timer = o.signal.getitimer(o.signal.ITIMER_REAL)
+    custom = lambda signum, frame: None
+    try:
+        o.signal.signal(o.signal.SIGALRM, custom)
+        o.signal.setitimer(o.signal.ITIMER_REAL, 30, 10)
+        with o._wall_guard(.2): time.sleep(.01)
+        assert o.signal.getsignal(o.signal.SIGALRM) is custom
+        delay, interval = o.signal.getitimer(o.signal.ITIMER_REAL)
+        assert 29 < delay < 30 and interval == 10
+    finally:
+        o.signal.setitimer(o.signal.ITIMER_REAL, 0)
+        o.signal.signal(o.signal.SIGALRM, prior_handler)
+        o.signal.setitimer(o.signal.ITIMER_REAL, *prior_timer)
+
+
+def test_deadline_guard_rejects_nonmain_thread_without_changing_timer():
+    import threading
+    errors = []
+    prior_handler = o.signal.getsignal(o.signal.SIGALRM)
+    prior_timer = o.signal.getitimer(o.signal.ITIMER_REAL)
+    def work():
+        try:
+            with o._wall_guard(.1): pass
+        except BaseException as exc: errors.append(exc)
+    thread = threading.Thread(target=work); thread.start(); thread.join(timeout=1)
+    assert not thread.is_alive()
+    assert isinstance(errors[0], o.OrchestrationError)
+    assert o.signal.getsignal(o.signal.SIGALRM) == prior_handler
+    assert o.signal.getitimer(o.signal.ITIMER_REAL) == prior_timer
 
 
 @pytest.fixture

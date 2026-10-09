@@ -6,6 +6,7 @@ restarted or signaled. Only validation children created here can be terminated.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 import math
 import os
@@ -14,6 +15,7 @@ import resource
 import signal
 import stat
 import subprocess
+import threading
 import time
 
 from . import campaign, experiments as e, plans, signals
@@ -28,6 +30,32 @@ WINDOWS = {'training': ('2022-11-01T00:00:00Z', '2023-01-01T00:00:00Z', '2025-01
 
 class OrchestrationError(RuntimeError):
     """A finite stage or immutable identity boundary failed."""
+
+
+class DeadlineExpired(BaseException):
+    """Fatal deadline: C2's per-unit Exception handling must not continue."""
+
+
+@contextmanager
+def _wall_guard(seconds):
+    """Main-thread POSIX stage timer; cleanup runs after signal state restores."""
+    if threading.current_thread() is not threading.main_thread():
+        raise OrchestrationError('finite POSIX supervisor requires the main thread')
+    started = time.monotonic()
+    old_timer = signal.setitimer(signal.ITIMER_REAL, 0)
+    def expired(signum, frame):
+        raise DeadlineExpired('overall orchestration deadline exceeded during stage')
+    old_handler = signal.signal(signal.SIGALRM, expired)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old_handler)
+        delay, interval = old_timer
+        if delay:
+            delay = max(.000001, delay-(time.monotonic()-started))
+        signal.setitimer(signal.ITIMER_REAL, delay, interval)
 
 
 @dataclass(frozen=True)
@@ -94,17 +122,26 @@ def _report(root, phase, group):
     return True
 
 
-def _stop(proc):
-    if proc.poll() is None:
+def _stop(proc, *, clock=time.monotonic, sleep=time.sleep):
+    # Session leader exit does not imply that its owned PHP descendants exited.
+    for signum in (signal.SIGTERM, signal.SIGKILL):
         try:
-            os.killpg(proc.pid, signal.SIGTERM)
+            os.killpg(proc.pid, signum)
         except ProcessLookupError:
-            pass
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=5)
+            proc.poll()
+            return
+        deadline = clock()+5
+        while True:
+            proc.poll()  # Reap the leader independently of group liveness.
+            try:
+                os.killpg(proc.pid, 0)
+            except ProcessLookupError:
+                return
+            remaining = deadline-clock()
+            if remaining <= 0:
+                break
+            sleep(min(.05, remaining))
+    raise OrchestrationError('owned validation process group survived bounded cleanup')
 
 
 def _size(root):
@@ -218,6 +255,11 @@ def run(c: Config, *, clock=time.monotonic, sleep=time.sleep, popen=subprocess.P
         return value
     def pause():
         sleep(min(c.poll_interval, remaining()))
+    def stage(function, *args):
+        with _wall_guard(remaining()):
+            result = function(*args)
+        remaining()
+        return result
     c.evidence_root.mkdir(mode=0o700)
     children = []
     resources_before = resource.getrusage(resource.RUSAGE_CHILDREN)
@@ -228,7 +270,7 @@ def run(c: Config, *, clock=time.monotonic, sleep=time.sleep, popen=subprocess.P
                   str(value) if isinstance(value, Path) else value for key,value in asdict(c).items()}
         terminal['attempt_sha256'] = e._publish(c.evidence_root/'attempt.json', {'schema_version':'research-orchestration-attempt.v1',
             'config':config, 'orchestration_sha256':signals._file_sha256(Path(__file__)), 'resume_supported':False})
-        snapshot = stages.snapshot(c)
+        snapshot = stage(stages.snapshot, c)
         terminal['input_code_identity_sha256'] = e._publish(c.evidence_root/'input-code-identity.json', snapshot)
         while True:
             remaining()
@@ -236,7 +278,7 @@ def run(c: Config, *, clock=time.monotonic, sleep=time.sleep, popen=subprocess.P
             if all(ready):
                 break
             pause()
-        if stages.snapshot(c) != snapshot:
+        if stage(stages.snapshot, c) != snapshot:
             raise OrchestrationError('frozen input or code changed before validation launch')
         for root, group in zip(c.validation_roots, GROUPS):
             remaining()
@@ -256,16 +298,16 @@ def run(c: Config, *, clock=time.monotonic, sleep=time.sleep, popen=subprocess.P
             pause()
         if not all(_report(root, 'validation', group) for root,group in zip(c.validation_roots, GROUPS)):
             raise OrchestrationError('completed validation subprocess missing report')
-        if stages.snapshot(c) != snapshot:
+        if stage(stages.snapshot, c) != snapshot:
             raise OrchestrationError('frozen input or code changed before protocol freeze')
-        protocol = stages.protocol(c, deadline)
-        if stages.snapshot(c) != snapshot:
+        protocol = stage(stages.protocol, c, deadline)
+        if stage(stages.snapshot, c) != snapshot:
             raise OrchestrationError('frozen input or code changed before protocol freeze')
         report_hashes = {str(root):campaign._input(root/'report.json', campaign.MAX_REPORT)[1]
                          for root in (*c.training_roots, *c.validation_roots)}
-        result = stages.execute(c, protocol, remaining)
+        result = stage(stages.execute, c, protocol, remaining)
         remaining()
-        if (stages.snapshot(c) != snapshot or any(campaign._input(Path(root)/'report.json', campaign.MAX_REPORT)[1] != digest
+        if (stage(stages.snapshot, c) != snapshot or any(campaign._input(Path(root)/'report.json', campaign.MAX_REPORT)[1] != digest
                 for root,digest in report_hashes.items())):
             raise OrchestrationError('frozen input or code changed at finish')
         terminal.update(state=result['selection_state'], reports=result['reports'])
