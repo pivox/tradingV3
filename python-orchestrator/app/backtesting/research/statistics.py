@@ -16,7 +16,7 @@ import tempfile
 from typing import Any
 
 ZERO = Decimal('0')
-LEDGERS = ('plans','rejections','events','trades','cashflows','funding-events')
+LEDGERS = ('plans','rejections','events','trades','cashflows','funding-events','marked-equity')
 COMPONENTS = ('gross_pnl_quote','net_pnl_quote','fees_quote','funding_quote','spread_quote','slippage_quote')
 PROFILE_FIELDS = ('entry_spread_rate','stop_spread_rate','target_spread_rate',
                   'entry_slippage_rate','stop_slippage_rate','target_slippage_rate','funding_provision_rate')
@@ -137,8 +137,8 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
                     end_ms: int, max_spool_bytes: int = 4*1024**3,
                     min_free_bytes: int = 20*1024**3, expected_identity: dict | None = None,
                     expected_sources: dict | None = None, expected_cost_profile: str | None = None,
-                    expected_cost_model: dict | None = None) -> dict:
-    """Merge six ordered ledgers and independently join plans/trades/cashflows.
+                    expected_cost_model: dict | None = None, require_marked: bool = False) -> dict:
+    """Merge ordered ledgers and independently join plans/trades/cashflows/marks.
 
     SQLite is a private temporary local index, not an application database.
     Its bounded file retains closed-plan identities to detect duplicate closes
@@ -161,8 +161,15 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
     outcomes = OutcomeStatistics()
     counts, ambiguity, exits = Counter(),Counter(),Counter()
     active = {}
+    check_marked = require_marked or files['marked-equity.ndjson']['count'] > 0
     maximum_closed_drawdown = peak_wallet = ZERO
     wallet = Decimal('100000'); peak_wallet = wallet
+    marked_positions = {}
+    marked_peak = wallet; marked_drawdown = ZERO
+    marked_initial = marked_terminal = False
+    marked_at = start_ms
+    dirty_cash = False
+    cash_boundary = start_ms
     sequence = 0
 
     def tagged(name):
@@ -186,6 +193,44 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
                     connection.commit()
                     if spool.stat().st_size > max_spool_bytes or shutil.disk_usage(spool.parent).free < min_free_bytes:
                         raise StatisticsError('statistics_spool_capacity_exceeded')
+                if name == 'marked-equity':
+                    at,kind,marks = row.get('timestamp_ms'),row.get('kind'),row.get('marks')
+                    if (row.get('schema_version') != 'research-marked-equity.v1'
+                        or row.get('mark_source') != 'last_known_close.v1'
+                        or type(at) is not int or not start_ms <= at <= end_ms
+                        or at < marked_at or (at-start_ms)%60000
+                        or type(row.get('processed_batches')) is not int
+                        or row['processed_batches'] != (at-start_ms)//60000
+                        or not isinstance(marks,dict) or set(marks) != set(marked_positions)
+                        or marked_terminal or (dirty_cash and at != cash_boundary)):
+                        raise StatisticsError('marked_equity_clock_or_position_conflict')
+                    if kind == 'initial':
+                        if marked_initial or at != start_ms or counts['plans'] or counts['cashflows']:
+                            raise StatisticsError('marked_equity_initial_conflict')
+                        marked_initial = True
+                    elif kind == 'terminal':
+                        if at != end_ms or marked_positions:
+                            raise StatisticsError('marked_equity_terminal_conflict')
+                        marked_terminal = True
+                    elif kind != 'boundary' or not marked_initial:
+                        raise StatisticsError('marked_equity_sample_kind_conflict')
+                    unrealized = ZERO
+                    for key,position in marked_positions.items():
+                        price = decimal(marks[key])
+                        if price <= 0 or at not in (position['last'],position['last']+60000):
+                            raise StatisticsError('marked_equity_active_minute_gap')
+                        unrealized += position['units']*(price-position['entry'])
+                        position['last'] = at
+                    equity = wallet+unrealized
+                    marked_peak = max(marked_peak,equity)
+                    marked_drawdown = max(marked_drawdown,marked_peak-equity)
+                    marked_at = at; dirty_cash = False
+                    counts['marked_samples'] += 1
+                    continue
+                if marked_terminal:
+                    raise StatisticsError('ledger_after_marked_terminal')
+                if check_marked and not marked_initial and name != 'funding-events':
+                    raise StatisticsError('marked_equity_initial_missing')
                 symbol = row.get('symbol')
                 if symbol not in symbols:
                     raise StatisticsError('ledger_symbol_outside_protocol')
@@ -226,6 +271,13 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
                             counts['admitted'] += 1
                         if reason == 'limit_fill_proxy':
                             counts['filled'] += 1
+                            if check_marked:
+                                at = row.get('timestamp_ms')
+                                if (type(at) is not int or not start_ms < at <= end_ms
+                                    or (at-start_ms)%60000 or key in marked_positions or len(marked_positions) >= 4):
+                                    raise StatisticsError('marked_equity_fill_clock_conflict')
+                                entry,quantity,contract = map(decimal,plan[3:])
+                                marked_positions[key] = {'entry':entry,'units':quantity*contract,'last':at-60000,'fill':at}
                         if row.get('ambiguous'):
                             ambiguity[reason] += 1
                         counts['events'] += 1
@@ -233,6 +285,10 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
                         at = row['timestamp_ms']
                         if type(at) is not int or not start_ms <= at <= end_ms:
                             raise StatisticsError('cashflow_timestamp_outside_phase')
+                        boundary = start_ms+((at-start_ms+59999)//60000)*60000
+                        if check_marked and ((dirty_cash and boundary != cash_boundary) or boundary < marked_at):
+                            raise StatisticsError('marked_equity_cash_boundary_missing')
+                        cash_boundary = boundary
                         amount = decimal(row['amount_quote'])
                         kind = row['kind']
                         if kind == 'gross_pnl':
@@ -260,6 +316,7 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
                             years[year] = {'cashflow_net_pnl_quote':ZERO,'outcomes':OutcomeStatistics()}
                         years[year]['cashflow_net_pnl_quote'] += amount
                         wallet += amount; peak_wallet = max(peak_wallet,wallet)
+                        dirty_cash = True
                         maximum_closed_drawdown = max(maximum_closed_drawdown,peak_wallet-wallet)
                         counts['cashflows'] += 1
                     else:
@@ -277,6 +334,13 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
                         at,fill = row['exit_boundary_ms'],row['fill_boundary_ms']
                         if type(at) is not int or type(fill) is not int or not start_ms <= fill <= at <= end_ms:
                             raise StatisticsError('trade_timestamp_outside_phase')
+                        if check_marked:
+                            position_mark = marked_positions.pop(key,None)
+                            close_clock = start_ms+((at-start_ms+59999)//60000)*60000
+                            required_mark = close_clock if row['exit_reason'] == 'research_end' else close_clock-60000
+                            if (position_mark is None or position_mark['last'] < required_mark
+                                    or position_mark['fill'] != fill):
+                                raise StatisticsError('marked_equity_active_minute_gap')
                         # Exactly midnight is a declared exclusive settlement, allowed.
                         if fill//DAY != (at-1)//DAY:
                             raise StatisticsError('trade_crosses_utc_midnight')
@@ -301,6 +365,8 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
                     counts['funding_events'] += 1
             if active:
                 raise StatisticsError('unclosed_cashflow_position')
+            if check_marked and (not marked_initial or not marked_terminal or marked_positions or dirty_cash):
+                raise StatisticsError('marked_equity_incomplete')
             connection.commit()
             if spool.stat().st_size > max_spool_bytes or shutil.disk_usage(spool.parent).free < min_free_bytes:
                 raise StatisticsError('statistics_spool_capacity_exceeded')
@@ -320,6 +386,9 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
         'counts':{key:counts[key] for key in ('plans','admitted','filled','rejected','planner_rejections','events','cashflows','funding_events')},
         'ambiguity_counts':dict(ambiguity),'exit_reason_counts':dict(exits),
         'cashflow_wallet_maximum_drawdown_quote':str(maximum_closed_drawdown),
+        'maximum_drawdown_quote':str(marked_drawdown),
+        'marked_equity_peak_quote':str(marked_peak),'marked_equity_samples':counts['marked_samples'],
+        'marked_equity_verified':check_marked,
         'cashflow_wallet_drawdown_is_marked':False,'independently_reconciled':True}
 
 
@@ -419,7 +488,7 @@ def _verify_campaign(root: Path, protocol: dict, registration: dict) -> dict:
                'signal_run_id','signal_output_sha256')} for symbol,row in sources.items()}
     result = analyze_ledgers(root,status['files'],symbols=SYMBOLS,start_ms=start,end_ms=end,
         expected_identity=expected,expected_sources=sources,expected_cost_profile=profile,
-        expected_cost_model=costs['profiles'][profile])
+        expected_cost_model=costs['profiles'][profile],require_marked=True)
     if (any(decimal(summary[field]) != decimal(result[field]) for field in (*COMPONENTS,'wallet_quote'))
         or summary['trades'] != result['closed_trades']
         or summary['admitted_plans'] != result['counts']['admitted']
@@ -439,6 +508,8 @@ def _verify_campaign(root: Path, protocol: dict, registration: dict) -> dict:
         raise StatisticsError('physical_signal_denominator_conflict')
     if decimal(summary['maximum_drawdown_quote']) < 0 or decimal(summary['maximum_exposure_quote']) < 0:
         raise StatisticsError('negative_marked_drawdown_or_exposure')
+    if decimal(summary['maximum_drawdown_quote']) != decimal(result['maximum_drawdown_quote']):
+        raise StatisticsError('marked_drawdown_summary_conflict')
     quality = summary['source_quality']; funding = manifest['funding_inventory']
     if (quality['funding_inventory'] != funding or funding['coverage'] != 'observed_only'
         or manifest['funding_inventory_hash'] != funding['inventory_hash']
@@ -455,9 +526,9 @@ def _verify_campaign(root: Path, protocol: dict, registration: dict) -> dict:
     result.update(status=status['status'],phase=phase,variant_id=selected['id'],cost_profile=profile,
         coverage_complete=quality['candles'] == 'verified_complete',cost_evidence_complete=complete_funding,
         funding_provenance='observed_only',funding_diagnostic_is_exchange_certification=False,
-        source_quality=quality,maximum_drawdown_quote=str(decimal(summary['maximum_drawdown_quote'])),
+        source_quality=quality,
         maximum_exposure_quote=str(decimal(summary['maximum_exposure_quote'])),
-        marked_drawdown_source='kernel_marked_equity',cutoff=protocol['cutoff'])
+        marked_drawdown_source='independent_kernel_ohlc_close_proxy',cutoff=protocol['cutoff'])
     result['counts'].update(scored=counters['evaluated_ticks'],passed=counters['passed_rules'],
         failed_rules=counters['failed_rules'],source_candles=summary.get('source_candles'),
         scored_clock_minutes=(end-start)//60000,scored_symbol_minutes=(end-start)//60000*len(SYMBOLS))

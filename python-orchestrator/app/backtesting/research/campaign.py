@@ -373,7 +373,8 @@ def run_campaign(dataset_root: Path, signal_root: Path | tuple[Path,...], output
                 simulator = PortfolioSimulator(assumptions,build,
                     event_sink=lambda row:evidence.emit('events',row),
                     trade_sink=lambda row:evidence.emit('trades',row),
-                    cashflow_sink=lambda row:evidence.emit('cashflows',row),rejection_sink=rejected)
+                    cashflow_sink=lambda row:evidence.emit('cashflows',row),rejection_sink=rejected,
+                    marked_sink=lambda row:evidence.emit('marked-equity',row))
                 def passed_signals(symbol):
                     root,selection,meta,opened,_ = bindings[symbol]
                     for signal in _scan(root,selection,meta,opened,deadline):

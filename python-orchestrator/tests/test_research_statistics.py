@@ -13,7 +13,13 @@ from app.backtesting.research.portfolio_simulator import canonical_hash, SYMBOLS
 
 START = 1672531200000
 FIELDS = ('gross_pnl_quote','net_pnl_quote','fees_quote','funding_quote','spread_quote','slippage_quote')
-LEDGERS = ('plans','rejections','events','trades','cashflows','funding-events')
+LEDGERS = ('plans','rejections','events','trades','cashflows','funding-events','marked-equity')
+
+
+def marked_row(at,start=START,kind='boundary',marks=None):
+    return ('marked-equity',{'schema_version':'research-marked-equity.v1',
+        'timestamp_ms':at,'processed_batches':(at-start)//60000,'kind':kind,
+        'mark_source':'last_known_close.v1','marks':marks or {}})
 
 
 def ledger_fixture(tmp_path, *, net='2', funding='0', timestamp=START+60000):
@@ -118,7 +124,8 @@ def test_trade_and_cashflow_year_difference_is_reported(tmp_path):
 
 def campaign_fixture(root):
     """Synthetic C1-shaped zero ledger fixture, never actual C1/source execution."""
-    files = write_ledgers(root,[])
+    files = write_ledgers(root,[marked_row(START,kind='initial'),
+                               marked_row(1735689600000,kind='terminal')])
     baseline = {'setup_hash':'a'*64,'config_hash':'b'*64,'condition_catalog_hash':'c'*64,'snapshot_hash':'d'*64}
     instruments = {'synthetic':True}; instruments['manifest_hash'] = canonical_hash(instruments)
     rates = {field:0 for field in ('entry_spread_rate','stop_spread_rate','target_spread_rate',
@@ -190,6 +197,95 @@ def test_complete_zero_unit_independently_verified_not_eligible(tmp_path):
     assert result['funding_provenance'] == 'observed_only'
     assert result['cost_evidence_complete'] is True
     assert result['maximum_drawdown_quote'] == '0'
+
+
+def test_rehashed_summary_cannot_invent_marked_drawdown(tmp_path):
+    protocol,registration = campaign_fixture(tmp_path)
+    summary = json.loads((tmp_path/'summary.json').read_bytes())
+    summary['maximum_drawdown_quote'] = '5999'
+    rehash_campaign(tmp_path,summary=summary)
+    with pytest.raises(StatisticsError,match='marked_drawdown'):
+        verify_campaign(tmp_path,protocol,registration)
+
+
+def marked_fixture(root):
+    """Synthetic mark peak/drop; cashflow-only drawdown is merely one quote."""
+    _,key = ledger_fixture(root,timestamp=START+240000)
+    rows = read_rows(root)
+    rows[2][1]['timestamp_ms'] = START+60000
+    rows[3][1]['timestamp_ms'] = START+60000
+    rows[-1][1]['fill_boundary_ms'] = START+60000
+    rows = [marked_row(START,kind='initial'),*rows[:4],
+        marked_row(START+60000,marks={key:'100'}),
+        marked_row(START+120000,marks={key:'3600'}),
+        marked_row(START+180000,marks={key:'100'}),*rows[4:],
+        marked_row(START+240000),marked_row(START+300000,kind='terminal')]
+    return rows,key
+
+
+def test_marked_drawdown_recomputed_from_plan_cash_wallet_and_complete_active_clock(tmp_path):
+    rows,_ = marked_fixture(tmp_path)
+    result = analyze_ledgers(tmp_path,write_ledgers(tmp_path,rows),symbols=SYMBOLS,
+        start_ms=START,end_ms=START+300000,require_marked=True)
+    assert D(result['maximum_drawdown_quote']) == 7000
+    assert result['cashflow_wallet_maximum_drawdown_quote'] == '1'
+    assert result['marked_equity_verified'] is True
+
+
+@pytest.mark.parametrize('reason',['research_end','holding_deadline'])
+def test_marked_replay_preserves_final_mark_and_nonminute_deadline_semantics(tmp_path,reason):
+    rows,key = marked_fixture(tmp_path)
+    if reason == 'research_end':
+        rows[10][1]['exit_reason'] = reason
+        rows.insert(8,marked_row(START+240000,marks={key:'100'}))
+    else:
+        for index in (8,9): rows[index][1]['timestamp_ms'] -= 1000
+        rows[10][1]['exit_boundary_ms'] -= 1000
+        rows[10][1]['exit_reason'] = reason
+    result = analyze_ledgers(tmp_path,write_ledgers(tmp_path,rows),symbols=SYMBOLS,
+        start_ms=START,end_ms=START+300000,require_marked=True)
+    assert D(result['maximum_drawdown_quote']) == 7000
+    if reason == 'research_end':
+        rows.pop(8)
+        with pytest.raises(StatisticsError,match='active_minute_gap'):
+            analyze_ledgers(tmp_path,write_ledgers(tmp_path,rows),symbols=SYMBOLS,
+                start_ms=START,end_ms=START+300000,require_marked=True)
+
+
+def test_real_verifier_requires_marked_evidence_even_for_zero_trades(tmp_path):
+    protocol,registration = campaign_fixture(tmp_path)
+    status = json.loads((tmp_path/'status.json').read_bytes())
+    status['files'] = write_ledgers(tmp_path,[])
+    rehash_campaign(tmp_path,status=status)
+    with pytest.raises(StatisticsError,match='marked_equity_incomplete'):
+        verify_campaign(tmp_path,protocol,registration)
+
+
+@pytest.mark.parametrize('mutation',['missing_initial','duplicate_initial','initial_after_plan','missing_active',
+    'missing_before_close','missing_cash_sample','wrong_positions','zero_mark','source','clock','backwards',
+    'bad_kind','terminal_early','missing_terminal','after_terminal','duplicate_fill','fill_trade_clock'])
+def test_marked_evidence_gaps_and_rehashed_malformed_samples_rejected(tmp_path,mutation):
+    rows,key = marked_fixture(tmp_path)
+    if mutation == 'missing_initial': rows.pop(0)
+    elif mutation == 'duplicate_initial': rows.insert(1,copy.deepcopy(rows[0]))
+    elif mutation == 'initial_after_plan': rows[0],rows[1] = rows[1],rows[0]
+    elif mutation == 'missing_active': rows.pop(6)
+    elif mutation == 'missing_before_close': rows.pop(7)
+    elif mutation == 'missing_cash_sample': rows.pop(-2)
+    elif mutation == 'wrong_positions': rows[5][1]['marks'] = {}
+    elif mutation == 'zero_mark': rows[5][1]['marks'][key] = '0'
+    elif mutation == 'source': rows[5][1]['mark_source'] = 'unbound'
+    elif mutation == 'clock': rows[5][1]['processed_batches'] = 99
+    elif mutation == 'backwards': rows[7][1]['timestamp_ms'] = START
+    elif mutation == 'bad_kind': rows[5][1]['kind'] = 'unknown'
+    elif mutation == 'terminal_early': rows[-1] = marked_row(START+240000,kind='terminal')
+    elif mutation == 'missing_terminal': rows.pop()
+    elif mutation == 'after_terminal': rows.append(('funding-events',{'symbol':'BTCUSDT','timestamp_ms':START,'rate':'0'}))
+    elif mutation == 'duplicate_fill': rows.insert(4,copy.deepcopy(rows[3]))
+    else: rows[-3][1]['fill_boundary_ms'] += 60000
+    with pytest.raises(StatisticsError,match='marked|ledger_after'):
+        analyze_ledgers(tmp_path,write_ledgers(tmp_path,rows),symbols=SYMBOLS,
+            start_ms=START,end_ms=START+300000,require_marked=True)
 
 
 @pytest.mark.parametrize('change', ['holdout','hash','symbols','identity','missing_bindings'])
