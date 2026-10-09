@@ -216,10 +216,13 @@ class Stages:
 
     def execute(self, c, protocol, remaining):
         with e.ExperimentRegistry(c.registry_root, protocol, max_output_bytes=c.aggregate_bytes) as registry:
-            def unit(registration, output):
+            def unit(registration, output, *, max_output_bytes=None, min_free_bytes=None):
                 seconds = min(c.unit_timeout, remaining())
                 used = _size(c.registry_root)
                 allowance = min(c.unit_bytes, c.aggregate_bytes-used-4*1024**2)
+                if max_output_bytes is not None:
+                    allowance = min(allowance, max_output_bytes)
+                free_floor = max(e.RESERVE, min_free_bytes if min_free_bytes is not None else e.RESERVE)
                 if allowance <= 0:
                     raise OrchestrationError('aggregate storage allowance exhausted')
                 registry._budget(allowance)
@@ -227,7 +230,7 @@ class Stages:
                     signal_roots={'training':c.training_roots, 'validation':c.validation_roots},
                     app_dir=c.app_dir, instrument_path=c.instrument_path, cost_path=c.cost_path,
                     funding_supplement_root=c.funding_supplement_root, wall_timeout=seconds,
-                    max_output_bytes=allowance, min_free_bytes=e.RESERVE)
+                    max_output_bytes=allowance, min_free_bytes=free_floor)
                 return runner(registration, output)
             candidates = e.schedule_batch(registry, unit)
             remaining()

@@ -379,7 +379,9 @@ def test_production_snapshot_binds_code_inputs_and_optional_funding(setup, monke
     assert str(supplement/'status.json') in o.Stages().snapshot(replace(c, funding_supplement_root=supplement))['files']
 
 
-def test_production_execute_freezes_before_runner_and_caps_remaining(setup, monkeypatch):
+@pytest.mark.parametrize('provided_cap,provided_floor', [(None, None), (1024, o.e.RESERVE+8*1024**2),
+    (8*1024**3, 0)])
+def test_production_execute_freezes_before_runner_and_caps_remaining(setup, monkeypatch, provided_cap, provided_floor):
     c, clock, _, _, _ = setup
     events, allowances = [], []
     class Registry:
@@ -390,16 +392,20 @@ def test_production_execute_freezes_before_runner_and_caps_remaining(setup, monk
     monkeypatch.setattr(o.e, 'ExperimentRegistry', Registry)
     def runner(**kwargs):
         events.append('runner'); assert kwargs['wall_timeout'] == 50
+        assert kwargs['max_output_bytes'] == min(c.unit_bytes, provided_cap if provided_cap is not None else c.unit_bytes)
+        assert kwargs['min_free_bytes'] == max(o.e.RESERVE, provided_floor if provided_floor is not None else o.e.RESERVE)
         assert kwargs['max_output_bytes'] <= c.aggregate_bytes-o._size(c.registry_root)
         assert kwargs['signal_roots'] == {'training':c.training_roots, 'validation':c.validation_roots}
         return lambda registration, output: events.append('simulation')
     monkeypatch.setattr(o.e, 'make_campaign_runner', runner)
-    monkeypatch.setattr(o.e, 'schedule_batch', lambda registry, unit: (unit({}, registry.root/'unit'), [])[1])
+    monkeypatch.setattr(o.e, 'schedule_batch', lambda registry, unit: (unit({}, registry.root/'unit',
+        max_output_bytes=provided_cap, min_free_bytes=provided_floor), [])[1])
     monkeypatch.setattr(o.e, 'freeze_selection', lambda *args: {'selection_state':'no_eligible_candidate'})
     monkeypatch.setattr(o.e, 'write_reports', lambda *args: {'json': c.report_root/'report.json'})
     result = o.Stages().execute(c, {}, lambda:50)
     assert events == ['protocol_frozen', 'runner', 'simulation']
-    assert allowances == [c.unit_bytes] and result['selection_state'] == 'no_eligible_candidate'
+    assert allowances == [min(c.unit_bytes, provided_cap if provided_cap is not None else c.unit_bytes)]
+    assert result['selection_state'] == 'no_eligible_candidate'
 
 
 def test_aggregate_exhaustion_no_runner(setup, monkeypatch):
