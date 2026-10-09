@@ -9,10 +9,12 @@ use App\Tests\TradingCore\Backtesting\Research\ResearchPlanSessionTest;
 use App\TradingCore\Backtesting\Json\StrictJsonObjectDecoder;
 use App\TradingCore\Backtesting\Research\ResearchPlanSession;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
+use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
+#[CoversClass(ResearchPlanWorkerCommand::class)]
 final class ResearchPlanWorkerCommandTest extends TestCase
 {
     public function testPersistentOpenAndDeclaredCloseWithoutDatabase(): void

@@ -15,8 +15,10 @@ use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
 use App\TradingCore\OrderPlan\Canonical\NetRCostMath;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy;
+use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
+#[CoversClass(ResearchPlanBuilder::class)]
 final class ResearchPlanBuilderTest extends TestCase
 {
     public function testBaselinePlanUsesClosedCandidateAndGenuineRiskCap(): void

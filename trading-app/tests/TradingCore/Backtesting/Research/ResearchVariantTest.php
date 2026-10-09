@@ -9,8 +9,10 @@ use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
+use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
+#[CoversClass(ResearchVariant::class)]
 final class ResearchVariantTest extends TestCase
 {
     public function testCatalogHasBaselineAndTwelveDistinctClosedDiffs(): void
@@ -22,6 +24,20 @@ final class ResearchVariantTest extends TestCase
         self::assertCount(13, array_unique(array_map(static fn (ResearchVariant $v): string => $v->hash, $variants)));
         foreach ($variants as $variant) {
             self::assertSame($variant->hash, ResearchVariant::select($variant->id, $variant->diff, $policy, $setupHash, $catalogHash)->hash);
+        }
+    }
+
+    public function testAllCatalogDiffsSurviveJsonRoundTripAndReorderedKeys(): void
+    {
+        [$policy, $setupHash, $catalogHash] = self::baseline();
+        foreach (ResearchVariant::catalog($policy, $setupHash, $catalogHash) as $variant) {
+            $wireDiff = json_decode(json_encode($variant->diff, JSON_THROW_ON_ERROR), true, 128, JSON_THROW_ON_ERROR);
+            self::assertSame($variant->hash, ResearchVariant::select(
+                $variant->id, $wireDiff, $policy, $setupHash, $catalogHash,
+            )->hash, $variant->id);
+            self::assertSame($variant->diff, ResearchVariant::select(
+                $variant->id, array_reverse($wireDiff, true), $policy, $setupHash, $catalogHash,
+            )->diff, $variant->id);
         }
     }
 

@@ -7,8 +7,11 @@ namespace App\Tests\TradingCore\Backtesting\Research;
 use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluator;
 use App\TradingCore\Backtesting\Research\ResearchCostAssumptions;
 use App\TradingCore\Backtesting\Research\ResearchInstrumentAssumptions;
+use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
+#[CoversClass(ResearchInstrumentAssumptions::class)]
+#[CoversClass(ResearchCostAssumptions::class)]
 final class ResearchAssumptionsTest extends TestCase
 {
     /** @var list<string> */

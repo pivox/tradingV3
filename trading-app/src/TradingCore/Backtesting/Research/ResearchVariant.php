@@ -59,11 +59,20 @@ final readonly class ResearchVariant
     public static function select(string $id, array $diff, CanonicalExecutionPolicy $policy, string $setupHash, string $catalogHash): self
     {
         self::assertBaseline($policy);
-        if (!isset(self::DIFFS[$id]) || self::DIFFS[$id] !== $diff
+        if (!isset(self::DIFFS[$id])
             || preg_match('/\A(?:sha256:)?[a-f0-9]{64}\z/D', $setupHash) !== 1
             || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $catalogHash) !== 1) {
             throw new \InvalidArgumentException('research_variant_invalid');
         }
+        try {
+            $matches = CanonicalBacktestRuleEvaluator::canonicalJson(self::DIFFS[$id]) === CanonicalBacktestRuleEvaluator::canonicalJson($diff);
+        } catch (\InvalidArgumentException $exception) {
+            throw new \InvalidArgumentException('research_variant_invalid', previous: $exception);
+        }
+        if (!$matches) {
+            throw new \InvalidArgumentException('research_variant_invalid');
+        }
+        $diff = self::DIFFS[$id];
         $baseZone = $policy->entryZone;
         $baseStop = $policy->stop;
         $baseTarget = $policy->targets[0];

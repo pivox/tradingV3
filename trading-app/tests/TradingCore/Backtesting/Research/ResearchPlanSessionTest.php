@@ -6,12 +6,16 @@ namespace App\Tests\TradingCore\Backtesting\Research;
 
 use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluator;
 use App\TradingCore\Backtesting\Research\ResearchPlanSession;
+use App\TradingCore\Backtesting\Research\ResearchVariant;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\Setup\SetupContractLoader;
+use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
+use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
+#[CoversClass(ResearchPlanSession::class)]
 final class ResearchPlanSessionTest extends TestCase
 {
     public function testOpenAppendCloseBindsLocalBaselineAndArtifactReference(): void
@@ -29,6 +33,24 @@ final class ResearchPlanSessionTest extends TestCase
         $closed = $session->close(['schema_version' => 'research-plan-close.v1', 'session_id' => 'plan-reference', 'expected_signals' => 1]);
         self::assertSame('complete', $closed['completion']);
         self::assertSame(1, $closed['planned']);
+    }
+
+    public function testOpenAcceptsEveryCatalogVariantAfterJsonRoundTripAndKeyReorder(): void
+    {
+        [$open] = self::frames();
+        $open['expected_signals'] = 0;
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
+            'fake', 'local', 'long', ShadowExecutionCapability::Backtest,
+        ));
+        foreach (ResearchVariant::catalog(CanonicalExecutionPolicy::fromSnapshot($snapshot),
+            $open['baseline']['setup_hash'], $open['baseline']['condition_catalog_hash']) as $variant) {
+            $open['variant'] = ['schema_version' => 'research-variant-selection.v1', 'id' => $variant->id,
+                'diff' => array_reverse($variant->diff, true), 'variant_hash' => $variant->hash];
+            $wireOpen = json_decode(json_encode($open, JSON_THROW_ON_ERROR), true, 128, JSON_THROW_ON_ERROR);
+            $opened = (new ResearchPlanSession(new EffectiveTradingConfigResolver()))->open($wireOpen);
+            self::assertSame($variant->hash, $opened['variant_hash'], $variant->id);
+        }
     }
 
     public function testRejectsBaselineFromAnotherAppDirectory(): void
