@@ -498,7 +498,7 @@ def _new_code_inventory():
     root = Path(__file__).parent
     names = ('holdout.py','holdout_authority.py','frozen_verifier_inventory.json','signals.py','signal_sources.py',
         'campaign.py','campaign_evidence.py','plans.py','portfolio_simulator.py','statistics.py','funding.py',
-        'binance_history.py','source_complements.py')
+        'binance_history.py','source_complements.py','orchestration.py','experiments.py')
     return {str(root/name):_file_hash(root/name) for name in names} | {
         str(root.parents[1]/'modern_trading_contracts.py'):_file_hash(root.parents[1]/'modern_trading_contracts.py')}
 
@@ -645,6 +645,37 @@ def _fresh_output(output: Path,authority):
     if any(_overlap(output,p) for p in inputs): raise HoldoutError('input_output_overlap')
 
 
+@dataclass(frozen=True)
+class _ClaimFailureReceipt:
+    """Exception-local publication evidence. This is never an authorization."""
+    authority_hash: str
+    anchor: Path
+    output_root: Path
+    contract_bytes: bytes
+    claim_bytes: bytes
+
+    @property
+    def contract_hash(self): return hash_bytes(self.contract_bytes)
+
+    @property
+    def claim_hash(self): return hash_bytes(self.claim_bytes)
+
+
+def _claim_failure_receipt(error, authority, output_root):
+    receipt = getattr(error, '_holdout_claim_failure_receipt', None)
+    if (type(receipt) is not _ClaimFailureReceipt or receipt.authority_hash!=authority.authority_hash
+        or receipt.anchor!=authority.anchor or receipt.output_root!=Path(output_root)):
+        return None
+    try:
+        contract, raw, claim = _retained(authority)
+        if (raw==receipt.contract_bytes and claim==receipt.claim_bytes
+            and contract['output_root']==str(receipt.output_root)):
+            return receipt
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
 def prepare_claim(authority: CampaignAuthority,output_root: Path,*,timeout: float=OVERALL_SECONDS,
         max_output_bytes: int=OVERALL_BYTES) -> HoldoutAuthorization:
     authority = _installed(authority)
@@ -711,7 +742,19 @@ def prepare_claim(authority: CampaignAuthority,output_root: Path,*,timeout: floa
         claim_raw = canonical_bytes({'schema_version':'research-holdout-claim.v1','campaign_id':CAMPAIGN_ID,
             'authority_hash':authority.authority_hash,'contract_hash':hash_bytes(raw),
             'output_root':str(output),'run_id':uuid.uuid4().hex})
-        _publish_bytes(authority.anchor/'claim.json',claim_raw)
+        try:
+            _publish_bytes(authority.anchor/'claim.json',claim_raw)
+        except BaseException as exc:
+            # Only this invocation knows its freshly created run_id/claim bytes.
+            # Do not recover a pre-existing claim or mint execution after failure.
+            try:
+                _, retained_contract, retained_claim = _retained(authority)
+                if retained_contract==raw and retained_claim==claim_raw:
+                    exc._holdout_claim_failure_receipt = _ClaimFailureReceipt(
+                        authority.authority_hash,authority.anchor,output,raw,claim_raw)
+            except BaseException:
+                pass
+            raise
     return _mint_authorization(authority.authority_hash,hash_bytes(raw),hash_bytes(claim_raw),
         authority.anchor,output,tuple((s['variant_id'],s['cost_profile']) for s in slots),raw,'evaluate',
         deadline=started+timeout)
@@ -815,6 +858,17 @@ def remaining_limits(auth: HoldoutAuthorization) -> dict:
     installation, source inputs and separately bounded temporary stats indexes
     are excluded from this persistent accounting; no per-stage byte charging.
     """
+    _check_issuance(auth)
+    return _remaining_limits(auth, reserve_terminal=auth.mode == 'evaluate')
+
+
+def _terminal_limits(auth: HoldoutAuthorization) -> dict:
+    """Capacity solely for evaluate-mode terminal publication, never execution."""
+    require_claim(auth, operation='report')
+    return _remaining_limits(auth, reserve_terminal=False)
+
+
+def _remaining_limits(auth: HoldoutAuthorization, *, reserve_terminal: bool) -> dict:
     contract = require_claim(auth, operation='retained')
     seconds = _BUDGETS[(auth.claim_hash, auth.mode)]-time.monotonic()
     if seconds <= 0:
@@ -836,10 +890,13 @@ def remaining_limits(auth: HoldoutAuthorization) -> dict:
                 if key not in seen:
                     seen.add(key)
                     used += info.st_size
-    remaining = contract['limits']['overall_bytes']-used-contract['limits']['terminal_reserve_bytes']
-    if remaining <= 0:
+    # Replay does not publish another terminal. Its original terminal already
+    # legitimately occupies the reserved bytes; only the total cap still applies.
+    reserve = contract['limits']['terminal_reserve_bytes'] if reserve_terminal else 0
+    remaining = contract['limits']['overall_bytes']-used-reserve
+    if remaining < 0 or (reserve_terminal and remaining == 0):
         raise HoldoutError('holdout_overall_capacity')
-    if shutil.disk_usage(auth.output_root.parent).free < contract['limits']['disk_reserve_bytes']:
+    if auth.mode=='evaluate' and shutil.disk_usage(auth.output_root.parent).free < contract['limits']['disk_reserve_bytes']:
         raise HoldoutError('disk_reserve_required')
     seconds = _BUDGETS[(auth.claim_hash, auth.mode)]-time.monotonic()
     if seconds <= 0:

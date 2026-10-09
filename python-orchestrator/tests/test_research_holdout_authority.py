@@ -710,11 +710,15 @@ def test_genuine_new_inventory_requires_complete_controller(tmp_path,monkeypatch
     fake=root/'holdout_authority.py'; fake.write_text('')
     monkeypatch.setattr(h,'__file__',str(fake))
     with pytest.raises(FileNotFoundError): h._new_code_inventory()
-    for name in ('holdout.py','holdout_authority.py','frozen_verifier_inventory.json','signals.py','signal_sources.py',
-        'campaign.py','campaign_evidence.py','plans.py','portfolio_simulator.py','statistics.py','funding.py','binance_history.py','source_complements.py'):
+    names = ('holdout.py','holdout_authority.py','frozen_verifier_inventory.json','signals.py','signal_sources.py',
+        'campaign.py','campaign_evidence.py','plans.py','portfolio_simulator.py','statistics.py','funding.py',
+        'binance_history.py','source_complements.py','orchestration.py','experiments.py')
+    for name in names:
         (root/name).write_text('')
     (root.parents[1]/'modern_trading_contracts.py').write_text('')
-    assert len(h._new_code_inventory())==14
+    inventory = h._new_code_inventory()
+    assert len(inventory)==16
+    assert set(inventory)=={str(root/name) for name in names} | {str(root.parents[1]/'modern_trading_contracts.py')}
 
 
 def test_trusted_inventory_schema_denials(monkeypatch):

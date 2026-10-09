@@ -623,9 +623,11 @@ def _run_selected_signals(dataset_root, output_root, app_dir, start, end, score_
                 raise SignalError('claimed baseline differs from signal worker')
         report["status"] = "complete"
         return report
-    except Exception as exc:
+    except BaseException as exc:
         report["status"] = "failed"
         report["errors"].append({"type": type(exc).__name__, "message": str(exc)})
+        if not isinstance(exc, Exception):
+            raise
         raise SignalError(str(exc)) from exc
     finally:
         elapsed = time.monotonic() - started

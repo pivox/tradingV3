@@ -90,7 +90,9 @@ def engine(fixture, tmp_path, monkeypatch, request):
     fixture.config['protocol_hash'] = fixture.freeze['protocol_hash'] = h.hash_bytes(h.canonical_bytes(fixture.protocol))
     fixture.installed.write_bytes(h.canonical_bytes(fixture.config))
     (Path(fixture.config['registry'])/'protocol.json').write_bytes(h.canonical_bytes(fixture.protocol))
-    fixture.selected(getattr(request,'param','baseline'))
+    mode = getattr(request,'param','baseline')
+    controller = isinstance(mode, dict)
+    fixture.selected(mode['variant'] if controller else mode)
     baseline = report['symbols']['BTCUSDT']['baseline']
     ip = json.loads(kwargs['instrument_path'].read_bytes())
     cp = json.loads(kwargs['cost_path'].read_bytes())
@@ -106,12 +108,14 @@ def engine(fixture, tmp_path, monkeypatch, request):
             'research_code_hash':canonical_hash(campaign.plans.code_inventory(kwargs['app_dir'])),
             **{p+'_cost_hash':canonical_hash(cp['profiles'][p]) for p in ('baseline','adverse')}}}
     monkeypatch.setattr(h, '_preflight_identities', lambda a,p: identity)
-    auth = fixture.claim()
-    auth.output_root.mkdir(mode=0o700)
-    kwargs['signal_root'].rename(auth.output_root/'signals')
-    report_path = auth.output_root/'signals'/'report.json'
+    auth = None if controller else fixture.claim()
+    if auth is not None:
+        auth.output_root.mkdir(mode=0o700)
+        kwargs['signal_root'].rename(auth.output_root/'signals')
+    signal_root = kwargs['signal_root'] if controller else auth.output_root/'signals'
+    report_path = signal_root/'report.json'
     for symbol in h.SYMBOLS[1:]:
-        path = auth.output_root/'signals'/(symbol+'.results.ndjson')
+        path = signal_root/(symbol+'.results.ndjson')
         frame = json.loads(path.read_bytes())
         frame.update(passed=False,reason_code='sample_reject')
         frame['result_hash'] = canonical_hash({k:v for k,v in frame.items() if k != 'result_hash'})
@@ -123,10 +127,11 @@ def engine(fixture, tmp_path, monkeypatch, request):
     # the UTC +00:00 representation used by this private fixture.
     monkeypatch.setattr(signal_sources, '_select_sources_validated',
         lambda root,beginning,ending,score,symbol: selections[symbol])
-    for p in auth.output_root.rglob('*'):
+    for p in signal_root.rglob('*'):
         if p.is_file(): p.chmod(0o600)
-    (auth.output_root/'units'/'baseline').mkdir(mode=0o700, parents=True)
-    (auth.output_root/'units').chmod(0o700)
+    if auth is not None:
+        (auth.output_root/'units'/'baseline').mkdir(mode=0o700, parents=True)
+        (auth.output_root/'units').chmod(0o700)
     upstream.Builder.positive = True
     class BoundBuilder(upstream.Builder):
         def build(self, signal, view):
@@ -136,6 +141,33 @@ def engine(fixture, tmp_path, monkeypatch, request):
                 result['plan_hash'] = canonical_hash({k:v for k,v in result.items() if k != 'plan_hash'})
             return result
     monkeypatch.setattr(campaign.plans, 'PlanWorker', BoundBuilder)
+    if controller:
+        from dataclasses import replace, asdict
+        reader = campaign.FundingReader
+        class ControllerFunding(reader):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.inventory = replace(self.inventory, symbols=tuple(replace(row,
+                    first_ms=start+30000, last_ms=start+30000) for row in self.inventory.symbols))
+                data = asdict(self.inventory); data.pop('inventory_hash')
+                self.inventory = replace(self.inventory, inventory_hash=canonical_hash(data))
+            def iter_events(self):
+                for row in super().iter_events(): yield replace(row, timestamp_ms=start+30000)
+        monkeypatch.setattr(campaign, 'FundingReader', ControllerFunding)
+        # Only the private worker transport is synthetic. The public signal
+        # controller, bindings, once-only claim, kernel and verifier are real.
+        calls = []
+        def worker(root, out, app, selection, argv, timeout, stderr, capacity):
+            assert (fixture.anchor/'claim.json').exists()
+            calls.append(selection.symbol)
+            for suffix in ('.results.ndjson',):
+                raw = (signal_root/(selection.symbol+suffix)).read_bytes()
+                target = out/(selection.symbol+suffix)
+                target.write_bytes(raw); target.chmod(0o600)
+            return report['symbols'][selection.symbol]
+        monkeypatch.setattr(signals, '_run_symbol', worker)
+        monkeypatch.setattr(signals, '_worker_argv', lambda app, supplied: ('synthetic-private-worker',))
+        return fixture, kwargs, report, selections, calls
     return auth, kwargs, report, selections, report_path
 
 
