@@ -180,7 +180,7 @@ def funding_rows(raw: bytes, symbol: str, start: int, end: int) -> list[dict]:
         if "markPrice" in row:
             _number(row["markPrice"], positive=True)
         try:
-            _canonical_json(row)
+            _canonical_json(row).encode("utf-8")
         except ValueError as exc:
             raise ComplementError("funding row is not representable in canonical evidence") from exc
         previous = timestamp
