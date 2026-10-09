@@ -91,6 +91,23 @@ def test_exact_unique_slots_and_fresh_output_cannot_repeat(fixture, selected, co
         f.module.prepare_claim(f.authority(), f.other_output)
 
 
+def test_claim_retains_observed_runner_interpreter_distinct_from_frozen_verifier(fixture,monkeypatch):
+    auth = fixture.claim()
+    contract = json.loads(auth.contract_bytes)
+    runner = contract['runner_interpreter']
+    assert runner['invoked_path']==sys.executable
+    assert runner['resolved_path']==str(Path(sys.executable).resolve())
+    assert runner['version']==sys.version
+    assert runner['on_disk_binary_sha256']==h_module._file_hash(Path(sys.executable).resolve())
+    assert runner['dependency_environment_attestation']=='unavailable'
+    assert runner['binary_hash_scope']=='on_disk_file_not_process_memory_or_host_os'
+    assert runner['invoked_path']!=contract['paths']['python']
+    monkeypatch.setattr(sys,'executable','/different/verification/python')
+    monkeypatch.setattr(sys,'version','different verification interpreter')
+    replay=h_module.mint_retained_authorization(fixture.authority())
+    assert json.loads(replay.contract_bytes)['runner_interpreter']==runner
+
+
 def test_fake_and_replaced_capabilities_deny_before_reads(fixture):
     f = fixture; auth = f.claim(); h = f.module
     for fake in (None, dataclasses.replace(auth), dataclasses.replace(auth, output_root=f.other_output),

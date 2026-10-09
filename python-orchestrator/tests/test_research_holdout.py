@@ -2,7 +2,9 @@
 import dataclasses
 import hashlib
 import json
+import io
 from pathlib import Path
+import zipfile
 
 import pytest
 
@@ -11,6 +13,52 @@ from app.backtesting.research import holdout_authority as h
 from tests.test_research_holdout_authority import fixture
 from tests import test_research_campaign as upstream
 from app.backtesting.research.portfolio_simulator import canonical_hash
+
+
+def _materialize_engine_sources(root, start, score, end, symbols):
+    """Genuine bound metadata/files; only the candle transport remains fake."""
+    from app.backtesting.research.binance_history import SOURCE, plan_archives
+    from datetime import datetime, timezone
+    entries = []
+    beginning = datetime.fromtimestamp(start/1000,timezone.utc)
+    month = beginning.replace(day=1,hour=0,minute=0)
+    segments = []
+    while signal_sources._ms(month)<score:
+        following = month.replace(year=month.year+(month.month==12),month=month.month%12+1)
+        left,right = max(start,signal_sources._ms(month)),min(score,signal_sources._ms(following))
+        content = '\n'.join(f'{t},100,101,99,100,1,{t+59999},100,1,1,100,0'
+                            for t in range(left,right,60000))
+        segments.append((month,following,left,right,content))
+        month = following
+    for symbol in symbols:
+        for month,following,left,right,content in segments:
+            archive = plan_archives(symbol,month,following)[0]
+            stream = io.BytesIO()
+            with zipfile.ZipFile(stream,'w',compression=zipfile.ZIP_DEFLATED) as zipped:
+                zipped.writestr(archive.filename.removesuffix('.zip')+'.csv',content)
+            raw = stream.getvalue(); digest = hashlib.sha256(raw).hexdigest()
+            path = root/'archives'/'klines'/archive.filename
+            path.parent.mkdir(parents=True,exist_ok=True); path.write_bytes(raw)
+            path.with_name(path.name+'.CHECKSUM').write_text(f'{digest}  {archive.filename}')
+            entries.append({'symbol':symbol,'kind':'klines','start':upstream.iso(left),'end':upstream.iso(right),
+                'status':'ok','coverage':'complete','gaps':[],'count':(right-left)//60000,
+                'first_open':left,'last_close':right-1,'evidence':'official_archive_checksum',
+                'filename':archive.filename,'url':archive.url,'checksum_url':archive.checksum_url,
+                'raw_path':str(path.relative_to(root)),'checksum_path':str(path.relative_to(root))+'.CHECKSUM',
+                'sha256':digest,'size':len(raw)})
+        path = root/'rest'/symbol/(str(score)+'.json'); path.parent.mkdir(parents=True,exist_ok=True)
+        raw = json.dumps([[t,'100','120' if t>=score+60000 else '101','99','100','1',
+                           t+59999,'100',1,'1','100','0'] for t in range(score,end,60000)]).encode()
+        path.write_bytes(raw)
+        entries.append({'symbol':symbol,'kind':'klines','start':upstream.iso(score),'end':upstream.iso(end),
+            'status':'ok','coverage':'complete','gaps':[],'count':(end-score)//60000,
+            'first_open':score,'last_close':end-1,'evidence':'download_sha256',
+            'pages':[{'raw_path':str(path.relative_to(root)),'sha256':hashlib.sha256(raw).hexdigest(),
+                'size':len(raw),'url':f'https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1m&startTime={score}&endTime={end-1}&limit=1000'}]})
+    (root/'manifest.json').write_text(json.dumps({'identity':{'schema':1,'source':SOURCE,'symbols':list(symbols),
+        'start':upstream.iso(start),'end':upstream.iso(end),'include_funding':False},'sources':entries}))
+    return {symbol:signal_sources._select_sources_validated(root,signal_sources._utc(upstream.iso(start)),
+        signal_sources._utc(upstream.iso(end)),signal_sources._utc(upstream.iso(score)),symbol) for symbol in symbols}
 
 
 @pytest.mark.parametrize('entry', ['source', 'signals', 'campaign', 'statistics', 'verify'])
@@ -73,13 +121,23 @@ def test_shared_budget_does_not_reset_on_slot_and_counts_physical_bytes_once(fix
 
 @pytest.fixture
 def engine(fixture, tmp_path, monkeypatch, request):
-    """Three synthetic minutes, not a full-calendar evaluation."""
+    """Three scored minutes plus 60000 warmup minutes, all synthetic."""
     base = tmp_path/'engine'; base.mkdir(mode=0o700)
     start = 1767225600000
     source_start = start-250*14400000
     monkeypatch.setattr(upstream, 'START', start)
     monkeypatch.setattr(upstream, 'SOURCE_START', source_start)
     kwargs, report, selections = upstream.fixture(base, monkeypatch, passed=True, symbols=h.SYMBOLS)
+    selections = _materialize_engine_sources(kwargs['dataset_root'],source_start,start,start+180000,h.SYMBOLS)
+    manifest_sha = next(iter(selections.values())).manifest_sha256
+    reader = campaign.FundingReader
+    class BoundFunding(reader):
+        def __init__(self,*args,**kwargs):
+            super().__init__(*args,**kwargs)
+            self.inventory = dataclasses.replace(self.inventory,acquisition_manifest_sha256=manifest_sha)
+            data = dataclasses.asdict(self.inventory); data.pop('inventory_hash')
+            self.inventory = dataclasses.replace(self.inventory,inventory_hash=canonical_hash(data))
+    monkeypatch.setattr(campaign,'FundingReader',BoundFunding)
     monkeypatch.setattr(h, 'SOURCE_START', upstream.iso(source_start))
     monkeypatch.setattr(h, 'SCORE_START', upstream.iso(start))
     monkeypatch.setattr(h, 'END', upstream.iso(start+180000))
@@ -100,7 +158,7 @@ def engine(fixture, tmp_path, monkeypatch, request):
         'instrument_sha256':hashlib.sha256(kwargs['instrument_path'].read_bytes()).hexdigest(),
         'cost_sha256':hashlib.sha256(kwargs['cost_path'].read_bytes()).hexdigest(),
         'source_manifest_sha256':hashlib.sha256((kwargs['dataset_root']/'manifest.json').read_bytes()).hexdigest(),
-        'new_code':campaign._runner_code(), 'protocol_identity':{
+        'new_code':h._new_code_inventory(), 'protocol_identity':{
             **{target:baseline[source] for target,source in
                (('base_setup_hash','setup_hash'),('base_config_hash','config_hash'),
                 ('base_catalog_hash','condition_catalog_hash'),('base_snapshot_hash','snapshot_hash'))},
@@ -114,19 +172,21 @@ def engine(fixture, tmp_path, monkeypatch, request):
         kwargs['signal_root'].rename(auth.output_root/'signals')
     signal_root = kwargs['signal_root'] if controller else auth.output_root/'signals'
     report_path = signal_root/'report.json'
-    for symbol in h.SYMBOLS[1:]:
+    for symbol in h.SYMBOLS:
         path = signal_root/(symbol+'.results.ndjson')
         frame = json.loads(path.read_bytes())
-        frame.update(passed=False,reason_code='sample_reject')
+        frame.update(session_id=f'research-{symbol}-{selections[symbol].dataset_sha256[:20]}',
+            source=campaign._source(selections[symbol]))
+        if symbol!='BTCUSDT': frame.update(passed=False,reason_code='sample_reject')
         frame['result_hash'] = canonical_hash({k:v for k,v in frame.items() if k != 'result_hash'})
         raw = (json.dumps(frame)+'\n').encode(); path.write_bytes(raw)
-        report['symbols'][symbol].update(passed_rules=0,failed_rules=1,scored_passed_rules=0,
-            scored_failed_rules=1,result_sha256=hashlib.sha256(raw).hexdigest())
+        if symbol!='BTCUSDT':
+            report['symbols'][symbol].update(passed_rules=0,failed_rules=1,scored_passed_rules=0,scored_failed_rules=1)
+        report['symbols'][symbol].update(result_sha256=hashlib.sha256(raw).hexdigest(),
+            dataset_sha256=selections[symbol].dataset_sha256,manifest_sha256=manifest_sha)
     report_path.write_text(json.dumps(report,sort_keys=True))
     # Exact canonical production report window strings are claimed, including
     # the UTC +00:00 representation used by this private fixture.
-    monkeypatch.setattr(signal_sources, '_select_sources_validated',
-        lambda root,beginning,ending,score,symbol: selections[symbol])
     for p in signal_root.rglob('*'):
         if p.is_file(): p.chmod(0o600)
     if auth is not None:
@@ -169,6 +229,13 @@ def engine(fixture, tmp_path, monkeypatch, request):
         monkeypatch.setattr(signals, '_worker_argv', lambda app, supplied: ('synthetic-private-worker',))
         return fixture, kwargs, report, selections, calls
     return auth, kwargs, report, selections, report_path
+
+
+def test_production_authority_and_campaign_runner_inventories_are_exactly_equal():
+    inventory = h._new_code_inventory()
+    assert inventory == campaign._runner_code()
+    assert {str(Path(campaign.__file__).with_name(name)) for name in
+            ('orchestration.py','experiments.py')} <= set(inventory)
 
 
 def test_binding_publication_and_real_guarded_engine_reconcile(engine):
@@ -271,6 +338,36 @@ def test_retained_verification_replays_without_source_generation(engine, monkeyp
             variant_id='baseline',cost_profile='baseline')
 
 
+def test_bound_raw_klines_are_reverified_before_profit_without_generation(engine,monkeypatch):
+    auth,binding = publish(engine)
+    root = auth.output_root/'units'/'baseline'/'baseline'
+    campaign.run_holdout_campaign(auth.output_root/'signals',authorization=auth,
+        variant_id='baseline',cost_profile='baseline')
+    retained = h.mint_retained_authorization(h.load_campaign_authority()).for_slot('baseline','baseline')
+    assert statistics.verify_holdout_campaign(root,authorization=retained,
+        variant_id='baseline',cost_profile='baseline')['closed_trades']==1
+    source = Path(json.loads(auth.contract_bytes)['paths']['dataset_root'])
+    entries = engine[3]['BTCUSDT'].sources
+    selected = [source/entries[-1]['pages'][0]['raw_path'],source/entries[0]['raw_path'],
+                source/entries[0]['checksum_path']]
+    def forbidden(*args,**kwargs): pytest.fail('raw source corruption reached profit/generation')
+    with monkeypatch.context() as guard:
+        guard.setattr(signal_sources,'select_holdout_sources',forbidden)
+        guard.setattr(signal_sources,'_select_sources_validated',forbidden)
+        guard.setattr(campaign,'iter_verified_candles',forbidden)
+        guard.setattr(campaign,'PortfolioSimulator',forbidden)
+        guard.setattr(statistics,'_read_json',forbidden)
+        for path in selected:
+            raw = path.read_bytes()
+            for change in ('missing','mutated'):
+                if change=='missing': path.unlink()
+                else: path.write_bytes(raw+b'corruption')
+                with pytest.raises(signal_sources.SignalError):
+                    statistics.verify_holdout_campaign(root,authorization=retained,
+                        variant_id='baseline',cost_profile='baseline')
+                path.write_bytes(raw)
+
+
 def test_synthetic_2026_net_plus_two_uses_same_guarded_arithmetic(engine):
     from tests.test_research_statistics import write_ledgers, marked_row
     auth,binding = publish(engine)
@@ -367,7 +464,7 @@ def test_binding_construction_requires_exact_source_and_b1_scope(engine,change):
             signal_sources.select_holdout_sources(Path('/wrong'),'BTCUSDT',authorization=slot)
         return
     if change == 'source_hash':
-        selections['BTCUSDT'] = dataclasses.replace(selections['BTCUSDT'],manifest_sha256='f'*64)
+        report['symbols']['BTCUSDT']['manifest_sha256'] = 'f'*64
     elif change == 'date': report['source_end'] = '2026-10-10T06:00:00Z'
     elif change == 'missing_symbol': report['symbols'].pop('AVAXUSDT')
     elif change == 'baseline': report['symbols']['BTCUSDT']['baseline'] = {}

@@ -20,6 +20,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import time
 import uuid
 
@@ -698,10 +699,15 @@ def prepare_claim(authority: CampaignAuthority,output_root: Path,*,timeout: floa
         for v in variants for cost in ('baseline','adverse')]
     if len({(s['variant_id'],s['cost_profile']) for s in slots})!=len(slots): raise HoldoutError('duplicate_slots')
     config = json.loads(authority.config_bytes)
+    runner_path = Path(sys.executable).resolve()
     contract = {'schema_version':'research-holdout-contract.v1','campaign_id':CAMPAIGN_ID,
         'authority_hash':authority.authority_hash,'registry':str(authority.registry),
         'protocol_hash':config['protocol_hash'],'freeze_sha256':hash_bytes(freeze_raw),
         'freeze':freeze,'identities':identities,'paths':config['paths'],'output_root':str(output),
+        'runner_interpreter':{'invoked_path':sys.executable,'resolved_path':str(runner_path),
+            'version':sys.version,'on_disk_binary_sha256':_file_hash(runner_path),
+            'binary_hash_scope':'on_disk_file_not_process_memory_or_host_os',
+            'dependency_environment_attestation':'unavailable'},
         'symbols':list(SYMBOLS),'variants':variants,'selected':selected,'slots':slots,
         'window':{'source_start':SOURCE_START,'score_start':SCORE_START,'end':END,
             'end_ms':int(datetime.fromisoformat(END.replace('Z','+00:00')).timestamp()*1000)},

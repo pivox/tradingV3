@@ -21,7 +21,12 @@ def test_complete_fixed_controller_with_real_kernel_and_readonly_replay(engine, 
     assert report['paper_transfer'] == 'distinct_pending'
     assert calls == list(h.SYMBOLS)
     assert report['python_transition']['new_b1_code_identity']['code_sha256']==signal_report['code_sha256']
-    assert report['python_transition']['new_runtime_inventory']==f.config['runtime']
+    transition=report['python_transition']
+    assert transition['frozen_verifier_runtime_inventory']==f.config['runtime']
+    assert transition['frozen_verifier_python_path']==f.config['paths']['python']
+    runner=json.loads((f.anchor/'contract.json').read_bytes())['runner_interpreter']
+    assert transition['runner_interpreter']==runner
+    assert 'new_python_path' not in transition and 'new_runtime_inventory' not in transition
     assert len(report['units']) == (2 if f.freeze['selected']['id']=='baseline' else 4)
     assert len({(u['variant_id'],u['cost_profile']) for u in report['units']}) == len(report['units'])
     for unit in report['units']:
@@ -38,6 +43,13 @@ def test_complete_fixed_controller_with_real_kernel_and_readonly_replay(engine, 
     assert holdout.verify_retained_holdout() == report
     after = {str(p):p.read_bytes() for root in (f.output,f.anchor) for p in root.rglob('*') if p.is_file()}
     assert after == before
+    # A verifier can use another interpreter; it cannot relabel the original
+    # execution or recapture provenance while rebuilding its immutable reports.
+    import sys
+    with monkeypatch.context() as provenance:
+        provenance.setattr(sys,'executable','/different/verification/python')
+        provenance.setattr(sys,'version','different verification interpreter')
+        assert holdout.verify_retained_holdout()==report
     assert holdout.main(['--verify-retained'])==0
     console=json.loads(capsys.readouterr().out)
     assert console['holdout_status']=='complete' and console['execution_authority']=='none'

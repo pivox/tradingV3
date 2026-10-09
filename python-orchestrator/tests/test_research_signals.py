@@ -87,6 +87,111 @@ def rest_dataset(root: Path) -> Path:
     return root
 
 
+def test_retained_source_identity_reader_has_finite_nofollow_reads(tmp_path,monkeypatch):
+    import time
+    root = tmp_path/'identity'; root.mkdir()
+    path = root/'item'; path.write_bytes(b'x'*(1024**2+1))
+    identity = signal_sources._source_artifact_identity
+    digest,size,raw = identity(root,'item',2*1024**2,time.monotonic()+10,capture=False)
+    assert (digest,size,raw)==(hashlib.sha256(path.read_bytes()).hexdigest(),1024**2+1,None)
+    assert identity(root,'item',2*1024**2,time.monotonic()+10,capture=True)[2]==path.read_bytes()
+    with pytest.raises(signal_sources.SignalError,match='deadline'):
+        identity(root,'item',2*1024**2,time.monotonic()-1)
+    with pytest.raises(signal_sources.SignalError,match='size'):
+        identity(root,'item',1,time.monotonic()+10)
+    (root/'link').symlink_to(path)
+    with pytest.raises(signal_sources.SignalError): identity(root,'link',2*1024**2,time.monotonic()+10)
+    (root/'directory').mkdir()
+    with pytest.raises(signal_sources.SignalError): identity(root,'directory',2*1024**2,time.monotonic()+10)
+    with pytest.raises(signal_sources.SignalError): identity(root,'absent',2*1024**2,time.monotonic()+10)
+    with pytest.raises(signal_sources.SignalError): identity(root,'../item',2*1024**2,time.monotonic()+10)
+    with pytest.raises(signal_sources.SignalError): identity(Path('relative'),'item',2*1024**2,time.monotonic()+10)
+    (root/'parent-link').symlink_to(root,target_is_directory=True)
+    with pytest.raises(signal_sources.SignalError): identity(root,'parent-link/item',2*1024**2,time.monotonic()+10)
+
+
+@pytest.mark.parametrize('change', ['deadline','growth','replacement'])
+def test_source_identity_rechecks_between_chunks_and_rejects_midread_changes(tmp_path,monkeypatch,change):
+    import time
+    root=tmp_path/'raw'; root.mkdir(); path=root/'item'; path.write_bytes(b'x'*(1024**2+1))
+    original=signal_sources.os.fdopen; calls=[]; now=[time.monotonic()]
+    class Stream:
+        def __init__(self,fd,*args,**kwargs): self.stream=original(fd,*args,**kwargs)
+        def __enter__(self): return self
+        def __exit__(self,*args): self.stream.close()
+        def fileno(self): return self.stream.fileno()
+        def read(self,size):
+            calls.append(size); raw=self.stream.read(size)
+            if len(calls)==1:
+                if change=='deadline': now[0]+=100
+                elif change=='growth': path.write_bytes(path.read_bytes()+b'!')
+                else:
+                    replacement=root/'replacement'; replacement.write_bytes(path.read_bytes())
+                    replacement.replace(path)
+            return raw
+    monkeypatch.setattr(signal_sources.os,'fdopen',Stream)
+    monkeypatch.setattr(signal_sources.time,'monotonic',lambda:now[0])
+    with pytest.raises(signal_sources.SignalError,match='deadline' if change=='deadline' else 'changed'):
+        signal_sources._source_artifact_identity(root,'item',2*1024**2,now[0]+10)
+    assert all(size<=1024**2 for size in calls)
+    if change=='deadline': assert len(calls)==1
+
+
+@pytest.mark.parametrize('transport', ['archive','rest'])
+def test_retained_subset_identity_is_exact_readonly_and_never_iterates_candles(tmp_path,monkeypatch,transport):
+    import time
+    root = dataset(tmp_path/'raw') if transport=='archive' else rest_dataset(tmp_path/'raw')
+    selection = signal_sources.select_sources(root,START,END,START,'BTCUSDT')
+    raw = (root/'manifest.json').read_bytes()
+    before = {str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    def forbidden(*args,**kwargs): pytest.fail('retained source identity generated candles or selected evaluation inputs')
+    monkeypatch.setattr(signal_sources,'_select_sources_validated',forbidden)
+    monkeypatch.setattr(signal_sources,'iter_verified_candles',forbidden)
+    verify = signal_sources._verify_bound_source_identity
+    assert verify(root,raw,selection.start,selection.end,selection.score_start,'BTCUSDT',
+                  selection.dataset_sha256,time.monotonic()+10)==selection
+    assert before=={str(p):p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    with pytest.raises(signal_sources.SignalError,match='subset'):
+        verify(root,raw,selection.start,selection.end,selection.score_start,'BTCUSDT','0'*64,time.monotonic()+10)
+    with pytest.raises(signal_sources.SignalError,match='deadline'):
+        verify(root,raw,selection.start,selection.end,selection.score_start,'BTCUSDT',selection.dataset_sha256,time.monotonic()-1)
+
+
+@pytest.mark.parametrize('change', ['checksum_format','checksum_name','checksum_digest','checksum_unicode',
+    'archive_size','rest_size','rest_path','rest_url','rest_json','rest_empty','rest_order','rest_count'])
+def test_retained_source_identity_preserves_original_archive_and_rest_semantics(tmp_path,change):
+    import time
+    is_archive=change.startswith(('checksum','archive'))
+    root=dataset(tmp_path/'raw') if is_archive else rest_dataset(tmp_path/'raw')
+    manifest=json.loads((root/'manifest.json').read_bytes()); entry=manifest['sources'][0]
+    if change.startswith('checksum'):
+        path=root/entry['checksum_path']
+        text={'checksum_format':'invalid','checksum_name':entry['sha256']+'  wrong.zip',
+              'checksum_digest':'0'*64+'  '+entry['filename']}
+        path.write_bytes(b'\xff' if change=='checksum_unicode' else text[change].encode())
+    elif change=='archive_size': entry['size']+=1
+    else:
+        page=entry['pages'][0]; path=root/page['raw_path']
+        if change=='rest_size': page['size']+=1
+        elif change=='rest_path': page['raw_path']='rest/BTCUSDT/wrong.json'
+        elif change=='rest_url': page['url']='https://wrong'
+        else:
+            rows=json.loads(path.read_bytes())
+            if change=='rest_json': raw=b'not json'
+            elif change=='rest_empty': raw=b'[]'
+            else:
+                if change=='rest_order': rows.reverse()
+                else: rows.pop()
+                raw=json.dumps(rows).encode()
+            path.write_bytes(raw); page.update(size=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+    raw=json.dumps(manifest).encode()
+    beginning,ending,score=map(signal_sources._utc,(START,END,START))
+    selection=signal_sources._selection_from_manifest(raw,beginning,ending,score,'BTCUSDT')
+    with pytest.raises(signal_sources.SignalError):
+        signal_sources._verify_bound_source_identity(root,raw,beginning,ending,score,'BTCUSDT',
+            selection.dataset_sha256,time.monotonic()+10)
+
+
 FAKE_WORKER = r'''
 import hashlib, json, os, sys, time
 from datetime import datetime, timezone

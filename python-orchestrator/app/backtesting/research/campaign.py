@@ -25,6 +25,7 @@ from .portfolio_simulator import (Candle, CostAssumptions, FundingCoverage,
     FundingEvent, InstrumentAssumptions, PortfolioSimulator, RunAssumptions,
     Signal, SYMBOLS, canonical_hash, merge_candles, number)
 from .signal_sources import (_ms, _utc, _read_bounded, select_sources, iter_verified_candles)
+from .signal_sources import _source_artifact_identity, _verify_bound_source_identity, MAX_MANIFEST_BYTES
 
 MAX_ARTIFACT = 4*1024**3
 MAX_REPORT = 16*1024**2
@@ -281,7 +282,8 @@ def _runner_code():
     paths = [Path(__file__).with_name(name+'.py') for name in
              ('campaign','campaign_evidence','plans','portfolio_simulator','funding','signals','signal_sources','binance_history','source_complements')]
     paths.extend(Path(__file__).with_name(name) for name in
-                 ('statistics.py','holdout.py','holdout_authority.py','frozen_verifier_inventory.json'))
+                 ('statistics.py','holdout.py','holdout_authority.py','frozen_verifier_inventory.json',
+                  'orchestration.py','experiments.py'))
     paths.append(Path(__file__).resolve().parents[2]/'modern_trading_contracts.py')
     # Task3 supplies the controller; ordinary pre-holdout callers remain usable
     # while a claim's stricter preflight requires the complete inventory.
@@ -356,8 +358,15 @@ def build_holdout_unit_inputs(signal_root: Path, *, authorization, variant_id: s
     contract = require_claim(authorization,operation='binding',variant_id=variant_id,cost_profile=cost_profile)
     p = contract['paths']; symbols = tuple(contract['symbols'])
     limits = remaining_limits(authorization)
+    deadline = time.monotonic()+limits['seconds']
     reports,bindings,windows,_ = _verify_reports(Path(p['dataset_root']), (Path(signal_root),),
-        Path(p['app_dir']),symbols,'holdout',time.monotonic()+limits['seconds'],authorization=authorization)
+        Path(p['app_dir']),symbols,'holdout',deadline,authorization=authorization)
+    _,_,raw_manifest = _source_artifact_identity(Path(p['dataset_root']),'manifest.json',
+        MAX_MANIFEST_BYTES,deadline,capture=True)
+    for symbol in symbols:
+        selection = bindings[symbol][1]
+        _verify_bound_source_identity(Path(p['dataset_root']),raw_manifest,selection.start,selection.end,
+            selection.score_start,symbol,selection.dataset_sha256,deadline)
     instruments, instrument_sha = _input(Path(p['instrument_path']), MAX_REPORT)
     costs, cost_sha = _input(Path(p['cost_path']), MAX_REPORT)
     for document,field in ((instruments,'manifest_hash'),(costs,'assumption_hash')):
@@ -471,9 +480,12 @@ def validate_holdout_unit_inputs(*, authorization, variant_id: str, cost_profile
         raise CampaignError('unit input immutable anchor conflict')
     _validate_binding_scope(binding,authorization,contract)
     p = contract['paths']; ident = contract['identities']
+    source_digest,_,raw_manifest = _source_artifact_identity(Path(p['dataset_root']),'manifest.json',
+        MAX_MANIFEST_BYTES,deadline,capture=True)
+    if source_digest!=ident['source_manifest_sha256']:
+        raise CampaignError('unit input retained file identity conflict')
     for name,digest in ((p['instrument_path'],ident['instrument_sha256']),
-                        (p['cost_path'],ident['cost_sha256']),
-                        (str(Path(p['dataset_root'])/'manifest.json'),ident['source_manifest_sha256'])):
+                        (p['cost_path'],ident['cost_sha256'])):
         if hashlib.sha256(_read(Path(name),64*1024**2)).hexdigest() != digest:
             raise CampaignError('unit input retained file identity conflict')
     if _runner_code() != binding['runner_code_sha256'] or plans.code_inventory(Path(p['app_dir'])) != ident['php']:
@@ -487,7 +499,7 @@ def validate_holdout_unit_inputs(*, authorization, variant_id: str, cost_profile
         or report['code_sha256'] != reports[0]['code_sha256']
         or report['code_sha256'] != signals._code_hashes(Path(p['app_dir']),fake_worker=False)):
         raise CampaignError('unit input retained B1 identity conflict')
-    _validate_retained_metadata(binding,contract,report,digest,deadline)
+    _validate_retained_metadata(binding,contract,report,digest,deadline,raw_manifest)
     # Provenance metadata can be revalidated in verify mode; no funding events,
     # candles, signal rows, planner or simulator are generated here.
     reader = FundingReader(Path(p['dataset_root']),contract['window']['score_start'],contract['window']['end'],
@@ -518,7 +530,7 @@ def _artifact_identity(path,deadline):
     return digest.hexdigest(),count
 
 
-def _validate_retained_metadata(binding,contract,report,report_sha,deadline):
+def _validate_retained_metadata(binding,contract,report,report_sha,deadline,raw_manifest):
     """Reconstruct the unit's immutable expected inputs from hashed metadata.
 
     No source selector, candle/signal row iterator, worker or simulation is used.
@@ -542,6 +554,10 @@ def _validate_retained_metadata(binding,contract,report,report_sha,deadline):
             or not verified.executable or verified.blockers
             or any(snapshot[key] != baseline[key] for key in ('config_hash','condition_catalog_hash','snapshot_hash'))):
             raise CampaignError('unit input retained baseline or source identity conflict')
+        selection = _verify_bound_source_identity(Path(contract['paths']['dataset_root']),raw_manifest,
+            _utc(w['source_start']),_utc(w['end']),_utc(w['score_start']),symbol,meta['dataset_sha256'],deadline)
+        if selection.expected_candles!=meta['source_candles']:
+            raise CampaignError('unit input retained source denominator conflict')
         root = Path(binding['signal_reports'][0]['root'])
         if _artifact_identity(root/(symbol+'.results.ndjson'),deadline) != (meta['result_sha256'],meta['scored_evaluations']):
             raise CampaignError('unit input retained signal artifact identity conflict')
