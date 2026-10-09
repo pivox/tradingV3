@@ -16,6 +16,7 @@ from .signal_sources import SignalError
 
 LEDGERS = ('plans','rejections','events','trades','cashflows','funding-events')
 MAX_LINE = 2*1024**2
+TERMINAL_STATUS_BYTES = 8192
 
 
 class EvidenceError(RuntimeError):
@@ -37,19 +38,28 @@ def encoded(value) -> bytes:
 
 class Evidence:
     def __init__(self, root: Path, source_roots: tuple[Path, ...], *,
-                 max_bytes: int, min_free_bytes: int):
+                 max_bytes: int, min_free_bytes: int, initial_bytes: int = 0):
         root = Path(root)
-        if type(max_bytes) is not int or max_bytes <= 0 or type(min_free_bytes) is not int or min_free_bytes < 0:
+        if (type(max_bytes) is not int or max_bytes <= TERMINAL_STATUS_BYTES
+            or type(min_free_bytes) is not int or min_free_bytes < 0
+            or type(initial_bytes) is not int or initial_bytes < 0):
             raise EvidenceError('evidence storage limits invalid')
         for source in source_roots:
             source = Path(source)
             if root == source or source in root.parents or root in source.parents:
                 raise EvidenceError('output overlaps evidence source root')
+        if initial_bytes+TERMINAL_STATUS_BYTES > max_bytes:
+            raise EvidenceError('initial evidence and terminal status exceed disk cap')
+        initial_free = shutil.disk_usage(root.parent).free if root.parent.is_dir() else 0
+        if root.parent.is_dir() and initial_free < min_free_bytes+initial_bytes+TERMINAL_STATUS_BYTES:
+            raise EvidenceError('initial evidence free space reserve')
         try:
             self.root = _private_output(root, source_roots[0] if source_roots else root/'unused')
         except SignalError as exc:
             raise EvidenceError(str(exc)) from exc
         self.max_bytes, self.min_free = max_bytes, min_free_bytes
+        # Conservatively account for buffered writes not yet visible to disk_usage.
+        self.free_budget = initial_free-min_free_bytes
         self.bytes = self.sequence = 0
         self.streams = {}
         self.hashes = {name:hashlib.sha256() for name in LEDGERS}
@@ -66,12 +76,19 @@ class Evidence:
                 os.fsync(stream.fileno())
                 stream.close()
 
-    def _reserve(self, size: int) -> None:
-        if self.bytes+size > self.max_bytes:
+    def _reserve(self, size: int, *, terminal: bool = False) -> None:
+        reserve = 0 if terminal else TERMINAL_STATUS_BYTES
+        if self.bytes+size > self.max_bytes-reserve:
             raise EvidenceError('evidence disk cap exceeded')
-        if shutil.disk_usage(self.root).free-size < self.min_free:
+        if (self.bytes+size > self.free_budget-reserve
+            or shutil.disk_usage(self.root).free-size < self.min_free+reserve):
             raise EvidenceError('evidence free space reserve')
         self.bytes += size
+
+    @staticmethod
+    def check_status(value) -> None:
+        if len(encoded(value)) > TERMINAL_STATUS_BYTES:
+            raise EvidenceError('terminal status encoded size exceeded')
 
     def json(self, name: str, value) -> str:
         if Path(name).name != name or not name.endswith('.json'):
@@ -80,7 +97,10 @@ class Evidence:
         if path.exists() or path.is_symlink():
             raise EvidenceError('immutable evidence file already exists')
         raw = encoded(value)
-        self._reserve(len(raw))
+        terminal = name == 'status.json'
+        if terminal:
+            self.check_status(value)
+        self._reserve(len(raw),terminal=terminal)
         temporary = self.root/('.'+name+'.tmp')
         fd = os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
         with os.fdopen(fd,'wb') as stream:
