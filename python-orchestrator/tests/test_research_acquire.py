@@ -116,26 +116,74 @@ def test_forbidden_does_not_retry_and_invalid_checksum(tmp_path: Path) -> None:
     assert result.sources[0]["status"] == "checksum_error"
 
 
+def test_rejects_clone_checkout_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def unused(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("network should not be called")
+
+    clone_repo = tmp_path / "clone-checkout"
+    clone_source = clone_repo / "python-orchestrator/app/backtesting/research/acquire.py"
+    clone_source.parent.mkdir(parents=True)
+    clone_source.touch()
+    monkeypatch.setattr(acquire_module, "__file__", str(clone_source))
+
+    with client_for(unused) as client, pytest.raises(AcquisitionError):
+        acquire(clone_repo / "history", START, END,
+                symbols=("BTCUSDT",), client=client)
+
+
+def test_rejects_worktree_and_main_checkout_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unused(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("network should not be called")
+
+    worktree_main = tmp_path / "worktree-main"
+    worktree = worktree_main / ".worktrees/research-checkout"
+    worktree_source = worktree / "python-orchestrator/app/backtesting/research/acquire.py"
+    worktree_source.parent.mkdir(parents=True)
+    worktree_source.touch()
+    gitdir = worktree_main / ".git/worktrees/research-checkout"
+    gitdir.mkdir(parents=True)
+    (worktree / ".git").write_text(f"gitdir: {gitdir}\n")
+    monkeypatch.setattr(acquire_module, "__file__", str(worktree_source))
+
+    with client_for(unused) as client:
+        # A linked worktree must reject both its own root and the shared main
+        # checkout root named by its synthetic .git pointer.
+        with pytest.raises(AcquisitionError):
+            acquire(worktree / "history", START, END,
+                    symbols=("BTCUSDT",), client=client)
+        with pytest.raises(AcquisitionError):
+            acquire(worktree_main / "history", START, END,
+                    symbols=("BTCUSDT",), client=client)
+
+
 def test_rejects_inrepo_symlink_conflict_and_cap(tmp_path: Path) -> None:
     def unused(request: httpx.Request) -> httpx.Response:
         raise AssertionError("network should not be called")
 
     with client_for(unused) as client:
-        with pytest.raises(AcquisitionError):
-            acquire(Path(__file__).parents[1] / "history", START, END,
-                    symbols=("BTCUSDT",), client=client)
-        main_repo = Path(__file__).parents[4]
-        with pytest.raises(AcquisitionError):
-            acquire(main_repo / "history", START, END,
-                    symbols=("BTCUSDT",), client=client)
         target = tmp_path / "target"
         target.mkdir()
         (tmp_path / "link").symlink_to(target, target_is_directory=True)
         with pytest.raises(AcquisitionError):
             acquire(tmp_path / "link", START, END, symbols=("BTCUSDT",), client=client)
-        root = tmp_path / "cap"
         with pytest.raises(AcquisitionError):
-            acquire(root, START, END, symbols=("BTCUSDT",), client=client, root_cap_bytes=1)
+            acquire(tmp_path / "small_cap", START, END, symbols=("BTCUSDT",),
+                    client=client, root_cap_bytes=1)
+
+    cap = acquire_module.MAX_ZIP_BYTES
+    cap_root = tmp_path / "existing_cap"
+    with client_for(lambda _: httpx.Response(404)) as client:
+        result = acquire(cap_root, START, END, symbols=("BTCUSDT",), client=client,
+                         reserve_bytes=0, root_cap_bytes=cap)
+    assert not result.complete
+    oversized = cap_root / "oversized.bin"
+    with oversized.open("wb") as output:
+        output.truncate(cap + 1)
+    with client_for(unused) as client, pytest.raises(AcquisitionError, match="capacity"):
+        acquire(cap_root, START, END, symbols=("BTCUSDT",), client=client,
+                reserve_bytes=0, root_cap_bytes=cap)
 
 
 def test_recent_tail_pagination_cutoff_and_empty(tmp_path: Path) -> None:
