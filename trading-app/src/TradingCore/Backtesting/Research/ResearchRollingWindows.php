@@ -46,8 +46,8 @@ final class ResearchRollingWindows
             $this->pending[$next] = $bar;
         } else {
             $current = $this->pending[$next];
-            $current['high'] = (string) BigDecimal::of($current['high'])->max(BigDecimal::of($bar['high']));
-            $current['low'] = (string) BigDecimal::of($current['low'])->min(BigDecimal::of($bar['low']));
+            $current['high'] = (string) BigDecimal::max($current['high'], $bar['high']);
+            $current['low'] = (string) BigDecimal::min($current['low'], $bar['low']);
             $current['volume'] = (string) BigDecimal::of($current['volume'])->plus($bar['volume'])->stripTrailingZeros();
             $current['close'] = $bar['close'];
             $current['available_ms'] = $bar['available_ms'];

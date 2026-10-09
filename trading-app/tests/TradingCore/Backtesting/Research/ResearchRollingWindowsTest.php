@@ -34,6 +34,28 @@ final class ResearchRollingWindowsTest extends TestCase
         self::assertSame(1667261100000, $bar['available_ms']);
     }
 
+    public function testEarlierExtremaSurviveEveryAggregationLevel(): void
+    {
+        $start = 1667260800000;
+        $windows = new ResearchRollingWindows('BTCUSDT', $start, $start + 240 * 60000);
+        for ($minute = 0; $minute < 240; ++$minute) {
+            $record = self::candle($minute);
+            if ($minute === 0) {
+                $record['open'] = '180';
+                $record['high'] = '200';
+                $record['low'] = '50';
+            }
+            $windows->append(ResearchCandle::fromArray($record));
+        }
+        foreach (['5m', '15m', '1h', '4h'] as $timeframe) {
+            $bar = $windows->bars($timeframe)[0];
+            self::assertSame('180', $bar['open'], $timeframe);
+            self::assertSame('200', $bar['high'], $timeframe);
+            self::assertSame('50', $bar['low'], $timeframe);
+            self::assertSame('101', $bar['close'], $timeframe);
+        }
+    }
+
     public function testWarmupIsBoundedAndOnlyCompleteUtcBucketsExist(): void
     {
         self::assertTrue(class_exists(ResearchRollingWindows::class));
@@ -77,14 +99,22 @@ final class ResearchRollingWindowsTest extends TestCase
         $start = 1667260800000;
         $end = $start + 60000 * 60000;
         $windows = new ResearchRollingWindows('BTCUSDT', $start, $end);
-        for ($i = 0; $i < 60000; ++$i) { $windows->append(ResearchCandle::fromArray(self::candle($i))); }
+        for ($i = 0; $i < 60000; ++$i) {
+            $record = self::candle($i);
+            if ($i % 60 === 0) {
+                $hour = intdiv($i, 60);
+                $record['high'] = (string) (110 + $hour % 7);
+                $record['low'] = (string) (90 - $hour % 5);
+            }
+            $windows->append(ResearchCandle::fromArray($record));
+        }
         $hourly = [];
         for ($i = 0; $i < 1000; ++$i) {
             $open = $start + $i * 3600000;
             $hourly[] = ['schema_version' => \App\TradingCore\Backtesting\Indicator\CanonicalIndicatorCandle::SCHEMA_VERSION,
                 'source_record_id' => hash('sha256', 'canonical-hour:' . $i), 'source_network' => 'mainnet', 'market_data_venue' => 'okx', 'market_type' => 'perpetual', 'symbol' => 'BTCUSDT', 'timeframe' => '1h',
                 'open_at' => ResearchSignalSession::instant($open), 'close_at' => ResearchSignalSession::instant($open + 3600000), 'available_at' => ResearchSignalSession::instant($open + 3600000),
-                'open' => '100', 'high' => '102', 'low' => '99', 'close' => '101', 'volume' => '6', 'complete' => true];
+                'open' => '100', 'high' => (string) (110 + $i % 7), 'low' => (string) (90 - $i % 5), 'close' => '101', 'volume' => '6', 'complete' => true];
         }
         $canonical = (new \App\TradingCore\Backtesting\Indicator\CanonicalFourHourAggregator())->aggregate($hourly, ['source_network' => 'mainnet', 'market_data_venue' => 'okx', 'market_type' => 'perpetual'], 'BTCUSDT', ResearchSignalSession::instant($end));
         foreach ($canonical->candles() as $i => $candle) {
