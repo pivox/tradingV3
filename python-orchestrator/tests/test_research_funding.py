@@ -58,8 +58,8 @@ def acquisition(tmp_path, rows=None, *, symbols=("BTCUSDT",), start=START, end=E
             private_write(root / path, raw)
             private_write(root / (path + ".CHECKSUM"), f"{digest}  {source.filename}\n".encode())
             selected = [row for row in selected_rows if int(start.timestamp()*1000) <= row[0] < int(end.timestamp()*1000)]
-            manifest["sources"].append(dict(symbol=symbol, kind="funding", start=source.start.isoformat(),
-                end=source.end.isoformat(), filename=source.filename, url=source.url, checksum_url=source.checksum_url,
+            manifest["sources"].append(dict(symbol=symbol, kind="funding", start=max(start, source.start).isoformat(),
+                end=min(end, source.end).isoformat(), filename=source.filename, url=source.url, checksum_url=source.checksum_url,
                 status="ok", evidence="official_archive_checksum", raw_path=path, checksum_path=path+".CHECKSUM",
                 sha256=digest, size=len(raw), count=len(selected), first_open=selected[0][0] if selected else None,
                 last_close=selected[-1][0] if selected else None, gaps=[], coverage="observed_only" if selected else "empty"))
@@ -480,3 +480,52 @@ def test_exact_start_and_exclusive_end_archive_payments_remain_distinct(tmp_path
     events = tuple(reader.iter_events())
     assert len(events) == 1 and events[0].timestamp_ms == T
     assert reader.inventory.symbols[0].continuity == "declared_interval_consistent"
+
+
+def test_acquisition_midmonth_clipped_bounds_keep_full_raw_context_and_origin_summary(tmp_path):
+    start,end = instant("2023-01-15T01:00:00Z"), instant("2023-01-16T02:00:00Z")
+    day = int(instant("2023-01-15T00:00:00Z").timestamp()*1000)
+    rows = [(day+hours*3600000+1,"8","0") for hours in (0,8,16,24,32)]
+    root = acquisition(tmp_path, rows, start=start, end=end)
+    manifest = json.loads((root / "manifest.json").read_text())
+    assert manifest["sources"][0]["count"] == 3
+    reader = f.FundingReader(root, start, end, symbols=("BTCUSDT",))
+    events = tuple(reader.iter_events())
+    assert [e.timestamp_ms for e in events] == [row[0] for row in rows[1:4]]
+    assert reader.inventory.symbols[0].continuity == "declared_interval_consistent"
+    assert any(binding.role == "boundary_context" for binding in reader.inventory.sources)
+    assert reader.inventory.symbols[0].count == 3
+    narrow = f.FundingReader(root, start, instant("2023-01-15T02:00:00Z"), symbols=("BTCUSDT",))
+    assert tuple(narrow.iter_events()) == ()
+    assert narrow.inventory.symbols[0].count == 0
+    assert narrow.inventory.symbols[0].continuity == "declared_interval_consistent"
+    for left,right in ((start-timedelta(milliseconds=1), end), (start, end+timedelta(milliseconds=1))):
+        with pytest.raises(f.FundingError, match="identity"):
+            f.FundingReader(root, left, right, symbols=("BTCUSDT",))
+
+
+@pytest.mark.parametrize("field,value", [("start", "2023-01-01T00:00:00+00:00"),
+    ("start", "2023-01-15T02:00:00+00:00"), ("end", "2023-02-01T00:00:00+00:00"),
+    ("end", "2023-01-16T01:00:00+00:00")])
+def test_wrong_partial_month_provenance_bounds_are_rejected(tmp_path, field, value):
+    start,end = instant("2023-01-15T01:00:00Z"), instant("2023-01-16T02:00:00Z")
+    root = acquisition(tmp_path, [], start=start, end=end)
+    update_manifest(root, lambda m: m["sources"][0].update({field:value}))
+    with pytest.raises(f.FundingError, match="identity"):
+        f.FundingReader(root, start, end, symbols=("BTCUSDT",))
+
+
+def test_multimonth_acquisition_clips_only_edges_and_keeps_requested_subwindow_counts(tmp_path):
+    start,end = instant("2023-01-15T01:00:00Z"), instant("2023-03-16T02:00:00Z")
+    def row(value):
+        return (int(instant(value).timestamp()*1000)+1,"8","0")
+    root = acquisition(tmp_path, {"2023-01":[row("2023-01-01T00:00:00Z"),row("2023-01-16T00:00:00Z")],
+        "2023-02":[row("2023-02-01T00:00:00Z")],
+        "2023-03":[row("2023-03-01T00:00:00Z"),row("2023-03-31T00:00:00Z")]}, start=start,end=end)
+    reader = f.FundingReader(root,start,end,symbols=("BTCUSDT",))
+    assert len(tuple(reader.iter_events())) == reader.inventory.symbols[0].count == 3
+    feb = instant("2023-02-01T00:00:00Z")
+    narrow = f.FundingReader(root,feb,feb+timedelta(hours=4),symbols=("BTCUSDT",))
+    assert len(tuple(narrow.iter_events())) == narrow.inventory.symbols[0].count == 1
+    assert narrow.inventory.start_ms == int(feb.timestamp()*1000)
+    assert narrow.inventory.end_exclusive_ms == int((feb+timedelta(hours=4)).timestamp()*1000)

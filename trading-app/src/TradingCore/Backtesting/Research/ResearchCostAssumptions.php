@@ -31,7 +31,8 @@ final readonly class ResearchCostAssumptions
             || !is_string($manifest['frozen_at'])
             || preg_match('/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\z/D', $manifest['frozen_at']) !== 1
             || !self::validInstant($manifest['frozen_at'])
-            || !is_array($manifest['profiles']) || array_keys($manifest['profiles']) !== ['baseline', 'adverse']
+            || !is_array($manifest['profiles']) || count($manifest['profiles']) !== 2
+            || array_diff(array_keys($manifest['profiles']), ['baseline', 'adverse']) !== []
         ) {
             throw new \InvalidArgumentException('research_cost_assumptions_invalid');
         }

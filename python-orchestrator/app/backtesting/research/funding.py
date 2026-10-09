@@ -269,9 +269,14 @@ class FundingReader:
 
     def _archive_events(self, source, entry: dict, bindings: set | None = None) -> tuple[FundingEvent, ...]:
         expected_path = "archives/funding/" + source.filename
+        # The ZIP covers its full named month, but acquire records only the
+        # intersection with the acquisition window in the source identity.
+        expected_start = max(self.origin_start, source.start)
+        expected_end = min(self.origin_end, source.end)
         if (entry.get("url") != source.url or entry.get("checksum_url") != source.checksum_url
                 or entry.get("raw_path") != expected_path or entry.get("checksum_path") != expected_path + ".CHECKSUM"
-                or entry.get("start") != source.start.isoformat() or entry.get("end") != source.end.isoformat()
+                or expected_start >= expected_end or entry.get("start") != expected_start.isoformat()
+                or entry.get("end") != expected_end.isoformat()
                 or entry.get("evidence") != "official_archive_checksum" or entry.get("status") != "ok"):
             raise FundingError("archive source identity mismatch")
         raw = _read(self.root, expected_path, MAX_ARCHIVE_BYTES)

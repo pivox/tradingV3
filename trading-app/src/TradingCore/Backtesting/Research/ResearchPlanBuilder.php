@@ -223,7 +223,6 @@ final readonly class ResearchPlanBuilder
                 'metadata_raw_sha256' => $this->instruments->rawSha256,
             ],
             'cost_status' => 'hypothetical_ohlcv_not_live_order_book',
-            'cost_profile' => $this->costProfile,
             'cost_model' => [
                 'entry_fee_role' => $this->policy->costContract->entryLiquidityRole,
                 'stop_fee_role' => $this->policy->costContract->stopLiquidityRole,
@@ -413,6 +412,7 @@ final readonly class ResearchPlanBuilder
             'base_catalog_hash' => $this->baseline['condition_catalog_hash'], 'base_snapshot_hash' => $this->baseline['snapshot_hash'],
             'variant_id' => $this->variant->id, 'variant_hash' => $this->variant->hash,
             'instrument_assumptions_hash' => $this->instruments->hash, 'cost_assumptions_hash' => $this->costs->hash,
+            'cost_profile' => $this->costProfile,
             'research_code_hash' => $this->codeHash,
             'code_hash_scope' => ResearchCodeIdentity::SCOPE,
             'integrity_boundary' => 'sha256_and_local_baseline_only_runner_verifies_b1_artifact'];
