@@ -38,6 +38,7 @@ final readonly class ResearchPlanBuilder
         private string $costProfile,
         private array $baseline,
         private array $sourceRun,
+        ?string $codeHash = null,
     ) {
         if ($policy->riskPolicy->riskRate !== 0.05
             || $policy->riskPolicy->environmentMaxNotional !== 250.0
@@ -57,7 +58,10 @@ final readonly class ResearchPlanBuilder
             throw new \InvalidArgumentException('research_baseline_limits_mismatch');
         }
         $costs->profile($costProfile);
-        $this->codeHash = ResearchCodeIdentity::current();
+        if ($codeHash !== null && preg_match('/\Asha256:[a-f0-9]{64}\z/D', $codeHash) !== 1) {
+            throw new \InvalidArgumentException('research_plan_code_hash_invalid');
+        }
+        $this->codeHash = $codeHash ?? ResearchCodeIdentity::current();
     }
 
     /**
@@ -76,6 +80,7 @@ final readonly class ResearchPlanBuilder
             return $this->reject($identity, 'research_signal_rules_not_passed');
         }
         $this->validatePortfolio($portfolio, $signal);
+        $identity['portfolio_hash'] = $portfolio['portfolio_hash'];
         if (in_array($signal['result_hash'], $portfolio['active_signal_hashes'], true)) {
             return $this->reject($identity, 'research_portfolio_signal_duplicate');
         }
@@ -187,7 +192,7 @@ final readonly class ResearchPlanBuilder
             return $this->reject($identity, 'research_holding_window_unavailable');
         }
         $plan = ['schema_version' => 'research-plan.v1', 'research_only' => true, 'execution_authority' => 'none',
-            ...$identity, 'portfolio_hash' => $portfolio['portfolio_hash'], 'symbol' => $symbol,
+            ...$identity, 'symbol' => $symbol,
             'evaluated_ms' => $signal['evaluated_ms'], 'candidate_price_source' => 'last_closed_15m_close', 'candidate_price' => $candidate,
             'zone_lower_price' => $zone['lower_price'], 'zone_upper_price' => $zone['upper_price'],
             'entry_price' => $zone['entry_price'], 'stop_price' => $protection['stop_price'],
@@ -409,7 +414,7 @@ final readonly class ResearchPlanBuilder
             'variant_id' => $this->variant->id, 'variant_hash' => $this->variant->hash,
             'instrument_assumptions_hash' => $this->instruments->hash, 'cost_assumptions_hash' => $this->costs->hash,
             'research_code_hash' => $this->codeHash,
-            'code_hash_scope' => 'research_plan_direct_dependencies_v1',
+            'code_hash_scope' => ResearchCodeIdentity::SCOPE,
             'integrity_boundary' => 'sha256_and_local_baseline_only_runner_verifies_b1_artifact'];
     }
 
