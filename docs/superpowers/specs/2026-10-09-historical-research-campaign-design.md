@@ -38,9 +38,11 @@ it does not replace the full requested campaign's completion criteria.
 
 ## Research protocol
 
-- Data start: `2023-01-01T00:00:00Z`; acquire earlier indicator warmup separately
-  if needed and do not count its returns. Freeze a precise UTC exclusive end
-  before acquisition. Never use a still-open candle or move the end during a run.
+- Scored data start: `2023-01-01T00:00:00Z`. Acquisition starts at
+  `2022-11-01T00:00:00Z` to warm up 250 closed 4h candles; November/December
+  observations are not scored. The exclusive campaign end is frozen at
+  `2026-10-09T06:00:00Z`. Never use a still-open candle or move this end during
+  a run; uncovered requested intervals remain explicit.
 - Training: 2023–2024. Validation: 2025. Final holdout: 2026 through frozen end.
   Quality checks may inspect all years, but neither signals, profits nor candidate
   selection may read holdout results before the winner is frozen.
