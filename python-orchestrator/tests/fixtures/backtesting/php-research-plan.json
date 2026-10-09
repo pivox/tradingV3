@@ -1,0 +1,249 @@
+{
+  "fixture_status": "synthetic_php_research_builder_not_execution_authority",
+  "signal": {
+    "schema_version": "research-signal-result.v1",
+    "session_id": "reference-BTCUSDT",
+    "source": {
+      "dataset_id": "reference-BTCUSDT",
+      "dataset_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_venue": "binance_usdm",
+      "source_network": "mainnet",
+      "market_type": "perpetual"
+    },
+    "execution": {
+      "mode_id": "day_trading",
+      "mode_version": "1.1.0",
+      "setup_id": "day_trading.trend_continuation.long",
+      "setup_version": "1.1.0",
+      "exchange": "fake",
+      "environment": "local",
+      "side": "long",
+      "execution_capability": "backtest"
+    },
+    "baseline": {
+      "config_hash": "sha256:30ca1637908fa4dfe5763fcf0ab796265eafa59db196f72be390224984959e22",
+      "condition_catalog_hash": "sha256:350a310d2ba512bf9d4c373436c4088447291d55c75fdc979cce44cecf1ec7ef",
+      "snapshot_hash": "sha256:45239b89c1a8ad94343788d2cbd99ae3210a409bcbe16486ac5c0c1c68b2ec5d",
+      "setup_hash": "862e88b957f0b41a8251ea3137ee46b73ab9c17b30b022689b706c2496a679ff",
+      "file_hashes": [],
+      "mode_risk": {
+        "daily_loss_cap": {
+          "justification": "The lower of the percentage and quote caps applies to realized, unrealized and reserved risk under #304.",
+          "source": "config/app/trade_entry.regular.yaml:77-84 plus #306 UTC semantics",
+          "state": "defined",
+          "unit": "compound_percent_equity_and_quote_per_day",
+          "value": {
+            "absolute_quote": 30,
+            "day_boundary_local": "00:00:00",
+            "day_timezone": "UTC",
+            "include_unrealized_loss": true,
+            "percent_equity": 6,
+            "quote_currency": "USDT"
+          }
+        },
+        "max_concurrent_positions": {
+          "justification": "Pending reservations consume concurrency before a fill.",
+          "source": "config/app/trade_entry.regular.yaml:77-84 plus #304 reservation semantics",
+          "state": "defined",
+          "unit": "positions",
+          "value": {
+            "include_pending_entries": true,
+            "limit": 4
+          }
+        },
+        "mode_exposure_cap": {
+          "justification": "Versioned shadow hypothesis for aggregate day_trading notional.",
+          "source": "GitHub issue #306 decision 2026-08-10",
+          "state": "defined",
+          "unit": "percent_equity_notional",
+          "value": 100
+        },
+        "trade_budget": {
+          "justification": "The historical value is copied into this immutable hypothesis; the runtime never loads regular.",
+          "source": "config/app/trade_entry.regular.yaml:77-84 pinned by #306",
+          "state": "defined",
+          "unit": "percent_equity_per_trade",
+          "value": 5
+        }
+      }
+    },
+    "symbol": "BTCUSDT",
+    "evaluated_ms": 1672660800000,
+    "evaluated_at": "2023-01-02T12:00:00.000000Z",
+    "passed": true,
+    "reason_code": "setup_rules_passed",
+    "numeric_context_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "contexts": {
+      "1m": {
+        "open_ms": 1672660740000,
+        "available_ms": 1672660800000,
+        "research_window_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "5m": {
+        "open_ms": 1672660500000,
+        "available_ms": 1672660800000,
+        "research_window_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "vwap": 100,
+        "atr": 1
+      },
+      "15m": {
+        "open_ms": 1672659900000,
+        "available_ms": 1672660800000,
+        "research_window_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "close": 100.2
+      },
+      "1h": {
+        "open_ms": 1672657200000,
+        "available_ms": 1672660800000,
+        "research_window_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "4h": {
+        "open_ms": 1672646400000,
+        "available_ms": 1672660800000,
+        "research_window_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    "trace_hash": "sha256:a90b91217f29bf1b6ad1b4cca6328326d1c96b05603b9777d35f6a667acaf8d6",
+    "verdicts": [],
+    "trace": {
+      "schema_version": "canonical-setup-rule-runtime.v1",
+      "mode_id": "day_trading",
+      "mode_version": "1.1.0",
+      "setup_id": "day_trading.trend_continuation.long",
+      "setup_version": "1.1.0",
+      "setup_hash": "862e88b957f0b41a8251ea3137ee46b73ab9c17b30b022689b706c2496a679ff",
+      "catalog_hash": "sha256:350a310d2ba512bf9d4c373436c4088447291d55c75fdc979cce44cecf1ec7ef",
+      "config_hash": "sha256:30ca1637908fa4dfe5763fcf0ab796265eafa59db196f72be390224984959e22",
+      "side": "long",
+      "execution_timeframe": "15m",
+      "mandatory_confirmations": [
+        "5m",
+        "1m"
+      ],
+      "evaluated_at": "2023-01-02T12:00:00.000000Z"
+    },
+    "result_hash": "sha256:b489775aacd175885662f3d94775feb59d14e843256e7b97c10f70e33c2fb2bf"
+  },
+  "portfolio": {
+    "schema_version": "research-portfolio-view.v1",
+    "as_of_ms": 1672660800000,
+    "equity_quote": 100000,
+    "available_balance_quote": 100000,
+    "realized_net_pnl_quote": 0,
+    "unrealized_net_pnl_quote": 0,
+    "open_positions": 0,
+    "pending_entries": 0,
+    "open_notional_quote": 0,
+    "pending_notional_quote": 0,
+    "reserved_risk_quote": 0,
+    "active_signal_hashes": [],
+    "portfolio_hash": "sha256:ba7f0970bc3d7a565b7c164462c28b15c6471c00f9ea439304150e4b56496536"
+  },
+  "plan": {
+    "schema_version": "research-plan.v1",
+    "research_only": true,
+    "execution_authority": "none",
+    "signal_result_hash": "sha256:b489775aacd175885662f3d94775feb59d14e843256e7b97c10f70e33c2fb2bf",
+    "signal_index": 2,
+    "signal_run_id": "run-reference-BTCUSDT",
+    "signal_output_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "dataset_id": "reference-BTCUSDT",
+    "dataset_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_venue": "binance_usdm",
+    "source_network": "mainnet",
+    "market_type": "perpetual",
+    "base_setup_hash": "862e88b957f0b41a8251ea3137ee46b73ab9c17b30b022689b706c2496a679ff",
+    "base_config_hash": "sha256:30ca1637908fa4dfe5763fcf0ab796265eafa59db196f72be390224984959e22",
+    "base_catalog_hash": "sha256:350a310d2ba512bf9d4c373436c4088447291d55c75fdc979cce44cecf1ec7ef",
+    "base_snapshot_hash": "sha256:45239b89c1a8ad94343788d2cbd99ae3210a409bcbe16486ac5c0c1c68b2ec5d",
+    "variant_id": "baseline",
+    "variant_hash": "sha256:61796453a7644e4400d2d4e07300d60a4d375d5c4ea4e34bac533ee93b2f7936",
+    "instrument_assumptions_hash": "sha256:5754a9c2831b6eb0bba45afc0c88e8c7a7b21ffc1249dc6d0773ceea87b11537",
+    "cost_assumptions_hash": "sha256:5175ed0dfe35067e729a1c724d3dd42689e5378da388bbbdc114c889d1a896da",
+    "research_code_hash": "sha256:ac1b2c77f2d4fbd22b98424b7af8c6de1b0d1d46e5a3346b6becd476b42ee5ab",
+    "code_hash_scope": "research_plan_direct_dependencies_v1",
+    "integrity_boundary": "sha256_and_local_baseline_only_runner_verifies_b1_artifact",
+    "portfolio_hash": "sha256:ba7f0970bc3d7a565b7c164462c28b15c6471c00f9ea439304150e4b56496536",
+    "symbol": "BTCUSDT",
+    "evaluated_ms": 1672660800000,
+    "candidate_price_source": "last_closed_15m_close",
+    "candidate_price": 100.2,
+    "zone_lower_price": 99.7,
+    "zone_upper_price": 100.3,
+    "entry_price": 100.2,
+    "stop_price": 98.7,
+    "risk_distance": 1.5,
+    "targets": [
+      {
+        "id": "tp1",
+        "price": 103.2,
+        "gross_reward_quote": 7.485,
+        "entry_fee_quote": 0.0499998,
+        "target_fee_quote": 0.128742,
+        "entry_spread_quote": 0.0249999,
+        "entry_slippage_quote": 0.0249999,
+        "target_spread_quote": 0.0257484,
+        "target_slippage_quote": 0.0257484,
+        "funding_provision_quote": 0.0249999,
+        "net_reward_quote": 7.1797617,
+        "net_risk_quote": 4.03987905,
+        "net_r": 1.777221944305486
+      }
+    ],
+    "quantity": 2.495,
+    "position_notional_quote": 249.999,
+    "final_leverage": 1,
+    "effective_leverage_cap": 2,
+    "risk_budget_quote": 5000,
+    "risk_components_quote": {
+      "gross_stop_loss": 3.7425,
+      "entry_fee": 0.0499998,
+      "stop_exit_fee": 0.12312825,
+      "entry_spread": 0.0249999,
+      "stop_spread": 0.02462565,
+      "entry_slippage": 0.0249999,
+      "stop_slippage": 0.02462565,
+      "funding_provision": 0.0249999,
+      "total_stop_loss": 4.03987905
+    },
+    "entry_ttl_seconds": 90,
+    "cancel_after_seconds": 120,
+    "holding_deadline_ms": 1672689600000,
+    "holding_deadline_exclusive": true,
+    "instrument_binding": "synthetic_fake_local_from_research_manifest",
+    "instrument_status": "current_metadata_not_historical",
+    "instrument_math": {
+      "tick_size": 0.1,
+      "quantity_step": 0.001,
+      "min_quantity": 0.001,
+      "max_quantity": 100,
+      "min_notional": 5,
+      "contract_size": 1,
+      "leverage_cap_assumed": 2,
+      "mmr_proxy_rate": 0.005,
+      "liquidation_fee_rate": 0.001,
+      "metadata_retrieved_at": "2026-10-09T06:00:00Z",
+      "metadata_raw_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "cost_status": "hypothetical_ohlcv_not_live_order_book",
+    "cost_profile": "baseline",
+    "cost_model": {
+      "entry_fee_role": "maker",
+      "stop_fee_role": "taker",
+      "target_fee_role": "taker",
+      "entry_fee_rate": 0.0002,
+      "stop_fee_rate": 0.0005,
+      "target_fee_rate": 0.0005,
+      "entry_spread_rate": 0.0001,
+      "stop_spread_rate": 0.0001,
+      "target_spread_rate": 0.0001,
+      "entry_slippage_rate": 0.0001,
+      "stop_slippage_rate": 0.0001,
+      "target_slippage_rate": 0.0001,
+      "funding_provision_rate": 0.0001,
+      "funding_interval_seconds": 28800,
+      "funding_intervals_provisioned": 1
+    },
+    "plan_hash": "sha256:a24a5ccff146dc16ac28df7d06e1af876a4c6d26cc4617b7fd007d97767625f0"
+  }
+}
