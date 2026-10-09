@@ -62,7 +62,8 @@ def _utc(value: str) -> datetime:
     return result
 
 
-def _safe_root(root: Path) -> Path:
+def _safe_root(root: Path, identity: dict, expected_keys: set[tuple[str, str, str, str]],
+               root_cap_bytes: int, reserve_bytes: int) -> Path:
     root = Path(root)
     if not root.is_absolute() or ".." in root.parts:
         raise AcquisitionError("absolute root without traversal required")
@@ -75,7 +76,8 @@ def _safe_root(root: Path) -> Path:
             gitdir = Path(marker.removeprefix("gitdir: ")).resolve()
             if gitdir.parent.name == "worktrees" and gitdir.parent.parent.name == ".git":
                 repositories.append(gitdir.parent.parent.parent)
-    if any(root == repository or repository in root.parents for repository in repositories):
+    if (root == Path.home() or any(root == repository or repository in root.parents
+                                   or root in repository.parents for repository in repositories)):
         raise AcquisitionError("history root must be outside repository")
     cursor = Path(root.anchor)
     for part in root.parts[1:]:
@@ -84,6 +86,30 @@ def _safe_root(root: Path) -> Path:
             raise AcquisitionError("symlink in history root")
         if cursor.exists() and not cursor.is_dir():
             raise AcquisitionError("non-directory history root")
+    if root.exists():
+        entries = list(root.iterdir())
+        if entries:
+            manifest_path = root / "manifest.json"
+            if not manifest_path.exists() and not manifest_path.is_symlink():
+                _interrupted_initial_manifest(root, identity)
+            else:
+                try:
+                    manifest = json.loads(_read_file(manifest_path, max_bytes=MAX_ZIP_BYTES))
+                except (ValueError, UnicodeError) as exc:
+                    raise AcquisitionError("existing root has no valid acquisition manifest") from exc
+                if not isinstance(manifest, dict):
+                    raise AcquisitionError("existing root has no valid acquisition manifest")
+                if manifest.get("identity") != identity:
+                    raise AcquisitionError("root identity conflict")
+                _validate_manifest_sources(manifest, expected_keys)
+        if _root_size(root) > root_cap_bytes:
+            raise AcquisitionError("root capacity exceeded")
+    else:
+        ancestor = root.parent
+        while not ancestor.exists():
+            ancestor = ancestor.parent
+        if shutil.disk_usage(ancestor).free < reserve_bytes:
+            raise AcquisitionError("free-space reserve exceeded")
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(root, 0o700)
     return root
@@ -96,10 +122,62 @@ def _regular(path: Path) -> bool:
         return False
 
 
-def _read_file(path: Path) -> bytes:
+def _interrupted_initial_manifest(root: Path, identity: dict) -> tuple[Path, dict]:
+    """Prove an unpublished initial manifest belongs to this private root."""
+    uid = os.geteuid()
+    root_stat = root.stat(follow_symlinks=False)
+    if (root_stat.st_uid != uid or stat.S_IMODE(root_stat.st_mode) != 0o700):
+        raise AcquisitionError("initial manifest identity cannot be proven for this root")
+    names = {entry.name for entry in root.iterdir()}
+    candidates = [name for name in names
+                  if name.startswith(".manifest.") and name.endswith(".tmp")
+                  and name[len(".manifest."):-len(".tmp")].isdigit()]
+    if len(candidates) != 1 or names != {".writer.lock", candidates[0]}:
+        raise AcquisitionError("initial manifest identity cannot be proven")
+    lock = root / ".writer.lock"
+    temp = root / candidates[0]
+    try:
+        lock_stat = lock.lstat()
+        temp_stat = temp.lstat()
+        if (not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_uid != uid
+                or stat.S_IMODE(lock_stat.st_mode) != 0o600 or lock_stat.st_size != 0
+                or not stat.S_ISREG(temp_stat.st_mode) or temp_stat.st_uid != uid
+                or stat.S_IMODE(temp_stat.st_mode) != 0o600):
+            raise AcquisitionError("initial manifest identity cannot be proven")
+        manifest = json.loads(_read_file(temp, max_bytes=MAX_ZIP_BYTES))
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise AcquisitionError("initial manifest identity cannot be proven") from exc
+    expected = {"identity": identity, "complete": False, "sources": []}
+    if manifest != expected:
+        raise AcquisitionError("initial manifest identity conflict")
+    return temp, manifest
+
+
+def _read_file(path: Path, *, max_bytes: int = MAX_ZIP_BYTES) -> bytes:
     if not _regular(path):
         raise AcquisitionError("missing or unsafe stored file")
+    if path.stat().st_size > max_bytes:
+        raise AcquisitionError("stored file size limit")
     return path.read_bytes()
+
+
+def _validate_manifest_sources(manifest: dict, expected_keys: set[tuple[str, str, str, str]]) -> None:
+    sources = manifest.get("sources")
+    if not isinstance(sources, list):
+        raise AcquisitionError("invalid manifest sources")
+    seen: set[tuple[str, str, str, str]] = set()
+    for entry in sources:
+        if not isinstance(entry, dict):
+            raise AcquisitionError("invalid manifest source")
+        try:
+            key = (entry["symbol"], entry["kind"], entry["start"], entry["end"])
+        except KeyError as exc:
+            raise AcquisitionError("invalid manifest source key") from exc
+        if not all(isinstance(value, str) for value in key):
+            raise AcquisitionError("invalid manifest source key type")
+        if key not in expected_keys or key in seen:
+            raise AcquisitionError("manifest source set conflict")
+        seen.add(key)
 
 
 def _root_size(root: Path) -> int:
@@ -144,6 +222,16 @@ def _atomic_file(path: Path, data: bytes) -> None:
     finally:
         if temp.exists():
             temp.unlink()
+
+
+def _additional_storage_bytes(path: Path, data: bytes) -> int:
+    if any(parent.is_symlink() for parent in path.parents):
+        raise AcquisitionError("symlink artifact directory")
+    if path.exists() or path.is_symlink():
+        if _read_file(path, max_bytes=len(data)) != data:
+            raise AcquisitionError("stored bytes conflict")
+        return 0
+    return len(data)
 
 
 def _manifest_write(path: Path, manifest: dict) -> None:
@@ -216,8 +304,8 @@ def _stored_archive(root: Path, entry: dict, source: ArchiveSource, start: datet
             or entry.get("checksum_path") != expected_path + ".CHECKSUM"
             or entry.get("url") != source.url or entry.get("checksum_url") != source.checksum_url):
         raise AcquisitionError("resumed archive path conflict")
-    raw = _read_file(root / entry["raw_path"])
-    checksum = _read_file(root / entry["checksum_path"]).decode("utf-8")
+    raw = _read_file(root / entry["raw_path"], max_bytes=MAX_ZIP_BYTES)
+    checksum = _read_file(root / entry["checksum_path"], max_bytes=4096).decode("utf-8")
     try:
         digest = verify_checksum(raw, checksum, source.filename)
         parsed = parse_archive(raw, source, start, end)
@@ -229,6 +317,9 @@ def _stored_archive(root: Path, entry: dict, source: ArchiveSource, start: datet
             or [list(gap) for gap in parsed.gaps] != entry.get("gaps")
             or parsed.coverage != entry.get("coverage")):
         raise AcquisitionError("resumed archive differs from manifest")
+    expected_status = "incomplete" if parsed.coverage == "incomplete" else "ok"
+    if entry.get("status") != expected_status:
+        raise AcquisitionError("resumed archive status conflict")
 
 
 def _stored_tail(root: Path, entry: dict, symbol: str, start: datetime,
@@ -244,7 +335,7 @@ def _stored_tail(root: Path, entry: dict, symbol: str, start: datetime,
                             f"&endTime={int(end.timestamp() * 1000) - 1}&limit=1000")
             if page.get("url") != expected_url:
                 raise AcquisitionError("resumed REST URL conflict")
-            raw = _read_file(root / page["raw_path"])
+            raw = _read_file(root / page["raw_path"], max_bytes=2 * 1024 * 1024)
             if len(raw) != page["size"] or hashlib.sha256(raw).hexdigest() != page["sha256"]:
                 raise AcquisitionError("resumed REST hash conflict")
             payload = json.loads(raw)
@@ -262,6 +353,8 @@ def _stored_tail(root: Path, entry: dict, symbol: str, start: datetime,
             or parsed.last_close != entry.get("last_close") or parsed.coverage != entry.get("coverage")
             or [list(gap) for gap in parsed.gaps] != entry.get("gaps")):
         raise AcquisitionError("resumed REST summary conflict")
+    if entry.get("status") != ("ok" if parsed.coverage == "complete" else "missing"):
+        raise AcquisitionError("resumed REST status conflict")
 
 
 def _archive(root: Path, source: ArchiveSource, start: datetime, end: datetime,
@@ -274,11 +367,18 @@ def _archive(root: Path, source: ArchiveSource, start: datetime, end: datetime,
         except _HTTPStatus as exc:
             return _entry(source, symbol=source.symbol, kind=source.kind, start=start, end=end,
                           status="checksum_error", error=f"checksum HTTP {exc.status}")
-        digest = verify_checksum(raw, checksum.decode("utf-8"), source.filename)
+        try:
+            checksum_text = checksum.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ArchiveError("checksum encoding invalid") from exc
+        digest = verify_checksum(raw, checksum_text, source.filename)
         parsed = parse_archive(raw, source, start, end)
-        capacity(len(raw) + len(checksum))
         raw_path = f"archives/{source.kind}/{source.filename}"
         checksum_path = raw_path + ".CHECKSUM"
+        capacity(
+            _additional_storage_bytes(root / raw_path, raw)
+            + _additional_storage_bytes(root / checksum_path, checksum)
+        )
         _atomic_file(root / raw_path, raw)
         _atomic_file(root / checksum_path, checksum)
         return _entry(source, symbol=source.symbol, kind=source.kind, start=start, end=end,
@@ -328,8 +428,8 @@ def _tail(root: Path, symbol: str, start: datetime, end: datetime, client: httpx
                 raise ArchiveError("REST page order")
             if page_rows[-1][0] >= cutoff_ms:
                 raise ArchiveError("REST page beyond end")
-            capacity(len(raw))
             path = f"rest/{symbol}/{cursor}.json"
+            capacity(_additional_storage_bytes(root / path, raw))
             _atomic_file(root / path, raw)
             pages.append({"url": url, "raw_path": path, "sha256": hashlib.sha256(raw).hexdigest(),
                           "size": len(raw)})
@@ -366,13 +466,36 @@ def acquire(root: Path, start: str, end: str, *, symbols: tuple[str, ...] = SYMB
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None or current.utcoffset() != timedelta(0):
         raise AcquisitionError("UTC now required")
-    target = _safe_root(Path(root))
+    identity = {"schema": SCHEMA, "source": SOURCE, "symbols": list(symbols),
+                "start": beginning.isoformat(), "end": ending.isoformat(),
+                "include_funding": include_funding}
+    expected_keys = set()
+    for symbol in symbols:
+        for kind in (("klines", "funding") if include_funding else ("klines",)):
+            for source in plan_archives(symbol, beginning, ending, kind):
+                expected_keys.add((symbol, kind, max(beginning, source.start).isoformat(),
+                                   min(ending, source.end).isoformat()))
+    requested_root = Path(root)
+    clean_root = not requested_root.exists() or (
+        requested_root.is_dir() and not any(requested_root.iterdir())
+    )
+    target = _safe_root(requested_root, identity, expected_keys, root_cap_bytes, reserve_bytes)
     if shutil.disk_usage(target).free < reserve_bytes:
         raise AcquisitionError("free-space reserve exceeded")
     lock_path = target / ".writer.lock"
     if lock_path.exists() and not _regular(lock_path):
         raise AcquisitionError("unsafe writer lock")
-    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        lock_created = True
+    except FileExistsError:
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        lock_created = False
+    lock_stat = os.fstat(lock_fd)
+    if (not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_uid != os.geteuid()
+            or stat.S_IMODE(lock_stat.st_mode) != 0o600):
+        os.close(lock_fd)
+        raise AcquisitionError("unsafe writer lock")
     owned = client is None
     if owned:
         client = httpx.Client(timeout=30, follow_redirects=False)
@@ -382,12 +505,19 @@ def acquire(root: Path, start: str, end: str, *, symbols: tuple[str, ...] = SYMB
         except BlockingIOError as exc:
             raise AcquisitionError("another writer holds the root lock") from exc
         manifest_path = target / "manifest.json"
-        identity = {"schema": SCHEMA, "source": SOURCE, "symbols": list(symbols),
-                    "start": beginning.isoformat(), "end": ending.isoformat(),
-                    "include_funding": include_funding}
+        if not manifest_path.exists() and not manifest_path.is_symlink():
+            entries = list(target.iterdir())
+            if entries:
+                if clean_root and lock_created and {entry.name for entry in entries} == {".writer.lock"}:
+                    manifest = None
+                else:
+                    temp_path, manifest = _interrupted_initial_manifest(target, identity)
+                    os.replace(temp_path, manifest_path)
+            else:
+                manifest = None
         if manifest_path.exists() or manifest_path.is_symlink():
             try:
-                manifest = json.loads(_read_file(manifest_path))
+                manifest = json.loads(_read_file(manifest_path, max_bytes=MAX_ZIP_BYTES))
             except (ValueError, UnicodeError) as exc:
                 raise AcquisitionError("invalid manifest") from exc
             if manifest.get("identity") != identity:
@@ -397,12 +527,7 @@ def acquire(root: Path, start: str, end: str, *, symbols: tuple[str, ...] = SYMB
             _manifest_write(manifest_path, manifest)
         existing = {(e["symbol"], e["kind"], e["start"], e["end"]): e
                     for e in manifest["sources"]}
-        expected_keys = set()
-        for symbol in symbols:
-            for kind in (("klines", "funding") if include_funding else ("klines",)):
-                for source in plan_archives(symbol, beginning, ending, kind):
-                    expected_keys.add((symbol, kind, max(beginning, source.start).isoformat(),
-                                       min(ending, source.end).isoformat()))
+        _validate_manifest_sources(manifest, expected_keys)
 
         def capacity(next_bytes: int) -> None:
             stored = _root_size(target)
@@ -450,7 +575,10 @@ def acquire(root: Path, start: str, end: str, *, symbols: tuple[str, ...] = SYMB
                             entry = _tail(target, symbol, source_start, source_end, client, sleep,
                                           capacity, current)
                     record(entry)
-        result = AcquisitionResult(all(e["status"] == "ok" for e in manifest["sources"]),
+        actual_keys = {(e["symbol"], e["kind"], e["start"], e["end"])
+                       for e in manifest["sources"]}
+        result = AcquisitionResult(actual_keys == expected_keys
+                                   and all(e["status"] == "ok" for e in manifest["sources"]),
                                    tuple(manifest["sources"]), manifest_path)
         manifest["complete"] = result.complete
         _manifest_write(manifest_path, manifest)
