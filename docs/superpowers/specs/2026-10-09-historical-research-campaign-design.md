@@ -38,9 +38,11 @@ it does not replace the full requested campaign's completion criteria.
 
 ## Research protocol
 
-- Data start: `2023-01-01T00:00:00Z`; acquire earlier indicator warmup separately
-  if needed and do not count its returns. Freeze a precise UTC exclusive end
-  before acquisition. Never use a still-open candle or move the end during a run.
+- Scored data start: `2023-01-01T00:00:00Z`. Acquisition starts at
+  `2022-11-01T00:00:00Z` to warm up 250 closed 4h candles; November/December
+  observations are not scored. The exclusive campaign end is frozen at
+  `2026-10-09T06:00:00Z`. Never use a still-open candle or move this end during
+  a run; uncovered requested intervals remain explicit.
 - Training: 2023–2024. Validation: 2025. Final holdout: 2026 through frozen end.
   Quality checks may inspect all years, but neither signals, profits nor candidate
   selection may read holdout results before the winner is frozen.
@@ -79,6 +81,15 @@ If that API is unavailable, report the uncovered tail rather than bypass access
 restrictions or invent data. Monthly funding archives are fetched/verified
 separately; their timestamps and interval metadata are retained without making
 an unsupported complete-funding claim.
+
+Phase A deliberately keeps its planned source identities stable. If a completed
+month's archive is not published yet, its 404 remains `missing`: this version
+does not expand that month into daily sources. Binance documents monthly
+publication on the first Monday; retry the unchanged acquisition after
+publication. A future daily fallback requires explicit child-source provenance
+and resume tests. The frozen October 9 campaign is outside that publication
+window, and September BTC/ETH monthly archives were verified during the run.
+This limitation never authorizes marking missing coverage complete.
 
 Reject duplicate/out-of-order/non-finite/invalid OHLC records, wrong close time,
 wrong interval, ZIP path traversal, multiple unexpected members and unreasonable
