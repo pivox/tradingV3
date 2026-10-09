@@ -90,15 +90,18 @@ def _safe_root(root: Path, identity: dict, expected_keys: set[tuple[str, str, st
         entries = list(root.iterdir())
         if entries:
             manifest_path = root / "manifest.json"
-            try:
-                manifest = json.loads(_read_file(manifest_path, max_bytes=MAX_ZIP_BYTES))
-            except (ValueError, UnicodeError) as exc:
-                raise AcquisitionError("existing root has no valid acquisition manifest") from exc
-            if not isinstance(manifest, dict):
-                raise AcquisitionError("existing root has no valid acquisition manifest")
-            if manifest.get("identity") != identity:
-                raise AcquisitionError("root identity conflict")
-            _validate_manifest_sources(manifest, expected_keys)
+            if not manifest_path.exists() and not manifest_path.is_symlink():
+                _interrupted_initial_manifest(root, identity)
+            else:
+                try:
+                    manifest = json.loads(_read_file(manifest_path, max_bytes=MAX_ZIP_BYTES))
+                except (ValueError, UnicodeError) as exc:
+                    raise AcquisitionError("existing root has no valid acquisition manifest") from exc
+                if not isinstance(manifest, dict):
+                    raise AcquisitionError("existing root has no valid acquisition manifest")
+                if manifest.get("identity") != identity:
+                    raise AcquisitionError("root identity conflict")
+                _validate_manifest_sources(manifest, expected_keys)
         if _root_size(root) > root_cap_bytes:
             raise AcquisitionError("root capacity exceeded")
     else:
@@ -117,6 +120,37 @@ def _regular(path: Path) -> bool:
         return stat.S_ISREG(path.lstat().st_mode)
     except FileNotFoundError:
         return False
+
+
+def _interrupted_initial_manifest(root: Path, identity: dict) -> tuple[Path, dict]:
+    """Prove an unpublished initial manifest belongs to this private root."""
+    uid = os.geteuid()
+    root_stat = root.stat(follow_symlinks=False)
+    if (root_stat.st_uid != uid or stat.S_IMODE(root_stat.st_mode) != 0o700):
+        raise AcquisitionError("initial manifest identity cannot be proven for this root")
+    names = {entry.name for entry in root.iterdir()}
+    candidates = [name for name in names
+                  if name.startswith(".manifest.") and name.endswith(".tmp")
+                  and name[len(".manifest."):-len(".tmp")].isdigit()]
+    if len(candidates) != 1 or names != {".writer.lock", candidates[0]}:
+        raise AcquisitionError("initial manifest identity cannot be proven")
+    lock = root / ".writer.lock"
+    temp = root / candidates[0]
+    try:
+        lock_stat = lock.lstat()
+        temp_stat = temp.lstat()
+        if (not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_uid != uid
+                or stat.S_IMODE(lock_stat.st_mode) != 0o600 or lock_stat.st_size != 0
+                or not stat.S_ISREG(temp_stat.st_mode) or temp_stat.st_uid != uid
+                or stat.S_IMODE(temp_stat.st_mode) != 0o600):
+            raise AcquisitionError("initial manifest identity cannot be proven")
+        manifest = json.loads(_read_file(temp, max_bytes=MAX_ZIP_BYTES))
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise AcquisitionError("initial manifest identity cannot be proven") from exc
+    expected = {"identity": identity, "complete": False, "sources": []}
+    if manifest != expected:
+        raise AcquisitionError("initial manifest identity conflict")
+    return temp, manifest
 
 
 def _read_file(path: Path, *, max_bytes: int = MAX_ZIP_BYTES) -> bytes:
@@ -188,6 +222,16 @@ def _atomic_file(path: Path, data: bytes) -> None:
     finally:
         if temp.exists():
             temp.unlink()
+
+
+def _additional_storage_bytes(path: Path, data: bytes) -> int:
+    if any(parent.is_symlink() for parent in path.parents):
+        raise AcquisitionError("symlink artifact directory")
+    if path.exists() or path.is_symlink():
+        if _read_file(path, max_bytes=len(data)) != data:
+            raise AcquisitionError("stored bytes conflict")
+        return 0
+    return len(data)
 
 
 def _manifest_write(path: Path, manifest: dict) -> None:
@@ -323,11 +367,18 @@ def _archive(root: Path, source: ArchiveSource, start: datetime, end: datetime,
         except _HTTPStatus as exc:
             return _entry(source, symbol=source.symbol, kind=source.kind, start=start, end=end,
                           status="checksum_error", error=f"checksum HTTP {exc.status}")
-        digest = verify_checksum(raw, checksum.decode("utf-8"), source.filename)
+        try:
+            checksum_text = checksum.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ArchiveError("checksum encoding invalid") from exc
+        digest = verify_checksum(raw, checksum_text, source.filename)
         parsed = parse_archive(raw, source, start, end)
-        capacity(len(raw) + len(checksum))
         raw_path = f"archives/{source.kind}/{source.filename}"
         checksum_path = raw_path + ".CHECKSUM"
+        capacity(
+            _additional_storage_bytes(root / raw_path, raw)
+            + _additional_storage_bytes(root / checksum_path, checksum)
+        )
         _atomic_file(root / raw_path, raw)
         _atomic_file(root / checksum_path, checksum)
         return _entry(source, symbol=source.symbol, kind=source.kind, start=start, end=end,
@@ -377,8 +428,8 @@ def _tail(root: Path, symbol: str, start: datetime, end: datetime, client: httpx
                 raise ArchiveError("REST page order")
             if page_rows[-1][0] >= cutoff_ms:
                 raise ArchiveError("REST page beyond end")
-            capacity(len(raw))
             path = f"rest/{symbol}/{cursor}.json"
+            capacity(_additional_storage_bytes(root / path, raw))
             _atomic_file(root / path, raw)
             pages.append({"url": url, "raw_path": path, "sha256": hashlib.sha256(raw).hexdigest(),
                           "size": len(raw)})
@@ -424,13 +475,27 @@ def acquire(root: Path, start: str, end: str, *, symbols: tuple[str, ...] = SYMB
             for source in plan_archives(symbol, beginning, ending, kind):
                 expected_keys.add((symbol, kind, max(beginning, source.start).isoformat(),
                                    min(ending, source.end).isoformat()))
-    target = _safe_root(Path(root), identity, expected_keys, root_cap_bytes, reserve_bytes)
+    requested_root = Path(root)
+    clean_root = not requested_root.exists() or (
+        requested_root.is_dir() and not any(requested_root.iterdir())
+    )
+    target = _safe_root(requested_root, identity, expected_keys, root_cap_bytes, reserve_bytes)
     if shutil.disk_usage(target).free < reserve_bytes:
         raise AcquisitionError("free-space reserve exceeded")
     lock_path = target / ".writer.lock"
     if lock_path.exists() and not _regular(lock_path):
         raise AcquisitionError("unsafe writer lock")
-    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        lock_created = True
+    except FileExistsError:
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        lock_created = False
+    lock_stat = os.fstat(lock_fd)
+    if (not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_uid != os.geteuid()
+            or stat.S_IMODE(lock_stat.st_mode) != 0o600):
+        os.close(lock_fd)
+        raise AcquisitionError("unsafe writer lock")
     owned = client is None
     if owned:
         client = httpx.Client(timeout=30, follow_redirects=False)
@@ -440,6 +505,16 @@ def acquire(root: Path, start: str, end: str, *, symbols: tuple[str, ...] = SYMB
         except BlockingIOError as exc:
             raise AcquisitionError("another writer holds the root lock") from exc
         manifest_path = target / "manifest.json"
+        if not manifest_path.exists() and not manifest_path.is_symlink():
+            entries = list(target.iterdir())
+            if entries:
+                if clean_root and lock_created and {entry.name for entry in entries} == {".writer.lock"}:
+                    manifest = None
+                else:
+                    temp_path, manifest = _interrupted_initial_manifest(target, identity)
+                    os.replace(temp_path, manifest_path)
+            else:
+                manifest = None
         if manifest_path.exists() or manifest_path.is_symlink():
             try:
                 manifest = json.loads(_read_file(manifest_path, max_bytes=MAX_ZIP_BYTES))

@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace App\TradingCore\OrderPlan\Canonical;
 
-use Brick\Math\BigDecimal;
-use Brick\Math\RoundingMode;
 use Psr\Clock\ClockInterface;
 
 final readonly class CanonicalEntryZoneEngine
@@ -82,35 +80,14 @@ final readonly class CanonicalEntryZoneEngine
             }
         }
 
-        $anchor = self::decimal($request->anchor->value);
-        $atr = self::decimal($request->atr->value);
-        $tick = self::decimal($request->tick->tickSize);
-        $halfWidth = $atr->multipliedBy(self::decimal($zonePolicy->atrMultiplier));
-        $minimum = $anchor->multipliedBy(self::decimal($zonePolicy->minimumHalfWidthRate));
-        $maximum = $anchor->multipliedBy(self::decimal($zonePolicy->maximumHalfWidthRate));
-        if ($halfWidth->isLessThan($minimum)) {
-            $halfWidth = $minimum;
-        }
-        if ($halfWidth->isGreaterThan($maximum)) {
-            $halfWidth = $maximum;
-        }
-
-        $signedAsymmetry = $risk->side === 'long' ? $zonePolicy->asymmetryRate : -$zonePolicy->asymmetryRate;
-        $lowerWidth = $halfWidth->multipliedBy(BigDecimal::one()->plus(self::decimal($signedAsymmetry)));
-        $upperWidth = $halfWidth->multipliedBy(BigDecimal::one()->minus(self::decimal($signedAsymmetry)));
-        $lower = self::quantize($anchor->minus($lowerWidth), $tick, RoundingMode::FLOOR);
-        $upper = self::quantize($anchor->plus($upperWidth), $tick, RoundingMode::CEILING);
-        if ($lower->isLessThanOrEqualTo(BigDecimal::zero()) || !$upper->isGreaterThan($lower)) {
-            throw new CanonicalOrderPlanException('canonical_entry_zone_bounds_invalid');
-        }
-        $entry = self::quantize(
-            self::decimal($request->market->candidatePrice),
-            $tick,
-            $risk->side === 'long' ? RoundingMode::CEILING : RoundingMode::FLOOR,
+        $prices = EntryZonePriceMath::calculate(
+            $zonePolicy,
+            $risk->side,
+            $request->anchor->value,
+            $request->atr->value,
+            $request->market->candidatePrice,
+            $request->tick->tickSize,
         );
-        if ($entry->isLessThan($lower) || $entry->isGreaterThan($upper)) {
-            throw new CanonicalOrderPlanException('canonical_entry_zone_candidate_outside');
-        }
 
         return new CanonicalEntryZone(
             modeId: $risk->modeId,
@@ -122,9 +99,9 @@ final readonly class CanonicalEntryZoneEngine
             side: $risk->side,
             symbol: $request->symbol,
             marketType: $request->market->marketType,
-            lowerPrice: $lower->toFloat(),
-            upperPrice: $upper->toFloat(),
-            entryPrice: $entry->toFloat(),
+            lowerPrice: $prices['lower_price'],
+            upperPrice: $prices['upper_price'],
+            entryPrice: $prices['entry_price'],
             tickSize: $request->tick->tickSize,
             anchorSource: $zonePolicy->anchorSource,
             anchorTimeframe: $zonePolicy->anchorTimeframe,
@@ -155,15 +132,5 @@ final readonly class CanonicalEntryZoneEngine
         if (preg_match('/\Asha256:[a-f0-9]{64}\z/D', $hash) !== 1) {
             throw new CanonicalOrderPlanException('canonical_entry_zone_input_hash_invalid');
         }
-    }
-
-    private static function decimal(float $value): BigDecimal
-    {
-        return CanonicalOrderPlanDecimal::fromFloat($value, 'canonical_entry_zone_value_invalid');
-    }
-
-    private static function quantize(BigDecimal $value, BigDecimal $tick, int $roundingMode): BigDecimal
-    {
-        return $value->dividedBy($tick, 0, $roundingMode)->multipliedBy($tick);
     }
 }

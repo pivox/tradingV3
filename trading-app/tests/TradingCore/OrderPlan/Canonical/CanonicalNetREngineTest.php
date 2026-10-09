@@ -19,11 +19,13 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionEngine;
 use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalTargetCostSnapshot;
 use App\TradingCore\OrderPlan\Canonical\CanonicalTickSnapshot;
+use App\TradingCore\OrderPlan\Canonical\NetRCostMath;
 use App\TradingCore\Risk\Canonical\CanonicalCostSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalInstrumentSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
 use App\TradingCore\Risk\Canonical\CanonicalRiskDecision;
 use App\TradingCore\Risk\Canonical\CanonicalRiskEngine;
+use Brick\Math\BigDecimal;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
@@ -46,6 +48,84 @@ final class CanonicalNetREngineTest extends TestCase
         self::assertGreaterThan($decision->targets[0]->netR, $decision->targets[1]->netR);
         self::assertSame($risk->totalStopLoss, $decision->targets[0]->netRisk);
         self::assertSame($policy->configHash, $decision->configHash);
+    }
+
+    public function testValueCostMathMatchesEveryAuthenticatedComponent(): void
+    {
+        self::assertTrue(class_exists(NetRCostMath::class), 'Value-only Net-R cost math is missing.');
+        [$policy, $protection] = $this->protection();
+        $costs = $this->executionCosts($policy, 0.0001);
+        $risk = $this->riskDecision($policy, $protection, $costs);
+        $decision = (new CanonicalNetREngine())->calculate(new CanonicalNetRRequest($policy, $protection, $risk, $costs));
+        $intervals = intdiv($policy->holdingWindowSeconds - 1, $policy->costContract->fundingIntervalSeconds) + 1;
+
+        $riskAmounts = NetRCostMath::risk(
+            $protection->side, $protection->entryPrice, $protection->stopPrice,
+            $risk->quantity, $risk->contractSize,
+            $policy->riskPolicy->takerFeeRate, $policy->riskPolicy->takerFeeRate,
+            $costs->entrySpreadRate, $costs->stopSpreadRate,
+            $costs->entrySlippageRate, $costs->stopSlippageRate,
+            $costs->fundingRate, $intervals,
+        );
+        self::assertSame($risk->grossStopLoss, $riskAmounts['gross_risk']->toFloat());
+        self::assertSame($risk->entryFee, $riskAmounts['entry_fee']->toFloat());
+        self::assertSame($risk->stopExitFee, $riskAmounts['stop_fee']->toFloat());
+        self::assertSame($risk->entrySpreadCost, $riskAmounts['entry_spread']->toFloat());
+        self::assertSame($risk->stopSpreadCost, $riskAmounts['stop_spread']->toFloat());
+        self::assertSame($risk->entrySlippageCost, $riskAmounts['entry_slippage']->toFloat());
+        self::assertSame($risk->stopSlippageCost, $riskAmounts['stop_slippage']->toFloat());
+        self::assertSame($risk->fundingCost, $riskAmounts['funding']->toFloat());
+        self::assertSame($risk->totalStopLoss, $riskAmounts['net_risk']->toFloat());
+
+        foreach ($protection->targets as $index => $target) {
+            $targetCost = $costs->targets[$index];
+            $amounts = NetRCostMath::target(
+                $protection->entryPrice, $target->price, $risk->quantity, $risk->contractSize,
+                $policy->riskPolicy->takerFeeRate, $targetCost->spreadRate, $targetCost->slippageRate,
+                $riskAmounts,
+            );
+            $expected = $decision->targets[$index];
+            self::assertSame($expected->grossReward, $amounts['gross_reward']->toFloat());
+            self::assertSame($expected->targetFee, $amounts['target_fee']->toFloat());
+            self::assertSame($expected->targetSpreadCost, $amounts['target_spread']->toFloat());
+            self::assertSame($expected->targetSlippageCost, $amounts['target_slippage']->toFloat());
+            self::assertSame($expected->netReward, $amounts['net_reward']->toFloat());
+            self::assertSame($expected->netR, $amounts['net_r']->toFloat());
+        }
+    }
+
+    public function testValueCostMathRejectsZeroRiskDenominator(): void
+    {
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_net_r_risk_invalid');
+        NetRCostMath::target(100.0, 102.0, 1.0, 1.0, 0.0005, 0.0001, 0.0001, [
+            'entry_fee' => BigDecimal::of('0.05'),
+            'entry_spread' => BigDecimal::of('0.01'),
+            'entry_slippage' => BigDecimal::of('0.01'),
+            'funding' => BigDecimal::zero(),
+            'net_risk' => BigDecimal::zero(),
+        ]);
+    }
+
+    public function testValueCostMathKeepsPerLegFeesAndShortAdverseFunding(): void
+    {
+        $amounts = NetRCostMath::risk(
+            'short', 100.0, 101.0, 1.0, 1.0,
+            0.0002, 0.0005,
+            0.0, 0.0, 0.0, 0.0,
+            -0.0001, 2,
+        );
+        self::assertSame(0.02, $amounts['entry_fee']->toFloat());
+        self::assertSame(0.0505, $amounts['stop_fee']->toFloat());
+        self::assertSame(0.02, $amounts['funding']->toFloat());
+
+        $favorable = NetRCostMath::risk(
+            'short', 100.0, 101.0, 1.0, 1.0,
+            0.0002, 0.0005,
+            0.0, 0.0, 0.0, 0.0,
+            0.0001, 2,
+        );
+        self::assertSame(0.0, $favorable['funding']->toFloat());
     }
 
     public function testRejectsWhenGrossRPassesButCostInclusiveNetRFails(): void

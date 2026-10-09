@@ -8,6 +8,7 @@ import fcntl
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -31,6 +32,90 @@ def fixture_zip() -> bytes:
 
 def client_for(handler):
     return httpx.Client(transport=httpx.MockTransport(handler), timeout=30)
+
+
+def initial_identity(symbols: tuple[str, ...] = ("BTCUSDT",)) -> dict:
+    return {
+        "schema": acquire_module.SCHEMA,
+        "source": acquire_module.SOURCE,
+        "symbols": list(symbols),
+        "start": acquire_module._utc(START).isoformat(),
+        "end": acquire_module._utc(END).isoformat(),
+        "include_funding": False,
+    }
+
+
+def write_interrupted_initial_root(root: Path, identity: dict) -> Path:
+    root.mkdir(mode=0o700)
+    os.chmod(root, 0o700)
+    lock = root / ".writer.lock"
+    lock.write_bytes(b"")
+    os.chmod(lock, 0o600)
+    manifest_tmp = root / ".manifest.12345.tmp"
+    manifest_tmp.write_text(json.dumps(
+        {"identity": identity, "complete": False, "sources": []},
+        sort_keys=True, indent=2,
+    ) + "\n")
+    os.chmod(manifest_tmp, 0o600)
+    return manifest_tmp
+
+
+def test_recovers_interrupted_initial_manifest_only_for_matching_private_root(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "interrupted"
+    identity = initial_identity()
+    manifest_tmp = write_interrupted_initial_root(root, identity)
+
+    with client_for(lambda _: httpx.Response(404)) as client:
+        result = acquire(root, START, END, symbols=("BTCUSDT",),
+                         client=client, reserve_bytes=0)
+
+    assert not result.complete
+    assert result.manifest_path.exists()
+    assert not manifest_tmp.exists()
+    assert json.loads(result.manifest_path.read_text())["identity"] == identity
+
+
+def test_rejects_interrupted_initial_manifest_for_another_identity(tmp_path: Path) -> None:
+    root = tmp_path / "foreign_identity"
+    write_interrupted_initial_root(root, initial_identity(("ETHUSDT",)))
+
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("network should not be called"))) as client:
+        with pytest.raises(AcquisitionError, match="identity"):
+            acquire(root, START, END, symbols=("BTCUSDT",),
+                    client=client, reserve_bytes=0)
+    assert (root / ".manifest.12345.tmp").exists()
+    assert not (root / "manifest.json").exists()
+
+
+def test_rejects_interrupted_initial_root_without_provable_identity(tmp_path: Path) -> None:
+    root = tmp_path / "ambiguous_interrupted"
+    root.mkdir(mode=0o700)
+    os.chmod(root, 0o700)
+    lock = root / ".writer.lock"
+    lock.write_bytes(b"")
+    os.chmod(lock, 0o600)
+
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("network should not be called"))) as client:
+        with pytest.raises(AcquisitionError, match="identity"):
+            acquire(root, START, END, symbols=("BTCUSDT",),
+                    client=client, reserve_bytes=0)
+    assert lock.exists()
+    assert not (root / "manifest.json").exists()
+
+
+def test_rejects_interrupted_initial_root_with_non_private_permissions(tmp_path: Path) -> None:
+    root = tmp_path / "non_private_interrupted"
+    temp = write_interrupted_initial_root(root, initial_identity())
+    os.chmod(root, 0o750)
+
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("network should not be called"))) as client:
+        with pytest.raises(AcquisitionError, match="identity"):
+            acquire(root, START, END, symbols=("BTCUSDT",),
+                    client=client, reserve_bytes=0)
+    assert temp.exists()
+    assert not (root / "manifest.json").exists()
 
 
 def test_archive_success_manifest_resume_and_tamper(tmp_path: Path) -> None:
@@ -116,26 +201,170 @@ def test_forbidden_does_not_retry_and_invalid_checksum(tmp_path: Path) -> None:
     assert result.sources[0]["status"] == "checksum_error"
 
 
+def test_non_utf8_archive_checksum_is_checksum_error(tmp_path: Path) -> None:
+    raw = fixture_zip()
+
+    def invalid_encoding(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(".CHECKSUM"):
+            return httpx.Response(200, content=b"\xff\xfe")
+        return httpx.Response(200, content=raw)
+
+    with client_for(invalid_encoding) as client:
+        result = acquire(tmp_path / "invalid_checksum_encoding", START, END,
+                         symbols=("BTCUSDT",), client=client, reserve_bytes=0)
+    assert result.sources[0]["status"] == "checksum_error"
+
+
+def test_rejects_clone_checkout_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def unused(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("network should not be called")
+
+    clone_repo = tmp_path / "clone-checkout"
+    clone_source = clone_repo / "python-orchestrator/app/backtesting/research/acquire.py"
+    clone_source.parent.mkdir(parents=True)
+    clone_source.touch()
+    monkeypatch.setattr(acquire_module, "__file__", str(clone_source))
+
+    with client_for(unused) as client, pytest.raises(AcquisitionError):
+        acquire(clone_repo / "history", START, END,
+                symbols=("BTCUSDT",), client=client)
+
+
+def test_rejects_worktree_and_main_checkout_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unused(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("network should not be called")
+
+    worktree_main = tmp_path / "worktree-main"
+    worktree = worktree_main / ".worktrees/research-checkout"
+    worktree_source = worktree / "python-orchestrator/app/backtesting/research/acquire.py"
+    worktree_source.parent.mkdir(parents=True)
+    worktree_source.touch()
+    gitdir = worktree_main / ".git/worktrees/research-checkout"
+    gitdir.mkdir(parents=True)
+    (worktree / ".git").write_text(f"gitdir: {gitdir}\n")
+    monkeypatch.setattr(acquire_module, "__file__", str(worktree_source))
+
+    with client_for(unused) as client:
+        # A linked worktree must reject both its own root and the shared main
+        # checkout root named by its synthetic .git pointer.
+        with pytest.raises(AcquisitionError):
+            acquire(worktree / "history", START, END,
+                    symbols=("BTCUSDT",), client=client)
+        with pytest.raises(AcquisitionError):
+            acquire(worktree_main / "history", START, END,
+                    symbols=("BTCUSDT",), client=client)
+
+
 def test_rejects_inrepo_symlink_conflict_and_cap(tmp_path: Path) -> None:
     def unused(request: httpx.Request) -> httpx.Response:
         raise AssertionError("network should not be called")
 
     with client_for(unused) as client:
-        with pytest.raises(AcquisitionError):
-            acquire(Path(__file__).parents[1] / "history", START, END,
-                    symbols=("BTCUSDT",), client=client)
-        main_repo = Path(__file__).parents[4]
-        with pytest.raises(AcquisitionError):
-            acquire(main_repo / "history", START, END,
-                    symbols=("BTCUSDT",), client=client)
         target = tmp_path / "target"
         target.mkdir()
         (tmp_path / "link").symlink_to(target, target_is_directory=True)
         with pytest.raises(AcquisitionError):
             acquire(tmp_path / "link", START, END, symbols=("BTCUSDT",), client=client)
-        root = tmp_path / "cap"
         with pytest.raises(AcquisitionError):
-            acquire(root, START, END, symbols=("BTCUSDT",), client=client, root_cap_bytes=1)
+            acquire(tmp_path / "small_cap", START, END, symbols=("BTCUSDT",),
+                    client=client, root_cap_bytes=1)
+
+    cap = acquire_module.MAX_ZIP_BYTES
+    cap_root = tmp_path / "existing_cap"
+    with client_for(lambda _: httpx.Response(404)) as client:
+        result = acquire(cap_root, START, END, symbols=("BTCUSDT",), client=client,
+                         reserve_bytes=0, root_cap_bytes=cap)
+    assert not result.complete
+    oversized = cap_root / "oversized.bin"
+    with oversized.open("wb") as output:
+        output.truncate(cap + 1)
+    with client_for(unused) as client, pytest.raises(AcquisitionError, match="capacity"):
+        acquire(cap_root, START, END, symbols=("BTCUSDT",), client=client,
+                reserve_bytes=0, root_cap_bytes=cap)
+
+
+def test_tail_retry_capacity_counts_only_new_page_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opening = int(datetime.fromisoformat("2026-10-09T00:00:00+00:00").timestamp() * 1000)
+    start, end = "2026-10-09T00:00:00Z", "2026-10-09T16:42:00Z"
+    now = datetime(2026, 10, 9, 17, 0, tzinfo=UTC)
+
+    def row(timestamp: int) -> list[object]:
+        return [timestamp, "100", "102", "99", "101", "2", timestamp + 59999,
+                "200", 3, "1", "100", "0"]
+
+    first_page = json.dumps([row(opening + index * 60000) for index in range(1000)],
+                            separators=(",", ":")).encode()
+    second_page = json.dumps([row(opening + index * 60000) for index in (1000, 1001)],
+                             separators=(",", ":")).encode()
+    second_page_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal second_page_calls
+        if request.url.host == "data.binance.vision":
+            return httpx.Response(404)
+        cursor = int(request.url.params["startTime"])
+        if cursor == opening:
+            return httpx.Response(200, content=first_page,
+                                  headers={"Content-Type": "application/json"})
+        second_page_calls += 1
+        if second_page_calls <= 3:
+            return httpx.Response(500)
+        return httpx.Response(200, content=second_page,
+                              headers={"Content-Type": "application/json"})
+
+    root = tmp_path / "retry_tail_capacity"
+    with client_for(handler) as client:
+        partial = acquire(root, start, end, symbols=("BTCUSDT",), now=now,
+                          client=client, reserve_bytes=0)
+    assert not partial.complete
+    assert partial.sources[0]["status"] == "http_error"
+    assert len(partial.sources[0]["pages"]) == 1
+    assert (root / partial.sources[0]["pages"][0]["raw_path"]).read_bytes() == first_page
+
+    reserve = 1024
+    stored_before_retry = acquire_module._root_size(root)
+    free_budget = stored_before_retry + len(second_page) + reserve
+    monkeypatch.setattr(
+        acquire_module.shutil,
+        "disk_usage",
+        lambda _: SimpleNamespace(free=free_budget - acquire_module._root_size(root)),
+    )
+    with client_for(handler) as client:
+        resumed = acquire(root, start, end, symbols=("BTCUSDT",), now=now,
+                          client=client, reserve_bytes=reserve)
+
+    assert resumed.complete
+    assert resumed.sources[0]["status"] == "ok"
+    assert resumed.sources[0]["count"] == 1002
+    assert second_page_calls == 4
+
+
+def test_additional_storage_bytes_requires_identical_regular_file(tmp_path: Path) -> None:
+    payload = b"verified bytes"
+    path = tmp_path / "page.json"
+    assert acquire_module._additional_storage_bytes(path, payload) == len(payload)
+    path.write_bytes(payload)
+    assert acquire_module._additional_storage_bytes(path, payload) == 0
+    with pytest.raises(AcquisitionError, match="stored bytes conflict"):
+        acquire_module._additional_storage_bytes(path, b"different bytes")
+
+    outside = tmp_path / "outside"
+    outside.write_bytes(payload)
+    symlink = tmp_path / "page-link.json"
+    symlink.symlink_to(outside)
+    with pytest.raises(AcquisitionError, match="missing or unsafe stored file"):
+        acquire_module._additional_storage_bytes(symlink, payload)
+
+    external_dir = tmp_path / "external-dir"
+    external_dir.mkdir()
+    parent_symlink = tmp_path / "parent-link"
+    parent_symlink.symlink_to(external_dir, target_is_directory=True)
+    with pytest.raises(AcquisitionError, match="symlink artifact directory"):
+        acquire_module._additional_storage_bytes(parent_symlink / "page.json", payload)
 
 
 def test_recent_tail_pagination_cutoff_and_empty(tmp_path: Path) -> None:

@@ -14,6 +14,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalPriceObservation;
 use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionEngine;
 use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalTickSnapshot;
+use App\TradingCore\OrderPlan\Canonical\ProtectionPriceMath;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
@@ -37,6 +38,56 @@ final class CanonicalProtectionEngineTest extends TestCase
         self::assertSame('tp1', $decision->targets[0]->id);
         self::assertSame($policy->configHash, $decision->configHash);
         self::assertContains($atr->inputHash, $decision->inputHashes);
+    }
+
+    public function testValueMathMatchesAuthenticatedAtrAndPivotBothSides(): void
+    {
+        self::assertTrue(class_exists(ProtectionPriceMath::class), 'Value-only protection math is missing.');
+        foreach (['long', 'short'] as $side) {
+            foreach (['atr', 'pivot'] as $kind) {
+                [$policy, $zone] = $this->policyAndZone($side, $kind);
+                $value = $kind === 'atr' ? 1.0 : ($side === 'long' ? 99.0 : 101.0);
+                $observation = $this->observation($kind === 'atr' ? 'atr' : 's1', $value);
+                $decision = (new CanonicalProtectionEngine())->calculate(new CanonicalProtectionRequest(
+                    $policy,
+                    $zone,
+                    $kind === 'atr' ? $observation : null,
+                    $kind === 'pivot' ? $observation : null,
+                ));
+                $prices = ProtectionPriceMath::calculate(
+                    $policy->stop,
+                    $policy->targets,
+                    $side,
+                    $zone->entryPrice,
+                    $zone->tickSize,
+                    $value,
+                );
+                self::assertSame($decision->entryPrice, $prices['entry_price']);
+                self::assertSame($decision->stopPrice, $prices['stop_price']);
+                self::assertSame($decision->riskDistance, $prices['risk_distance']);
+                self::assertSame(
+                    array_map(get_object_vars(...), $decision->targets),
+                    array_map(get_object_vars(...), $prices['targets']),
+                );
+            }
+        }
+    }
+
+    public function testValueMathRejectsNonFiniteStopInput(): void
+    {
+        [$policy, $zone] = $this->policyAndZone('long');
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_protection_input_invalid');
+        ProtectionPriceMath::calculate($policy->stop, $policy->targets, 'long', $zone->entryPrice, $zone->tickSize, INF);
+    }
+
+    public function testValueMathRejectsInvalidTargetRole(): void
+    {
+        [$policy, $zone] = $this->policyAndZone('long');
+        $invalid = [new \App\TradingCore\OrderPlan\Canonical\CanonicalTargetPolicy('tp1', 1.5, 'unknown')];
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_target_policy_invalid');
+        ProtectionPriceMath::calculate($policy->stop, $invalid, 'long', $zone->entryPrice, $zone->tickSize, 1.0);
     }
 
     public function testCalculatesShortAtrStopAndTargetsWithCorrectPolarity(): void

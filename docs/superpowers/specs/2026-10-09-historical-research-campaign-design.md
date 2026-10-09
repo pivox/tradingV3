@@ -82,6 +82,15 @@ restrictions or invent data. Monthly funding archives are fetched/verified
 separately; their timestamps and interval metadata are retained without making
 an unsupported complete-funding claim.
 
+Phase A deliberately keeps its planned source identities stable. If a completed
+month's archive is not published yet, its 404 remains `missing`: this version
+does not expand that month into daily sources. Binance documents monthly
+publication on the first Monday; retry the unchanged acquisition after
+publication. A future daily fallback requires explicit child-source provenance
+and resume tests. The frozen October 9 campaign is outside that publication
+window, and September BTC/ETH monthly archives were verified during the run.
+This limitation never authorizes marking missing coverage complete.
+
 Reject duplicate/out-of-order/non-finite/invalid OHLC records, wrong close time,
 wrong interval, ZIP path traversal, multiple unexpected members and unreasonable
 sizes. Gaps are first-class evidence, not forward-filled candles. Treat a missing
