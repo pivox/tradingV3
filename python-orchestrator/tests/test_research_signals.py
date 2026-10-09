@@ -336,6 +336,153 @@ def test_fake_worker_streams_and_reports_private_outputs(tmp_path: Path) -> None
                     worker_argv=fake_worker(tmp_path))
 
 
+def test_producer_delivers_complete_frames_after_short_pipe_writes(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = dataset(tmp_path / "dataset")
+    selection = select_sources(root, START, END, START, "BTCUSDT")
+    session = f"research-BTCUSDT-{selection.dataset_sha256[:20]}"
+    expected = b"".join(signals._frames(selection, root, session))
+    children = []
+    delivered = bytearray()
+    popen = subprocess.Popen
+
+    class PrefixPipe:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def write(self, raw):
+            prefix = raw[:17]
+            written = self.inner.write(prefix)
+            delivered.extend(prefix[:written])
+            return written
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+    def short_pipe_worker(*args, **kwargs):
+        child = popen(*args, **kwargs)
+        child.stdin = PrefixPipe(child.stdin)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(signals.subprocess, "Popen", short_pipe_worker)
+    out = tmp_path / "out"
+    try:
+        report = run_signals(root, out, tmp_path, START, END, START, ("BTCUSDT",),
+                             worker_argv=fake_worker(tmp_path), wall_timeout=2)
+    finally:
+        assert len(children) == 1
+        assert children[0].poll() is not None
+        assert children[0].stdin.closed
+    assert bytes(delivered) == expected
+    frames = [json.loads(line) for line in delivered.splitlines()]
+    assert len(frames) == 3
+    assert len(frames[1]["candles"]) == 2
+    assert report["status"] == "complete"
+    result = report["symbols"]["BTCUSDT"]
+    assert result["source_candles"] == report["totals"]["source_candles"] == 2
+    assert result["evaluated_ticks"] == report["totals"]["evaluated_ticks"] == 0
+    assert result["result_sha256"] == hashlib.sha256(b"").hexdigest()
+    assert (out / "BTCUSDT.results.ndjson").read_bytes() == b""
+    assert result["stderr_bytes"] == 0
+    assert children[0].returncode == 0
+
+
+class ScriptedWriter:
+    def __init__(self, actions):
+        self.actions = iter(actions)
+        self.delivered = bytearray()
+
+    def write(self, raw):
+        action = next(self.actions)
+        if isinstance(action, Exception):
+            raise action
+        if type(action) is int and 0 < action <= len(raw):
+            self.delivered.extend(raw[:action])
+        return action
+
+
+@pytest.mark.parametrize("actions", [[7], [2, 5], [1, 2, 1, 3],
+                                     [InterruptedError(), 2, InterruptedError(), 5]])
+def test_write_all_preserves_exact_bytes(actions) -> None:
+    writer = ScriptedWriter(actions)
+    signals._write_all(writer, b"a\xc3\xa9bcd\n", signals.time.monotonic() + 2)
+    assert writer.delivered == b"a\xc3\xa9bcd\n"
+
+
+@pytest.mark.parametrize("invalid", [0, None, -1, 8, True, 1.5, "1"])
+def test_write_all_rejects_invalid_progress(invalid) -> None:
+    writer = ScriptedWriter([invalid])
+    with pytest.raises(SignalError, match="worker stdin write made invalid progress"):
+        signals._write_all(writer, b"frame\n", signals.time.monotonic() + 2)
+    assert writer.delivered == b""
+
+
+def test_write_all_propagates_broken_pipe_after_prefix() -> None:
+    failure = BrokenPipeError("closed synthetic pipe")
+    writer = ScriptedWriter([2, failure])
+    with pytest.raises(BrokenPipeError) as raised:
+        signals._write_all(writer, b"frame\n", signals.time.monotonic() + 2)
+    assert raised.value is failure
+    assert writer.delivered == b"fr"
+
+
+@pytest.mark.parametrize("actions, ticks, expected", [([], [2], b""),
+                         ([2], [0, 2], b"fr"),
+                         ([InterruptedError(), InterruptedError()], [0, 1, 2], b"")])
+def test_write_all_checks_deadline_on_every_retry(
+        monkeypatch: pytest.MonkeyPatch, actions, ticks, expected) -> None:
+    clock = iter(ticks)
+    monkeypatch.setattr(signals.time, "monotonic", lambda: next(clock))
+    writer = ScriptedWriter(actions)
+    with pytest.raises(SignalError, match="worker stdin producer timeout"):
+        signals._write_all(writer, b"frame\n", 2)
+    assert writer.delivered == expected
+
+
+@pytest.mark.parametrize("failure", [0, None, -1, "oversized", "broken_pipe"])
+def test_producer_write_failure_reaps_synthetic_worker(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure) -> None:
+    root = dataset(tmp_path / "dataset")
+    children = []
+    popen = subprocess.Popen
+
+    class FailingPipe:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def write(self, raw):
+            if b"research-signal-candles.v1" in bytes(raw):
+                if failure == "broken_pipe":
+                    raise BrokenPipeError("closed synthetic pipe")
+                return len(raw) + 1 if failure == "oversized" else failure
+            return self.inner.write(raw)
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+    def failing_pipe_worker(*args, **kwargs):
+        child = popen(*args, **kwargs)
+        child.stdin = FailingPipe(child.stdin)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(signals.subprocess, "Popen", failing_pipe_worker)
+    out = tmp_path / "out"
+    message = "closed synthetic pipe" if failure == "broken_pipe" else "invalid progress"
+    with pytest.raises(SignalError, match="worker input failed: .*" + message):
+        run_signals(root, out, tmp_path, START, END, START, ("BTCUSDT",),
+                    worker_argv=fake_worker(tmp_path), wall_timeout=2)
+    assert len(children) == 1
+    assert children[0].poll() is not None
+    assert children[0].stdin.closed
+    report = json.loads((out / "report.json").read_text())
+    assert report["status"] == "failed"
+    assert report["totals"]["completed_symbols"] == 0
+    assert not (out / "BTCUSDT.results.ndjson").exists()
+    assert not (out / "BTCUSDT.boundary.ndjson").exists()
+
+
 @pytest.mark.parametrize("tamper", ["none", "hash", "url", "rows"])
 def test_rest_payload_and_provenance(tmp_path: Path, tamper: str) -> None:
     root = rest_dataset(tmp_path / "dataset")

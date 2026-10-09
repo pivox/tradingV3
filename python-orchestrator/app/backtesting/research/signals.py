@@ -65,6 +65,20 @@ def _encode(frame: dict) -> bytes:
     return raw
 
 
+def _write_all(stream, raw: bytes, deadline: float) -> None:
+    remaining = memoryview(raw)
+    while remaining:
+        if time.monotonic() >= deadline:
+            raise SignalError("worker stdin producer timeout")
+        try:
+            written = stream.write(remaining)
+        except InterruptedError:
+            continue
+        if type(written) is not int or not 0 < written <= len(remaining):
+            raise SignalError("worker stdin write made invalid progress")
+        remaining = remaining[written:]
+
+
 def _is_scored_tick(tick: int, score_start_ms: int, end_ms: int) -> bool:
     return score_start_ms <= tick < end_ms
 
@@ -346,11 +360,11 @@ def _run_symbol(root: Path, out: Path, app_dir: Path, selection: SourceSelection
         try:
             for line in _frames(selection, root, session_id):
                 frame = json.loads(line)
+                _write_all(proc.stdin, line, deadline)
+                proc.stdin.flush()
                 if frame["schema_version"] == "research-signal-candles.v1":
                     sent["candles"] += len(frame["candles"])
                     sent["batches"] += 1
-                proc.stdin.write(line)
-                proc.stdin.flush()
         except (Exception, BrokenPipeError) as exc:
             producer_error.append(exc)
         finally:
