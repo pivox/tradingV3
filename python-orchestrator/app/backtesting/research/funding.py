@@ -439,14 +439,16 @@ class FundingReader:
                 effective_interval = event.declared_interval_hours
                 if effective_interval is None and self.hypothesis == REST_HYPOTHESIS:
                     effective_interval = prior_declared
-                    if self.start_ms <= event.timestamp_ms < self.end_ms and effective_interval is not None:
-                        used_assumption = True
                 if event.timestamp_ms < self.start_ms:
                     left_context = True
                     previous = event
                     if event.declared_interval_hours is not None:
                         prior_declared = event.declared_interval_hours
                     continue
+                # The successor can supply the diagnostic interval even when
+                # it falls outside the selected window. That remains assumed.
+                if event.declared_interval_hours is None and effective_interval is not None:
+                    used_assumption = True
                 if event.timestamp_ms >= self.end_ms:
                     after = event
                 else:
@@ -477,7 +479,9 @@ class FundingReader:
                 previous = event
                 if event.declared_interval_hours is not None:
                     prior_declared = event.declared_interval_hours
-            if first is None or (first.timestamp_ms - self.start_ms > TOLERANCE_MS and not left_context):
+            bracketed_empty = first is None and left_context and after is not None
+            if (first is None and not bracketed_empty) or (first is not None and
+                    first.timestamp_ms - self.start_ms > TOLERANCE_MS and not left_context):
                 issue("boundary_context_absent", right=first.timestamp_ms if first else None)
             if after is None:
                 interval = last.declared_interval_hours if last is not None else None
