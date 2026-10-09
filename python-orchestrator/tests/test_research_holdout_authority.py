@@ -657,6 +657,50 @@ def test_preclaim_capacity_and_output_denials(fixture,monkeypatch,change):
     assert not (f.anchor/'claim.json').exists()
 
 
+@pytest.mark.parametrize('placement', ['nested_directory','nested_file','nested_symlink',
+    'current_checkout','author_worktree','shared_checkout'])
+def test_repository_output_denied_before_preflight_or_claim(fixture,monkeypatch,placement):
+    from app.backtesting.research import signals
+    f=fixture; h=f.module
+    if placement=='current_checkout':
+        # Inspect only the current code's location: never create this output.
+        output=Path(signals.__file__).resolve().parents[4]/('never-created-holdout-'+f.output.parent.name)
+    elif placement in ('author_worktree','shared_checkout'):
+        author=f.output.parent/'synthetic-author'; author.mkdir()
+        shared=f.output.parent/'synthetic-shared'; shared.mkdir()
+        # Worktree Git pointer geometry is sufficient; no actual repository
+        # installation, checkout, or operational worktree is read or changed.
+        (author/'.git').write_text('gitdir: '+str(shared/'.git/worktrees/author'))
+        monkeypatch.setattr(signals,'__file__',str(author/'python-orchestrator/app/backtesting/research/signals.py'))
+        output=(author if placement=='author_worktree' else shared)/'new-output'
+    else:
+        other=f.output.parent/'synthetic-repository'; nested=other/'nested'
+        nested.mkdir(parents=True)
+        marker=other/'.git'
+        if placement=='nested_directory': marker.mkdir()
+        elif placement=='nested_file': marker.write_text('gitdir: elsewhere')
+        else: marker.symlink_to(other/'absent-git-directory')
+        output=nested/'new-output'
+    authority=f.authority()
+    def forbidden(*args,**kwargs):
+        raise AssertionError('invalid output reached heldout preflight or claim publication')
+    monkeypatch.setattr(h,'_preflight_identities',forbidden)
+    monkeypatch.setattr(h,'_publish_bytes',forbidden)
+    with pytest.raises(h.HoldoutError,match='output_location.*repositor'):
+        h.prepare_claim(authority,output)
+    assert not output.exists()
+    assert not (f.anchor/'claim.json').exists()
+    assert not (f.anchor/'contract.json').exists()
+    assert not f.anchor.exists()
+
+
+def test_preclaim_output_validation_does_not_require_future_signal_parent(fixture):
+    auth=fixture.claim()
+    assert auth.output_root==fixture.output
+    assert not fixture.output.exists()
+    assert not (fixture.output/'signals').exists()
+
+
 @pytest.mark.parametrize('kwargs', [
     {'operation':'unknown'}, {'operation':'signals','source_start':'wrong'},
     {'operation':'signals','score_start':'wrong'}, {'operation':'signals','end':'wrong'},

@@ -89,10 +89,9 @@ def _first_evaluable_ms(selection: SourceSelection) -> int:
     return ((earliest + 899999) // 900000) * 900000
 
 
-def _private_output(root: Path, dataset_root: Path) -> Path:
+def _validate_output_location(root: Path, dataset_root: Path) -> None:
+    """Check placement without creating output or requiring its future parent."""
     root = Path(root)
-    if not root.is_absolute() or ".." in root.parts or root.exists() or root.is_symlink():
-        raise SignalError("fresh absolute output directory required")
     repo = Path(__file__).resolve().parents[4]
     git_pointer = repo / ".git"
     repositories = [repo]
@@ -115,6 +114,13 @@ def _private_output(root: Path, dataset_root: Path) -> Path:
             raise SignalError("symlink output path")
     if (root.parent / ".git").exists() or (root.parent / ".git").is_symlink():
         raise SignalError("output root inside another repository")
+
+
+def _private_output(root: Path, dataset_root: Path) -> Path:
+    root = Path(root)
+    if not root.is_absolute() or ".." in root.parts or root.exists() or root.is_symlink():
+        raise SignalError("fresh absolute output directory required")
+    _validate_output_location(root, dataset_root)
     if not root.parent.is_dir():
         raise SignalError("output parent directory required")
     root.mkdir(mode=0o700)

@@ -644,6 +644,11 @@ def _fresh_output(output: Path,authority):
         *(Path(p) for p in config['paths'].values() if p is not None),
         *(Path(p) for p in config['retained'])]
     if any(_overlap(output,p) for p in inputs): raise HoldoutError('input_output_overlap')
+    from .signals import SignalError, _validate_output_location
+    try:
+        _validate_output_location(output,Path(config['paths']['dataset_root']))
+    except SignalError as exc:
+        raise HoldoutError('output_location: '+str(exc)) from exc
 
 
 @dataclass(frozen=True)
