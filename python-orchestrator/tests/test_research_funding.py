@@ -415,3 +415,68 @@ def test_iterator_revalidates_root_privacy_and_frozen_raw_hash(tmp_path):
     private_write(root / "archives/funding/BTCUSDT-fundingRate-2023-01.zip", b"corrupted")
     with pytest.raises(f.FundingError):
         list(reader.iter_events())
+
+
+def test_rest_successor_boundary_labels_assumption_even_when_selected_events_are_declared(tmp_path):
+    start,end = instant("2026-09-30T16:00:00Z"), instant("2026-10-01T00:00:00Z")
+    root = acquisition(tmp_path, [(START_MS-28800000+1,"8","0")], start=start, end=end)
+    tail = supplement(tmp_path)
+    assumed = f.FundingReader(root, start, end, symbols=("BTCUSDT",), supplement_root=tail,
+                             rest_interval_hypothesis="carry_forward_last_declared")
+    quality = assumed.inventory.symbols[0]
+    assert quality.count == 1 and quality.interval_counts == (("8", 1),)
+    assert quality.continuity == "assumed_interval"
+    unknown = f.FundingReader(root, start, end, symbols=("BTCUSDT",), supplement_root=tail)
+    assert unknown.inventory.symbols[0].continuity == "inconclusive"
+
+
+@pytest.mark.parametrize("offset", [0, 1])
+def test_short_empty_window_between_verified_regular_payments_is_consistent(tmp_path, offset):
+    root = acquisition(tmp_path, [(T+offset,"8","0"), (T+28800000+offset+1,"8","0")])
+    reader = f.FundingReader(root, START+timedelta(hours=1), START+timedelta(hours=2), symbols=("BTCUSDT",))
+    quality = reader.inventory.symbols[0]
+    assert list(reader.iter_events()) == []
+    assert quality.count == 0 and quality.first_ms is None and quality.last_ms is None
+    assert quality.continuity == "declared_interval_consistent"
+    assert quality.issue_counts == () and reader.inventory.evidence_complete
+    assert reader.inventory.coverage == "observed_only" and reader.inventory.schedule_attestation == "not_attested"
+
+
+@pytest.mark.parametrize("rows,expected", [
+    ([], "inconclusive"),
+    ([(T,"8","0")], "inconclusive"),
+    ([(T+28800000,"8","0")], "inconclusive"),
+    ([(T,"8","0"), (T+57600000,"8","0")], "gaps"),
+    ([(T,"4","0"), (T+14400005,"2","0")], "inconclusive"),
+])
+def test_empty_window_needs_both_witnesses_and_preserves_gap_or_transition(tmp_path, rows, expected):
+    root = acquisition(tmp_path, rows)
+    quality = f.FundingReader(root, START+timedelta(hours=1), START+timedelta(hours=2), symbols=("BTCUSDT",)).inventory.symbols[0]
+    assert quality.count == 0 and quality.continuity == expected
+    if expected == "gaps":
+        assert "interval_gap" in dict(quality.issue_counts)
+    elif len(rows) == 2:
+        assert "transition_inconclusive" in dict(quality.issue_counts)
+    else:
+        assert "boundary_context_absent" in dict(quality.issue_counts)
+
+
+def test_empty_archive_rest_bracket_uses_explicit_interval_hypothesis(tmp_path):
+    start,end = instant("2026-09-30T16:00:00Z"), instant("2026-10-01T00:00:00Z")
+    root = acquisition(tmp_path, [(START_MS-28800000+1,"8","0")], start=start, end=end)
+    tail = supplement(tmp_path)
+    left,right = start+timedelta(hours=1), start+timedelta(hours=2)
+    assumed = f.FundingReader(root, left, right, symbols=("BTCUSDT",), supplement_root=tail,
+                             rest_interval_hypothesis="carry_forward_last_declared")
+    assert assumed.inventory.symbols[0].count == 0
+    assert assumed.inventory.symbols[0].continuity == "assumed_interval"
+    unknown = f.FundingReader(root, left, right, symbols=("BTCUSDT",), supplement_root=tail)
+    assert unknown.inventory.symbols[0].continuity == "inconclusive"
+
+
+def test_exact_start_and_exclusive_end_archive_payments_remain_distinct(tmp_path):
+    root = acquisition(tmp_path, [(T,"8","0"), (T+28800000,"8","0")])
+    reader = f.FundingReader(root, START, START+timedelta(hours=8), symbols=("BTCUSDT",))
+    events = tuple(reader.iter_events())
+    assert len(events) == 1 and events[0].timestamp_ms == T
+    assert reader.inventory.symbols[0].continuity == "declared_interval_consistent"
