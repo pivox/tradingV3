@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import time
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -18,7 +19,7 @@ from typing import Iterator
 
 from .binance_history import (KLINE_HEADER, MAX_ZIP_BYTES, SOURCE, SYMBOLS, ArchiveError,
                               ArchiveSource, parse_archive, plan_archives,
-                              validate_kline, verify_checksum)
+                              validate_kline, verify_checksum, verify_checksum_digest)
 
 MAX_MANIFEST_BYTES = 64 * 1024 * 1024
 MAX_REST_BYTES = 2 * 1024 * 1024
@@ -145,10 +146,43 @@ def select_sources(root: Path, start: str, end: str, score_start: str,
     if (symbol not in SYMBOLS or beginning >= ending or score < SCORE_FLOOR
             or score < beginning or score >= ending or ending > HOLDOUT_START):
         raise SignalError("unsupported research range or symbol")
+    return _select_sources_validated(root, beginning, ending, score, symbol)
+
+
+def select_holdout_sources(root: Path, symbol: str, *, authorization) -> SourceSelection:
+    """Select the claimed fixed window; ordinary research remains pre-holdout."""
+    from .holdout_authority import require_claim
+    contract = require_claim(authorization, operation='source')
+    if Path(root) != Path(contract['paths']['dataset_root']) or symbol not in contract['symbols']:
+        raise SignalError('claimed source root or symbol conflict')
+    window = contract['window']
+    selection = _select_sources_validated(root, _utc(window['source_start']),
+        _utc(window['end']), _utc(window['score_start']), symbol)
+    if selection.manifest_sha256 != contract['identities']['source_manifest_sha256']:
+        raise SignalError('claimed source manifest conflict')
+    return selection
+
+
+def _select_sources_validated(root: Path, beginning: datetime, ending: datetime,
+                             score: datetime, symbol: str) -> SourceSelection:
+    """Coverage and provenance validation shared after separate scope guards."""
     root = Path(root)
     if not root.is_absolute() or root.is_symlink():
         raise SignalError("absolute non-symlink dataset root required")
     raw_manifest = _read_bounded(root, "manifest.json", MAX_MANIFEST_BYTES)
+    return _selection_from_manifest(raw_manifest, beginning, ending, score, symbol)
+
+
+def _identity_deadline(deadline):
+    if deadline is not None and time.monotonic() >= deadline:
+        raise SignalError('source identity deadline')
+
+
+def _selection_from_manifest(raw_manifest, beginning, ending, score, symbol, *, deadline=None):
+    """One exact metadata/subset schema, for selection and read-only replay."""
+    _identity_deadline(deadline)
+    if len(raw_manifest)>MAX_MANIFEST_BYTES:
+        raise SignalError('source manifest size limit')
     try:
         manifest = json.loads(raw_manifest)
         identity = manifest["identity"]
@@ -163,6 +197,7 @@ def select_sources(root: Path, start: str, end: str, score_start: str,
         raise SignalError("acquisition identity conflict")
     selected: list[dict] = []
     for entry in entries:
+        _identity_deadline(deadline)
         if not isinstance(entry, dict):
             raise SignalError("acquisition source invalid")
         if entry.get("symbol") != symbol or entry.get("kind") != "klines":
@@ -190,6 +225,7 @@ def select_sources(root: Path, start: str, end: str, score_start: str,
     selected.sort(key=lambda entry: entry["start"])
     cursor = beginning
     for entry in selected:
+        _identity_deadline(deadline)
         left, right = _utc(entry["start"]), _utc(entry["end"])
         if left > cursor or right <= cursor or (left < cursor and entry is not selected[0]):
             raise SignalError("selected candle gap or overlap")
@@ -209,6 +245,88 @@ def select_sources(root: Path, start: str, end: str, score_start: str,
     return SourceSelection(symbol, beginning, ending, score, hashlib.sha256(raw_manifest).hexdigest(),
                            subset, tuple(selected), (_ms(ending) - _ms(beginning)) // 60000,
                            evaluated, warmup, before)
+
+
+def _source_artifact_identity(root, name, maximum, deadline, *, capture=False):
+    """No-follow, finite chunk reads; no cached hash survives this invocation."""
+    _identity_deadline(deadline)
+    root = Path(root)
+    if not root.is_absolute(): raise SignalError('absolute dataset root required')
+    path = root.joinpath(*_safe_relative(name).parts)
+    if any(parent.is_symlink() for parent in (root,*path.parents)):
+        raise SignalError('stored path symlink')
+    try:
+        fd = os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd,'rb') as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size>maximum:
+                raise SignalError('source file type or size limit')
+            digest,size,blocks = hashlib.sha256(),0,[]
+            while True:
+                _identity_deadline(deadline)
+                block = stream.read(min(1024**2,maximum-size+1))
+                _identity_deadline(deadline)
+                if not block: break
+                size += len(block)
+                if size>maximum: raise SignalError('source file size limit')
+                digest.update(block)
+                if capture: blocks.append(block)
+            after = os.fstat(stream.fileno())
+            current = path.lstat()
+            fields = ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns')
+            if (size!=before.st_size or any(getattr(before,key)!=getattr(after,key)
+                or getattr(before,key)!=getattr(current,key) for key in fields)):
+                raise SignalError('source file changed during identity read')
+            return digest.hexdigest(),size,b''.join(blocks) if capture else None
+    except OSError as exc:
+        raise SignalError('stored source file unavailable') from exc
+
+
+def _verify_bound_source_identity(root, raw_manifest, beginning, ending, score, symbol,
+                                  expected_dataset, deadline):
+    """Reconstruct exactly the bound subset and verify its referenced raw files.
+
+    No evaluation selector, candle iterator, generator or worker is invoked.
+    Checksums have the original digest/filename semantics (the acquisition
+    manifest has no separate hash of CHECKSUM bytes). REST payloads are only
+    decoded to establish page boundaries; no candle objects are generated.
+    """
+    selection = _selection_from_manifest(raw_manifest,beginning,ending,score,symbol,deadline=deadline)
+    if selection.dataset_sha256!=expected_dataset: raise SignalError('bound source subset identity conflict')
+    for entry in selection.sources:
+        _identity_deadline(deadline)
+        if entry['evidence']=='official_archive_checksum':
+            digest,size,_ = _source_artifact_identity(root,entry['raw_path'],MAX_ZIP_BYTES,deadline)
+            _,_,checksum = _source_artifact_identity(root,entry['checksum_path'],4096,deadline,capture=True)
+            try:
+                verify_checksum_digest(digest,checksum.decode('utf-8'),entry['filename'])
+            except (ArchiveError,UnicodeError) as exc:
+                raise SignalError('retained archive checksum conflict') from exc
+            if digest!=entry.get('sha256') or size!=entry.get('size'):
+                raise SignalError('archive bytes differ from manifest')
+        else:
+            cursor,end_ms = _ms(_utc(entry['start'])),_ms(_utc(entry['end']))
+            for page in entry['pages']:
+                _identity_deadline(deadline)
+                path = f'rest/{symbol}/{cursor}.json'
+                url = ('https://fapi.binance.com/fapi/v1/klines?'
+                    f'symbol={symbol}&interval=1m&startTime={cursor}&endTime={end_ms-1}&limit=1000')
+                if page.get('raw_path')!=path or page.get('url')!=url:
+                    raise SignalError('REST provenance conflict')
+                digest,size,raw = _source_artifact_identity(root,path,MAX_REST_BYTES,deadline,capture=True)
+                if digest!=page.get('sha256') or size!=page.get('size'):
+                    raise SignalError('REST bytes differ from manifest')
+                try:
+                    rows = json.loads(raw)
+                    if (not isinstance(rows,list) or not 1<=len(rows)<=1000
+                        or rows[0][0]!=cursor or rows[-1][0]!=cursor+(len(rows)-1)*60000):
+                        raise SignalError('REST page boundary conflict')
+                except (ValueError,TypeError,IndexError,KeyError) as exc:
+                    raise SignalError('REST page boundary conflict') from exc
+                cursor += len(rows)*60000
+            if cursor!=end_ms: raise SignalError('REST candle count incomplete')
+    _identity_deadline(deadline)
+    return selection
 
 
 def _decimal_text(value: object) -> str:

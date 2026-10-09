@@ -21,7 +21,10 @@ from decimal import Decimal, ROUND_DOWN
 import hashlib
 import math
 import re
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .holdout_authority import HoldoutAuthorization
 
 from app.modern_trading_contracts import FrozenJsonDict, _canonical_json
 
@@ -210,8 +213,27 @@ class RunAssumptions:
     funding: FundingCoverage
     funding_path_policy: str
     funding_mark_policy: str
+    authorization: HoldoutAuthorization | None = None
 
     def __post_init__(self) -> None:
+        binding = None
+        if self.phase == 'holdout':
+            from .holdout_authority import require_claim
+            # Issuance is checked before trusting even the slot tuple.
+            require_claim(self.authorization,operation='retained')
+            if len(self.authorization.slots) != 1:
+                raise ValueError('single_slot_authorization_required')
+            variant,profile = self.authorization.slots[0]
+            contract = require_claim(self.authorization,operation='simulate',variant_id=variant,
+                cost_profile=profile,symbols=self.symbols)
+            from .campaign import validate_holdout_unit_inputs
+            binding = validate_holdout_unit_inputs(authorization=self.authorization,
+                variant_id=variant,cost_profile=profile,operation='simulate')
+            if (self.start_ms != int(datetime.fromisoformat(contract['window']['score_start'].replace('Z','+00:00')).timestamp()*1000)
+                or self.end_ms != contract['window']['end_ms']):
+                raise ValueError('research_source_window_invalid')
+        elif self.authorization is not None:
+            raise ValueError('research_prehholdout_authorization_invalid')
         # Tuples keep supplied assumptions immutable; reject mutable impostors.
         if any(type(getattr(self, k)) is not tuple for k in ('symbols','instruments','identity','sources')):
             raise ValueError('research_assumptions_mutable')
@@ -220,9 +242,9 @@ class RunAssumptions:
             raise ValueError('research_assumptions_mutable')
         if (type(self.start_ms) is not int or type(self.end_ms) is not int
             or self.start_ms % MINUTE or self.end_ms % MINUTE or self.start_ms >= self.end_ms
-            or self.start_ms < 1672531200000 or self.phase not in ('training','validation')
-            or self.end_ms > (1735689600000 if self.phase == 'training' else 1767225600000)
-            or (self.phase == 'validation' and self.start_ms < 1735689600000)):
+            or (binding is None and (self.start_ms < 1672531200000 or self.phase not in ('training','validation')
+                or self.end_ms > (1735689600000 if self.phase == 'training' else 1767225600000)
+                or (self.phase == 'validation' and self.start_ms < 1735689600000)))):
             raise ValueError('research_source_window_invalid')
         if not self.symbols or self.symbols != tuple(s for s in SYMBOLS if s in self.symbols):
             raise ValueError('research_universe_invalid')
@@ -251,6 +273,18 @@ class RunAssumptions:
             or self.funding_path_policy != 'adverse_possible_credit_certain.v1'
             or self.funding_mark_policy != 'last_known_close.v1'):
             raise ValueError('research_funding_coverage_invalid')
+        if binding is not None:
+            from dataclasses import asdict
+            from .campaign_evidence import encoded
+            import json
+            if (dict(self.identity) != binding['identity']
+                or {s:dict(rows) for s,rows in self.sources} != binding['sources']
+                or self.costs.wire() != binding['kernel_costs']
+                or json.loads(encoded({s:asdict(i) for s,i in self.instruments})) != binding['kernel_instruments']
+                or json.loads(encoded(asdict(self.funding))) != binding['funding_coverage']
+                or self.funding_path_policy != binding['funding_path_policy']
+                or self.funding_mark_policy != binding['funding_mark_policy']):
+                raise ValueError('research_holdout_input_binding_conflict')
 
 
 def merge_candles(streams: Mapping[str, Iterator[Candle]], symbols: tuple[str, ...]) -> Iterator[tuple[Candle, ...]]:

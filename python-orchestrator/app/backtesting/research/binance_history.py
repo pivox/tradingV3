@@ -87,6 +87,11 @@ def plan_archives(symbol: str, start_UTC: datetime, end_exclusive_UTC: datetime,
 
 def verify_checksum(raw: bytes, checksum_text: str, filename: str) -> str:
     digest = hashlib.sha256(raw).hexdigest()
+    return verify_checksum_digest(digest, checksum_text, filename)
+
+
+def verify_checksum_digest(digest: str, checksum_text: str, filename: str) -> str:
+    """Same checksum semantics for an already bounded, streamed file digest."""
     lines = checksum_text.strip().splitlines()
     if len(lines) != 1:
         raise ArchiveError("checksum format")

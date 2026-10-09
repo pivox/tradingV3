@@ -13,6 +13,7 @@ import shutil
 import sqlite3
 import stat
 import tempfile
+import time
 from typing import Any
 
 ZERO = Decimal('0')
@@ -145,11 +146,54 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
     without accumulating all plans/candles in memory. Cashflow state is capped
     at the four portfolio slots; pair/year aggregations have fixed dimensions.
     """
-    from .portfolio_simulator import canonical_hash
-    root = Path(root)
     if (set(files) != {name+'.ndjson' for name in LEDGERS} or not symbols or
             start_ms >= end_ms or end_ms > 1767225600000 or start_ms < 1672531200000):
         raise StatisticsError('ledger_scope_invalid_holdout_closed')
+    return _analyze_validated_ledgers(root,files,symbols=symbols,start_ms=start_ms,end_ms=end_ms,
+        max_spool_bytes=max_spool_bytes,min_free_bytes=min_free_bytes,expected_identity=expected_identity,
+        expected_sources=expected_sources,expected_cost_profile=expected_cost_profile,
+        expected_cost_model=expected_cost_model,require_marked=require_marked)
+
+
+def analyze_holdout_ledgers(root: Path, files: dict, *, authorization, variant_id: str,
+                            cost_profile: str) -> dict:
+    """Use the same arithmetic with claimed inputs and a shared overall clock.
+
+    The private temporary index has its own claimed cap and a disk floor on
+    the actual temporary filesystem; it is not persistent campaign output.
+    """
+    from .holdout_authority import require_claim, remaining_limits
+    from .campaign import validate_holdout_unit_inputs
+    contract = require_claim(authorization,operation='statistics',variant_id=variant_id,
+        cost_profile=cost_profile,output_root=root)
+    binding = validate_holdout_unit_inputs(authorization=authorization,variant_id=variant_id,
+        cost_profile=cost_profile,operation='statistics')
+    limits = remaining_limits(authorization)
+    disk_floor = contract['limits']['disk_reserve_bytes']
+    spool_capacity = min(contract['limits']['statistics_spool_bytes'],
+                         shutil.disk_usage(tempfile.gettempdir()).free-disk_floor)
+    if spool_capacity <= 0:
+        raise StatisticsError('statistics_spool_capacity_exceeded')
+    w = contract['window']
+    start = int(datetime.fromisoformat(w['score_start'].replace('Z','+00:00')).timestamp()*1000)
+    return _analyze_validated_ledgers(root,files,symbols=tuple(contract['symbols']),start_ms=start,end_ms=w['end_ms'],
+        max_spool_bytes=spool_capacity,
+        min_free_bytes=contract['limits']['disk_reserve_bytes'],expected_identity=binding['identity'],
+        expected_sources=binding['sources'],expected_cost_profile=cost_profile,
+        expected_cost_model=binding['cost_assumptions']['profiles'][cost_profile],require_marked=True,
+        deadline=time.monotonic()+limits['seconds'])
+
+
+def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_ms: int,
+                    end_ms: int, max_spool_bytes: int = 4*1024**3,
+                    min_free_bytes: int = 20*1024**3, expected_identity: dict | None = None,
+                    expected_sources: dict | None = None, expected_cost_profile: str | None = None,
+                    expected_cost_model: dict | None = None, require_marked: bool = False,
+                    deadline: float | None = None) -> dict:
+    from .portfolio_simulator import canonical_hash
+    root = Path(root)
+    if set(files) != {name+'.ndjson' for name in LEDGERS} or not symbols or start_ms >= end_ms:
+        raise StatisticsError('ledger_scope_invalid')
     for directory in (root,*root.parents):
         if directory.is_symlink():
             raise StatisticsError('unsafe_ledger_root')
@@ -186,6 +230,8 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
         try:
             for name,row in heapq.merge(*(tagged(name) for name in LEDGERS),
                                        key=lambda item:item[1]['ledger_sequence']):
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise StatisticsError('statistics_overall_deadline')
                 if row['ledger_sequence'] != sequence:
                     raise StatisticsError('global_ledger_sequence_conflict')
                 sequence += 1
@@ -418,6 +464,54 @@ def _verify_campaign(root: Path, protocol: dict, registration: dict) -> dict:
     if (manifest.get('phase') != phase or manifest.get('start_ms') != start
             or manifest.get('end_ms') != end or manifest.get('end_exclusive') is not True):
         raise StatisticsError('campaign_scope_invalid_before_profit_read')
+    return _verify_bound_campaign(root,protocol,registration,binding,phase,start,end,
+                                  manifest,manifest_sha)
+
+
+def verify_holdout_campaign(root: Path, *, authorization, variant_id: str,
+                            cost_profile: str) -> dict:
+    from .holdout_authority import require_claim
+    from .campaign import validate_holdout_unit_inputs, _holdout_metadata
+    contract = require_claim(authorization,operation='verify',variant_id=variant_id,
+        cost_profile=cost_profile,output_root=root)
+    binding = validate_holdout_unit_inputs(authorization=authorization,variant_id=variant_id,
+        cost_profile=cost_profile,operation='verify')
+    try:
+        manifest,manifest_sha = _read_json(Path(root)/'manifest.json')
+        w = contract['window']
+        start = int(datetime.fromisoformat(w['score_start'].replace('Z','+00:00')).timestamp()*1000)
+        for key,value in _holdout_metadata(authorization,binding,include_binding=True).items():
+            if manifest.get(key) != value:
+                raise StatisticsError('holdout_manifest_authority_conflict_before_profit_read')
+        for field in ('baseline','variant','source_runs','signal_reports','instrument_assumptions',
+                      'instrument_file_sha256','cost_assumptions','cost_file_sha256','funding_inventory',
+                      'funding_inventory_hash','php_code_inventory','runner_code_sha256',
+                      'funding_diagnostic_policy','funding_path_policy','funding_mark_policy','b1_counters'):
+            if manifest.get(field) != binding[field]:
+                raise StatisticsError('holdout_manifest_input_conflict_before_profit_read')
+        if (manifest.get('start_ms') != start or manifest.get('end_ms') != w['end_ms']
+            or manifest.get('source_start_ms') != int(datetime.fromisoformat(w['source_start'].replace('Z','+00:00')).timestamp()*1000)
+            or manifest.get('cost_profile') != cost_profile or manifest.get('end_exclusive') is not True
+            or manifest.get('symbol_priority') != contract['symbols']):
+            raise StatisticsError('holdout_manifest_scope_conflict_before_profit_read')
+        identity = dict(contract['identities']['protocol_identity'])
+        from .portfolio_simulator import canonical_hash
+        identity['signal_code_hash'] = canonical_hash(binding['signal_reports'][0]['code_sha256'])
+        protocol = {'identity':identity,'variants':contract['variants'],'cutoff':w['end']}
+        registration = {'phase':'holdout','variant_id':variant_id,'cost_profile':cost_profile}
+        return _verify_bound_campaign(Path(root),protocol,registration,binding,'holdout',start,w['end_ms'],
+            manifest,manifest_sha,authorization=authorization)
+    except StatisticsError:
+        raise
+    except (OSError,ValueError,KeyError,TypeError,OverflowError) as exc:
+        raise StatisticsError('invalid_or_missing_holdout_campaign_evidence') from exc
+
+
+def _verify_bound_campaign(root, protocol, registration, binding, phase, start, end,
+                           manifest, manifest_sha, *, authorization=None):
+    """Identical ledger arithmetic and campaign reconciliation after scope guards."""
+    from .experiments import hash_bytes, canonical_bytes, WINDOWS
+    from .portfolio_simulator import canonical_hash, SYMBOLS
     summary,summary_sha = _read_json(root/'summary.json')
     status,_ = _read_json(root/'status.json')
     if (manifest['schema_version'] != 'research-campaign-manifest.v1'
@@ -446,9 +540,17 @@ def _verify_campaign(root: Path, protocol: dict, registration: dict) -> dict:
             or summary['source_quality']['funding_diagnostic_policy'] != binding['funding_diagnostic_policy']):
         raise StatisticsError('campaign_frozen_funding_input_or_policy_conflict')
     identity = protocol['identity']
-    frozen_data = {p:protocol['phase_bindings'][p]['source_runs'] for p in WINDOWS}
-    if hash_bytes(canonical_bytes(frozen_data)) != identity['dataset_hash']:
-        raise StatisticsError('protocol_dataset_identity_conflict')
+    if authorization is None:
+        frozen_data = {p:protocol['phase_bindings'][p]['source_runs'] for p in WINDOWS}
+        if hash_bytes(canonical_bytes(frozen_data)) != identity['dataset_hash']:
+            raise StatisticsError('protocol_dataset_identity_conflict')
+    else:
+        from .campaign import _holdout_metadata
+        expected_metadata = _holdout_metadata(authorization,binding)
+        if any(doc.get(k) != v for doc in (summary,status) for k,v in expected_metadata.items()):
+            raise StatisticsError('holdout_terminal_authority_conflict')
+        if any(summary.get(k) != binding[k] for k in ('b1_counters','source_candles','phase_batches')):
+            raise StatisticsError('holdout_physical_input_denominator_conflict')
     if any(canonical_hash(report['code_sha256']) != identity['signal_code_hash'] for report in manifest['signal_reports']):
         raise StatisticsError('signal_code_identity_conflict')
     baseline = manifest['baseline']
@@ -466,7 +568,8 @@ def _verify_campaign(root: Path, protocol: dict, registration: dict) -> dict:
     if set(costs['profiles'][profile]) != set(PROFILE_FIELDS):
         raise StatisticsError('cost_model_profile_shape_invalid')
     if (instruments['manifest_hash'] != identity['instrument_assumptions_hash']
-        or costs['assumption_hash'] != binding['cost_assumptions_hash']
+        or costs['assumption_hash'] != (binding['cost_assumptions_hash'] if authorization is None
+                                       else binding['cost_assumptions']['assumption_hash'])
         or canonical_hash(costs['profiles'][profile]) != identity[profile+'_cost_hash']):
         raise StatisticsError('assumption_protocol_identity_conflict')
     selected = next(row for row in protocol['variants'] if row['id'] == registration['variant_id'])
@@ -486,9 +589,13 @@ def _verify_campaign(root: Path, protocol: dict, registration: dict) -> dict:
     # Source venue belongs to plan evidence but is absent from the trade schema.
     sources = {symbol:{k:v for k,v in row.items() if k in ('dataset_id','dataset_sha256',
                'signal_run_id','signal_output_sha256')} for symbol,row in sources.items()}
-    result = analyze_ledgers(root,status['files'],symbols=SYMBOLS,start_ms=start,end_ms=end,
-        expected_identity=expected,expected_sources=sources,expected_cost_profile=profile,
-        expected_cost_model=costs['profiles'][profile],require_marked=True)
+    if authorization is None:
+        result = analyze_ledgers(root,status['files'],symbols=SYMBOLS,start_ms=start,end_ms=end,
+            expected_identity=expected,expected_sources=sources,expected_cost_profile=profile,
+            expected_cost_model=costs['profiles'][profile],require_marked=True)
+    else:
+        result = analyze_holdout_ledgers(root,status['files'],authorization=authorization,
+            variant_id=registration['variant_id'],cost_profile=profile)
     if (any(decimal(summary[field]) != decimal(result[field]) for field in (*COMPONENTS,'wallet_quote'))
         or summary['trades'] != result['closed_trades']
         or summary['admitted_plans'] != result['counts']['admitted']
