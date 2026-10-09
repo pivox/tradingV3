@@ -10,6 +10,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalMarketSnapshot;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalPriceObservation;
 use App\TradingCore\OrderPlan\Canonical\CanonicalTickSnapshot;
+use App\TradingCore\OrderPlan\Canonical\EntryZonePriceMath;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
@@ -38,6 +39,39 @@ final class CanonicalEntryZoneEngineTest extends TestCase
         self::assertEquals(new \DateTimeImmutable('2026-08-10T12:03:00+00:00'), $zone->expiresAt);
         self::assertSame($request->policy->configHash, $zone->configHash);
         self::assertCount(4, $zone->inputHashes);
+    }
+
+    public function testValueMathMatchesAuthenticatedLongAndShortZones(): void
+    {
+        self::assertTrue(class_exists(EntryZonePriceMath::class), 'Value-only entry math is missing.');
+        foreach (['long', 'short'] as $side) {
+            $request = $this->request(
+                side: $side,
+                candidatePrice: $side === 'long' ? 100.1 : 100.39,
+                atr: $side === 'long' ? 1.0 : 0.75,
+            );
+            $zone = $this->engine()->calculate($request);
+            self::assertSame([
+                'lower_price' => $zone->lowerPrice,
+                'upper_price' => $zone->upperPrice,
+                'entry_price' => $zone->entryPrice,
+            ], EntryZonePriceMath::calculate(
+                $request->policy->entryZone,
+                $side,
+                $request->anchor->value,
+                $request->atr->value,
+                $request->market->candidatePrice,
+                $request->tick->tickSize,
+            ));
+        }
+    }
+
+    public function testValueMathRejectsNonFiniteCandidateWithCanonicalReason(): void
+    {
+        self::assertTrue(class_exists(EntryZonePriceMath::class), 'Value-only entry math is missing.');
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_entry_zone_candidate_invalid');
+        EntryZonePriceMath::calculate($this->request()->policy->entryZone, 'long', 100.0, 1.0, NAN, 0.1);
     }
 
     public function testCalculatesShortAsymmetryAndQuantizesCandidateDown(): void
