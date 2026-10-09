@@ -832,6 +832,8 @@ def test_resume_bounds_auxiliary_files_before_read_bytes(tmp_path: Path,
       "200", True, "1", "100", "0"]],
     [[1791504000000, "100", "102", "99", "101", "2", 1791504059999,
       "200", 3.5, "1", "100", "0"]],
+    [["9" * 5000, "100", "102", "99", "101", "2", 1791504059999,
+      "200", 3, "1", "100", "0"]],
 ])
 def test_rest_malformed_rows_are_recorded_invalid(tmp_path: Path, payload: object) -> None:
     now = datetime(2026, 10, 9, 0, 2, tzinfo=UTC)

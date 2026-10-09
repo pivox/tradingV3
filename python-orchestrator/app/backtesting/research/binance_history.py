@@ -110,7 +110,10 @@ def _integer(value: object) -> int:
     if type(value) is int:
         return value
     if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
-        return int(value)
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise ArchiveError("integer field exceeds limit") from exc
     raise ArchiveError("integer field required")
 
 
