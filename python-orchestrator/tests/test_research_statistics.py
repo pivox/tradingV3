@@ -121,7 +121,10 @@ def campaign_fixture(root):
     files = write_ledgers(root,[])
     baseline = {'setup_hash':'a'*64,'config_hash':'b'*64,'condition_catalog_hash':'c'*64,'snapshot_hash':'d'*64}
     instruments = {'synthetic':True}; instruments['manifest_hash'] = canonical_hash(instruments)
-    costs = {'profiles':{'baseline':{'synthetic':'base'},'adverse':{'synthetic':'adverse'}}}
+    rates = {field:0 for field in ('entry_spread_rate','stop_spread_rate','target_spread_rate',
+        'entry_slippage_rate','stop_slippage_rate','target_slippage_rate')}
+    costs = {'profiles':{'baseline':{**rates,'funding_provision_rate':0.0001},
+                         'adverse':{**rates,'funding_provision_rate':0.0002}}}
     costs['assumption_hash'] = canonical_hash(costs)
     source_runs = [{'symbol':s,'source':{'dataset_id':'synthetic','dataset_sha256':'e'*64},
         'signal_run_id':'synthetic','signal_output_sha256':'f'*64} for s in SYMBOLS]
@@ -138,7 +141,6 @@ def campaign_fixture(root):
         instrument_assumptions_hash=instruments['manifest_hash'],
         baseline_cost_hash=canonical_hash(costs['profiles']['baseline']),
         adverse_cost_hash=canonical_hash(costs['profiles']['adverse']))
-    protocol = make_protocol(identity,phase_bindings=bindings)
     variant = {'id':'baseline','diff':[]}
     variant['variant_hash'] = canonical_hash({'schema_version':'research-variant.v1',**variant,
         'base_setup_hash':baseline['setup_hash'],'base_config_hash':baseline['config_hash'],
@@ -146,6 +148,9 @@ def campaign_fixture(root):
     funding = {'coverage':'observed_only','evidence_complete':True,
         'symbols':[{'symbol':s,'count':0,'evidence_complete':True,'continuity':'declared_interval_consistent'} for s in SYMBOLS]}
     funding['inventory_hash'] = canonical_hash(funding)
+    binding.update(funding_inventory_hash=funding['inventory_hash'],
+                   funding_diagnostic_policy='synthetic_funding_diagnostic.v1')
+    protocol = make_protocol(identity,phase_bindings=bindings)
     manifest = {'schema_version':'research-campaign-manifest.v1','run_id':'synthetic',
         'phase':'training','start_ms':START,'end_ms':1735689600000,'end_exclusive':True,
         'symbol_priority':list(SYMBOLS),'variant':variant,'cost_profile':'baseline','baseline':baseline,
@@ -163,6 +168,7 @@ def campaign_fixture(root):
         'phase_batches':(1735689600000-START)//60000,'source_candles':(1735689600000-START)//60000*10,
         'b1_counters':{'evaluated_ticks':200,'passed_rules':0,'failed_rules':200},
         'source_quality':{'candles':'verified_complete','funding_inventory':funding,
+            'funding_diagnostic_policy':binding['funding_diagnostic_policy'],
             'kernel_funding_coverage':'verified_complete'},'reconciliation':{'status':'verified'}}
     (root/'summary.json').write_bytes(canonical_bytes(summary))
     status = {'schema_version':'research-campaign-status.v1','run_id':'synthetic','status':'complete',
@@ -462,3 +468,38 @@ def test_completed_evidence_counters_and_marked_metric_bounds(tmp_path,mutation)
         summary['maximum_drawdown_quote'] = '-1'
     rehash_campaign(tmp_path,summary=summary)
     with pytest.raises(StatisticsError): verify_campaign(tmp_path,protocol,registration)
+
+
+def alter_funding_input(root,field):
+    manifest = json.loads((root/'manifest.json').read_bytes())
+    summary = json.loads((root/'summary.json').read_bytes())
+    if field == 'funding_diagnostic_policy':
+        manifest[field] = 'different_diagnostic_policy.v1'
+        summary['source_quality'][field] = manifest[field]
+    else:
+        funding = manifest['funding_inventory']
+        funding[field] = 'sha256:'+'9'*64 if field.endswith(('hash','sha256')) else 'different_frozen_input'
+        funding['inventory_hash'] = canonical_hash({k:v for k,v in funding.items() if k != 'inventory_hash'})
+        manifest['funding_inventory_hash'] = funding['inventory_hash']
+        summary['source_quality']['funding_inventory'] = funding
+    rehash_campaign(root,manifest,summary)
+
+
+@pytest.mark.parametrize('field',['supplement_status_sha256','rest_interval_hypothesis','rest_hypothesis_hash','sources','funding_diagnostic_policy'])
+def test_rehashed_funding_inputs_cannot_escape_frozen_protocol(tmp_path,field):
+    protocol,registration = campaign_fixture(tmp_path)
+    alter_funding_input(tmp_path,field)
+    with pytest.raises(StatisticsError,match='funding'):
+        verify_campaign(tmp_path,protocol,registration)
+
+
+def test_large_c1_manifest_maps_are_read_with_explicit_64mib_bound(tmp_path):
+    from app.backtesting.research import statistics
+    code = {'synthetic-vendor/'+('x'*192)+f'/{i:05}.php':'a'*64 for i in range(65536)}
+    path = tmp_path/'manifest.json'
+    data = canonical_bytes({'php_code_inventory':{'scope':'synthetic','files':code}})
+    assert len(data) > 16*1024**2
+    path.write_bytes(data)
+    value,digest = statistics._read_json(path)
+    assert value['php_code_inventory']['files'] == code
+    assert digest == hash_bytes(data)

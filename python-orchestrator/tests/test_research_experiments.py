@@ -9,10 +9,11 @@ import pytest
 from app.backtesting.research.experiments import (
     ExperimentError, ExperimentRegistry, make_protocol, screening_reasons, rank_candidates,
     schedule_batch, freeze_selection, verify_freeze, write_reports,
+    hash_bytes, canonical_bytes,
 )
 from app.backtesting.research.portfolio_simulator import SYMBOLS
 from app.backtesting.research.portfolio_simulator import canonical_hash
-from tests.test_research_statistics import campaign_fixture, write_ledgers, rehash_campaign, FIELDS
+from tests.test_research_statistics import campaign_fixture, write_ledgers, rehash_campaign, FIELDS, alter_funding_input, read_rows
 
 HASH = 'a' * 64
 IDENTITY = {k: HASH for k in ('dataset_hash', 'signal_code_hash', 'research_code_hash',
@@ -21,7 +22,8 @@ IDENTITY = {k: HASH for k in ('dataset_hash', 'signal_code_hash', 'research_code
 
 
 def bound_protocol():
-    binding = {'source_runs':[],'signal_reports':[], 'runner_code_sha256':{},'cost_assumptions_hash':HASH}
+    binding = {'source_runs':[],'signal_reports':[], 'runner_code_sha256':{},'cost_assumptions_hash':HASH,
+        'funding_inventory_hash':HASH,'funding_diagnostic_policy':'synthetic_funding_diagnostic.v1'}
     return make_protocol(IDENTITY,phase_bindings={p:binding for p in ('training','validation')})
 
 
@@ -286,6 +288,7 @@ def full_fixture_runner(protocol):
                        'signal_output_sha256':source['signal_output_sha256']}
             at = (1704067200000 if phase == 'training' and index >= 50 else start)+(index%50+1)*60000
             plan = {'schema_version':'research-plan.v1',**identity,**sources,'symbol':symbol,
+                'cost_profile':profile,'cost_model':manifest['cost_assumptions']['profiles'][profile],
                 'entry_price':100.0,'quantity':2.0,'instrument_math':{'contract_size':1.0},
                 'risk_components_quote':{'total_stop_loss':2.0},'evaluated_ms':at-60000}
             plan['plan_hash'] = canonical_hash(plan); key = plan['plan_hash']
@@ -542,3 +545,107 @@ def test_report_refuses_unverified_complete_statistics(tmp_path):
         row = registry.register('baseline','baseline','training')
         registry.finish(row['attempt_id'],{'state':'complete','statistics':metrics()})
         with pytest.raises(ValueError): write_reports(registry,tmp_path/'report')
+
+
+def test_rehashed_funding_cannot_be_reused_or_selected(tmp_path):
+    from app.backtesting.research.statistics import StatisticsError
+    seed = tmp_path/'seed'; seed.mkdir(); protocol,_ = campaign_fixture(seed)
+    with ExperimentRegistry(tmp_path/'private',protocol,min_free_bytes=0) as registry:
+        rows = schedule_batch(registry,full_fixture_runner(protocol))
+        attempt = next(a for a in registry.attempts() if a['terminal']['state'] == 'complete')
+        root = registry.root/'attempts'/attempt['registration']['attempt_id']/'campaign'
+        alter_funding_input(root,'rest_interval_hypothesis')
+        with pytest.raises(StatisticsError,match='frozen_funding'):
+            schedule_batch(registry,lambda *_: pytest.fail('reuse must not run a new campaign'))
+        with pytest.raises(StatisticsError,match='frozen_funding'):
+            freeze_selection(registry,rows)
+        assert not (registry.root/'selection-freeze.json').exists()
+        assert len(registry.attempts()) == 28
+
+
+def alter_plan_scenario(root,mutation):
+    rows = read_rows(root)
+    references = {}
+    for kind,row in rows:
+        if kind == 'plans':
+            old = row['plan_hash']
+            if mutation == 'profile_label':
+                row['cost_profile'] = 'baseline'
+            elif mutation == 'missing_profile':
+                row.pop('cost_profile')
+            elif mutation == 'missing_cost_field':
+                row['cost_model'].pop('funding_provision_rate')
+            else:
+                row['cost_model'][mutation] = '0.0001'
+            new = canonical_hash({k:v for k,v in row.items() if k != 'plan_hash'})
+            references[old] = new
+    for _,row in rows:
+        if 'plan_hash' in row:
+            row['plan_hash'] = references[row['plan_hash']]
+    status = json.loads((root/'status.json').read_bytes())
+    status['files'] = write_ledgers(root,rows)
+    rehash_campaign(root,status=status)
+
+
+@pytest.mark.parametrize('mutation',['profile_label','missing_profile','missing_cost_field','funding_provision_rate',
+    'entry_spread_rate','stop_spread_rate','target_spread_rate','entry_slippage_rate','stop_slippage_rate','target_slippage_rate'])
+def test_adverse_plan_scenario_bound_beyond_shared_manifest_hash(tmp_path,mutation):
+    from app.backtesting.research.statistics import StatisticsError, verify_campaign
+    seed = tmp_path/'seed'; seed.mkdir(); protocol,_ = campaign_fixture(seed)
+    registration = {'phase':'training','variant_id':'baseline','cost_profile':'adverse',
+        'protocol_hash':hash_bytes(canonical_bytes(protocol))}
+    root = tmp_path/'adverse'; full_fixture_runner(protocol)(registration,root)
+    assert verify_campaign(root,protocol,registration)['closed_trades'] == 100
+    alter_plan_scenario(root,mutation)
+    with pytest.raises(StatisticsError,match='cost_profile|cost_model'):
+        verify_campaign(root,protocol,registration)
+
+
+def test_rehashed_wrong_scenario_cannot_be_reused_or_selected(tmp_path):
+    from app.backtesting.research.statistics import StatisticsError
+    seed = tmp_path/'seed'; seed.mkdir(); protocol,_ = campaign_fixture(seed)
+    with ExperimentRegistry(tmp_path/'private',protocol,min_free_bytes=0) as registry:
+        rows = schedule_batch(registry,full_fixture_runner(protocol))
+        attempt = next(a for a in registry.attempts() if a['registration']['variant_id'] == 'baseline'
+                       and a['registration']['phase'] == 'training' and a['registration']['cost_profile'] == 'adverse')
+        root = registry.root/'attempts'/attempt['registration']['attempt_id']/'campaign'
+        alter_plan_scenario(root,'profile_label')
+        with pytest.raises(StatisticsError,match='cost_profile'):
+            schedule_batch(registry,lambda *_: pytest.fail('reuse must not run a new campaign'))
+        with pytest.raises(StatisticsError,match='cost_profile'):
+            freeze_selection(registry,rows)
+        assert not (registry.root/'selection-freeze.json').exists()
+        assert len(registry.attempts()) == 28
+
+
+def test_large_frozen_code_maps_protocol_publishes_and_reopens(tmp_path):
+    code = {'synthetic-vendor/'+('x'*180)+f'/{i:05}.php':'a'*64 for i in range(8192)}
+    bindings = bound_protocol()['phase_bindings']
+    for phase,binding in bindings.items():
+        binding['signal_reports'] = [{'root':str(tmp_path/f'{phase}-group-{group}'),
+            'report_sha256':'b'*64,'symbols':list(SYMBOLS[group*5:(group+1)*5]),'code_sha256':code}
+            for group in range(2)]
+    protocol = make_protocol(IDENTITY,phase_bindings=bindings)
+    assert len(canonical_bytes(protocol)) > 4*1024**2
+    with ExperimentRegistry(tmp_path/'large-private',protocol,min_free_bytes=0) as registry:
+        registry.register('baseline','baseline','training')
+    with ExperimentRegistry(tmp_path/'large-private',protocol,min_free_bytes=0) as registry:
+        assert len(registry.attempts()) == 1
+
+
+def test_protocol_writer_checks_matching_reader_size_limit_before_publication(tmp_path,monkeypatch):
+    from app.backtesting.research import experiments
+    monkeypatch.setattr(experiments,'MAX_PROTOCOL_BYTES',32,raising=False)
+    with pytest.raises(ExperimentError,match='json_capacity'):
+        with ExperimentRegistry(tmp_path/'private',bound_protocol(),min_free_bytes=0): pass
+    assert not (tmp_path/'private'/'protocol.json').exists()
+    assert not list((tmp_path/'private').glob('*.tmp'))
+
+
+@pytest.mark.parametrize('field,value',[('funding_inventory_hash',None),('funding_inventory_hash','invalid'),
+    ('funding_diagnostic_policy',None),('funding_diagnostic_policy','')])
+def test_funding_bindings_required_before_protocol_registration(field,value):
+    binding = bound_protocol()['phase_bindings']
+    binding['training'][field] = value
+    with pytest.raises(ExperimentError,match='funding_binding'):
+        make_protocol(IDENTITY,phase_bindings=binding)
