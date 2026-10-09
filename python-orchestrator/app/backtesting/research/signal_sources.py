@@ -220,6 +220,18 @@ def _decimal_text(value: object) -> str:
         raise SignalError("candle decimal invalid") from exc
     if not decimal.is_finite():
         raise SignalError("candle decimal nonfinite")
+    digits = len(decimal.as_tuple().digits)
+    exponent = decimal.as_tuple().exponent
+    if decimal.is_signed() or not isinstance(exponent, int):
+        raise SignalError("candle decimal invalid")
+    if exponent >= 0:
+        rendered_length = digits + exponent
+    elif digits > -exponent:
+        rendered_length = digits + 1
+    else:
+        rendered_length = 2 - exponent
+    if rendered_length > 64:
+        raise SignalError("candle decimal invalid")
     rendered = format(decimal, "f")
     if len(rendered) > 64 or rendered.startswith("-"):
         raise SignalError("candle decimal invalid")

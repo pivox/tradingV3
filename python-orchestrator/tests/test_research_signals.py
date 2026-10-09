@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import subprocess
 import sys
 import zipfile
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import pytest
@@ -15,6 +18,8 @@ from app.backtesting.research.binance_history import KLINE_HEADER, SOURCE, plan_
 from app.backtesting.research.signals import SignalError, run_signals, select_sources
 from app.backtesting.research import signals
 from app.backtesting.research import signal_sources
+from app.modern_trading_contracts import (CanonicalEffectiveConfigSnapshot,
+                                          calculate_config_hash, calculate_snapshot_hash)
 
 START = "2023-01-01T00:00:00Z"
 END = "2023-01-01T00:02:00Z"
@@ -83,8 +88,12 @@ def rest_dataset(root: Path) -> Path:
 
 
 FAKE_WORKER = r'''
-import json, os, sys, time
+import hashlib, json, os, sys, time
+from datetime import datetime, timezone
 mode = sys.argv[1] if len(sys.argv) > 1 else "ok"
+evidence = json.load(open(sys.argv[2])) if len(sys.argv) > 2 else None
+def digest(value):
+    return "sha256:" + hashlib.sha256(json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
 opened = None
 consumed = 0
 for line in sys.stdin:
@@ -100,49 +109,165 @@ for line in sys.stdin:
         if mode == "output_flood": print("x" * 3000, flush=True); sys.exit(0)
         acknowledgement = {"schema_version":"research-signal-opened.v1", "session_id":frame["session_id"],
               "source":{k:frame[k] for k in ("dataset_id","dataset_sha256","source_venue","source_network","market_type")},
-              "execution":{"mode_id":"day_trading","mode_version":"1.1.0","setup_id":"day_trading.trend_continuation.long","setup_version":"1.1.0","exchange":"fake","environment":"local","side":"long","execution_capability":"backtest"},
-              "baseline":{"config_hash":"sha256:fixture"},"effective_config_snapshot":{},"indicator_engine_version":"php_fallback_v1"}
+              "execution":evidence["execution"],
+              "baseline":evidence["baseline"],"effective_config_snapshot":evidence["snapshot"],"indicator_engine_version":"php_fallback_v1"}
         if mode == "badidentity": acknowledgement["source"]["source_venue"] = "okx"
         if mode == "badexec": acknowledgement["execution"]["mode_id"] = "forged"
         if mode == "badengine": acknowledgement["indicator_engine_version"] = "unknown"
+        if mode == "emptybaseline": acknowledgement["baseline"] = {}
+        if mode == "emptysnapshot": acknowledgement["effective_config_snapshot"] = {}
+        if mode == "badfilehash":
+            name = next(iter(acknowledgement["baseline"]["file_hashes"]))
+            acknowledgement["baseline"]["file_hashes"][name] = "sha256:" + "0"*64
+        if mode == "badsnapshothash": acknowledgement["effective_config_snapshot"]["snapshot_hash"] = "sha256:" + "0"*64
         print(json.dumps(acknowledgement), flush=True)
+        if mode == "error_frame":
+            print(json.dumps({"schema_version":"research-signal-error.v1","session_id":frame["session_id"],"reason_code":"fixture_failure"}),flush=True)
+            sys.exit(2)
+        if mode == "unknown_frame":
+            print(json.dumps({"schema_version":"unexpected.v1"}),flush=True)
+            sys.exit(0)
     elif schema == "research-signal-candles.v1":
         if mode == "stderr": sys.stderr.write("x" * 2000000); sys.stderr.flush()
         if mode == "timeout": time.sleep(5)
         consumed += len(frame["candles"])
         emitted = 0
-        if mode in ("boundary", "scored", "badtick", "badcontext", "badhash", "badpassed"):
+        if mode in ("boundary", "scored", "badtick", "badcontext", "badhash", "badpassed",
+                    "missing_symbol", "missing_contexts", "stale_context", "future_context",
+                    "forged_digest", "forged_trace_hash"):
+            tick = opened["end_ms"] if mode != "scored" else opened["start_ms"] + 60000
+            keys = ("close","rsi","ema_20","ema_50","ema_200","macd_hist","vwap","atr","adx",
+                    "ma9","ma21","bb_upper","bb_middle","bb_lower","ema","ema_prev","ema_200_slope",
+                    "macd","pullback_age_bars","volume_ratio","ma_21_plus_k_atr")
+            contexts = {}
+            for name,step in (("1m",60000),("5m",300000),("15m",900000),("1h",3600000),("4h",14400000)):
+                available = tick // step * step
+                context = {key:1 for key in keys}
+                context.update({"open_ms":available-step,"available_ms":available,
+                                "research_window_hash":"sha256:"+"d"*64,
+                                "adx":{"14":1,"15":1},"ema":{"9":1},"ema_prev":{"9":1},
+                                "macd":{"hist":1},"pullback_age_bars":None,"volume_ratio":None})
+                contexts[name] = context
+            trace = {"schema_version":"canonical-setup-rule-runtime.v1","sample":1}
             result = {"schema_version":"research-signal-result.v1","session_id":frame["session_id"],
                   "source":{k:opened[k] for k in ("dataset_id","dataset_sha256","source_venue","source_network","market_type")},
-                  "execution":{"mode_id":"day_trading","mode_version":"1.1.0","setup_id":"day_trading.trend_continuation.long","setup_version":"1.1.0","exchange":"fake","environment":"local","side":"long","execution_capability":"backtest"},
-                  "baseline":{"config_hash":"sha256:fixture"},"symbol":opened["symbol"],
-                  "evaluated_ms":opened["end_ms"],"passed":True,"contexts":{},
-                  "numeric_context_hash":"sha256:"+"a"*64,"trace_hash":"sha256:"+"b"*64,"result_hash":"sha256:"+"c"*64}
+                  "execution":evidence["execution"],
+                  "baseline":acknowledgement["baseline"],"symbol":opened["symbol"],
+                  "evaluated_ms":tick,"evaluated_at":datetime.fromtimestamp(tick/1000,timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z"),
+                  "passed":True,"reason_code":"sample_pass","contexts":contexts,"verdicts":{"sample":True},"trace":trace,
+                  "numeric_context_hash":"sha256:"+"a"*64,"trace_hash":digest(trace)}
             if mode == "badtick": result["evaluated_ms"] += 900000
-            if mode == "scored": result["evaluated_ms"] = opened["start_ms"] + 60000
-            if mode == "badcontext": result["contexts"] = {"1m":{"available_ms":opened["end_ms"]+1}}
-            if mode == "badhash": result["result_hash"] = "forged"
+            if mode == "badcontext": result["contexts"]["1m"]["available_ms"] = opened["end_ms"]+1
+            if mode == "missing_symbol": result.pop("symbol")
+            if mode == "missing_contexts": result["contexts"] = {}
+            if mode == "stale_context": result["contexts"]["5m"]["available_ms"] -= 300000
+            if mode == "future_context": result["contexts"]["4h"]["available_ms"] += 14400000
             if mode == "badpassed": result["passed"] = "true"
+            if mode == "forged_trace_hash": result["trace_hash"] = "sha256:" + "0"*64
+            result["result_hash"] = digest(result)
+            if mode == "badhash": result["result_hash"] = "forged"
+            if mode == "forged_digest": result["result_hash"] = "sha256:" + "c"*64
             print(json.dumps(result), flush=True)
             emitted = 1
         print(json.dumps({"schema_version":"research-signal-batch-accepted.v1","session_id":frame["session_id"],
-                          "consumed_candles":len(frame["candles"]) + int(mode == "badack"),"emitted_results":emitted}), flush=True)
+                          "consumed_candles":len(frame["candles"]) + int(mode == "badack"),"emitted_results":emitted + int(mode == "bad_ack_results")}), flush=True)
     elif schema == "research-signal-close.v1":
         if mode == "missing_summary": break
         end = opened["start_ms"] + consumed * 60000
         summary = {"schema_version":"research-signal-summary.v1","session_id":opened["session_id"],
              "source":{k:opened[k] for k in ("dataset_id","dataset_sha256","source_venue","source_network","market_type")},
-             "execution":{"mode_id":"day_trading","mode_version":"1.1.0","setup_id":"day_trading.trend_continuation.long","setup_version":"1.1.0","exchange":"fake","environment":"local","side":"long","execution_capability":"backtest"},
-             "baseline":{"config_hash":"sha256:fixture"},"symbol":opened["symbol"],"consumed_candles":consumed + int(mode == "badcount"),
-             "warmup_unavailable":0,"before_score_start":0,"evaluated_ticks":int(mode in ("boundary", "scored", "badtick", "badcontext", "badhash", "badpassed")),"passed_rules":int(mode in ("boundary", "scored", "badtick", "badcontext", "badhash", "badpassed")),"failed_rules":0,
+             "execution":evidence["execution"],
+             "baseline":acknowledgement["baseline"],"symbol":opened["symbol"],"consumed_candles":consumed + int(mode == "badcount"),
+             "warmup_unavailable":0,"before_score_start":0,"evaluated_ticks":int(mode in ("boundary", "scored", "badtick", "badcontext", "badhash", "badpassed", "missing_symbol", "missing_contexts", "stale_context", "future_context", "forged_digest", "forged_trace_hash")),"passed_rules":int(mode in ("boundary", "scored", "badtick", "badcontext", "badhash", "badpassed", "missing_symbol", "missing_contexts", "stale_context", "future_context", "forged_digest", "forged_trace_hash")),"failed_rules":0,
              "first_source_open_ms":opened["start_ms"],"last_source_open_ms":end-60000,
              "source_available_end_ms":end,"promised_end_ms":opened["end_ms"],
              "score_start_ms":opened["score_start_ms"],"completion":"partial" if mode == "partial" else "complete"}
         if mode == "summary_identity": summary["source"]["source_venue"] = "okx"
         if mode == "summary_baseline": summary["baseline"]["config_hash"] = "forged"
+        if mode == "summary_missing_symbol": summary.pop("symbol")
+        if mode == "summary_bool": summary["evaluated_ticks"] = False
+        if mode == "summary_extra": summary["unknown"] = True
         print(json.dumps(summary), flush=True)
         if mode == "extra": print("{}", flush=True)
 '''
+
+
+def _worker_evidence(app_dir: Path) -> dict:
+    template = Path(__file__).parent / "fixtures/backtesting/php-effective-config-snapshot.json"
+    snapshot = json.loads(template.read_text())
+    execution = {"mode_id": "day_trading", "mode_version": "1.1.0",
+                 "setup_id": "day_trading.trend_continuation.long", "setup_version": "1.1.0",
+                 "exchange": "fake", "environment": "local", "side": "long",
+                 "execution_capability": "backtest"}
+    snapshot["request"] = execution
+    snapshot["config"]["mode"].update({"mode_id": "day_trading", "mode_version": "1.1.0",
+                                          "risk": {"budget": 1}})
+    snapshot["config"]["setup"].update({"setup_id": execution["setup_id"],
+                                           "setup_version": "1.1.0"})
+    snapshot["config"]["environment"]["id"] = "local"
+    renames = {}
+    for index, layer in enumerate(snapshot["ordered_layers"]):
+        original = layer["path"]
+        path = app_dir / "config" / f"layer-{index}.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"layer {index}\n")
+        renames[original] = str(path)
+        layer["path"] = str(path)
+    snapshot["ordered_files"] = [renames[path] for path in snapshot["ordered_files"]]
+    for layer in snapshot["provenance"].values():
+        layer["path"] = renames[layer["path"]]
+    snapshot["config_hash"] = calculate_config_hash(snapshot["config"], snapshot["condition_catalog_hash"])
+    snapshot["snapshot_hash"] = calculate_snapshot_hash(snapshot)
+    CanonicalEffectiveConfigSnapshot.model_validate(snapshot)
+    catalog = app_dir / "config/catalog.yaml"
+    catalog.write_text("catalog fixture\n")
+    files = [*snapshot["ordered_files"], str(catalog)]
+    baseline = {"config_hash": snapshot["config_hash"],
+                "condition_catalog_hash": snapshot["condition_catalog_hash"],
+                "snapshot_hash": snapshot["snapshot_hash"], "setup_hash": "a" * 64,
+                "file_hashes": {name: "sha256:" + hashlib.sha256(Path(name).read_bytes()).hexdigest()
+                                for name in files},
+                "mode_risk": snapshot["config"]["mode"]["risk"]}
+    return {"execution": execution, "baseline": baseline, "snapshot": snapshot}
+
+
+def fake_worker(app_dir: Path, mode: str = "ok") -> tuple[str, ...]:
+    path = app_dir / "fake-worker-evidence.json"
+    path.write_text(json.dumps(_worker_evidence(app_dir)))
+    return (sys.executable, "-c", FAKE_WORKER, mode, str(path))
+
+
+def opened_fixture(app_dir: Path, selection: object) -> dict:
+    evidence = _worker_evidence(app_dir)
+    return {"schema_version": "research-signal-opened.v1", "session_id": "session",
+            "source": {"dataset_id": "research-" + selection.dataset_sha256[:24],
+                       "dataset_sha256": selection.dataset_sha256, "source_venue": "binance_usdm",
+                       "source_network": "mainnet", "market_type": "perpetual"},
+            "execution": evidence["execution"], "baseline": evidence["baseline"],
+            "effective_config_snapshot": evidence["snapshot"],
+            "indicator_engine_version": "php_fallback_v1"}
+
+
+def result_fixture(tick: int) -> dict:
+    contexts = {}
+    for timeframe, step in signals.TIMEFRAME_MS.items():
+        available = tick // step * step
+        item = {key: 1 for key in signals.CONTEXT_FIELDS}
+        item.update({"open_ms": available - step, "available_ms": available,
+                     "research_window_hash": "sha256:" + "d" * 64,
+                     "adx": {"14": 1}, "ema": {"9": 1}, "ema_prev": {"9": 1},
+                     "macd": {"hist": 1}, "pullback_age_bars": None, "volume_ratio": None})
+        contexts[timeframe] = item
+    trace = {"schema_version": "canonical-setup-rule-runtime.v1", "sample": 1}
+    frame = {"schema_version": "research-signal-result.v1", "session_id": "session",
+             "source": {"dataset_id": "sample"}, "execution": {"mode_id": "day_trading"},
+             "baseline": {"config_hash": "sample"}, "symbol": "BTCUSDT",
+             "evaluated_ms": tick, "evaluated_at": datetime.fromtimestamp(tick / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z"),
+             "passed": False, "reason_code": "sample_reject", "numeric_context_hash": "sha256:" + "a" * 64,
+             "contexts": contexts, "trace_hash": signals._sha256_canonical(trace),
+             "verdicts": {"sample": False}, "trace": trace}
+    frame["result_hash"] = signals._sha256_canonical(frame)
+    return frame
 
 
 def test_selects_complete_candle_subset_from_partial_global_manifest(tmp_path: Path) -> None:
@@ -188,17 +313,18 @@ def test_rejects_bad_selected_archive(tmp_path: Path, mutate: str) -> None:
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(SignalError):
         run_signals(root, tmp_path / "out", tmp_path, START, END, START,
-                    ("BTCUSDT",), worker_argv=(sys.executable, "-c", FAKE_WORKER))
+                    ("BTCUSDT",), worker_argv=fake_worker(tmp_path))
 
 
 def test_fake_worker_streams_and_reports_private_outputs(tmp_path: Path) -> None:
     root = dataset(tmp_path / "dataset")
     out = tmp_path / "out"
     report = run_signals(root, out, tmp_path, START, END, START, ("BTCUSDT",),
-                         worker_argv=(sys.executable, "-c", FAKE_WORKER))
+                         worker_argv=fake_worker(tmp_path))
     assert report["status"] == "complete"
     assert report["symbols"]["BTCUSDT"]["source_candles"] == 2
     assert report["symbols"]["BTCUSDT"]["evaluated_ticks"] == 0
+    assert report["symbols"]["BTCUSDT"]["effective_config_snapshot"] == _worker_evidence(tmp_path)["snapshot"]
     assert report["totals"]["source_candles"] == 2
     assert report["totals"]["scored_evaluations"] == 0
     assert report["totals"]["elapsed_seconds"] > 0
@@ -207,7 +333,7 @@ def test_fake_worker_streams_and_reports_private_outputs(tmp_path: Path) -> None
     assert (out / "report.json").stat().st_mode & 0o777 == 0o600
     with pytest.raises(SignalError):
         run_signals(root, out, tmp_path, START, END, START, ("BTCUSDT",),
-                    worker_argv=(sys.executable, "-c", FAKE_WORKER))
+                    worker_argv=fake_worker(tmp_path))
 
 
 @pytest.mark.parametrize("tamper", ["none", "hash", "url", "rows"])
@@ -230,7 +356,7 @@ def test_rest_payload_and_provenance(tmp_path: Path, tamper: str) -> None:
         page["size"] = len(altered)
     manifest_path.write_text(json.dumps(manifest))
     invocation = lambda: run_signals(root, tmp_path / "out", tmp_path, START, END, START,
-                                     ("BTCUSDT",), worker_argv=(sys.executable, "-c", FAKE_WORKER))
+                                     ("BTCUSDT",), worker_argv=fake_worker(tmp_path))
     if tamper == "none":
         assert invocation()["status"] == "complete"
     else:
@@ -241,14 +367,18 @@ def test_rest_payload_and_provenance(tmp_path: Path, tamper: str) -> None:
 @pytest.mark.parametrize("mode", ["early", "timeout", "stderr", "badopen", "output_flood",
                                   "missing_summary", "partial", "extra", "badjson", "badframe",
                                   "longline", "badidentity", "badexec", "badengine",
-                                  "badack", "badcount", "summary_identity", "summary_baseline"])
+                                  "badack", "badcount", "summary_identity", "summary_baseline",
+                                  "emptybaseline", "emptysnapshot", "badfilehash", "badsnapshothash",
+                                  "summary_missing_symbol", "summary_bool", "summary_extra",
+                                  "error_frame", "unknown_frame", "bad_ack_results"])
 def test_worker_failure_retains_partial_report(tmp_path: Path, mode: str) -> None:
     root = dataset(tmp_path / "dataset")
     out = tmp_path / "out"
     with pytest.raises(SignalError):
         run_signals(root, out, tmp_path, START, END, START, ("BTCUSDT",),
-                    worker_argv=(sys.executable, "-c", FAKE_WORKER, mode), wall_timeout=0.5,
-                    max_stderr_bytes=1024, max_output_bytes=2048)
+                    worker_argv=fake_worker(tmp_path, mode), wall_timeout=0.5,
+                    max_stderr_bytes=1024,
+                    max_output_bytes=2048 if mode == "output_flood" else 500_000)
     report = json.loads((out / "report.json").read_text())
     assert report["status"] == "failed"
     assert not (out / "BTCUSDT.results.ndjson").exists()
@@ -278,7 +408,7 @@ def test_boundary_worker_frame_separates_diagnostic_file(tmp_path: Path,
     monkeypatch.setattr(signals, "_first_evaluable_ms", lambda unused: 1672531320000)
     out = tmp_path / "out"
     report = run_signals(root, out, tmp_path, START, END, START, ("BTCUSDT",),
-                         worker_argv=(sys.executable, "-c", FAKE_WORKER, "boundary"))
+                         worker_argv=fake_worker(tmp_path, "boundary"))
     symbol = report["symbols"]["BTCUSDT"]
     assert symbol["evaluated_ticks"] == 1
     assert symbol["scored_evaluations"] == 0
@@ -296,7 +426,7 @@ def test_scored_worker_result_is_not_boundary(tmp_path: Path,
     monkeypatch.setattr(signals, "_first_evaluable_ms", lambda unused: 1672531260000)
     out = tmp_path / "out"
     report = run_signals(root, out, tmp_path, START, END, START, ("BTCUSDT",),
-                         worker_argv=(sys.executable, "-c", FAKE_WORKER, "scored"))
+                         worker_argv=fake_worker(tmp_path, "scored"))
     symbol = report["symbols"]["BTCUSDT"]
     assert symbol["scored_evaluations"] == 1
     assert symbol["scored_passed_rules"] == 1
@@ -305,7 +435,9 @@ def test_scored_worker_result_is_not_boundary(tmp_path: Path,
     assert json.loads((out / "BTCUSDT.results.ndjson").read_text())["evaluated_ms"] == 1672531260000
 
 
-@pytest.mark.parametrize("mode", ["badtick", "badcontext", "badhash", "badpassed"])
+@pytest.mark.parametrize("mode", ["badtick", "badcontext", "badhash", "badpassed",
+                                  "missing_symbol", "missing_contexts", "stale_context",
+                                  "future_context", "forged_digest", "forged_trace_hash"])
 def test_rejects_forged_result_frame(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                      mode: str) -> None:
     root = dataset(tmp_path / "dataset")
@@ -315,7 +447,7 @@ def test_rejects_forged_result_frame(tmp_path: Path, monkeypatch: pytest.MonkeyP
     out = tmp_path / "out"
     with pytest.raises(SignalError):
         run_signals(root, out, tmp_path, START, END, START, ("BTCUSDT",),
-                    worker_argv=(sys.executable, "-c", FAKE_WORKER, mode))
+                    worker_argv=fake_worker(tmp_path, mode))
     assert json.loads((out / "report.json").read_text())["status"] == "failed"
 
 
@@ -325,7 +457,7 @@ def test_rejects_unsafe_invocation_before_worker(tmp_path: Path, case: str) -> N
     root = dataset(tmp_path / "dataset")
     out = tmp_path / "out"
     symbols = ("BTCUSDT",)
-    worker = (sys.executable, "-c", FAKE_WORKER)
+    worker = fake_worker(tmp_path)
     start = START
     if case == "bad_symbol":
         symbols = ("NOTUSDT",)
@@ -436,7 +568,7 @@ def test_rest_candle_validation_fails_closed(tmp_path: Path, malformed: str) -> 
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(SignalError):
         run_signals(root, tmp_path / "out", tmp_path, START, END, START,
-                    ("BTCUSDT",), worker_argv=(sys.executable, "-c", FAKE_WORKER))
+                    ("BTCUSDT",), worker_argv=fake_worker(tmp_path))
 
 
 @pytest.mark.parametrize("case", ["checksum", "manifest_hash", "manifest_size", "duplicate_csv",
@@ -475,7 +607,7 @@ def test_archive_evidence_revalidated_before_worker(tmp_path: Path, case: str) -
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(SignalError):
         run_signals(root, tmp_path / "out", tmp_path, START, END, START,
-                    ("BTCUSDT",), worker_argv=(sys.executable, "-c", FAKE_WORKER))
+                    ("BTCUSDT",), worker_argv=fake_worker(tmp_path))
 
 
 @pytest.mark.parametrize("case", ["invalid_json", "empty", "too_many", "missing_final", "gap",
@@ -511,7 +643,7 @@ def test_rest_page_shape_and_contiguity(tmp_path: Path, case: str) -> None:
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(SignalError):
         run_signals(root, tmp_path / "out", tmp_path, START, END, START,
-                    ("BTCUSDT",), worker_argv=(sys.executable, "-c", FAKE_WORKER))
+                    ("BTCUSDT",), worker_argv=fake_worker(tmp_path))
 
 
 def test_frame_batch_partition_and_line_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -555,14 +687,18 @@ def test_missing_default_php_worker_fails_before_output(tmp_path: Path) -> None:
 
 
 def test_code_hashes_require_all_bound_worker_files(tmp_path: Path) -> None:
-    with pytest.raises(SignalError, match="worker or runner code unavailable"):
+    with pytest.raises(SignalError, match="required worker source unavailable"):
         signals._code_hashes(tmp_path, fake_worker=False)
     for name in signals.CODE_FILES:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("<?php // isolated test fixture")
+    for name in ("bin/console", "composer.json", "composer.lock", "vendor/composer/installed.json"):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture")
     hashes = signals._code_hashes(tmp_path, fake_worker=False)
-    assert len(hashes) == 2 + len(signals.CODE_FILES)
+    assert len(hashes) == 4 + 4 + len(signals.CODE_FILES)
 
 
 def test_private_output_rejects_symlink_parent_missing_parent_and_dataset(tmp_path: Path) -> None:
@@ -572,6 +708,63 @@ def test_private_output_rejects_symlink_parent_missing_parent_and_dataset(tmp_pa
     for candidate in (linked / "out", tmp_path / "missing" / "out", root / "nested", Path.home()):
         with pytest.raises(SignalError):
             signals._private_output(candidate, root)
+
+
+@pytest.mark.parametrize("marker", ["directory", "file", "symlink"])
+def test_private_output_rejects_other_repository_ancestors(tmp_path: Path, marker: str) -> None:
+    root = dataset(tmp_path / "dataset")
+    other = tmp_path / "other-repository"
+    nested = other / "nested"
+    nested.mkdir(parents=True)
+    git_marker = other / ".git"
+    if marker == "directory":
+        git_marker.mkdir()
+    elif marker == "file":
+        git_marker.write_text("gitdir: elsewhere")
+    else:
+        git_marker.symlink_to(root)
+    with pytest.raises(SignalError, match="repositor"):
+        signals._private_output(nested / "new-output", root)
+    assert not (nested / "new-output").exists()
+
+
+def test_decimal_exponent_rejected_before_fixed_point_rendering(monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+    original = builtins.format
+    def guard(value: object, spec: str = "") -> str:
+        if spec == "f":
+            raise AssertionError("unsafe fixed-point expansion")
+        return original(value, spec)
+    with monkeypatch.context() as patch:
+        patch.setattr(builtins, "format", guard)
+        with pytest.raises(SignalError):
+            signal_sources._decimal_text("1e10000000")
+
+
+def test_code_lineage_includes_calculator_runtime_and_parser(tmp_path: Path) -> None:
+    for name in signals.CODE_FILES:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("<?php // fixture")
+    source = tmp_path / "src/TradingCore/Backtesting/Indicator/CanonicalPhpIndicatorCalculator.php"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("<?php // calculator")
+    config = tmp_path / "config/services.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("services: {}")
+    dependency = tmp_path / "vendor/example/runtime.php"
+    dependency.parent.mkdir(parents=True, exist_ok=True)
+    dependency.write_text("<?php // dependency")
+    for name in ("bin/console", "composer.json", "composer.lock", "vendor/composer/installed.json"):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture")
+    hashes = signals._code_hashes(tmp_path, fake_worker=False)
+    assert str(source) in hashes
+    assert str(config) in hashes
+    assert str(dependency) in hashes
+    assert str(tmp_path / "bin/console") in hashes
+    assert str(Path(signals.__file__).with_name("binance_history.py")) in hashes
 
 
 def test_time_math_warmup_before_score_and_boundary(tmp_path: Path) -> None:
@@ -719,3 +912,164 @@ def test_nonexistent_worker_executable_preserves_failed_report(tmp_path: Path) -
         run_signals(root, out, tmp_path, START, END, START, ("BTCUSDT",),
                     worker_argv=(str(tmp_path / "missing-executable"),))
     assert json.loads((out / "report.json").read_text())["status"] == "failed"
+
+
+@pytest.mark.parametrize("fault", ["open_symbol", "snapshot_request", "snapshot_hash", "empty_baseline",
+                                    "risk", "setup_hash", "baseline_hash", "files_missing",
+                                    "file_hash_type", "file_relative", "file_outside", "file_absent",
+                                    "file_symlink", "file_changed", "file_count"])
+def test_open_evidence_rejects_forged_baseline_and_files(tmp_path: Path, fault: str) -> None:
+    root = dataset(tmp_path / "dataset")
+    selection = select_sources(root, START, END, START, "BTCUSDT")
+    frame = opened_fixture(tmp_path, selection)
+    snapshot, baseline = frame["effective_config_snapshot"], frame["baseline"]
+    if fault == "open_symbol":
+        frame["symbol"] = "BTCUSDT"
+    elif fault == "snapshot_request":
+        snapshot["request"]["mode_id"] = "scalping"
+    elif fault == "snapshot_hash":
+        snapshot["snapshot_hash"] = "sha256:" + "0" * 64
+    elif fault == "empty_baseline":
+        frame["baseline"] = {}
+    elif fault == "risk":
+        baseline["mode_risk"] = {"budget": 2}
+    elif fault == "setup_hash":
+        baseline["setup_hash"] = "bad"
+    elif fault == "baseline_hash":
+        baseline["config_hash"] = "sha256:" + "0" * 64
+    elif fault == "files_missing":
+        baseline["file_hashes"] = {}
+    elif fault == "file_hash_type":
+        first = next(iter(baseline["file_hashes"]))
+        baseline["file_hashes"][first] = 42
+    elif fault == "file_relative":
+        first = next(iter(baseline["file_hashes"]))
+        baseline["file_hashes"]["relative.yaml"] = baseline["file_hashes"].pop(first)
+    elif fault == "file_outside":
+        first = next(iter(baseline["file_hashes"]))
+        baseline["file_hashes"][str(tmp_path.parent / "outside.yaml")] = baseline["file_hashes"].pop(first)
+    elif fault == "file_absent":
+        Path(next(iter(baseline["file_hashes"]))).unlink()
+    elif fault == "file_symlink":
+        first = Path(next(iter(baseline["file_hashes"])))
+        moved = first.with_name("saved.yaml")
+        first.rename(moved)
+        first.symlink_to(moved)
+    elif fault == "file_changed":
+        Path(next(iter(baseline["file_hashes"]))).write_text("changed")
+    else:
+        baseline["file_hashes"][str(tmp_path / "extra.yaml")] = "sha256:" + "a" * 64
+    with pytest.raises(SignalError):
+        signals._validate_opened(frame, "session", selection, tmp_path)
+
+
+@pytest.mark.parametrize("fault", ["shape", "timestamp", "no_contexts", "missing_timeframe",
+                                    "context_type", "context_keys", "available_bool", "open_bool",
+                                    "stale", "wrong_open", "window_hash", "result_hash_shape",
+                                    "trace_hash_shape", "trace_hash_value", "trace_empty",
+                                    "result_hash_value", "reason", "verdicts", "nonfinite"])
+def test_result_evidence_rejects_forged_frames(fault: str) -> None:
+    tick = 1672531200000
+    frame = result_fixture(tick)
+    if fault == "shape":
+        frame.pop("evaluated_at")
+    elif fault == "timestamp":
+        frame["evaluated_at"] = "2023-01-01T00:01:00.000000Z"
+    elif fault == "no_contexts":
+        frame["contexts"] = {}
+    elif fault == "missing_timeframe":
+        frame["contexts"].pop("4h")
+    elif fault == "context_type":
+        frame["contexts"]["1m"] = []
+    elif fault == "context_keys":
+        frame["contexts"]["1m"].pop("rsi")
+    elif fault == "available_bool":
+        frame["contexts"]["1m"]["available_ms"] = True
+    elif fault == "open_bool":
+        frame["contexts"]["1m"]["open_ms"] = True
+    elif fault == "stale":
+        frame["contexts"]["5m"]["available_ms"] -= 300000
+    elif fault == "wrong_open":
+        frame["contexts"]["1h"]["open_ms"] += 3600000
+    elif fault == "window_hash":
+        frame["contexts"]["4h"]["research_window_hash"] = "bad"
+    elif fault == "result_hash_shape":
+        frame["result_hash"] = "bad"
+    elif fault == "trace_hash_shape":
+        frame["trace_hash"] = "bad"
+    elif fault == "trace_hash_value":
+        frame["trace_hash"] = "sha256:" + "0" * 64
+    elif fault == "trace_empty":
+        frame["trace"] = {}
+    elif fault == "result_hash_value":
+        frame["result_hash"] = "sha256:" + "0" * 64
+    elif fault == "reason":
+        frame["reason_code"] = ""
+    elif fault == "verdicts":
+        frame["verdicts"] = {}
+    else:
+        frame["contexts"]["1m"]["close"] = float("nan")
+        frame["result_hash"] = "sha256:" + "0" * 64
+    with pytest.raises(SignalError):
+        signals._validate_result(frame, tick)
+
+
+def test_valid_open_and_result_evidence(tmp_path: Path) -> None:
+    root = dataset(tmp_path / "dataset")
+    selection = select_sources(root, START, END, START, "BTCUSDT")
+    frame = opened_fixture(tmp_path, selection)
+    signals._validate_opened(frame, "session", selection, tmp_path)
+    result = result_fixture(1672531200000)
+    signals._validate_result(result, result["evaluated_ms"])
+    result["trace"] = None
+    result["result_hash"] = signals._sha256_canonical({key: value for key, value in result.items()
+                                                       if key != "result_hash"})
+    signals._validate_result(result, result["evaluated_ms"])
+
+
+@pytest.mark.parametrize("case", ["relative", "outside", "snapshot_list", "execution_changed"])
+def test_direct_identity_and_baseline_path_guards(tmp_path: Path, case: str) -> None:
+    root = dataset(tmp_path / "dataset")
+    selection = select_sources(root, START, END, START, "BTCUSDT")
+    frame = opened_fixture(tmp_path, selection)
+    if case in {"relative", "outside"}:
+        hashes = frame["baseline"]["file_hashes"]
+        catalog = str(tmp_path / "config/catalog.yaml")
+        digest = hashes.pop(catalog)
+        hashes["relative.yaml" if case == "relative" else str(tmp_path.parent / "outside.yaml")] = digest
+    elif case == "snapshot_list":
+        frame["effective_config_snapshot"] = []
+    else:
+        forged = deepcopy(frame)
+        forged["symbol"] = "BTCUSDT"
+        forged["execution"] = {"mode_id": "forged"}
+        with pytest.raises(SignalError, match="execution or baseline changed"):
+            signals._identity(forged, frame, "session", selection)
+        return
+    with pytest.raises(SignalError):
+        signals._validate_opened(frame, "session", selection, tmp_path)
+
+
+def test_child_termination_escalates_only_its_process() -> None:
+    class Child:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            self.calls.append("terminate")
+
+        def wait(self, timeout: int) -> int:
+            self.calls.append("wait")
+            if self.calls.count("wait") == 1:
+                raise subprocess.TimeoutExpired("fixture", timeout)
+            return 0
+
+        def kill(self) -> None:
+            self.calls.append("kill")
+
+    child = Child()
+    signals._terminate(child)
+    assert child.calls == ["terminate", "wait", "kill", "wait"]
