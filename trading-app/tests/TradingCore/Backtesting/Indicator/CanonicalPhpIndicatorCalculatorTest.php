@@ -17,15 +17,44 @@ use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorCandle;
 use App\TradingCore\Backtesting\Indicator\CanonicalFiniteSeriesValidator;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjectionException;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorWindow;
+use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorNumericSeries;
 use App\TradingCore\Backtesting\Indicator\CanonicalPhpIndicatorCalculator;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(CanonicalPhpIndicatorCalculator::class)]
 #[CoversClass(CanonicalFiniteSeriesValidator::class)]
+#[CoversClass(CanonicalIndicatorNumericSeries::class)]
 final class CanonicalPhpIndicatorCalculatorTest extends TestCase
 {
     private const GOLDEN_DELTA = 1.0e-12;
+
+    public function testValueOnlySeriesPreservesCanonicalArithmeticExactly(): void
+    {
+        self::assertTrue(class_exists(CanonicalIndicatorNumericSeries::class));
+        $calculator = new CanonicalPhpIndicatorCalculator(new Rsi(), new Macd(), new Ema(), new Adx(), new Sma(), new AtrCalculator(null), new Vwap(), new Bollinger());
+        $window = $this->window();
+        self::assertSame($calculator->calculate($window), $calculator->calculateNumericSeries(CanonicalIndicatorNumericSeries::fromCanonicalWindow($window)));
+    }
+
+    public function testNumericBoundaryRejectsInvalidOrMismatchedSeries(): void
+    {
+        $valid = CanonicalIndicatorNumericSeries::fromCanonicalWindow($this->window());
+        $inputs = [$valid->opens, $valid->highs, $valid->lows, $valid->closes, $valid->volumes, $valid->timestamps];
+        $invalidInputs = [];
+        foreach ([0, 1, 2, 3, 4, 5] as $index) {
+            $bad = $inputs; array_pop($bad[$index]); $invalidInputs[] = $bad;
+        }
+        foreach ([[0, NAN], [1, INF], [2, 0.0], [3, -1.0], [4, -0.1], [5, $valid->timestamps[1]], [0, '100']] as [$index, $value]) {
+            $bad = $inputs; $bad[$index][0] = $value; $invalidInputs[] = $bad;
+        }
+        $bad = $inputs; $bad[4] = array_fill(0, 250, 0.0); $invalidInputs[] = $bad;
+        $bad = $inputs; $bad[4] = array_fill(0, 250, PHP_FLOAT_MAX); $invalidInputs[] = $bad;
+        foreach ($invalidInputs as $input) {
+            try { new CanonicalIndicatorNumericSeries(...$input); self::fail('Invalid series accepted'); }
+            catch (CanonicalIndicatorProjectionException $exception) { self::assertSame('canonical_indicator_calculation_invalid', $exception->getMessage()); }
+        }
+    }
 
     public function testItCalculatesFiniteDeterministicCanonicalProviderContext(): void
     {
