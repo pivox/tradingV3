@@ -318,6 +318,24 @@ def test_earlier_partial_bytes_survive_later_empty_retry_failures(tmp_path, fina
     assert len(calls) == (3 if final_failure == "transport" else 2)
 
 
+@pytest.mark.parametrize("extra", ["NaN", "Infinity", "-Infinity", "1e400", "{}", "9223372036854775808"])
+def test_invalid_extra_funding_value_is_rejected_with_final_status(tmp_path, extra):
+    def handler(request):
+        if request.url.path.endswith("exchangeInfo"):
+            return httpx.Response(200, json=metadata())
+        symbol = request.url.params["symbol"]
+        payload = ('[{"symbol":"' + symbol + '","fundingTime":' + str(sc.START_MS) +
+                   ',"fundingRate":"0.0001","extra":' + extra + '}]').encode()
+        return httpx.Response(200, content=payload)
+
+    root = tmp_path / "invalid-extra"
+    with client(handler) as http:
+        result = sc.capture(root, **HYPOTHESES, client=http)
+    assert not result["retrieval_complete"]
+    assert all(entry["status"] == "rejected" for entry in result["funding"])
+    assert json.loads((root / "status.json").read_text())["retrieval_complete"] is False
+
+
 @pytest.mark.parametrize("retry_after", ["invalid", "nan"])
 def test_retry_header_fallback(retry_after):
     delays = []

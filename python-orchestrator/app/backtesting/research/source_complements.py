@@ -52,6 +52,15 @@ def _hash(value: dict) -> str:
 
 
 def _json(raw: bytes):
+    def invalid_constant(value):
+        raise ComplementError("non-standard JSON constant")
+
+    def finite_float(value):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ComplementError("non-finite JSON number")
+        return number
+
     def pairs(items):
         result = {}
         for key, value in items:
@@ -60,7 +69,8 @@ def _json(raw: bytes):
             result[key] = value
         return result
     try:
-        return json.loads(raw, object_pairs_hook=pairs)
+        return json.loads(raw, object_pairs_hook=pairs, parse_constant=invalid_constant,
+                          parse_float=finite_float)
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise ComplementError("invalid JSON evidence") from exc
 
@@ -161,6 +171,10 @@ def funding_rows(raw: bytes, symbol: str, start: int, end: int) -> list[dict]:
         _number(row.get("fundingRate"))
         if "markPrice" in row:
             _number(row["markPrice"], positive=True)
+        try:
+            _canonical_json(row)
+        except ValueError as exc:
+            raise ComplementError("funding row is not representable in canonical evidence") from exc
         previous = timestamp
     return rows
 
