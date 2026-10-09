@@ -1,8 +1,10 @@
 # C2b — guarded final holdout: proposed implementation design
 
-Status: implementation committed, consolidated review and required CI pending.
+Status: implementation and single-review corrections committed; final coverage
+and required CI pending.
 Authority and durable-claim infrastructure is committed in `5968c181`, shared-engine
 integration in `1f8161a0`, and controller/reporting in `bf72a7cf`.
+The consolidated review corrections are committed in `662994f1`.
 Full acceptance remains pending. This document is not authority
 to read the 2026 strategy/profit
 holdout. The overall campaign scope was approved in
@@ -180,8 +182,33 @@ coverage over seven modules, with no exclusions; pure branch coverage was
 93.243243%. Controller-only combined coverage was 95.945946%, with 88.135593%
 pure branch coverage. The synthetic controller scenarios score three minutes
 after 60,000 warmup minutes per pair; they are not an actual full-calendar run.
-Next: one consolidated independent review/correction, then mandatory complete
-repository CI before merge. A successful C2b implementation still does not
+Those coverage measurements precede the consolidated review corrections and
+must not be presented as coverage of the corrected revision.
+
+The single consolidated review found two Important defects and one Minor
+provenance issue. Commit `662994f1` reconciles the authority/campaign inventories
+and makes controller fixtures use the genuine authority inventory. It also
+reconstructs the exact bound source subset from its manifest and verifies the
+referenced archive/REST bytes, sizes and safe paths before retained summary/PnL
+reads, without invoking an evaluation selector, candle iterator or simulator.
+Reads are chunked, deadline- and size-bounded; no persistent hash cache is used.
+The manifest has no independent hash of CHECKSUM-file bytes: those files retain
+the existing strict digest/filename validation, not a claim of byte attestation.
+
+The execution contract now records the actual runner's invoked/resolved
+interpreter path, version and on-disk binary hash. Reports identify the frozen
+verifier runtime separately and retain the original runner provenance during
+read-only replay. Runner dependencies, process memory and the host OS are not
+attested by this record.
+
+The parent independently passed 22 concrete correction regressions, the direct
+inventory-equality test, and all six binding-scope cases after correcting one
+old test that mutated a detached fixture instead of a real input. The broader
+487-case run had 486 passes and that one test failure; application source bytes
+did not change when fixing the test. A fresh fifteen-file research coverage
+run is in progress over eight modules, including the changed checksum helper.
+Complete repository CI remains mandatory before merge; there is no second
+independent review cycle. A successful C2b implementation still does not
 authorize evaluation without the original campaign's eligible selection.
 No authority has been provisioned. Do not modify the two operationally frozen
 worktrees; recheck current process/evidence state before any operational action.
