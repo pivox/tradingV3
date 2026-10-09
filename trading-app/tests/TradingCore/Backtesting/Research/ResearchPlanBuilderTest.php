@@ -115,6 +115,22 @@ final class ResearchPlanBuilderTest extends TestCase
         self::assertSame('research-plan.v1', $builder->build($signal, 2, $portfolio)['schema_version']);
     }
 
+    public function testRejectionIdentityDistinguishesSelectedCostProfiles(): void
+    {
+        $rejections = [];
+        foreach (['baseline', 'adverse'] as $profile) {
+            [$builder, $signal, $portfolio] = self::fixture($profile);
+            $portfolio['active_signal_hashes'] = [$signal['result_hash']];
+            $portfolio['portfolio_hash'] = CanonicalBacktestRuleEvaluator::canonicalHash(array_diff_key($portfolio, ['portfolio_hash' => true]));
+            $rejection = $builder->build($signal, 2, $portfolio);
+            self::assertSame('research_portfolio_signal_duplicate', $rejection['reason_code']);
+            self::assertSame($profile, $rejection['cost_profile'] ?? null);
+            $rejections[] = $rejection;
+        }
+        self::assertSame($rejections[0]['cost_assumptions_hash'], $rejections[1]['cost_assumptions_hash']);
+        self::assertNotSame($rejections[0]['cost_profile'], $rejections[1]['cost_profile']);
+    }
+
     public function testRejectsWrongSourceProvenanceDespiteRehashedPayload(): void
     {
         [$builder, $signal, $portfolio] = self::fixture();
@@ -156,7 +172,7 @@ final class ResearchPlanBuilderTest extends TestCase
     }
 
     /** @return array{ResearchPlanBuilder, array<string, mixed>, array<string, mixed>} */
-    public static function fixture(): array
+    public static function fixture(string $costProfile = 'baseline'): array
     {
         $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
             'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
@@ -204,6 +220,6 @@ final class ResearchPlanBuilderTest extends TestCase
             'pending_notional_quote' => 0.0, 'reserved_risk_quote' => 0.0,
             'active_signal_hashes' => []];
         $portfolio['portfolio_hash'] = CanonicalBacktestRuleEvaluator::canonicalHash($portfolio);
-        return [new ResearchPlanBuilder($policy, $portfolioPolicy, $variant, $instrument, $costs, 'baseline', $baseline, $run), $signal, $portfolio];
+        return [new ResearchPlanBuilder($policy, $portfolioPolicy, $variant, $instrument, $costs, $costProfile, $baseline, $run), $signal, $portfolio];
     }
 }
