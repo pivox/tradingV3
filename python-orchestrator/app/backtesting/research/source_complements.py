@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import os
+import tempfile
 import time
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -192,11 +193,17 @@ def _fresh_root(root: Path) -> Path:
 def _write(root: Path, name: str, data: bytes) -> None:
     if sum(item.stat().st_size for item in root.iterdir()) + len(data) > ROOT_CAP:
         raise ComplementError("root storage cap")
-    fd = os.open(root / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "wb") as stream:
-        stream.write(data)
-        stream.flush()
-        os.fsync(stream.fileno())
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", suffix=".tmp", dir=root)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Atomic publication without replacing an existing immutable artifact.
+        os.link(temporary, root / name, follow_symlinks=False)
+    finally:
+        temporary.unlink()
 
 
 def _write_json(root: Path, name: str, value: dict) -> None:

@@ -71,6 +71,35 @@ def test_capture_private_exact_evidence_and_canonical_manifest(tmp_path):
         assert hashlib.sha256((root / page["raw_path"]).read_bytes()).hexdigest() == page["raw_sha256"]
 
 
+def test_artifacts_are_published_only_after_complete_private_write(tmp_path, monkeypatch):
+    root = tmp_path / "atomic"
+    root.mkdir(mode=0o700)
+    destination = root / "status.json"
+
+    def interrupted_publish(source, target, **kwargs):
+        assert not destination.exists()
+        assert Path(source).read_bytes() == b"complete bytes"
+        assert Path(source).stat().st_mode & 0o777 == 0o600
+        raise OSError("simulated publication interruption")
+
+    monkeypatch.setattr(sc.os, "link", interrupted_publish)
+    with pytest.raises(OSError, match="publication interruption"):
+        sc._write(root, destination.name, b"complete bytes")
+    assert not destination.exists()
+    assert list(root.iterdir()) == []
+
+
+def test_atomic_publication_never_overwrites_existing_artifacts(tmp_path):
+    root = tmp_path / "immutable"
+    root.mkdir(mode=0o700)
+    destination = root / "evidence.json"
+    destination.write_bytes(b"original")
+    with pytest.raises(FileExistsError):
+        sc._write(root, destination.name, b"replacement")
+    assert destination.read_bytes() == b"original"
+    assert list(root.iterdir()) == [destination]
+
+
 @pytest.mark.parametrize("mutation", [
     lambda m: m["symbols"].pop(),
     lambda m: m["symbols"].append(m["symbols"][0]),
