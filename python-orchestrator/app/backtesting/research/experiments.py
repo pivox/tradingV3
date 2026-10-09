@@ -12,6 +12,7 @@ import fcntl
 import csv
 import io
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -45,6 +46,8 @@ LIMIT = 4 * 1024**3
 RESERVE = 20 * 1024**3
 MAX_PROTOCOL_BYTES = 64 * 1024**2
 MAX_REGISTRY_JSON_BYTES = 4 * 1024**2
+# One bounded statistics document and one bounded immutable terminal document.
+UNIT_METADATA_RESERVE = 2 * MAX_REGISTRY_JSON_BYTES
 
 
 class ExperimentError(ValueError):
@@ -229,7 +232,7 @@ class ExperimentRegistry(AbstractContextManager):
         self.max_output_bytes, self.min_free_bytes = max_output_bytes,min_free_bytes
         self.lock = None
 
-    def _budget(self, extra: int = 0) -> None:
+    def _budget(self, extra: int = 0) -> int:
         total = 0
         for directory,subdirs,files in os.walk(self.root,followlinks=False):
             for name in (*subdirs,*files):
@@ -241,6 +244,7 @@ class ExperimentRegistry(AbstractContextManager):
                     total += item.stat().st_size
         if total+extra > self.max_output_bytes or shutil.disk_usage(self.root).free-extra < self.min_free_bytes:
             raise ExperimentError('registry_capacity_exceeded')
+        return min(self.max_output_bytes-total,shutil.disk_usage(self.root).free-self.min_free_bytes)-extra
 
     def __enter__(self):
         if self.root.exists():
@@ -406,6 +410,11 @@ def _candidate_rows(registry: ExperimentRegistry, *, allow_pending: bool = False
 def schedule_batch(registry: ExperimentRegistry, run_unit, *, verify_unit=None) -> list[dict]:
     """Run exactly 26 training units, then eligible validation; sequential only.
 
+    Budget-aware callbacks accept optional max_output_bytes/min_free_bytes keyword
+    arguments. The production factory enforces these on every C1 write, reserving
+    C2 terminal/statistics metadata outside C1's own terminal reserve. Arbitrary
+    custom callbacks are trusted code, not a filesystem sandbox; legacy synthetic
+    two-argument callbacks remain supported but cannot be storage-enforced here.
     run_unit(registration, fresh_output_root) is dependency injected. The default
     verifier replays the actual C1 ledgers; tests supply synthetic fixtures.
     No attempt is resumed halfway and every failure remains in the registry.
@@ -451,7 +460,15 @@ def schedule_batch(registry: ExperimentRegistry, run_unit, *, verify_unit=None) 
         parent = registry.root/'attempts'/registration['attempt_id']
         output = parent/'campaign'
         try:
-            run_unit(registration,output)
+            allowance = registry._budget()-UNIT_METADATA_RESERVE
+            if allowance <= 8192:
+                raise ExperimentError('unit_capacity_insufficient_terminal_metadata_reserved')
+            parameters = inspect.signature(run_unit).parameters
+            if 'max_output_bytes' in parameters or any(p.kind == p.VAR_KEYWORD for p in parameters.values()):
+                run_unit(registration,output,max_output_bytes=allowance,
+                         min_free_bytes=registry.min_free_bytes+UNIT_METADATA_RESERVE)
+            else:
+                run_unit(registration,output)
             registry._budget()
             stats = verify_unit(output,registry.protocol,registration)
             if stats.get('status') not in ('complete','inconclusive'):
@@ -539,6 +556,8 @@ def verify_freeze(path: Path) -> dict:
     _safe_directory(path.parent)
     freeze = _read_json(path)
     protocol = _read_json(path.parent/'protocol.json')
+    if (path.parent/'protocol.json').read_bytes() != canonical_bytes(protocol):
+        raise ExperimentError('protocol_bytes_not_canonical')
     if protocol.get('phase_bindings') is None:
         raise ExperimentError('phase_bindings_required')
     registry = ExperimentRegistry(path.parent,protocol)
@@ -568,11 +587,16 @@ def make_campaign_runner(*, dataset_root: Path, signal_roots: dict, app_dir: Pat
     """Bind C1 lazily. The caller separately authorizes actual benchmark/search."""
     if set(signal_roots) != set(WINDOWS):
         raise ExperimentError('both_signal_phases_required')
-    def run_unit(registration,output_root):
+    def run_unit(registration,output_root,*,max_output_bytes=None,min_free_bytes=None):
         from .campaign import run_campaign
+        bounded = dict(limits)
+        if max_output_bytes is not None:
+            bounded['max_output_bytes'] = min(bounded.get('max_output_bytes',LIMIT),max_output_bytes)
+        if min_free_bytes is not None:
+            bounded['min_free_bytes'] = max(bounded.get('min_free_bytes',RESERVE),min_free_bytes)
         return run_campaign(dataset_root,signal_roots[registration['phase']],output_root,app_dir,
             registration['phase'],registration['variant_id'],registration['cost_profile'],
-            instrument_path,cost_path,symbols=SYMBOLS,**limits)
+            instrument_path,cost_path,symbols=SYMBOLS,**bounded)
     return run_unit
 
 
@@ -666,7 +690,7 @@ def write_reports(registry: ExperimentRegistry,report_root: Path,candidates: lis
         'Les seuils sont des critères de recherche préspecifiés ; ils ne démontrent ni significativité statistique ni rentabilité future.',
         'Échantillons requis : 100 trades d’entraînement, dont 30 par année ; 50 de validation ; au moins 5 paires pour chaque phase et scénario. Un échantillon insuffisant reste inéligible.',
         'Le taux de réussite et le profit factor portent sur les résultats nets. Un dénominateur sans pertes reste indéfini et inéligible.',
-        'Le R réalisé net divise le PnL réel par le risque initial du plan. Le drawdown de sélection est celui des capitaux marqués du noyau ; le drawdown du portefeuille de cashflows est distinct.',
+        'Le R réalisé net divise le PnL réel par le risque initial du plan. Le drawdown de sélection est recalculé depuis les plans, cashflows et marques du noyau sur chaque minute active ; le drawdown de cashflows est distinct. Les marques sont un proxy de clôtures OHLC lié aux fichiers du run, pas des cotations indépendantes certifiées par la plateforme.',
         'Les totaux annuels de cashflows suivent leur date UTC ; les trades suivent leur sortie. Le JSON conserve tout écart, notamment au règlement exclusif de minuit.',
         'Les frais sont ceux de Fake/local, et les spreads, glissements, MMR et liquidations sont hypothétiques. Les bougies ne prouvent ni trajectoire intrabougie ni priorité des ordres passifs.',
         'Le funding conserve la provenance observed_only, les lacunes et les hypothèses d’intervalle ; un diagnostic de continuité ne certifie pas une bourse.',

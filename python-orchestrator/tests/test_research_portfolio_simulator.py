@@ -88,14 +88,43 @@ def plan(sig, view, *, quantity=2, leverage=1, stop=95, target=110):
     return p
 
 
-def simulator(config=None, builder=None, *, prime=True):
-    ledger = {key: [] for key in ('events', 'trades', 'cashflows', 'rejections')}
+def simulator(config=None, builder=None, *, prime=True,marked=False):
+    ledger = {key: [] for key in ('events', 'trades', 'cashflows', 'rejections','marked')}
     sim = PortfolioSimulator(config or assumptions(), builder or (lambda s,v: plan(s,v)),
         event_sink=ledger['events'].append, trade_sink=ledger['trades'].append,
-        cashflow_sink=ledger['cashflows'].append, rejection_sink=ledger['rejections'].append)
+        cashflow_sink=ledger['cashflows'].append, rejection_sink=ledger['rejections'].append,
+        marked_sink=ledger['marked'].append if marked else None)
     if prime:
         sim.prime(bars(sim.assumptions.start_ms-60000,symbols=sim.assumptions.symbols))
     return sim, ledger
+
+
+def test_sparse_marked_evidence_initial_terminal_and_each_active_minute():
+    sim,ledger = simulator(assumptions(minutes=6),marked=True)
+    sim.advance(bars(START),signals=(signal(START+60000),))
+    sim.advance(bars(START+60000))
+    sim.advance(bars(START+120000,close='99'))
+    sim.advance(bars(START+180000,high='111'))
+    sim.advance(bars(START+240000))
+    sim.advance(bars(START+300000))
+    sim.finish()
+    samples = ledger['marked']
+    assert [s['timestamp_ms'] for s in samples] == [START,START+120000,START+180000,START+240000,START+360000]
+    assert samples[0]['kind'] == 'initial' and samples[-1]['kind'] == 'terminal'
+    assert samples[2]['marks'] == {ledger['events'][0]['plan_hash']:D('99')}
+    assert not samples[3]['marks']
+    assert all(s['processed_batches'] == (s['timestamp_ms']-START)//60000 for s in samples)
+
+
+def test_optional_marked_sink_does_not_change_kernel_summary_or_execution():
+    results = []
+    for marked in (True,False):
+        sim,ledger = simulator(assumptions(minutes=3),marked=marked)
+        sim.advance(bars(START),signals=(signal(START+60000),))
+        sim.advance(bars(START+60000))
+        sim.advance(bars(START+120000,close='102',high='103'))
+        results.append((sim.finish(),{k:v for k,v in ledger.items() if k != 'marked'}))
+    assert results[0] == results[1]
 
 
 def test_initial_wallet_full_batch_and_no_signal_bar_fill():

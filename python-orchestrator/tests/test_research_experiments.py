@@ -280,7 +280,8 @@ def full_fixture_runner(protocol):
         identity.update(variant_id=variant,variant_hash=manifest['variant']['variant_hash'],
                         cost_assumptions_hash=manifest['cost_assumptions']['assumption_hash'])
         count = (100 if phase == 'training' else 50) if variant == 'baseline' else 0
-        rows = []; net_total = gross_total = 0
+        from tests.test_research_statistics import marked_row
+        rows = [marked_row(start,start,kind='initial')]; net_total = gross_total = 0
         for index in range(count):
             source = manifest['source_runs'][index%5]
             symbol = source['symbol']
@@ -295,21 +296,57 @@ def full_fixture_runner(protocol):
             net = -1 if index%5 == 0 else 3; gross = net+1
             net_total += net; gross_total += gross
             rows += [('plans',plan),('events',{'symbol':symbol,'plan_hash':key,'reason':'admitted'}),
-                     ('events',{'symbol':symbol,'plan_hash':key,'reason':'limit_fill_proxy'}),
+                     ('events',{'symbol':symbol,'plan_hash':key,'reason':'limit_fill_proxy','timestamp_ms':at}),
                      ('cashflows',{'symbol':symbol,'plan_hash':key,'kind':'entry_fee','amount_quote':'-1','timestamp_ms':at-30000}),
                      ('cashflows',{'symbol':symbol,'plan_hash':key,'kind':'gross_pnl','amount_quote':str(gross),'timestamp_ms':at}),
                      ('trades',{'symbol':symbol,'plan_hash':key,**identity,**sources,
                          **{f:'0' for f in FIELDS},'net_pnl_quote':str(net),'gross_pnl_quote':str(gross),
-                         'fees_quote':'1','exit_boundary_ms':at,'fill_boundary_ms':at-30000,'exit_reason':'synthetic'})]
+                         'fees_quote':'1','exit_boundary_ms':at,'fill_boundary_ms':at,'exit_reason':'synthetic'})]
             rows[-1][1].update(entry_price='100',quantity='2',exit_price=str(100+gross/2))
+            rows.append(marked_row(at,start))
+        rows.append(marked_row(end,start,kind='terminal'))
         status['files'] = write_ledgers(root,rows)
         summary.update(phase=phase,start_ms=start,end_ms=end,trades=count,admitted_plans=count,attempted_signals=count,
             gross_pnl_quote=str(gross_total),net_pnl_quote=str(net_total),fees_quote=str(count),
+            maximum_drawdown_quote='1' if count else '0',
             wallet_quote=str(100000+net_total),b1_counters={'evaluated_ticks':200,'passed_rules':count,'failed_rules':200-count})
         manifest['b1_counters'] = summary['b1_counters']
         summary.update(phase_batches=(end-start)//60000,source_candles=(end-start)//60000*10)
         rehash_campaign(root,manifest,summary,status)
     return runner
+
+
+@pytest.mark.parametrize('encoding',['whitespace','reorder','duplicate'])
+def test_freeze_rejects_noncanonical_protocol_bytes(tmp_path,encoding):
+    protocol = bound_protocol()
+    with ExperimentRegistry(tmp_path/'registry',protocol,min_free_bytes=0) as registry:
+        rows = schedule_batch(registry,lambda *args: (_ for _ in ()).throw(ValueError('synthetic')),
+                              verify_unit=verifier)
+        freeze_selection(registry,rows)
+    path = registry.root/'protocol.json'
+    if encoding == 'whitespace':
+        raw = json.dumps(protocol,indent=2).encode()
+    elif encoding == 'reorder':
+        raw = json.dumps(dict(reversed(list(protocol.items()))),separators=(',',':')).encode()
+    else:
+        raw = canonical_bytes(protocol).rstrip()[:-1]+b',"schema_version":'+json.dumps(protocol['schema_version']).encode()+b'}'
+    path.write_bytes(raw)
+    with pytest.raises(ExperimentError,match='protocol.*canonical'):
+        verify_freeze(registry.root/'selection-freeze.json')
+
+
+def test_scheduler_passes_remaining_budget_and_preserves_failure_terminal(tmp_path):
+    seen = []
+    def bounded(registration,root,*,max_output_bytes,min_free_bytes):
+        seen.append((max_output_bytes,min_free_bytes))
+        root.mkdir()
+        (root/'partial').write_bytes(b'x'*max_output_bytes)
+        raise ValueError('synthetic cap reached')
+    with ExperimentRegistry(tmp_path/'registry',bound_protocol(),max_output_bytes=9*1024**2,min_free_bytes=0) as registry:
+        rows = schedule_batch(registry,bounded,verify_unit=verifier)
+        assert seen and seen[0][0] < registry.max_output_bytes
+        assert all(a['terminal']['state'] == 'failed' for a in registry.attempts())
+        registry._budget()
 
 
 def test_selected_freeze_replays_real_shaped_ledgers_and_detects_evidence_tampering(tmp_path):
@@ -465,8 +502,29 @@ def test_lazy_c1_runner_does_not_start_workers_on_import(tmp_path,monkeypatch):
     run({'phase':'training','variant_id':'baseline','cost_profile':'adverse'},tmp_path/'output')
     assert calls[0][0][1] == tmp_path/'train'
     assert calls[0][1]['symbols'] == SYMBOLS
+    run({'phase':'validation','variant_id':'baseline','cost_profile':'baseline'},tmp_path/'output2',
+        max_output_bytes=100000,min_free_bytes=12345)
+    assert calls[1][1]['max_output_bytes'] == 100000
+    assert calls[1][1]['min_free_bytes'] == 12345
     kwargs['signal_roots'] = {}
     with pytest.raises(ExperimentError): experiments.make_campaign_runner(**kwargs)
+
+
+def test_rehashed_summary_drawdown_cannot_be_reused_or_frozen(tmp_path):
+    from app.backtesting.research.statistics import StatisticsError
+    seed = tmp_path/'seed'; seed.mkdir(); protocol,_ = campaign_fixture(seed)
+    with ExperimentRegistry(tmp_path/'private',protocol,min_free_bytes=0) as registry:
+        rows = schedule_batch(registry,full_fixture_runner(protocol))
+        attempt = next(a for a in registry.attempts() if a['terminal']['state'] == 'complete')
+        root = registry.root/'attempts'/attempt['registration']['attempt_id']/'campaign'
+        summary = json.loads((root/'summary.json').read_bytes())
+        summary['maximum_drawdown_quote'] = '5999'
+        rehash_campaign(root,summary=summary)
+        with pytest.raises(StatisticsError,match='marked_drawdown'):
+            schedule_batch(registry,lambda *_: pytest.fail('must reverify without rerun'))
+        with pytest.raises(StatisticsError,match='marked_drawdown'):
+            freeze_selection(registry,rows)
+        assert not (registry.root/'selection-freeze.json').exists()
 
 
 def test_missing_validation_pending_report_and_forbidden_validation(tmp_path):
