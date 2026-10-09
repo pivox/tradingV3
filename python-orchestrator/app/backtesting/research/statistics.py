@@ -18,7 +18,11 @@ from typing import Any
 ZERO = Decimal('0')
 LEDGERS = ('plans','rejections','events','trades','cashflows','funding-events')
 COMPONENTS = ('gross_pnl_quote','net_pnl_quote','fees_quote','funding_quote','spread_quote','slippage_quote')
+PROFILE_FIELDS = ('entry_spread_rate','stop_spread_rate','target_spread_rate',
+                  'entry_slippage_rate','stop_slippage_rate','target_slippage_rate','funding_provision_rate')
 MAX_LINE = 2*1024**2
+MAX_MANIFEST_BYTES = 64*1024**2
+MAX_JSON_BYTES = 16*1024**2
 DAY = 86400000
 
 
@@ -98,7 +102,7 @@ def _safe_file(path: Path, cap: int) -> None:
 
 
 def _read_json(path: Path) -> tuple[dict,str]:
-    _safe_file(path,16*1024**2)
+    _safe_file(path,MAX_MANIFEST_BYTES if path.name == 'manifest.json' else MAX_JSON_BYTES)
     raw = path.read_bytes()
     return _json(raw),hashlib.sha256(raw).hexdigest()
 
@@ -132,7 +136,8 @@ def _year(timestamp: int) -> str:
 def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_ms: int,
                     end_ms: int, max_spool_bytes: int = 4*1024**3,
                     min_free_bytes: int = 20*1024**3, expected_identity: dict | None = None,
-                    expected_sources: dict | None = None) -> dict:
+                    expected_sources: dict | None = None, expected_cost_profile: str | None = None,
+                    expected_cost_model: dict | None = None) -> dict:
     """Merge six ordered ledgers and independently join plans/trades/cashflows.
 
     SQLite is a private temporary local index, not an application database.
@@ -193,6 +198,13 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
                     key = row.get('plan_hash')
                     if canonical_hash({k:v for k,v in row.items() if k not in ('plan_hash','ledger_sequence')}) != key:
                         raise StatisticsError('plan_hash_conflict')
+                    if expected_cost_profile is not None:
+                        if row.get('cost_profile') != expected_cost_profile:
+                            raise StatisticsError('plan_cost_profile_conflict')
+                        model = row.get('cost_model')
+                        if (not isinstance(model,dict) or any(field not in model for field in PROFILE_FIELDS)
+                                or any(decimal(model[field]) != decimal(expected_cost_model[field]) for field in PROFILE_FIELDS)):
+                            raise StatisticsError('plan_cost_model_profile_conflict')
                     risk = decimal(row['risk_components_quote']['total_stop_loss'])
                     if risk <= 0:
                         raise StatisticsError('initial_stop_risk_nonpositive')
@@ -360,6 +372,10 @@ def _verify_campaign(root: Path, protocol: dict, registration: dict) -> dict:
     for field in ('source_runs','signal_reports','runner_code_sha256'):
         if manifest[field] != binding[field]:
             raise StatisticsError('campaign_frozen_source_or_code_conflict')
+    if (manifest['funding_inventory_hash'] != binding['funding_inventory_hash']
+            or manifest['funding_diagnostic_policy'] != binding['funding_diagnostic_policy']
+            or summary['source_quality']['funding_diagnostic_policy'] != binding['funding_diagnostic_policy']):
+        raise StatisticsError('campaign_frozen_funding_input_or_policy_conflict')
     identity = protocol['identity']
     frozen_data = {p:protocol['phase_bindings'][p]['source_runs'] for p in WINDOWS}
     if hash_bytes(canonical_bytes(frozen_data)) != identity['dataset_hash']:
@@ -378,6 +394,8 @@ def _verify_campaign(root: Path, protocol: dict, registration: dict) -> dict:
         if canonical_hash({k:v for k,v in document.items() if k != field}) != document[field]:
             raise StatisticsError('assumption_hash_conflict')
     profile = registration['cost_profile']
+    if set(costs['profiles'][profile]) != set(PROFILE_FIELDS):
+        raise StatisticsError('cost_model_profile_shape_invalid')
     if (instruments['manifest_hash'] != identity['instrument_assumptions_hash']
         or costs['assumption_hash'] != binding['cost_assumptions_hash']
         or canonical_hash(costs['profiles'][profile]) != identity[profile+'_cost_hash']):
@@ -400,7 +418,8 @@ def _verify_campaign(root: Path, protocol: dict, registration: dict) -> dict:
     sources = {symbol:{k:v for k,v in row.items() if k in ('dataset_id','dataset_sha256',
                'signal_run_id','signal_output_sha256')} for symbol,row in sources.items()}
     result = analyze_ledgers(root,status['files'],symbols=SYMBOLS,start_ms=start,end_ms=end,
-                             expected_identity=expected,expected_sources=sources)
+        expected_identity=expected,expected_sources=sources,expected_cost_profile=profile,
+        expected_cost_model=costs['profiles'][profile])
     if (any(decimal(summary[field]) != decimal(result[field]) for field in (*COMPONENTS,'wallet_quote'))
         or summary['trades'] != result['closed_trades']
         or summary['admitted_plans'] != result['counts']['admitted']

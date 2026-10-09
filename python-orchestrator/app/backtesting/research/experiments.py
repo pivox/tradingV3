@@ -43,6 +43,8 @@ WINDOWS = {'training': {'start':'2023-01-01T00:00:00Z','end':'2025-01-01T00:00:0
            'validation': {'start':'2025-01-01T00:00:00Z','end':'2026-01-01T00:00:00Z'}}
 LIMIT = 4 * 1024**3
 RESERVE = 20 * 1024**3
+MAX_PROTOCOL_BYTES = 64 * 1024**2
+MAX_REGISTRY_JSON_BYTES = 4 * 1024**2
 
 
 class ExperimentError(ValueError):
@@ -64,8 +66,14 @@ def make_protocol(identity: dict, *, phase_bindings: dict | None = None) -> dict
         raise ExperimentError('invalid_protocol_identity')
     if phase_bindings is not None and (set(phase_bindings) != set(WINDOWS) or
             any(set(phase_bindings[p]) != {'source_runs','signal_reports','runner_code_sha256',
-                'cost_assumptions_hash'} for p in WINDOWS)):
+                'cost_assumptions_hash','funding_inventory_hash','funding_diagnostic_policy'} for p in WINDOWS)):
         raise ExperimentError('invalid_phase_bindings')
+    if phase_bindings is not None:
+        for binding in phase_bindings.values():
+            funding_hash,policy = binding['funding_inventory_hash'],binding['funding_diagnostic_policy']
+            if (not isinstance(funding_hash,str) or re.fullmatch(r'(?:sha256:)?[a-f0-9]{64}',funding_hash) is None
+                    or not isinstance(policy,str) or re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}',policy) is None):
+                raise ExperimentError('invalid_frozen_funding_binding')
     return {'schema_version':'research-experiment-protocol.v1', 'identity':dict(identity),
         'phase_bindings':json.loads(canonical_bytes(phase_bindings)),
         'selection_code_sha256':{name:hash_bytes(Path(__file__).with_name(name).read_bytes())
@@ -162,8 +170,9 @@ def _safe_directory(path: Path) -> None:
 
 
 def _read_json(path: Path) -> dict:
+    cap = MAX_PROTOCOL_BYTES if path.name == 'protocol.json' else MAX_REGISTRY_JSON_BYTES
     if (any(parent.is_symlink() for parent in path.parents) or
-            not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_size > 4*1024**2):
+            not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_size > cap):
         raise ExperimentError('unsafe_or_oversized_artifact')
     try:
         value = json.loads(path.read_bytes())
@@ -175,7 +184,11 @@ def _read_json(path: Path) -> dict:
 
 
 def _publish(path: Path, value: dict) -> str:
-    return _publish_bytes(path,canonical_bytes(value))
+    data = canonical_bytes(value)
+    cap = MAX_PROTOCOL_BYTES if path.name == 'protocol.json' else MAX_REGISTRY_JSON_BYTES
+    if len(data) > cap:
+        raise ExperimentError('artifact_json_capacity_exceeded')
+    return _publish_bytes(path,data)
 
 
 def _publish_bytes(path: Path, data: bytes) -> str:
