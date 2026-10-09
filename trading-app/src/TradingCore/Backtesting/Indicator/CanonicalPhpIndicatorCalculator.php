@@ -74,21 +74,20 @@ final readonly class CanonicalPhpIndicatorCalculator
      */
     public function calculate(CanonicalIndicatorWindow $window): array
     {
-        $closes = $highs = $lows = $volumes = $ohlc = $seriesTimestamps = [];
-        foreach ($window->candles() as $candle) {
-            $close = (float) $candle->close;
-            $high = (float) $candle->high;
-            $low = (float) $candle->low;
-            $closes[] = $close;
-            $highs[] = $high;
-            $lows[] = $low;
-            $volumes[] = (float) $candle->volume;
-            $ohlc[] = ['high' => $high, 'low' => $low, 'close' => $close];
-            $seriesTimestamps[] = $candle->openTimestamp()->getTimestamp();
-        }
-        $totalVolume = array_sum($volumes);
-        if (!\is_finite($totalVolume) || $totalVolume <= 0.0) {
-            throw new CanonicalIndicatorProjectionException('canonical_indicator_calculation_invalid');
+        return $this->calculateNumericSeries(CanonicalIndicatorNumericSeries::fromCanonicalWindow($window));
+    }
+
+    /** @return array<string, mixed> */
+    public function calculateNumericSeries(CanonicalIndicatorNumericSeries $series): array
+    {
+        $closes = $series->closes;
+        $highs = $series->highs;
+        $lows = $series->lows;
+        $volumes = $series->volumes;
+        $seriesTimestamps = $series->timestamps;
+        $ohlc = [];
+        foreach ($closes as $i => $close) {
+            $ohlc[] = ['high' => $highs[$i], 'low' => $lows[$i], 'close' => $close];
         }
 
         $close = $this->finiteFloat($closes[array_key_last($closes)]);

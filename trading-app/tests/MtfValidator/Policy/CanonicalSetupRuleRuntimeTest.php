@@ -32,6 +32,42 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(CanonicalSetupRuleRuntimeResult::class)]
 final class CanonicalSetupRuleRuntimeTest extends TestCase
 {
+    public function testCompactVerdictsExposeComputedScalarAndSectionResultsWithoutChangingTrace(): void
+    {
+        $inputs = [
+            '4h' => self::indicatorInput('4h', '2026-08-10T04:00:00Z'),
+            '1h' => self::indicatorInput('1h', '2026-08-10T09:00:00Z', ['adx' => 25.0]),
+            '15m' => self::indicatorInput('15m', '2026-08-10T09:45:00Z'),
+            '5m' => self::indicatorInput('5m', '2026-08-10T09:55:00Z'),
+            '1m' => self::indicatorInput('1m', '2026-08-10T09:59:00Z'),
+        ];
+        $runtime = new CanonicalSetupRuleRuntime($this->passingConditions());
+        $result = $runtime->evaluate($this->dayTradingLineage(), $inputs, new \DateTimeImmutable('2026-08-10T10:00:00Z'));
+        self::assertTrue(property_exists($result, 'verdicts'));
+        self::assertTrue($result->passed);
+        self::assertSame(['passed' => true, 'reason_code' => 'all_of_passed'], $result->verdicts['sections']['regime']);
+        self::assertSame(['passed' => true, 'reason_code' => 'condition_passed'], $result->verdicts['filters'][1]);
+        self::assertSame([], $result->verdicts['no_trade_rules']);
+        self::assertArrayNotHasKey('passed', $result->trace['sections']['regime']);
+        self::assertArrayNotHasKey('passed', $result->trace['filters'][1]);
+        $inputs['1h']['adx'] = 10.0;
+        $rejected = $runtime->evaluate($this->dayTradingLineage(), $inputs, new \DateTimeImmutable('2026-08-10T10:00:00Z'));
+        self::assertFalse($rejected->passed);
+        self::assertSame(['passed' => false, 'reason_code' => 'condition_failed'], $rejected->verdicts['filters'][1]);
+    }
+
+    public function testEarlyRejectionsAndThreeArgumentConstructionRetainEmptyVerdicts(): void
+    {
+        $result = new CanonicalSetupRuleRuntimeResult(false, 'early', ['existing' => true]);
+        self::assertTrue(property_exists($result, 'verdicts'));
+        self::assertSame([], $result->verdicts);
+        self::assertSame(['existing' => true], $result->trace);
+        $early = (new CanonicalSetupRuleRuntime([]))->evaluate(LineageContext::legacy('BTCUSDT'), [], new \DateTimeImmutable('2026-08-10T10:00:00Z'));
+        self::assertSame('canonical_identity_required', $early->reasonCode);
+        self::assertSame([], $early->verdicts);
+        self::assertSame([], $early->trace);
+    }
+
     public function testScalpingShadowUsesContractDefinedExecutionAndConfirmationTrace(): void
     {
         foreach ([

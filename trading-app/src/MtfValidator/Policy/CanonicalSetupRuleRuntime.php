@@ -220,6 +220,19 @@ final class CanonicalSetupRuleRuntime
             'sections' => array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $sectionResults),
             'filters' => array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $filterResults),
             'no_trade_rules' => array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $noTradeResults),
+        ], [
+            'sections' => array_map(static fn (RuleEvaluationResult $result): array => [
+                'passed' => $result->passed,
+                'reason_code' => $result->reasonCode,
+            ], $sectionResults),
+            'filters' => array_map(static fn (RuleEvaluationResult $result): array => [
+                'passed' => $result->passed,
+                'reason_code' => $result->reasonCode,
+            ], $filterResults),
+            'no_trade_rules' => array_map(static fn (RuleEvaluationResult $result): array => [
+                'passed' => $result->passed,
+                'reason_code' => $result->reasonCode,
+            ], $noTradeResults),
         ]);
     }
 
