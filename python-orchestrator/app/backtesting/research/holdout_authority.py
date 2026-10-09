@@ -52,6 +52,7 @@ INVENTORY_JSON_BYTES = 8*1024**2
 INVENTORY_ENTRIES = 25_000
 INVENTORY_FILE_BYTES = 256*1024**2
 _ISSUED = {}
+_BUDGETS = {}
 
 
 class HoldoutError(ValueError):
@@ -592,10 +593,15 @@ class HoldoutAuthorization:
             self.output_root,((variant_id,cost_profile),),self.contract_bytes,self.mode)
 
 
-def _mint_authorization(*fields):
+def _mint_authorization(*fields, deadline=None):
     token = object()
     auth = HoldoutAuthorization(*fields,token)
     _ISSUED[token] = (auth,_authorization_fields(auth))
+    key = (auth.claim_hash, auth.mode)
+    if deadline is not None:
+        _BUDGETS[key] = deadline
+    if key not in _BUDGETS:
+        raise HoldoutError('authorization_budget_missing')
     return auth
 
 
@@ -707,11 +713,13 @@ def prepare_claim(authority: CampaignAuthority,output_root: Path,*,timeout: floa
             'output_root':str(output),'run_id':uuid.uuid4().hex})
         _publish_bytes(authority.anchor/'claim.json',claim_raw)
     return _mint_authorization(authority.authority_hash,hash_bytes(raw),hash_bytes(claim_raw),
-        authority.anchor,output,tuple((s['variant_id'],s['cost_profile']) for s in slots),raw,'evaluate')
+        authority.anchor,output,tuple((s['variant_id'],s['cost_profile']) for s in slots),raw,'evaluate',
+        deadline=started+timeout)
 
 
 def mint_retained_authorization(authority: CampaignAuthority) -> HoldoutAuthorization:
     """Mint read-only replay scope from retained consumed evidence, never retry."""
+    started = time.monotonic()
     authority = _installed(authority)
     protocol,freeze,raw = _verified_freeze(authority)
     _verify_runtime_inventory(authority)
@@ -721,7 +729,8 @@ def mint_retained_authorization(authority: CampaignAuthority) -> HoldoutAuthoriz
         raise HoldoutError('retained_input_identity_changed')
     return _mint_authorization(authority.authority_hash,hash_bytes(contract_raw),hash_bytes(claim_raw),
         authority.anchor,Path(contract['output_root']),
-        tuple((s['variant_id'],s['cost_profile']) for s in contract['slots']),contract_raw,'verify')
+        tuple((s['variant_id'],s['cost_profile']) for s in contract['slots']),contract_raw,'verify',
+        deadline=started+VERIFIER_SECONDS)
 
 
 def _validate_retained_scope(authority,contract,protocol,freeze):
@@ -795,3 +804,44 @@ def require_claim(auth: HoldoutAuthorization,*,operation: str,variant_id: str|No
     elif operation=='signals': expected = expected/'signals'
     if output_root is not None and Path(output_root)!=expected: raise HoldoutError('exact_output_scope_required')
     return json.loads(raw)
+
+
+def remaining_limits(auth: HoldoutAuthorization) -> dict:
+    """One monotonic clock and physical byte budget shared by all issued slots.
+
+    Retained replay has a finite, separate read-only clock. Persistent bytes
+    cover the consumed anchor (contract/claim/slot markers) and output tree,
+    counted once by inode with a terminal reserve. Original registry, authority
+    installation, source inputs and separately bounded temporary stats indexes
+    are excluded from this persistent accounting; no per-stage byte charging.
+    """
+    contract = require_claim(auth, operation='retained')
+    seconds = _BUDGETS[(auth.claim_hash, auth.mode)]-time.monotonic()
+    if seconds <= 0:
+        raise HoldoutError('holdout_overall_deadline')
+    used, seen = 0, set()
+    for root in (auth.anchor, auth.output_root):
+        if not root.exists():
+            continue
+        _safe_path(root, directory=True, private=True)
+        for directory, dirs, files in os.walk(root, followlinks=False):
+            if time.monotonic() >= _BUDGETS[(auth.claim_hash, auth.mode)]:
+                raise HoldoutError('holdout_overall_deadline')
+            for name in dirs:
+                _safe_path(Path(directory)/name, directory=True, private=True)
+            for name in files:
+                path = _safe_path(Path(directory)/name, private=True)
+                info = path.stat()
+                key = (info.st_dev, info.st_ino)
+                if key not in seen:
+                    seen.add(key)
+                    used += info.st_size
+    remaining = contract['limits']['overall_bytes']-used-contract['limits']['terminal_reserve_bytes']
+    if remaining <= 0:
+        raise HoldoutError('holdout_overall_capacity')
+    if shutil.disk_usage(auth.output_root.parent).free < contract['limits']['disk_reserve_bytes']:
+        raise HoldoutError('disk_reserve_required')
+    seconds = _BUDGETS[(auth.claim_hash, auth.mode)]-time.monotonic()
+    if seconds <= 0:
+        raise HoldoutError('holdout_overall_deadline')
+    return {'seconds':seconds, 'bytes':remaining, 'used_bytes':used}

@@ -145,6 +145,26 @@ def select_sources(root: Path, start: str, end: str, score_start: str,
     if (symbol not in SYMBOLS or beginning >= ending or score < SCORE_FLOOR
             or score < beginning or score >= ending or ending > HOLDOUT_START):
         raise SignalError("unsupported research range or symbol")
+    return _select_sources_validated(root, beginning, ending, score, symbol)
+
+
+def select_holdout_sources(root: Path, symbol: str, *, authorization) -> SourceSelection:
+    """Select the claimed fixed window; ordinary research remains pre-holdout."""
+    from .holdout_authority import require_claim
+    contract = require_claim(authorization, operation='source')
+    if Path(root) != Path(contract['paths']['dataset_root']) or symbol not in contract['symbols']:
+        raise SignalError('claimed source root or symbol conflict')
+    window = contract['window']
+    selection = _select_sources_validated(root, _utc(window['source_start']),
+        _utc(window['end']), _utc(window['score_start']), symbol)
+    if selection.manifest_sha256 != contract['identities']['source_manifest_sha256']:
+        raise SignalError('claimed source manifest conflict')
+    return selection
+
+
+def _select_sources_validated(root: Path, beginning: datetime, ending: datetime,
+                             score: datetime, symbol: str) -> SourceSelection:
+    """Coverage and provenance validation shared after separate scope guards."""
     root = Path(root)
     if not root.is_absolute() or root.is_symlink():
         raise SignalError("absolute non-symlink dataset root required")

@@ -146,6 +146,7 @@ def _file_sha256(path: Path) -> str:
 
 def _code_hashes(app_dir: Path, *, fake_worker: bool) -> dict[str, str]:
     paths = [Path(__file__), Path(__file__).with_name("signal_sources.py"),
+             Path(__file__).with_name("holdout_authority.py"),
              Path(__file__).with_name("binance_history.py"),
              Path(__file__).resolve().parents[2] / "modern_trading_contracts.py"]
     if not fake_worker:
@@ -569,6 +570,35 @@ def run_signals(dataset_root: Path, output_root: Path, app_dir: Path, start: str
                   for symbol in symbols]
     argv = _worker_argv(app_dir, worker_argv)
     code_hashes = _code_hashes(app_dir, fake_worker=worker_argv is not None)
+    return _run_selected_signals(dataset_root, Path(output_root), app_dir, start, end,
+        score_start, selections, argv, code_hashes, wall_timeout, max_stderr_bytes,
+        max_output_bytes)
+
+
+def run_holdout_signals(output_root: Path, *, authorization) -> dict:
+    """Run the fixed claimed universe with the canonical worker and shared caps."""
+    from .holdout_authority import require_claim, remaining_limits
+    from .signal_sources import select_holdout_sources
+    contract = require_claim(authorization, operation='signals', output_root=output_root)
+    paths, window = contract['paths'], contract['window']
+    dataset_root, app_dir = Path(paths['dataset_root']), Path(paths['app_dir'])
+    selections = [select_holdout_sources(dataset_root, symbol, authorization=authorization)
+                  for symbol in contract['symbols']]
+    limits = remaining_limits(authorization)
+    return _run_selected_signals(dataset_root, Path(output_root), app_dir,
+        window['source_start'], window['end'], window['score_start'], selections,
+        _worker_argv(app_dir, None), _code_hashes(app_dir, fake_worker=False),
+        min(DEFAULT_WALL_SECONDS, limits['seconds']), DEFAULT_STDERR_BYTES,
+        min(contract['limits']['signal_bytes'], limits['bytes']), authorization=authorization,
+        expected_baseline=contract['identities']['baseline'],
+        report_reserve=contract['limits']['metadata_bytes'])
+
+
+def _run_selected_signals(dataset_root, output_root, app_dir, start, end, score_start,
+        selections, argv, code_hashes, wall_timeout, max_stderr_bytes,
+        max_output_bytes, *, authorization=None, expected_baseline=None, report_reserve=0):
+    if max_output_bytes <= report_reserve:
+        raise SignalError('aggregate signal report capacity exceeded')
     output_root = _private_output(Path(output_root), dataset_root)
     report: dict = {"schema": "research-signal-run.v1", "status": "running",
                     "source_start": start, "source_end": end, "score_start": score_start,
@@ -577,9 +607,20 @@ def run_signals(dataset_root: Path, output_root: Path, app_dir: Path, start: str
     started = time.monotonic()
     try:
         for selection in selections:
+            symbol_timeout, symbol_bytes = wall_timeout, max_output_bytes
+            if authorization is not None:
+                from .holdout_authority import remaining_limits
+                remaining = remaining_limits(authorization)
+                used = sum(p.stat().st_size for p in output_root.iterdir() if p.is_file())
+                symbol_timeout = min(wall_timeout, remaining['seconds'])
+                symbol_bytes = min(max_output_bytes-used-report_reserve, remaining['bytes']-report_reserve)
+                if symbol_bytes <= 0:
+                    raise SignalError('aggregate signal output capacity exceeded')
             report["symbols"][selection.symbol] = _run_symbol(
-                dataset_root, output_root, app_dir, selection, argv, wall_timeout,
-                max_stderr_bytes, max_output_bytes)
+                dataset_root, output_root, app_dir, selection, argv, symbol_timeout,
+                max_stderr_bytes, symbol_bytes)
+            if authorization is not None and report['symbols'][selection.symbol]['baseline'] != expected_baseline:
+                raise SignalError('claimed baseline differs from signal worker')
         report["status"] = "complete"
         return report
     except Exception as exc:
@@ -597,6 +638,8 @@ def run_signals(dataset_root: Path, output_root: Path, app_dir: Path, start: str
                             "elapsed_seconds": elapsed,
                             "candles_per_second": candles / elapsed if elapsed > 0 and candles else None,
                             "evaluations_per_second": evaluations / elapsed if elapsed > 0 and evaluations else None}
+        if authorization is not None and len(json.dumps(report,sort_keys=True,indent=2,allow_nan=False).encode())+1 > report_reserve:
+            raise SignalError('aggregate signal report metadata capacity exceeded')
         _atomic_json(output_root / "report.json", report)
 
 

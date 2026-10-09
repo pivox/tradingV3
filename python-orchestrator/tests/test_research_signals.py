@@ -845,7 +845,8 @@ def test_code_hashes_require_all_bound_worker_files(tmp_path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("fixture")
     hashes = signals._code_hashes(tmp_path, fake_worker=False)
-    assert len(hashes) == 4 + 4 + len(signals.CODE_FILES)
+    assert len(hashes) == 5 + 4 + len(signals.CODE_FILES)
+    assert str(Path(signals.__file__).with_name('holdout_authority.py')) in hashes
 
 
 def test_private_output_rejects_symlink_parent_missing_parent_and_dataset(tmp_path: Path) -> None:
