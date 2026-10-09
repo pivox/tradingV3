@@ -106,13 +106,18 @@ def _decimal(value: str, *, positive: bool = False, nonnegative: bool = False) -
     return number
 
 
+def _integer(value: object) -> int:
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+        return int(value)
+    raise ArchiveError("integer field required")
+
+
 def validate_kline(row: list[str] | tuple[object, ...]) -> tuple[int, int]:
-    if len(row) != 12:
+    if not isinstance(row, (list, tuple)) or len(row) != 12:
         raise ArchiveError("kline field count")
-    try:
-        opening, closing, trades = int(row[0]), int(row[6]), int(row[8])
-    except (ValueError, TypeError) as exc:
-        raise ArchiveError("kline integer") from exc
+    opening, closing, trades = (_integer(row[i]) for i in (0, 6, 8))
     if opening < 0 or opening % 60000 or closing != opening + 59999 or trades < 0:
         raise ArchiveError("kline timestamp or trades")
     open_price, high, low, close = (_decimal(str(row[i]), positive=True) for i in (1, 2, 3, 4))

@@ -378,20 +378,15 @@ def test_incomplete_valid_archive_resumes_without_http(tmp_path: Path) -> None:
     assert calls == 2
 
 
-def test_root_cap_includes_preexisting_files(tmp_path: Path) -> None:
-    raw = fixture_zip()
+def test_foreign_nonempty_root_is_rejected_before_network(tmp_path: Path) -> None:
     root = tmp_path / "occupied"
     root.mkdir()
     cap = 64 * 1024 * 1024
     with (root / "already.bin").open("wb") as output:
         output.truncate(cap)
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith(".CHECKSUM"):
-            return httpx.Response(200, text=f"{hashlib.sha256(raw).hexdigest()}  BTCUSDT-1m-2023-01-01.zip")
-        return httpx.Response(200, content=raw)
-
-    with client_for(handler) as client, pytest.raises(AcquisitionError, match="capacity"):
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("no network"))) as client, \
+            pytest.raises(AcquisitionError):
         acquire(root, START, END, symbols=("BTCUSDT",), client=client, reserve_bytes=0,
                 root_cap_bytes=cap)
 
@@ -421,6 +416,10 @@ def test_rejects_naive_now_bad_manifest_and_unsafe_lock(tmp_path: Path) -> None:
         root = tmp_path / "bad_manifest"
         root.mkdir()
         (root / "manifest.json").write_text("not JSON")
+        with pytest.raises(AcquisitionError, match="manifest"):
+            acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                    reserve_bytes=0)
+        (root / "manifest.json").write_text("[]")
         with pytest.raises(AcquisitionError, match="manifest"):
             acquire(root, START, END, symbols=("BTCUSDT",), client=client,
                     reserve_bytes=0)
@@ -680,3 +679,268 @@ def test_resume_rest_rejects_forged_metadata(tmp_path: Path, field: str,
         with pytest.raises(AcquisitionError):
             acquire(root, "2026-10-09T00:00:00Z", "2026-10-09T00:01:00Z",
                     symbols=("BTCUSDT",), now=now, client=client, reserve_bytes=0)
+
+
+def test_existing_nonempty_root_and_repository_ancestor_are_untouched(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    occupied = tmp_path / "occupied"
+    occupied.mkdir(mode=0o755)
+    (occupied / "user.txt").write_text("keep")
+    original_mode = occupied.stat().st_mode & 0o777
+    def forbid_chmod(*_args: object) -> None:
+        raise AssertionError("chmod before validation")
+    monkeypatch.setattr(acquire_module.os, "chmod", forbid_chmod)
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("network"))) as client:
+        for root in (occupied, Path.home(), Path("/")):
+            with pytest.raises(AcquisitionError):
+                acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                        reserve_bytes=0)
+    assert occupied.stat().st_mode & 0o777 == original_mode
+    assert (occupied / "user.txt").read_text() == "keep"
+
+
+def test_resume_rederives_archive_status_and_rejects_extra_or_duplicate_sources(
+        tmp_path: Path) -> None:
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr("BTCUSDT-1m-2023-01-01.csv",
+                         "1672531200000,100,102,99,101,2,1672531259999,200,3,1,100,0")
+    raw = stream.getvalue()
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(".CHECKSUM"):
+            return httpx.Response(200, text=f"{hashlib.sha256(raw).hexdigest()}  BTCUSDT-1m-2023-01-01.zip")
+        return httpx.Response(200, content=raw)
+    root = tmp_path / "tamper"
+    with client_for(handler) as client:
+        result = acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                         reserve_bytes=0)
+    assert not result.complete
+    original = json.loads(result.manifest_path.read_text())
+    for mutation in ("status", "duplicate", "extra"):
+        forged = json.loads(json.dumps(original))
+        if mutation == "status":
+            forged["sources"][0]["status"] = "ok"
+        elif mutation == "duplicate":
+            forged["sources"].append(dict(forged["sources"][0]))
+        else:
+            extra = dict(forged["sources"][0])
+            extra["symbol"] = "ETHUSDT"
+            forged["sources"].append(extra)
+        result.manifest_path.write_text(json.dumps(forged))
+        with client_for(lambda _: (_ for _ in ()).throw(AssertionError("no network"))) as client:
+            with pytest.raises(AcquisitionError):
+                acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                        reserve_bytes=0)
+
+
+def test_resume_checks_total_root_cap_before_reading(tmp_path: Path) -> None:
+    raw = fixture_zip()
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(".CHECKSUM"):
+            return httpx.Response(200, text=f"{hashlib.sha256(raw).hexdigest()}  BTCUSDT-1m-2023-01-01.zip")
+        return httpx.Response(200, content=raw)
+    root = tmp_path / "cap_resume"
+    with client_for(handler) as client:
+        acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                reserve_bytes=0)
+    cap = 64 * 1024 * 1024
+    with (root / "oversize.bin").open("wb") as output:
+        output.truncate(cap + 1)
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("no network"))) as client:
+        with pytest.raises(AcquisitionError, match="capacity"):
+            acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                    reserve_bytes=0, root_cap_bytes=cap)
+
+
+def test_resume_rejects_oversize_raw_before_read_bytes(tmp_path: Path,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = fixture_zip()
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(".CHECKSUM"):
+            return httpx.Response(200, text=f"{hashlib.sha256(raw).hexdigest()}  BTCUSDT-1m-2023-01-01.zip")
+        return httpx.Response(200, content=raw)
+    root = tmp_path / "bounded_resume"
+    with client_for(handler) as client:
+        result = acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                         reserve_bytes=0)
+    path = root / result.sources[0]["raw_path"]
+    with path.open("wb") as output:
+        output.truncate(64 * 1024 * 1024 + 1)
+    real_read = Path.read_bytes
+    def guarded_read(target: Path) -> bytes:
+        if target == path:
+            raise AssertionError("oversize file was read")
+        return real_read(target)
+    monkeypatch.setattr(Path, "read_bytes", guarded_read)
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("no network"))) as client:
+        with pytest.raises(AcquisitionError):
+            acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                    reserve_bytes=0)
+
+
+@pytest.mark.parametrize("kind", ["checksum", "rest"])
+def test_resume_bounds_auxiliary_files_before_read_bytes(tmp_path: Path,
+                                                         monkeypatch: pytest.MonkeyPatch,
+                                                         kind: str) -> None:
+    root = tmp_path / kind
+    if kind == "checksum":
+        raw = fixture_zip()
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith(".CHECKSUM"):
+                return httpx.Response(200, text=f"{hashlib.sha256(raw).hexdigest()}  BTCUSDT-1m-2023-01-01.zip")
+            return httpx.Response(200, content=raw)
+        with client_for(handler) as client:
+            result = acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                             reserve_bytes=0)
+        path = root / result.sources[0]["checksum_path"]
+        size = 4097
+        start, end, now = START, END, None
+    else:
+        opening = 1791504000000
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=[[opening, "100", "102", "99", "101", "2",
+                                              opening + 59999, "200", 3, "1", "100", "0"]])
+        start, end = "2026-10-09T00:00:00Z", "2026-10-09T00:01:00Z"
+        now = datetime(2026, 10, 9, 0, 2, tzinfo=UTC)
+        with client_for(handler) as client:
+            result = acquire(root, start, end, symbols=("BTCUSDT",), now=now,
+                             client=client, reserve_bytes=0)
+        path = root / result.sources[0]["pages"][0]["raw_path"]
+        size = 2 * 1024 * 1024 + 1
+    with path.open("wb") as output:
+        output.truncate(size)
+    real_read = Path.read_bytes
+    def guarded_read(target: Path) -> bytes:
+        if target == path:
+            raise AssertionError("oversize auxiliary file was read")
+        return real_read(target)
+    monkeypatch.setattr(Path, "read_bytes", guarded_read)
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("no network"))) as client:
+        with pytest.raises(AcquisitionError):
+            acquire(root, start, end, symbols=("BTCUSDT",), now=now,
+                    client=client, reserve_bytes=0)
+
+
+@pytest.mark.parametrize("payload", [
+    [[42]], [{str(i): i for i in range(12)}], [[True, "100", "102", "99", "101", "2", 59999,
+                                     "200", 3, "1", "100", "0"]],
+    [[1791504000000.5, "100", "102", "99", "101", "2", 1791504059999,
+      "200", 3, "1", "100", "0"]],
+    [[1791504000000, "100", "102", "99", "101", "2", 1791504059999,
+      "200", float("inf"), "1", "100", "0"]],
+    [[1791504000000, "100", "102", "99", "101", "2", 1791504059999,
+      "200", True, "1", "100", "0"]],
+    [[1791504000000, "100", "102", "99", "101", "2", 1791504059999,
+      "200", 3.5, "1", "100", "0"]],
+])
+def test_rest_malformed_rows_are_recorded_invalid(tmp_path: Path, payload: object) -> None:
+    now = datetime(2026, 10, 9, 0, 2, tzinfo=UTC)
+    with client_for(lambda _: httpx.Response(200, content=json.dumps(payload).encode())) as client:
+        result = acquire(tmp_path / "bad_rest", "2026-10-09T00:00:00Z",
+                         "2026-10-09T00:01:00Z", symbols=("BTCUSDT",),
+                         client=client, now=now, reserve_bytes=0)
+    assert result.sources[0]["status"] == "invalid"
+
+
+@pytest.mark.parametrize("sources", [None, [42], [{"symbol": "BTCUSDT"}],
+                                     [{"symbol": [], "kind": "klines", "start": START,
+                                       "end": END}]])
+def test_resume_rejects_malformed_source_list(tmp_path: Path, sources: object) -> None:
+    root = tmp_path / "malformed"
+    with client_for(lambda _: httpx.Response(404)) as client:
+        result = acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                         reserve_bytes=0)
+    manifest = json.loads(result.manifest_path.read_text())
+    manifest["sources"] = sources
+    result.manifest_path.write_text(json.dumps(manifest))
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("no network"))) as client:
+        with pytest.raises(AcquisitionError):
+            acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                    reserve_bytes=0)
+
+
+def test_resume_rejects_special_file_in_root(tmp_path: Path) -> None:
+    root = tmp_path / "special"
+    with client_for(lambda _: httpx.Response(404)) as client:
+        acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                reserve_bytes=0)
+    os.mkfifo(root / "pipe")
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("no network"))) as client:
+        with pytest.raises(AcquisitionError):
+            acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                    reserve_bytes=0)
+
+
+def test_nested_new_root_is_created_private(tmp_path: Path) -> None:
+    with client_for(lambda _: httpx.Response(404)) as client:
+        result = acquire(tmp_path / "new" / "nested" / "root", START, END,
+                         symbols=("BTCUSDT",), client=client, reserve_bytes=0)
+    assert result.manifest_path.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_existing_empty_root_is_accepted(tmp_path: Path) -> None:
+    root = tmp_path / "empty"
+    root.mkdir()
+    with client_for(lambda _: httpx.Response(404)) as client:
+        result = acquire(root, START, END, symbols=("BTCUSDT",), client=client,
+                         reserve_bytes=0)
+    assert result.manifest_path.exists()
+
+
+def test_atomic_storage_equal_race_and_manifest_temp_cleanup(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "race.zip"
+    real_fsync = os.fsync
+    def equal_race(descriptor: int) -> None:
+        path.write_bytes(b"same")
+        real_fsync(descriptor)
+    monkeypatch.setattr(acquire_module.os, "fsync", equal_race)
+    acquire_module._atomic_file(path, b"same")
+    assert path.read_bytes() == b"same"
+    assert not list(tmp_path.glob("*.tmp"))
+    monkeypatch.setattr(acquire_module.os, "fsync", real_fsync)
+    def fail_replace(*_args: object) -> None:
+        raise OSError("simulated publication failure")
+    monkeypatch.setattr(acquire_module.os, "replace", fail_replace)
+    with pytest.raises(OSError):
+        acquire_module._manifest_write(tmp_path / "manifest.json", {"schema": 1})
+    assert not list(tmp_path.glob(".manifest.*.tmp"))
+
+
+def test_owned_http_client_is_bounded_and_closed(tmp_path: Path,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    created = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(404)))
+    options = []
+    monkeypatch.setattr(acquire_module.httpx, "Client", lambda **kwargs: (options.append(kwargs), created)[1])
+    result = acquire(tmp_path / "owned", START, END, symbols=("BTCUSDT",),
+                     reserve_bytes=0)
+    assert not result.complete
+    assert options == [{"timeout": 30, "follow_redirects": False}]
+    assert created.is_closed
+
+
+def test_resume_rest_rederives_partial_status(tmp_path: Path) -> None:
+    opening = 1791504000000
+    start, end = "2026-10-09T00:00:00Z", "2026-10-09T00:02:00Z"
+    now = datetime(2026, 10, 9, 0, 3, tzinfo=UTC)
+    def handler(request: httpx.Request) -> httpx.Response:
+        cursor = int(request.url.params["startTime"])
+        return httpx.Response(200, json=[[cursor, "100", "102", "99", "101", "2",
+                                          cursor + 59999, "200", 3, "1", "100", "0"]])
+    root = tmp_path / "rest_status"
+    with client_for(handler) as client:
+        result = acquire(root, start, end, symbols=("BTCUSDT",), now=now,
+                         client=client, reserve_bytes=0)
+    manifest = json.loads(result.manifest_path.read_text())
+    entry = manifest["sources"][0]
+    second = root / entry["pages"][1]["raw_path"]
+    second.unlink()
+    entry["pages"] = entry["pages"][:1]
+    entry["count"] = 1
+    entry["last_close"] = opening + 59999
+    entry["coverage"] = "incomplete"
+    result.manifest_path.write_text(json.dumps(manifest))
+    with client_for(lambda _: (_ for _ in ()).throw(AssertionError("no network"))) as client:
+        with pytest.raises(AcquisitionError):
+            acquire(root, start, end, symbols=("BTCUSDT",), now=now,
+                    client=client, reserve_bytes=0)
