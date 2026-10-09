@@ -361,7 +361,7 @@ def test_earlier_partial_bytes_survive_later_empty_retry_failures(tmp_path, fina
     assert len(calls) == (3 if final_failure == "transport" else 2)
 
 
-@pytest.mark.parametrize("extra", ["NaN", "Infinity", "-Infinity", "1e400", "{}", "9223372036854775808"])
+@pytest.mark.parametrize("extra", ["NaN", "Infinity", "-Infinity", "1e400", "{}", "9223372036854775808", '"\\ud800"'])
 def test_invalid_extra_funding_value_is_rejected_with_final_status(tmp_path, extra):
     def handler(request):
         if request.url.path.endswith("exchangeInfo"):
