@@ -17,7 +17,7 @@ import time
 import uuid
 
 from . import plans, signals
-from .campaign_evidence import Evidence, EvidenceError, reconcile
+from .campaign_evidence import Evidence, EvidenceError, TERMINAL_STATUS_BYTES, encoded, reconcile
 from .funding import FundingReader, REST_HYPOTHESIS
 from .portfolio_simulator import (Candle, CostAssumptions, FundingCoverage,
     FundingEvent, InstrumentAssumptions, PortfolioSimulator, RunAssumptions,
@@ -277,14 +277,16 @@ def run_campaign(dataset_root: Path, signal_root: Path | tuple[Path,...], output
     if funding_supplement_root is not None:
         exclusions += (Path(funding_supplement_root),)
     manifest_sha = None
-    with Evidence(Path(output_root),exclusions,max_bytes=max_output_bytes,min_free_bytes=min_free_bytes) as evidence:
-        evidence.json('attempt.json',{'schema_version':'research-campaign-attempt.v1','run_id':run_id,
-            'phase':phase,'variant_id':variant_id,'cost_profile':cost_profile,
-            'dataset_root':str(dataset_root),'signal_roots':list(map(str,roots)),
-            'app_dir':str(app_dir),'instrument_path':str(instrument_path),'cost_path':str(cost_path),
-            'symbol_priority':symbols})
+    attempt = {'schema_version':'research-campaign-attempt.v1','run_id':run_id,
+        'phase':phase,'variant_id':variant_id,'cost_profile':cost_profile,
+        'dataset_root':str(dataset_root),'signal_roots':list(map(str,roots)),
+        'app_dir':str(app_dir),'instrument_path':str(instrument_path),'cost_path':str(cost_path),
+        'symbol_priority':symbols}
+    with Evidence(Path(output_root),exclusions,max_bytes=max_output_bytes,min_free_bytes=min_free_bytes,
+                  initial_bytes=len(encoded(attempt))) as evidence:
         worker = None
         try:
+            evidence.json('attempt.json',attempt)
             if (wall_timeout <= 0 or io_timeout <= 0 or phase not in ('training','validation')
                 or symbols != tuple(s for s in SYMBOLS if s in symbols) or not symbols):
                 raise CampaignError('campaign phase, universe or limits invalid; holdout closed')
@@ -324,7 +326,8 @@ def run_campaign(dataset_root: Path, signal_root: Path | tuple[Path,...], output
                 'b1_python_code_binding_policy':'four_known_logical_modules_exact_content_php_paths_exact.v1',
                 'code_identity_check_policy':plans.CODE_POLICY,'code_hash_scope':plans.CODE_SCOPE,
                 'execution_authority':'none','initial_wallet_quote':'100000','b1_counters':counters,
-                'storage_policy':{'max_bytes':max_output_bytes,'min_free_bytes':min_free_bytes},
+                'storage_policy':{'max_bytes':max_output_bytes,'min_free_bytes':min_free_bytes,
+                    'terminal_status_reserved_bytes':TERMINAL_STATUS_BYTES},
                 'fill_policy':'conservative_closed_ohlc.v1',
                 'holding_settlement_policy':'prior_close_exclusive_deadline.v1',
                 'funding_path_policy':'adverse_possible_credit_certain.v1',
@@ -433,21 +436,27 @@ def run_campaign(dataset_root: Path, signal_root: Path | tuple[Path,...], output
                 'reconciliation':replay,'profit_factor':None,
                 'profit_factor_reason':'aggregate_ratios_owned_by_campaign_selection_ledger',
                 'average_net_r':None,'average_net_r_reason':'requires_plan_risk_join_in_selection_ledger'}
-            summary_sha = evidence.json('summary.json',summary)
-            evidence.json('status.json',{'schema_version':'research-campaign-status.v1','run_id':run_id,
+            summary_sha = hashlib.sha256(encoded(summary)).hexdigest()
+            terminal = {'schema_version':'research-campaign-status.v1','run_id':run_id,
                 'status':status,'manifest_sha256':manifest_sha,'summary_sha256':summary_sha,'files':files,
-                'completion':'input_complete','execution_authority':'none'})
+                'completion':'input_complete','execution_authority':'none'}
+            evidence.check_status(terminal)
+            evidence.json('summary.json',summary)
+            evidence.json('status.json',terminal)
             return summary
         except Exception as exc:
+            message, error_type = str(exc), type(exc).__name__
             failure = {'schema_version':'research-campaign-status.v1','run_id':run_id,'status':'failed',
                 'manifest_sha256':manifest_sha,'summary_sha256':None,'execution_authority':'none',
-                'error':{'type':type(exc).__name__,'message':str(exc)},
+                'error':{'type':error_type[:96],'type_truncated':len(error_type)>96,
+                    'message':message[:256],'message_truncated':len(message)>256,
+                    'message_sha256':hashlib.sha256(message.encode('utf-8',errors='surrogatepass')).hexdigest()},
                 'planner_evidence':worker.evidence() if worker is not None else None}
             try:
                 evidence.json('status.json',failure)
             except (OSError,EvidenceError):
-                pass  # Partial evidence remains when disk exhaustion prevents a status file.
-            raise CampaignError(str(exc)) from exc
+                pass  # Physical I/O failure can still prevent terminal publication.
+            raise CampaignError(message[:256]) from exc
 
 
 def main(argv: list[str] | None = None) -> int:

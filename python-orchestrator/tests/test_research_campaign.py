@@ -432,6 +432,66 @@ def test_failed_status_write_keeps_attempt_and_partial_evidence(tmp_path,monkeyp
     assert (kwargs['output_root']/'attempt.json').exists()
 
 
+@pytest.mark.parametrize('cap',[15000,22000])
+def test_real_evidence_cap_exhaustion_publishes_failed_status(tmp_path,monkeypatch,cap):
+    kwargs,_,_ = fixture(tmp_path,monkeypatch,passed=True)
+    Builder.positive = True
+    with pytest.raises(c.CampaignError,match='disk cap'):
+        c.run_campaign(**kwargs,max_output_bytes=cap)
+    out = kwargs['output_root']
+    assert json.loads((out/'status.json').read_text())['status'] == 'failed'
+    assert sum(p.stat().st_size for p in out.iterdir()) <= cap
+
+
+def test_final_publication_exhaustion_preserves_failed_status(tmp_path,monkeypatch):
+    kwargs,_,_ = fixture(tmp_path,monkeypatch,passed=True)
+    Builder.positive = True
+    original = c.Evidence.json
+    def limited(evidence,name,value):
+        if name == 'summary.json':
+            evidence.max_bytes = evidence.bytes+8192
+        return original(evidence,name,value)
+    monkeypatch.setattr(c.Evidence,'json',limited)
+    with pytest.raises(c.CampaignError,match='disk cap'): c.run_campaign(**kwargs)
+    out = kwargs['output_root']
+    assert (out/'trades.ndjson').exists()
+    assert not (out/'summary.json').exists()
+    assert json.loads((out/'status.json').read_text())['status'] == 'failed'
+
+
+def test_initial_attempt_budget_refuses_before_root(tmp_path,monkeypatch):
+    kwargs,_,_ = fixture(tmp_path,monkeypatch)
+    with pytest.raises(c.EvidenceError): c.run_campaign(**kwargs,max_output_bytes=8193)
+    assert not kwargs['output_root'].exists()
+
+
+def test_failure_unicode_diagnostics_are_bounded_and_hashed(tmp_path,monkeypatch):
+    kwargs,_,_ = fixture(tmp_path,monkeypatch)
+    message = '\U0001f680'*10000
+    error_type = type('\U0001f680'*1000,(RuntimeError,),{})
+    def failed(*args): raise error_type(message)
+    monkeypatch.setattr(c,'_verify_reports',failed)
+    with pytest.raises(c.CampaignError): c.run_campaign(**kwargs)
+    raw = (kwargs['output_root']/'status.json').read_bytes()
+    error = json.loads(raw)['error']
+    assert len(raw) <= 8192
+    assert error['message_truncated'] and error['type_truncated']
+    assert error['message_sha256'] == hashlib.sha256(message.encode()).hexdigest()
+
+
+def test_oversized_success_status_refuses_before_summary(tmp_path,monkeypatch):
+    kwargs,_,_ = fixture(tmp_path,monkeypatch)
+    original = c.Evidence.finish_ledgers
+    def oversized(evidence):
+        files = original(evidence)
+        files['events.ndjson']['sha256'] = 'x'*8192
+        return files
+    monkeypatch.setattr(c.Evidence,'finish_ledgers',oversized)
+    with pytest.raises(c.CampaignError,match='terminal status'): c.run_campaign(**kwargs)
+    assert not (kwargs['output_root']/'summary.json').exists()
+    assert json.loads((kwargs['output_root']/'status.json').read_text())['status'] == 'failed'
+
+
 def test_cli_one_unit_with_repeated_report_roots_and_error_exit(tmp_path,monkeypatch,capsys):
     values = []
     def run(**kwargs): values.append(kwargs);return {'status':'complete','run_id':'synthetic'}

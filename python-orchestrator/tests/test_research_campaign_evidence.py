@@ -57,12 +57,62 @@ def test_output_path_protection(tmp_path, kind):
 
 
 def test_disk_limits_and_unsafe_artifact_names(tmp_path):
-    with e.Evidence(tmp_path/'cap',(),max_bytes=10,min_free_bytes=0) as evidence:
+    with e.Evidence(tmp_path/'cap',(),max_bytes=8202,min_free_bytes=0) as evidence:
         with pytest.raises(e.EvidenceError): evidence.json('manifest.json', {'long':'x'*20})
         with pytest.raises(e.EvidenceError): evidence.json('../escape',{})
         with pytest.raises(e.EvidenceError): evidence.emit('unknown',{})
-    with e.Evidence(tmp_path/'free',(),max_bytes=10000,min_free_bytes=10**30) as evidence:
-        with pytest.raises(e.EvidenceError): evidence.json('manifest.json',{})
+    with pytest.raises(e.EvidenceError):
+        e.Evidence(tmp_path/'free',(),max_bytes=10000,min_free_bytes=10**30)
+    assert not (tmp_path/'free').exists()
+
+
+def test_ledger_exhaustion_preserves_terminal_budget_inside_cap(tmp_path):
+    row = {'kind':'before-failure'}
+    size = len(e.encoded({**row,'ledger_sequence':0}))
+    cap = 8192+size
+    out = tmp_path/'run'
+    with e.Evidence(out,(),max_bytes=cap,min_free_bytes=0) as evidence:
+        evidence.emit('events',row)
+        with pytest.raises(e.EvidenceError,match='disk cap'):
+            evidence.emit('events',row)
+        evidence.json('status.json',{'status':'failed'})
+    assert (out/'events.partial.ndjson').exists()
+    assert sum(p.stat().st_size for p in out.iterdir()) <= cap
+
+
+@pytest.mark.parametrize('cap',[1,8192])
+def test_impossible_terminal_budget_refuses_before_root(tmp_path,cap):
+    out = tmp_path/'run'
+    with pytest.raises(e.EvidenceError):
+        e.Evidence(out,(),max_bytes=cap,min_free_bytes=0)
+    assert not out.exists()
+
+
+def test_status_encoded_size_and_free_space_reserve(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    available = 9000
+    monkeypatch.setattr(e.shutil,'disk_usage',lambda path:SimpleNamespace(free=available))
+    out = tmp_path/'run'
+    with e.Evidence(out,(),max_bytes=100000,min_free_bytes=100) as evidence:
+        available = 8292
+        with pytest.raises(e.EvidenceError,match='free space'):
+            evidence.json('manifest.json',{})
+        with pytest.raises(e.EvidenceError,match='terminal status'):
+            evidence.json('status.json',{'message':'\U0001f680'*1000})
+        evidence.json('status.json',{'status':'failed'})
+    assert json.loads((out/'status.json').read_text())['status'] == 'failed'
+
+
+def test_buffered_ledgers_cannot_consume_free_space_status_reserve(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    row = {'kind':'buffered'}
+    size = len(e.encoded({**row,'ledger_sequence':0}))
+    monkeypatch.setattr(e.shutil,'disk_usage',lambda path:SimpleNamespace(free=8192+size+100))
+    with e.Evidence(tmp_path/'run',(),max_bytes=100000,min_free_bytes=100) as evidence:
+        evidence.emit('events',row)
+        with pytest.raises(e.EvidenceError,match='free space'):
+            evidence.emit('events',row)
+        evidence.json('status.json',{'status':'failed'})
 
 
 @pytest.mark.parametrize('mutation', ['wallet','net','trades','trade_net','orphan','duplicate','sequence','unknown_kind'])
