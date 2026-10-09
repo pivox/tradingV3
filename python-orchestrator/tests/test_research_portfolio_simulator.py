@@ -48,7 +48,12 @@ def bars(t, *, low='99', high='101', close='100', opening='100', symbols=SYMBOLS
 
 def signal(t, symbol='BTCUSDT', index=0):
     payload = {'schema_version': 'research-signal-result.v1', 'symbol': symbol,
-               'evaluated_ms': t, 'passed': True, 'source': {
+               'evaluated_ms': t, 'passed': True,
+               'baseline': {'setup_hash': IDENTITY['base_setup_hash'],
+                            'config_hash': IDENTITY['base_config_hash'],
+                            'condition_catalog_hash': IDENTITY['base_catalog_hash'],
+                            'snapshot_hash': IDENTITY['base_snapshot_hash']},
+               'source': {
                    'dataset_id': SOURCE['dataset_id'], 'dataset_sha256': SOURCE['dataset_sha256'],
                    'source_venue': 'binance_usdm', 'source_network': 'mainnet', 'market_type': 'perpetual'}}
     payload['result_hash'] = canonical_hash(payload)
@@ -709,3 +714,68 @@ def test_observed_funding_one_millisecond_before_end_is_in_phase():
     flow=next(x for x in ledger['cashflows'] if x['kind']=='funding')
     assert flow['timestamp_ms']==at and flow['amount_quote']==D('-.2')
     assert sim.finish()['completion']=='complete'
+
+
+@pytest.mark.parametrize('field', ['setup_hash','config_hash','condition_catalog_hash','snapshot_hash'])
+@pytest.mark.parametrize('startup', [True,False])
+def test_self_hashed_b1_other_baseline_is_rejected_before_planning(field,startup):
+    called=[]
+    def builder(s,v): called.append(s); return plan(s,v)
+    sim,ledger=simulator(builder=builder,prime=False)
+    t=START if startup else START+60000
+    payload=json.loads(json.dumps(dict(signal(t).payload),default=dict))
+    payload['baseline'][field]='sha256:'+'e'*64
+    payload['result_hash']=canonical_hash({k:v for k,v in payload.items() if k!='result_hash'})
+    altered=Signal(0,payload)
+    if not startup: sim.prime(bars(START-60000))
+    before=(sim.view(),dict(sim.marks),sim.processed_batches)
+    with pytest.raises(ValueError,match='research_signal_baseline_invalid'):
+        if startup: sim.prime(bars(START-60000),signals=(altered,))
+        else: sim.advance(bars(START),signals=(altered,))
+    assert (sim.view(),dict(sim.marks),sim.processed_batches)==before
+    assert not called and not any(ledger.values())
+    assert not sim.failed
+
+
+@pytest.mark.parametrize('bad_baseline', [None,[], {'setup_hash': HASH}])
+def test_missing_or_malformed_b1_baseline_is_invalid(bad_baseline):
+    sim,_=simulator(prime=False)
+    payload=dict(signal(START).payload)
+    if bad_baseline is None: payload.pop('baseline')
+    else: payload['baseline']=bad_baseline
+    payload['result_hash']=canonical_hash({k:v for k,v in payload.items() if k!='result_hash'})
+    with pytest.raises(ValueError,match='research_signal_baseline_invalid'):
+        sim.prime(bars(START-60000),signals=(Signal(0,payload),))
+
+
+@pytest.mark.parametrize('response', [None,[],['invalid'],True])
+@pytest.mark.parametrize('startup', [True,False])
+def test_nonmapping_plan_response_is_explicit_fatal_protocol_error(response,startup):
+    sim,ledger=simulator(builder=lambda s,v:response,prime=False)
+    if not startup: sim.prime(bars(START-60000))
+    with pytest.raises(ValueError,match='^research_plan_response_invalid$'):
+        if startup: sim.prime(bars(START-60000),signals=(signal(START),))
+        else: sim.advance(bars(START),signals=(signal(START+60000),))
+    assert sim.failed and sim.rejection_counts=={}
+    assert not ledger['rejections'] and not ledger['trades']
+    with pytest.raises(ValueError,match='failed'): sim.finish()
+
+
+@pytest.mark.parametrize('rate,amount', [('.001','-.2'),('-.001','.2')])
+def test_boundary_funding_on_prior_bar_fill_is_certain_before_new_admissions(rate,amount):
+    counts=tuple((s,1 if s==SYMBOLS[0] else 0) for s in SYMBOLS)
+    sim,ledger=simulator(assumptions(minutes=2,funding=FundingCoverage('verified_complete',HASH,counts)),prime=False)
+    sim.prime(bars(START-60000),signals=(signal(START),))
+    boundary=START+60000
+    sim.advance(bars(START),funding=(FundingEvent(SYMBOLS[0],boundary,D(rate)),),
+                signals=(signal(boundary,SYMBOLS[1]),))
+    flow=next(x for x in ledger['cashflows'] if x['kind']=='funding')
+    assert flow['timestamp_ms']==boundary and flow['amount_quote']==D(amount)
+    assert flow['ambiguous'] is False
+    assert flow['exposure_policy']=='adverse_possible_credit_certain.v1'
+    assert sim.positions[next(iter(sim.positions))].fill_start_ms < boundary
+    assert sim.positions[next(iter(sim.positions))].fill_boundary_ms == boundary
+    assert sim.view()['open_positions']==1 and sim.view()['pending_entries']==1
+    sim.advance(bars(boundary,low='101',high='102',opening='102',close='102'))
+    assert sim.finish()['completion']=='complete'
+    assert sum(x['funding_quote'] for x in ledger['trades'])==D(amount)
