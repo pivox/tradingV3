@@ -54,8 +54,13 @@ comparés au calcul PHP.
   exécution et confirmations. La cadence et la validité valent `PT4H`.
 - **Risque.**
   - Budget par trade : 5 % des fonds propres.
-  - Concurrence : dix positions, une par paire. Une entrée en attente réserve
-    déjà sa place.
+  - Concurrence : dix positions au plus et une seule par paire,
+    `per_symbol_limit: 1`. Une entrée en attente réserve déjà sa place.
+    `CanonicalPortfolioPolicy` lit cette limite. Le moteur d'admission
+    canonique refuse toute politique qui la porte
+    (`canonical_portfolio_symbol_occupancy_unavailable`), car son snapshot ne
+    connaît pas les symboles occupés. La règle est appliquée là où l'occupation
+    est connue : le plan builder de recherche et `PortfolioSimulator`.
   - Exposition du mode : 100 % des fonds propres.
   - Levier : 2.
   - Plafond de perte journalière : 100 % ou 100 000 USDT. Ce plafond explicite
@@ -73,8 +78,11 @@ comparés au calcul PHP.
 
   Les deux conditions de cassure sont des séries `oldest_to_newest`. Avant de
   les appeler, l'évaluateur strict exige la preuve de chronologie : des bougies
-  4h contiguës qui finissent à la bougie courante. Le niveau de cassure exclut
-  la bougie courante.
+  4h contiguës qui finissent à la bougie courante. Pour la fournir, les trois
+  producteurs d'indicateurs émettent `high_series_timestamps` et
+  `low_series_timestamps` à côté des séries : le calculateur PHP canonique, le
+  contexte MTF et la projection Python. Le niveau de cassure exclut la bougie
+  courante.
 - **Exécution figée.**
   - Entrée : ordre limite à la clôture 4h, actif 3600 s puis annulé à 3660 s.
     Le spread est plafonné à 6 bps et le slippage à 8 bps.

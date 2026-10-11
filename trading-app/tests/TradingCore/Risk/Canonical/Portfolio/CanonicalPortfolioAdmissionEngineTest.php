@@ -483,6 +483,21 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
         (new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00')))->admit($request);
     }
 
+    public function testPerSymbolLimitFailsClosedBecauseTheSnapshotCarriesNoOccupiedSymbols(): void
+    {
+        $limited = CanonicalPortfolioFixture::snapshot(['max_concurrent_positions' => [
+            'state' => 'defined',
+            'value' => ['limit' => 4, 'include_pending_entries' => true, 'per_symbol_limit' => 1],
+            'unit' => 'positions',
+            'source' => 'test-fixture',
+            'justification' => 'one active plan per symbol',
+        ]]);
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_symbol_occupancy_unavailable');
+        (new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00')))->admit($this->request($limited));
+    }
+
     private function request(
         ?\App\TradingCore\Config\EffectiveTradingConfigSnapshot $policySnapshot = null,
         ?CanonicalPortfolioSnapshot $snapshot = null,

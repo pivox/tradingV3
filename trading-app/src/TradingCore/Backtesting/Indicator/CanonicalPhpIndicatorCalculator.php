@@ -41,6 +41,8 @@ final readonly class CanonicalPhpIndicatorCalculator
      *     close: float,
      *     high_series: list<float>,
      *     low_series: list<float>,
+     *     high_series_timestamps: list<int>,
+     *     low_series_timestamps: list<int>,
      *     rsi: float,
      *     ema_20: float,
      *     ema_50: float,
@@ -135,6 +137,9 @@ final readonly class CanonicalPhpIndicatorCalculator
             'close' => $close,
             'high_series' => array_slice($highs, -60),
             'low_series' => array_slice($lows, -60),
+            // Explicit chronology for the series conditions that read highs and lows.
+            'high_series_timestamps' => array_slice($seriesTimestamps, -60),
+            'low_series_timestamps' => array_slice($seriesTimestamps, -60),
             'rsi' => $this->finiteFloat($this->rsi->calculatePhp($closes, 14)),
             'ema_20' => $ema[20],
             'ema_50' => $ema[50],

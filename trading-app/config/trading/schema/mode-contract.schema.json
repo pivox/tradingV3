@@ -137,7 +137,7 @@
         "session_policy": { "required": ["state", "value", "unit"], "properties": { "state": { "const": "defined" }, "value": { "const": { "calendar": "continuous_crypto", "timezone": "UTC" } }, "unit": { "const": "session_policy" } } },
         "timeframes": { "const": { "regime": ["4h"], "context": ["4h"], "trigger": ["4h"], "execution": ["4h"], "confirmations": ["4h"] } },
         "cadence": { "properties": { "evaluation": { "properties": { "state": { "const": "defined" }, "value": { "const": "PT4H" } } }, "validity_window": { "properties": { "state": { "const": "defined" }, "value": { "const": "PT4H" } } } } },
-        "risk": { "properties": { "trade_budget": { "properties": { "state": { "const": "defined" }, "value": { "const": 5.0 }, "unit": { "const": "percent_equity_per_trade" } } }, "daily_loss_cap": { "properties": { "state": { "const": "defined" }, "value": { "const": { "percent_equity": 100.0, "absolute_quote": 100000.0, "quote_currency": "USDT", "day_timezone": "UTC", "day_boundary_local": "00:00:00", "include_unrealized_loss": true } } } }, "max_concurrent_positions": { "properties": { "state": { "const": "defined" }, "value": { "const": { "limit": 10, "include_pending_entries": true } } } }, "mode_exposure_cap": { "properties": { "state": { "const": "defined" }, "value": { "const": 100.0 } } } } },
+        "risk": { "properties": { "trade_budget": { "properties": { "state": { "const": "defined" }, "value": { "const": 5.0 }, "unit": { "const": "percent_equity_per_trade" } } }, "daily_loss_cap": { "properties": { "state": { "const": "defined" }, "value": { "const": { "percent_equity": 100.0, "absolute_quote": 100000.0, "quote_currency": "USDT", "day_timezone": "UTC", "day_boundary_local": "00:00:00", "include_unrealized_loss": true } } } }, "max_concurrent_positions": { "properties": { "state": { "const": "defined" }, "value": { "const": { "limit": 10, "include_pending_entries": true, "per_symbol_limit": 1 } } } }, "mode_exposure_cap": { "properties": { "state": { "const": "defined" }, "value": { "const": 100.0 } } } } },
         "leverage": { "properties": { "state": { "const": "defined" }, "value": { "const": 2.0 } } },
         "order_policy": { "properties": { "state": { "const": "defined" }, "value": { "const": { "margin_mode": "isolated", "preferred_type": "limit", "market_fallback": false } } } }
       }
@@ -226,7 +226,10 @@
     "shadowConcurrency": {
       "type": "object", "additionalProperties": false,
       "required": ["limit", "include_pending_entries"],
-      "properties": { "limit": { "enum": [3, 4, 10] }, "include_pending_entries": { "const": true } }
+      "properties": { "limit": { "enum": [3, 4, 10] }, "include_pending_entries": { "const": true }, "per_symbol_limit": { "const": 1 } },
+      "if": { "properties": { "limit": { "const": 10 } }, "required": ["limit"] },
+      "then": { "required": ["per_symbol_limit"] },
+      "else": { "not": { "required": ["per_symbol_limit"] } }
     },
     "dailyCapDecision": {
       "allOf": [

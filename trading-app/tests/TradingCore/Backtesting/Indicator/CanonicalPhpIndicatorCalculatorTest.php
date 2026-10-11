@@ -77,6 +77,8 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
             'close',
             'high_series',
             'low_series',
+            'high_series_timestamps',
+            'low_series_timestamps',
             'rsi',
             'ema_20',
             'ema_50',
@@ -122,6 +124,8 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
         self::assertCount(60, $first['low_series']);
         self::assertSame($expectedHighs, $first['high_series']);
         self::assertSame($expectedLows, $first['low_series']);
+        self::assertSame(array_slice($first['series_timestamps'], -60), $first['high_series_timestamps']);
+        self::assertSame(array_slice($first['series_timestamps'], -60), $first['low_series_timestamps']);
 
         self::assertSame(125.23, $first['close']);
         // Golden vector independently derived from the documented PHP/Wilder

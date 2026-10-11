@@ -51,10 +51,10 @@ risk:
     justification: 'The candidate was screened without a daily-loss rule; this explicit cap cannot bind with ten plans of 250 quote notional.'
   max_concurrent_positions:
     state: defined
-    value: { limit: 10, include_pending_entries: true }
+    value: { limit: 10, include_pending_entries: true, per_symbol_limit: 1 }
     unit: positions
     source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11'
-    justification: 'One active plan per pair over the ten research pairs; a pending entry reserves its pair.'
+    justification: 'Ten plans at most and one active plan per pair; a pending entry reserves its pair. The canonical admission engine refuses this policy until its portfolio snapshot carries occupied symbols.'
   mode_exposure_cap:
     state: defined
     value: 100.0

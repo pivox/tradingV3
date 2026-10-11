@@ -408,13 +408,14 @@ final class ModeContractValidator
         if (!is_array($value) || array_is_list($value)) {
             throw new ModeContractException('risk.max_concurrent_positions shadow value must be a mapping.');
         }
-        $this->assertExactKeys($value, ['limit', 'include_pending_entries'], 'risk.max_concurrent_positions.value');
-        $limit = match ($modeId) {
-            'day_trading' => 4,
-            'swing' => 10,
-            default => 3,
+        $expected = match ($modeId) {
+            'day_trading' => ['limit' => 4, 'include_pending_entries' => true],
+            // Swing admits one active plan per pair, explicitly, below its ten-plan limit.
+            'swing' => ['limit' => 10, 'include_pending_entries' => true, 'per_symbol_limit' => 1],
+            default => ['limit' => 3, 'include_pending_entries' => true],
         };
-        if (!$this->frozenValuesEqual($value, ['limit' => $limit, 'include_pending_entries' => true])) {
+        $this->assertExactKeys($value, array_keys($expected), 'risk.max_concurrent_positions.value');
+        if (!$this->frozenValuesEqual($value, $expected)) {
             throw new ModeContractException('risk.max_concurrent_positions differs from the frozen shadow decision.');
         }
     }

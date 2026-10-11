@@ -97,6 +97,7 @@ final class ModeContractLoaderTest extends TestCase
         self::assertSame([
             'limit' => 10,
             'include_pending_entries' => true,
+            'per_symbol_limit' => 1,
         ], $document['risk']['max_concurrent_positions']['value']);
         self::assertSame(100.0, $document['risk']['mode_exposure_cap']['value']);
         self::assertSame(2.0, $document['leverage']['value']);
@@ -119,6 +120,10 @@ final class ModeContractLoaderTest extends TestCase
         $mutations['intraday horizon']['horizon']['value']['maximum_duration'] = 'PT8H';
         $mutations['four plans'] = $document;
         $mutations['four plans']['risk']['max_concurrent_positions']['value']['limit'] = 4;
+        $mutations['two plans per pair'] = $document;
+        $mutations['two plans per pair']['risk']['max_concurrent_positions']['value']['per_symbol_limit'] = 2;
+        $mutations['no pair limit'] = $document;
+        unset($mutations['no pair limit']['risk']['max_concurrent_positions']['value']['per_symbol_limit']);
         $mutations['missing confirmations'] = $document;
         unset($mutations['missing confirmations']['timeframes']['confirmations']);
         $mutations['hourly cadence'] = $document;
@@ -291,6 +296,7 @@ final class ModeContractLoaderTest extends TestCase
         $documents['swing']['risk']['daily_loss_cap']['value']['percent_equity'] = 100;
         $documents['swing']['risk']['daily_loss_cap']['value']['absolute_quote'] = 100000;
         $documents['swing']['risk']['max_concurrent_positions']['value']['limit'] = 10.0;
+        $documents['swing']['risk']['max_concurrent_positions']['value']['per_symbol_limit'] = 1.0;
         $documents['swing']['risk']['mode_exposure_cap']['value'] = 100;
         $documents['swing']['leverage']['value'] = 2;
 

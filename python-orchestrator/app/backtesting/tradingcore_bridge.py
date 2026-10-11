@@ -157,7 +157,7 @@ class CanonicalBacktestRuleResult(BaseModel):
 
     schema_version: Literal["canonical-backtest-rule-result.v1"]
     request_id: str
-    mode_id: Literal["day_trading", "scalping", "micro_scalping"]
+    mode_id: Literal["day_trading", "scalping", "micro_scalping", "swing"]
     mode_version: Literal["1.0.0", "1.1.0"]
     setup_id: str
     setup_version: Literal["1.0.0", "1.1.0"]
