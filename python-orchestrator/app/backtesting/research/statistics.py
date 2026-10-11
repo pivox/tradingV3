@@ -138,13 +138,15 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
                     end_ms: int, max_spool_bytes: int = 4*1024**3,
                     min_free_bytes: int = 20*1024**3, expected_identity: dict | None = None,
                     expected_sources: dict | None = None, expected_cost_profile: str | None = None,
-                    expected_cost_model: dict | None = None, require_marked: bool = False) -> dict:
+                    expected_cost_model: dict | None = None, require_marked: bool = False,
+                    kernel_profile=None) -> dict:
     """Merge ordered ledgers and independently join plans/trades/cashflows/marks.
 
     SQLite is a private temporary local index, not an application database.
     Its bounded file retains closed-plan identities to detect duplicate closes
     without accumulating all plans/candles in memory. Cashflow state is capped
-    at the four portfolio slots; pair/year aggregations have fixed dimensions.
+    at the profile's portfolio slots (day_trading: four); pair/year aggregations
+    have fixed dimensions.
     """
     if (set(files) != {name+'.ndjson' for name in LEDGERS} or not symbols or
             start_ms >= end_ms or end_ms > 1767225600000 or start_ms < 1672531200000):
@@ -152,7 +154,7 @@ def analyze_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_m
     return _analyze_validated_ledgers(root,files,symbols=symbols,start_ms=start_ms,end_ms=end_ms,
         max_spool_bytes=max_spool_bytes,min_free_bytes=min_free_bytes,expected_identity=expected_identity,
         expected_sources=expected_sources,expected_cost_profile=expected_cost_profile,
-        expected_cost_model=expected_cost_model,require_marked=require_marked)
+        expected_cost_model=expected_cost_model,require_marked=require_marked,kernel_profile=kernel_profile)
 
 
 def analyze_holdout_ledgers(root: Path, files: dict, *, authorization, variant_id: str,
@@ -176,12 +178,14 @@ def analyze_holdout_ledgers(root: Path, files: dict, *, authorization, variant_i
         raise StatisticsError('statistics_spool_capacity_exceeded')
     w = contract['window']
     start = int(datetime.fromisoformat(w['score_start'].replace('Z','+00:00')).timestamp()*1000)
+    from .portfolio_simulator import KernelProfile
     return _analyze_validated_ledgers(root,files,symbols=tuple(contract['symbols']),start_ms=start,end_ms=w['end_ms'],
         max_spool_bytes=spool_capacity,
         min_free_bytes=contract['limits']['disk_reserve_bytes'],expected_identity=binding['identity'],
         expected_sources=binding['sources'],expected_cost_profile=cost_profile,
         expected_cost_model=binding['cost_assumptions']['profiles'][cost_profile],require_marked=True,
-        deadline=time.monotonic()+limits['seconds'])
+        deadline=time.monotonic()+limits['seconds'],
+        kernel_profile=KernelProfile.from_wire(binding.get('kernel_profile')))
 
 
 def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,...], start_ms: int,
@@ -189,8 +193,11 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                     min_free_bytes: int = 20*1024**3, expected_identity: dict | None = None,
                     expected_sources: dict | None = None, expected_cost_profile: str | None = None,
                     expected_cost_model: dict | None = None, require_marked: bool = False,
-                    deadline: float | None = None) -> dict:
-    from .portfolio_simulator import canonical_hash
+                    deadline: float | None = None, kernel_profile=None) -> dict:
+    from .portfolio_simulator import DAY_TRADING_PROFILE, KernelProfile, canonical_hash
+    profile = DAY_TRADING_PROFILE if kernel_profile is None else kernel_profile
+    if not isinstance(profile, KernelProfile):
+        raise StatisticsError('kernel_profile_invalid')
     root = Path(root)
     if set(files) != {name+'.ndjson' for name in LEDGERS} or not symbols or start_ms >= end_ms:
         raise StatisticsError('ledger_scope_invalid')
@@ -226,7 +233,7 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
         os.chmod(spool,0o600)
         connection.execute('PRAGMA cache_size=-2048')
         connection.execute('PRAGMA temp_store=FILE')
-        connection.execute('CREATE TABLE plans (hash TEXT PRIMARY KEY, symbol TEXT, risk TEXT, closed INTEGER DEFAULT 0, entry TEXT, quantity TEXT, contract TEXT)')
+        connection.execute('CREATE TABLE plans (hash TEXT PRIMARY KEY, symbol TEXT, risk TEXT, closed INTEGER DEFAULT 0, entry TEXT, quantity TEXT, contract TEXT, side TEXT)')
         try:
             for name,row in heapq.merge(*(tagged(name) for name in LEDGERS),
                                        key=lambda item:item[1]['ledger_sequence']):
@@ -265,7 +272,7 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                         price = decimal(marks[key])
                         if price <= 0 or at not in (position['last'],position['last']+60000):
                             raise StatisticsError('marked_equity_active_minute_gap')
-                        unrealized += position['units']*(price-position['entry'])
+                        unrealized += position['units']*position['direction']*(price-position['entry'])
                         position['last'] = at
                     equity = wallet+unrealized
                     marked_peak = max(marked_peak,equity)
@@ -299,16 +306,19 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                     risk = decimal(row['risk_components_quote']['total_stop_loss'])
                     if risk <= 0:
                         raise StatisticsError('initial_stop_risk_nonpositive')
+                    # Only an extended kernel profile names the side; day_trading plans are long.
+                    if (row.get('side') not in profile.sides) if profile.extended else ('side' in row):
+                        raise StatisticsError('plan_side_conflict')
                     try:
-                        connection.execute('INSERT INTO plans(hash,symbol,risk,entry,quantity,contract) VALUES(?,?,?,?,?,?)',
+                        connection.execute('INSERT INTO plans(hash,symbol,risk,entry,quantity,contract,side) VALUES(?,?,?,?,?,?,?)',
                             (key,symbol,str(risk),str(decimal(row['entry_price'])),str(decimal(row['quantity'])),
-                             str(decimal(row['instrument_math']['contract_size']))))
+                             str(decimal(row['instrument_math']['contract_size'])),row.get('side','long')))
                     except sqlite3.IntegrityError as exc:
                         raise StatisticsError('duplicate_plan_identity') from exc
                     counts['plans'] += 1
                 elif name in ('cashflows','trades','events'):
                     key = row.get('plan_hash')
-                    plan = connection.execute('SELECT symbol,risk,closed,entry,quantity,contract FROM plans WHERE hash=?',(key,)).fetchone()
+                    plan = connection.execute('SELECT symbol,risk,closed,entry,quantity,contract,side FROM plans WHERE hash=?',(key,)).fetchone()
                     if plan is None or plan[0] != symbol or plan[2]:
                         raise StatisticsError('missing_closed_or_foreign_plan')
                     if name == 'events':
@@ -319,11 +329,12 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                             counts['filled'] += 1
                             if check_marked:
                                 at = row.get('timestamp_ms')
-                                if (type(at) is not int or not start_ms < at <= end_ms
-                                    or (at-start_ms)%60000 or key in marked_positions or len(marked_positions) >= 4):
+                                if (type(at) is not int or not start_ms < at <= end_ms or (at-start_ms)%60000
+                                    or key in marked_positions or len(marked_positions) >= profile.max_active):
                                     raise StatisticsError('marked_equity_fill_clock_conflict')
-                                entry,quantity,contract = map(decimal,plan[3:])
-                                marked_positions[key] = {'entry':entry,'units':quantity*contract,'last':at-60000,'fill':at}
+                                entry,quantity,contract = map(decimal,plan[3:6])
+                                marked_positions[key] = {'entry':entry,'units':quantity*contract,'last':at-60000,'fill':at,
+                                                         'direction':1 if plan[6] == 'long' else -1}
                         if row.get('ambiguous'):
                             ambiguity[reason] += 1
                         counts['events'] += 1
@@ -352,7 +363,7 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                         if field in ('fees_quote','spread_quote','slippage_quote') and amount > 0:
                             raise StatisticsError('expense_cannot_be_credit')
                         position = active.setdefault(key,{f:ZERO for f in COMPONENTS})
-                        if len(active) > 4:
+                        if len(active) > profile.max_active:
                             raise StatisticsError('cashflow_concurrency_exceeded')
                         for target in (position,totals,per_pair[symbol]):
                             target['net_pnl_quote'] += amount; target[field] += component
@@ -369,9 +380,12 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                         position = active.pop(key,None)
                         if position is None or any(decimal(row[f]) != position[f] for f in COMPONENTS):
                             raise StatisticsError('trade_cashflow_reconciliation_conflict')
-                        entry,quantity,contract = map(decimal,plan[3:])
+                        entry,quantity,contract = map(decimal,plan[3:6])
+                        direction = 1 if plan[6] == 'long' else -1
+                        if ((row.get('side') != plan[6]) if profile.extended else ('side' in row)):
+                            raise StatisticsError('trade_side_conflict')
                         if (decimal(row['entry_price']) != entry or decimal(row['quantity']) != quantity
-                                or quantity*contract*(decimal(row['exit_price'])-entry) != position['gross_pnl_quote']):
+                                or quantity*contract*direction*(decimal(row['exit_price'])-entry) != position['gross_pnl_quote']):
                             raise StatisticsError('gross_price_pnl_or_units_conflict')
                         expected_net = position['gross_pnl_quote']+position['funding_quote']-sum(
                             (position[f] for f in ('fees_quote','spread_quote','slippage_quote')),ZERO)
@@ -388,7 +402,7 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                                     or position_mark['fill'] != fill):
                                 raise StatisticsError('marked_equity_active_minute_gap')
                         # Exactly midnight is a declared exclusive settlement, allowed.
-                        if fill//DAY != (at-1)//DAY:
+                        if profile.daily_boundary and fill//DAY != (at-1)//DAY:
                             raise StatisticsError('trade_crosses_utc_midnight')
                         risk = decimal(plan[1]); net = position['net_pnl_quote']
                         outcomes.add(net,risk); pair_stats[symbol].add(net,risk)
@@ -435,7 +449,8 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
         'maximum_drawdown_quote':str(marked_drawdown),
         'marked_equity_peak_quote':str(marked_peak),'marked_equity_samples':counts['marked_samples'],
         'marked_equity_verified':check_marked,
-        'cashflow_wallet_drawdown_is_marked':False,'independently_reconciled':True}
+        'cashflow_wallet_drawdown_is_marked':False,'independently_reconciled':True,
+        **({'kernel_profile':profile.wire()} if profile.extended else {})}
 
 
 def verify_campaign(root: Path, protocol: dict, registration: dict) -> dict:

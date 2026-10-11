@@ -818,7 +818,7 @@ def _run_campaign_core(dataset_root: Path, signal_root: Path | tuple[Path,...], 
                 or any(_input(Path(r['root'])/'report.json',MAX_REPORT)[1] != r['report_sha256'] for r in reports)):
                 raise CampaignError('frozen input or code changed during campaign')
             files = evidence.finish_ledgers()
-            replay = reconcile(evidence.root,kernel_summary)
+            replay = reconcile(evidence.root,kernel_summary,max_active=assumptions.kernel_profile.max_active)
             status = kernel_summary['completion']
             summary = {**kernel_summary, 'schema_version':'research-campaign-summary.v1','run_id':run_id,
                 'status':status,'manifest_sha256':manifest_sha,'b1_counters':counters,

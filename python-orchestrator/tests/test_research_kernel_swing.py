@@ -283,3 +283,93 @@ def test_a_short_equals_the_long_on_the_reflected_market():
     assert {k: short_trades[0][k] for k in keys} == {k: long_trades[0][k] for k in keys}
     assert pivot - short_trades[0]['exit_price'] == long_trades[0]['exit_price']
     assert short_trades[0]['exit_reason'] == 'stop'
+
+
+# ------------------------------------------------------------- evidence and statistics
+def swing_ledgers(root):
+    """Run a swing scenario through the kernel into real evidence ledgers."""
+    from app.backtesting.research import campaign_evidence as evidence_module
+
+    start = START + DAY - 30 * 60000  # positions cross the UTC midnight
+    minutes = 120
+    events = {s: 1 if s in SYMBOLS[:3] else 0 for s in SYMBOLS}
+    config = swing_assumptions(minutes=minutes, start=start, funding=FundingCoverage(
+        'verified_complete', 'sha256:' + 'a' * 64, tuple(events.items())))
+    with evidence_module.Evidence(root, (), max_bytes=10 ** 8, min_free_bytes=0) as evidence:
+        def build(sig, view):
+            wide = sig.index >= 4
+            side = 'long' if sig.index % 2 else 'short'
+            stop = (90 if wide else 95) if side == 'long' else (110 if wide else 105)
+            plan = swing_plan(sig, view, side=side, stop=stop, target=120 if side == 'long' else 80)
+            evidence.emit('plans', plan)
+            return plan
+        sim = PortfolioSimulator(config, build, event_sink=lambda row: evidence.emit('events', row),
+                                 trade_sink=lambda row: evidence.emit('trades', row),
+                                 cashflow_sink=lambda row: evidence.emit('cashflows', row),
+                                 rejection_sink=lambda row: evidence.emit('rejections', row),
+                                 marked_sink=lambda row: evidence.emit('marked-equity', row))
+        sim.prime(bars(start - 60000))
+        sim.advance(bars(start), signals=tuple(signal(start + 60000, s, i) for i, s in enumerate(SYMBOLS[:6])))
+        for minute in range(1, minutes):
+            at = start + minute * 60000
+            funding = tuple(FundingEvent(s, START + DAY, D('.0002'), None, None)
+                            for s in SYMBOLS[:3]) if at + 60000 == START + DAY else ()
+            candles = bars(at, low='94', high='106', close='100') if minute == 60 else bars(at, close='100.5')
+            sim.advance(candles, funding=funding)
+        summary = sim.finish()
+        files = evidence.finish_ledgers()
+    return summary, files, start, start + minutes * 60000
+
+
+def test_independent_statistics_replay_swing_ledgers(tmp_path):
+    from app.backtesting.research import campaign_evidence as evidence_module
+    from app.backtesting.research.statistics import StatisticsError, analyze_ledgers
+
+    root = tmp_path / 'unit'
+    summary, files, start, end = swing_ledgers(root)
+    assert summary['trades'] == 6 and summary['kernel_profile'] == SWING_PROFILE.wire()
+    assert evidence_module.reconcile(root, summary, max_active=10)['status'] == 'verified'
+    result = analyze_ledgers(root, files, symbols=SYMBOLS, start_ms=start, end_ms=end, require_marked=True,
+                             kernel_profile=SWING_PROFILE)
+    assert result['closed_trades'] == 6 and D(result['net_pnl_quote']) == summary['net_pnl_quote']
+    assert D(result['wallet_quote']) == summary['wallet_quote']
+    assert D(result['maximum_drawdown_quote']) == summary['maximum_drawdown_quote'] > 0
+    assert result['exit_reason_counts'] == {'stop': 4, 'research_end': 2}
+    assert D(result['funding_quote']) != 0 and result['kernel_profile'] == SWING_PROFILE.wire()
+    with pytest.raises(evidence_module.EvidenceError):
+        evidence_module.reconcile(root, summary)  # six positions exceed day_trading's four
+    with pytest.raises(StatisticsError):
+        analyze_ledgers(root, files, symbols=SYMBOLS, start_ms=start, end_ms=end, require_marked=True)
+    with pytest.raises(StatisticsError, match='kernel_profile_invalid'):
+        analyze_ledgers(root, files, symbols=SYMBOLS, start_ms=start, end_ms=end, kernel_profile='swing.v1')
+
+
+def test_profile_wire_round_trip_and_rejections():
+    assert KernelProfile.from_wire(None) is DAY_TRADING_PROFILE
+    assert KernelProfile.from_wire(SWING_PROFILE.wire()) == SWING_PROFILE
+    assert KernelProfile.from_wire(SWING_PROFILE.wire()).extended
+    for broken in ({**SWING_PROFILE.wire(), 'max_active': 11}, {'profile_id': 'swing.v1'},
+                   {**SWING_PROFILE.wire(), 'sides': 'long'}, {**SWING_PROFILE.wire(), 'extra': 1},
+                   {**SWING_PROFILE.wire(), 'daily_loss_rate': '1'}):
+        with pytest.raises(ValueError, match='research_kernel_profile_invalid'):
+            KernelProfile.from_wire(broken)
+
+
+def test_statistics_reject_a_trade_whose_side_differs_from_its_plan(tmp_path):
+    import hashlib
+    import json
+
+    from app.backtesting.research.statistics import StatisticsError, analyze_ledgers
+
+    root = tmp_path / 'unit'
+    _, files, start, end = swing_ledgers(root)
+    path = root / 'trades.ndjson'
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows[0]['side'] = 'long' if rows[0]['side'] == 'short' else 'short'
+    raw = ''.join(json.dumps(row, sort_keys=True, separators=(',', ':')) + '\n' for row in rows).encode()
+    path.chmod(0o600)
+    path.write_bytes(raw)
+    files['trades.ndjson'] = {'sha256': hashlib.sha256(raw).hexdigest(), 'count': len(rows), 'bytes': len(raw)}
+    with pytest.raises(StatisticsError, match='trade_side_conflict'):
+        analyze_ledgers(root, files, symbols=SYMBOLS, start_ms=start, end_ms=end, require_marked=True,
+                        kernel_profile=SWING_PROFILE)

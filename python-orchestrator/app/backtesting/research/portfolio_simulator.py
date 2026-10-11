@@ -140,6 +140,22 @@ class KernelProfile:
         return {f.name: (wire_number(v) if isinstance(v := getattr(self, f.name), D)
                          else list(v) if isinstance(v, tuple) else v) for f in fields(self)}
 
+    @classmethod
+    def from_wire(cls, document: Mapping[str, Any] | None) -> KernelProfile:
+        """The profile a ``wire()`` document describes; ``None`` means day_trading."""
+        if document is None:
+            return DAY_TRADING_PROFILE
+        try:
+            profile = cls(document['profile_id'], tuple(document['sides']), document['entry_ttl_seconds'],
+                          document['cancel_after_seconds'], document['holding_window_seconds'],
+                          document['daily_boundary'], document['max_active'], document['one_active_per_symbol'],
+                          number(document['daily_loss_rate']), number(document['daily_loss_absolute_quote']))
+        except (KeyError, TypeError) as exc:
+            raise ValueError('research_kernel_profile_invalid') from exc
+        if profile.wire() != dict(document):
+            raise ValueError('research_kernel_profile_invalid')
+        return profile
+
 
 DAY_TRADING_PROFILE = KernelProfile()
 # The swing breakout candidate of 2026-10-11: both sides, 60 min entries, 14 days,
