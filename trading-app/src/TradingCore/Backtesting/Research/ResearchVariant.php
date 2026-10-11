@@ -29,6 +29,8 @@ final readonly class ResearchVariant
         'target_250' => ['target_risk_multiple' => 2.5],
         'ema20_5m_width_050' => ['anchor_source' => 'ema_20', 'zone_atr_multiplier' => 0.50],
     ];
+    /** The swing candidate is frozen: its contract geometry is the only variant. */
+    private const SWING_DIFFS = ['baseline' => []];
 
     /**
      * @param array<string, string|float> $diff
@@ -45,34 +47,37 @@ final readonly class ResearchVariant
     }
 
     /** @return non-empty-list<self> */
-    public static function catalog(CanonicalExecutionPolicy $policy, string $setupHash, string $catalogHash): array
+    public static function catalog(CanonicalExecutionPolicy $policy, string $setupHash, string $catalogHash, ?ResearchProfile $profile = null): array
     {
+        $profile ??= ResearchProfile::fromId(ResearchProfile::DAY_TRADING);
         $variants = [];
-        foreach (self::DIFFS as $id => $diff) {
-            $variants[] = self::select($id, $diff, $policy, $setupHash, $catalogHash);
+        foreach (self::diffs($profile) as $id => $diff) {
+            $variants[] = self::select($id, $diff, $policy, $setupHash, $catalogHash, $profile);
         }
 
         return $variants;
     }
 
     /** @param array<string, mixed> $diff */
-    public static function select(string $id, array $diff, CanonicalExecutionPolicy $policy, string $setupHash, string $catalogHash): self
+    public static function select(string $id, array $diff, CanonicalExecutionPolicy $policy, string $setupHash, string $catalogHash, ?ResearchProfile $profile = null): self
     {
-        self::assertBaseline($policy);
-        if (!isset(self::DIFFS[$id])
+        $profile ??= ResearchProfile::fromId(ResearchProfile::DAY_TRADING);
+        self::assertBaseline($policy, $profile);
+        $diffs = self::diffs($profile);
+        if (!isset($diffs[$id])
             || preg_match('/\A(?:sha256:)?[a-f0-9]{64}\z/D', $setupHash) !== 1
             || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $catalogHash) !== 1) {
             throw new \InvalidArgumentException('research_variant_invalid');
         }
         try {
-            $matches = CanonicalBacktestRuleEvaluator::canonicalJson(self::DIFFS[$id]) === CanonicalBacktestRuleEvaluator::canonicalJson($diff);
+            $matches = CanonicalBacktestRuleEvaluator::canonicalJson($diffs[$id]) === CanonicalBacktestRuleEvaluator::canonicalJson($diff);
         } catch (\InvalidArgumentException $exception) {
             throw new \InvalidArgumentException('research_variant_invalid', previous: $exception);
         }
         if (!$matches) {
             throw new \InvalidArgumentException('research_variant_invalid');
         }
-        $diff = self::DIFFS[$id];
+        $diff = $diffs[$id];
         $baseZone = $policy->entryZone;
         $baseStop = $policy->stop;
         $baseTarget = $policy->targets[0];
@@ -110,17 +115,26 @@ final readonly class ResearchVariant
         return new self($id, $diff, $hash, $zone, $stop, $targets);
     }
 
-    private static function assertBaseline(CanonicalExecutionPolicy $policy): void
+    /** @return non-empty-array<string, array<string, string|float>> */
+    private static function diffs(ResearchProfile $profile): array
+    {
+        return $profile->isDefault() ? self::DIFFS : self::SWING_DIFFS;
+    }
+
+    private static function assertBaseline(CanonicalExecutionPolicy $policy, ResearchProfile $profile): void
     {
         $zone = $policy->entryZone;
         $stop = $policy->stop;
-        if ($policy->riskPolicy->modeId !== 'day_trading' || $policy->riskPolicy->modeVersion !== '1.1.0'
-            || $policy->riskPolicy->setupId !== 'day_trading.trend_continuation.long' || $policy->riskPolicy->setupVersion !== '1.1.0'
-            || $policy->riskPolicy->exchange !== 'fake' || $policy->riskPolicy->environment !== 'local' || $policy->riskPolicy->side !== 'long'
-            || $zone->anchorSource !== 'vwap' || $zone->anchorTimeframe !== '5m' || $zone->atrTimeframe !== '5m'
+        [$anchorSource, $timeframe, $stopMultiple, $targetMultiple] = $profile->isDefault()
+            ? ['vwap', '5m', 1.5, 2.0]
+            : ['close', '4h', 3.0, 5.0];
+        if ($policy->riskPolicy->modeId !== $profile->modeId || $policy->riskPolicy->modeVersion !== $profile->modeVersion
+            || $policy->riskPolicy->setupId !== $profile->setupId || $policy->riskPolicy->setupVersion !== $profile->setupVersion
+            || $policy->riskPolicy->exchange !== 'fake' || $policy->riskPolicy->environment !== 'local' || $policy->riskPolicy->side !== $profile->side
+            || $zone->anchorSource !== $anchorSource || $zone->anchorTimeframe !== $timeframe || $zone->atrTimeframe !== $timeframe
             || $zone->atrMultiplier !== 0.30 || $zone->minimumHalfWidthRate !== 0.0005 || $zone->maximumHalfWidthRate !== 0.01
-            || $stop->kind !== 'atr' || $stop->timeframe !== '5m' || $stop->atrMultiplier !== 1.5
-            || count($policy->targets) !== 1 || $policy->targets[0]->riskMultiple !== 2.0
+            || $stop->kind !== 'atr' || $stop->timeframe !== $timeframe || $stop->atrMultiplier !== $stopMultiple
+            || count($policy->targets) !== 1 || $policy->targets[0]->riskMultiple !== $targetMultiple
         ) {
             throw new \InvalidArgumentException('research_baseline_geometry_mismatch');
         }

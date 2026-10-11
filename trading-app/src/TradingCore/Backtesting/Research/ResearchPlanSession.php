@@ -5,10 +5,8 @@ declare(strict_types=1);
 namespace App\TradingCore\Backtesting\Research;
 
 use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluator;
-use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Config\EffectiveTradingConfigResolverInterface;
-use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy;
 use App\TradingCore\Setup\SetupContractLoader;
@@ -49,7 +47,13 @@ final class ResearchPlanSession
         if ($this->active) {
             throw new \InvalidArgumentException('research_plan_session_already_open');
         }
-        self::exact($frame, ['schema_version', 'session_id', 'baseline', 'source_runs', 'variant', 'instrument_assumptions', 'cost_assumptions', 'cost_profile', 'expected_signals'], 'research_plan_open_invalid');
+        $keys = ['schema_version', 'session_id', 'baseline', 'source_runs', 'variant', 'instrument_assumptions', 'cost_assumptions', 'cost_profile', 'expected_signals'];
+        if (array_key_exists('profile', $frame)) {
+            $keys[] = 'profile';
+        }
+        self::exact($frame, $keys, 'research_plan_open_invalid');
+        // Same reason code as the signal session: research_profile_invalid.
+        $profile = ResearchProfile::fromFrame($frame);
         if (($frame['schema_version'] ?? null) !== 'research-plan-open.v1'
             || !is_string($frame['session_id']) || preg_match('/\A[A-Za-z0-9][A-Za-z0-9._:-]{0,95}\z/D', $frame['session_id']) !== 1
             || !is_int($frame['expected_signals']) || $frame['expected_signals'] < 0 || $frame['expected_signals'] > 10_000_000
@@ -60,10 +64,7 @@ final class ResearchPlanSession
         ) {
             throw new \InvalidArgumentException('research_plan_open_invalid');
         }
-        $request = new EffectiveTradingConfigRequest(
-            'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
-            'fake', 'local', 'long', ShadowExecutionCapability::Backtest,
-        );
+        $request = $profile->request();
         $snapshot = $this->resolver->resolve($request);
         if (!$snapshot->executable || $snapshot->blockers !== []) {
             throw new \InvalidArgumentException('research_plan_baseline_not_executable');
@@ -98,7 +99,7 @@ final class ResearchPlanSession
             throw new \InvalidArgumentException('research_variant_invalid');
         }
         $variant = ResearchVariant::select(
-            $frame['variant']['id'], $frame['variant']['diff'], $policy, $setup->stableHash(), (string) $snapshot->conditionCatalogHash,
+            $frame['variant']['id'], $frame['variant']['diff'], $policy, $setup->stableHash(), (string) $snapshot->conditionCatalogHash, $profile,
         );
         if (!hash_equals($variant->hash, $frame['variant']['variant_hash'])) {
             throw new \InvalidArgumentException('research_variant_hash_invalid');
@@ -119,7 +120,7 @@ final class ResearchPlanSession
             }
             $instruments->forSymbol($symbol);
             $builders[$symbol] = new ResearchPlanBuilder($policy, $portfolioPolicy, $variant, $instruments, $costs,
-                $frame['cost_profile'], $expectedBaseline, $run, $codeHash);
+                $frame['cost_profile'], $expectedBaseline, $run, $codeHash, $profile);
         }
         $this->active = true;
         $this->sessionId = $frame['session_id'];
