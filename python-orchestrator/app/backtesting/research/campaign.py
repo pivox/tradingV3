@@ -328,7 +328,7 @@ def _runner_code():
              ('campaign','campaign_evidence','plans','portfolio_simulator','funding','signals','signal_sources','binance_history','source_complements')]
     paths.extend(Path(__file__).with_name(name) for name in
                  ('statistics.py','holdout.py','holdout_authority.py','frozen_verifier_inventory.json',
-                  'orchestration.py','experiments.py'))
+                  'frozen_verifier_inventory.swing.json','orchestration.py','experiments.py'))
     paths.append(Path(__file__).resolve().parents[2]/'modern_trading_contracts.py')
     # Task3 supplies the controller; ordinary pre-holdout callers remain usable
     # while a claim's stricter preflight requires the complete inventory.
