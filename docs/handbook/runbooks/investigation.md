@@ -79,7 +79,7 @@ docker-compose exec trading-app-php php bin/console app:indicator:conditions:dia
 docker-compose exec trading-app-php php bin/console indicator:snapshot list --symbol=BTCUSDT --timeframe=5m
 ```
 
-Surveiller les warnings ATR si `php-trader` retourne une valeur invalide et force le fallback PHP.
+Surveiller les warnings ATR si `php-trader` retourne une valeur invalide et force le fallback PHP. Depuis le 2026-10-12, `php/conf.d/30-trader.ini` fixe `trader.real_precision=12` : avec la valeur par défaut (3 décimales), l'ATR des paires cotées sous 0,01 USDT s'arrondissait à 0 et déclenchait ce warning à chaque évaluation. Si les warnings reviennent, vérifier `php -i | grep real_precision` dans le conteneur.
 
 ## Decision MTF bloquee
 
