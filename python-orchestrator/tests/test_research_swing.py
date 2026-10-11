@@ -106,6 +106,7 @@ def test_frame_columns_and_decision_range():
     frame = sw.build_frame('BTCUSDT', bars_from(rows))
     assert frame['close'][248] is None and frame['close'][249] == rows['close'][249]
     assert frame['dh30'][29] is None and frame['dh30'][30] == max(rows['high'][:30])
+    assert frame['dl120'][119] is None and frame['dl120'][130] == min(rows['low'][10:130])
     assert frame['low6'][4] is None and frame['low6'][10] == min(rows['low'][5:11])
     assert frame['ema200'][299] == sw.snapshot(bars_from(rows), 299)['ema200']
     assert frame.decisions(START, START + 400 * sw.FOUR_HOURS) == range(249, 300)
@@ -127,27 +128,27 @@ def frame_of(**columns):
 def test_policies_follow_their_definitions():
     p = sw.POLICIES
     trend = {'close': 110.0, 'ema20': 105.0, 'ema50': 100.0, 'ema200': 90.0}
-    assert p['B60_up200'].predicate(frame_of(**trend, dh60=109.0), 2)
-    assert not p['B60_up200'].predicate(frame_of(**trend, dh60=110.0), 2)
-    assert p['B60_any'].predicate(frame_of(**{**trend, 'ema200': 120.0}, dh60=109.0), 2)
-    assert not p['B30_up200'].predicate(frame_of(**{**trend, 'ema200': 120.0}, dh30=100.0), 2)
-    assert p['B120_up200'].predicate(frame_of(**trend, dh120=100.0), 2)
+    assert p['B60_up200'].long(frame_of(**trend, dh60=109.0), 2)
+    assert not p['B60_up200'].long(frame_of(**trend, dh60=110.0), 2)
+    assert p['B60_any'].long(frame_of(**{**trend, 'ema200': 120.0}, dh60=109.0), 2)
+    assert not p['B30_up200'].long(frame_of(**{**trend, 'ema200': 120.0}, dh30=100.0), 2)
+    assert p['B120_up200'].long(frame_of(**trend, dh120=100.0), 2)
     reclaim = frame_of(**{**trend, 'close': [1.0, 99.0, 110.0], 'ema20': [1.0, 100.0, 105.0]})
-    assert p['PB20_stack'].predicate(reclaim, 2)
-    assert not p['PB20_stack'].predicate(frame_of(**{**trend, 'close': [1.0, 101.0, 110.0],
+    assert p['PB20_stack'].long(reclaim, 2)
+    assert not p['PB20_stack'].long(frame_of(**{**trend, 'close': [1.0, 101.0, 110.0],
                                                       'ema20': [1.0, 100.0, 105.0]}), 2)
-    assert not p['PB20_stack'].predicate(frame_of(**{**trend, 'ema50': 95.0, 'ema200': 96.0,
+    assert not p['PB20_stack'].long(frame_of(**{**trend, 'ema50': 95.0, 'ema200': 96.0,
                                                       'close': [1.0, 99.0, 110.0], 'ema20': [1.0, 100.0, 105.0]}), 2)
-    assert p['PB50_stack'].predicate(frame_of(**trend, low6=99.5), 2)
-    assert not p['PB50_stack'].predicate(frame_of(**trend, low6=100.5), 2)
-    assert p['OS30_up200'].predicate(frame_of(**trend, rsi=29.9), 2)
-    assert not p['OS30_up200'].predicate(frame_of(**trend, rsi=30.0), 2) and p['OS40_up200'].predicate(
+    assert p['PB50_stack'].long(frame_of(**trend, low6=99.5), 2)
+    assert not p['PB50_stack'].long(frame_of(**trend, low6=100.5), 2)
+    assert p['OS30_up200'].long(frame_of(**trend, rsi=29.9), 2)
+    assert not p['OS30_up200'].long(frame_of(**trend, rsi=30.0), 2) and p['OS40_up200'].long(
         frame_of(**trend, rsi=30.0), 2)
-    assert p['X921_up200'].predicate(frame_of(**trend, ema9p=99.0, ema21p=99.0, ema9=101.0, ema21=100.0), 2)
-    assert not p['X921_up200'].predicate(frame_of(**trend, ema9p=99.1, ema21p=99.0, ema9=101.0, ema21=100.0), 2)
-    assert p['TR_stack_adx25'].predicate(frame_of(**trend, adx=25.0), 2)
-    assert not p['TR_stack_adx25'].predicate(frame_of(**trend, adx=24.9), 2)
-    assert sw.SETUP_POLICIES == tuple(k for k in p if not k.startswith('R_')) and len(sw.SETUP_POLICIES) == 10
+    assert p['X921_up200'].long(frame_of(**trend, ema9p=99.0, ema21p=99.0, ema9=101.0, ema21=100.0), 2)
+    assert not p['X921_up200'].long(frame_of(**trend, ema9p=99.1, ema21p=99.0, ema9=101.0, ema21=100.0), 2)
+    assert p['TR_stack_adx25'].long(frame_of(**trend, adx=25.0), 2)
+    assert not p['TR_stack_adx25'].long(frame_of(**trend, adx=24.9), 2)
+    assert sw.SETUP_POLICIES == sw.LONG_POLICIES and len(sw.SETUP_POLICIES) == 10
     assert all(policy.description for policy in p.values())
 
 
@@ -155,11 +156,45 @@ def test_random_control_is_deterministic_and_regime_restricted():
     frame = frame_of(close=110.0, ema200=90.0)
     hits = [sw.sampled('BTCUSDT', START + k * sw.FOUR_HOURS) for k in range(400)]
     assert 70 < sum(hits) < 130 and hits == [sw.sampled('BTCUSDT', START + k * sw.FOUR_HOURS) for k in range(400)]
-    assert sw.POLICIES['R_all'].predicate(frame, 2) == sw.sampled('BTCUSDT', frame.close_ms(2))
+    assert (sw.POLICIES['R_all'].side(frame, 2) == 'long') == sw.sampled('BTCUSDT', frame.close_ms(2))
     below = frame_of(close=80.0, ema200=90.0)
-    assert not any(sw.POLICIES['R_up200'].predicate(sw.Frame('BTCUSDT', sw.FOUR_HOURS, START + k * sw.FOUR_HOURS,
+    assert not any(sw.POLICIES['R_up200'].long(sw.Frame('BTCUSDT', sw.FOUR_HOURS, START + k * sw.FOUR_HOURS,
                                                              below.columns), 2) for k in range(50))
 
+
+
+def test_short_and_two_sided_policies_mirror_the_long_rules():
+    p = sw.POLICIES
+    down = {'close': 80.0, 'ema20': 85.0, 'ema50': 90.0, 'ema200': 100.0}
+    up = {'close': 110.0, 'ema20': 105.0, 'ema50': 100.0, 'ema200': 90.0}
+    assert p['S60_dn200'].side(frame_of(**down, dl60=81.0), 2) == 'short'
+    assert p['S60_dn200'].side(frame_of(**down, dl60=80.0), 2) is None
+    assert p['S30_dn200'].side(frame_of(**{**down, 'ema200': 70.0}, dl30=81.0), 2) is None
+    assert p['S120_dn200'].side(frame_of(**down, dl120=90.0), 2) == 'short'
+    assert p['S60_any'].side(frame_of(**{**down, 'ema200': 70.0}, dl60=81.0), 2) == 'short'
+    assert p['TRS_stack_adx25'].side(frame_of(**down, adx=25.0), 2) == 'short'
+    assert p['TRS_stack_adx25'].side(frame_of(**down, adx=24.0), 2) is None
+    for bars in (30, 60, 120):
+        both = p[f'B{bars}_2s']
+        assert both.side(frame_of(**up, **{f'dh{bars}': 109.0}), 2) == 'long'
+        assert both.side(frame_of(**down, **{f'dl{bars}': 81.0}), 2) == 'short'
+        no_breakout = {f'dh{bars}': 200.0, f'dl{bars}': 120.0}  # a breakdown above the EMA200 is not a short
+        assert both.side(frame_of(**up, **no_breakout), 2) is None
+    assert p['B60_any_2s'].side(frame_of(**up, dh60=200.0, dl60=111.0), 2) == 'short'
+    assert p['TR_2s_adx25'].side(frame_of(**up, adx=30.0), 2) == 'long'
+    assert p['TR_2s_adx25'].side(frame_of(**down, adx=30.0), 2) == 'short'
+    regime = [sw.Frame('BTCUSDT', sw.FOUR_HOURS, START + k * sw.FOUR_HOURS, frame_of(**down).columns) for k in range(40)]
+    assert {p['R_regime'].side(f, 2) for f in regime} == {'short', None}
+    assert [p['R_dn200'].side(f, 2) for f in regime] == [p['R_regime'].side(f, 2) for f in regime]
+    assert sw.SHORT_POLICIES == ('S30_dn200', 'S60_dn200', 'S120_dn200', 'S60_any', 'TRS_stack_adx25')
+    assert len(sw.TWO_SIDED_POLICIES) == 5 and sw.CONTROL_POLICIES[-2:] == ('R_dn200', 'R_regime')
+
+
+def test_policy_groups_expand_in_order():
+    assert sw.expand_policies('two-sided,controls') == sw.TWO_SIDED_POLICIES + sw.CONTROL_POLICIES
+    assert sw.expand_policies('B60_2s,short,B60_2s') == ('B60_2s', *sw.SHORT_POLICIES)
+    with pytest.raises(ex.ExplorationError):
+        sw.expand_policies('long,B999')
 
 # ------------------------------------------------------------------------- geometries
 def test_geometry_catalogue_and_funding_intervals():
@@ -196,6 +231,36 @@ def test_swing_plan_rejections():
     assert sw.build_swing_plan(frame_of(close=100.0, atr=40.0), 2, sw.SwingGeometry(3.0, 2.0, 3), CENT, BASELINE,
                                START + 60 * ex.DAY) == (None, 'canonical_protection_stop_invalid')
 
+
+
+# ProtectionPriceMath and NetRCostMath ('short', negated provision rate) by PHP 8.4 on 2026-10-11.
+DOGE = {**CENT, 'symbol': 'DOGEUSDT', 'tick_size': 1e-05, 'quantity_step': 1.0, 'min_quantity': 1.0}
+
+
+@pytest.mark.parametrize('close,atr,instrument,geometry,profile,expected', [
+    (100.004, 1.0, CENT, sw.SwingGeometry(3.0, 3.0, 7), BASELINE,
+     (100.0, 103.0, 91.0, 2.5, 9.434, '2.200683697265210939')),
+    (0.081239, 0.00151, DOGE, sw.SwingGeometry(2.0, 5.0, 14), ADVERSE,
+     (0.08123, 0.08425, 0.06613, 3077.0, 20.488299887, '1.747987506553622713')),
+])
+def test_short_plans_equal_php_reference_vectors(close, atr, instrument, geometry, profile, expected):
+    plan, reason = sw.build_swing_plan(frame_of(close=close, atr=atr), 2, geometry, instrument, profile,
+                                       START + 60 * ex.DAY, 'short')
+    assert reason is None and plan.side == 'short'
+    assert (plan.entry, plan.stop, plan.target, plan.quantity, plan.net_risk) == expected[:5]
+    assert plan.net_r == float(expected[5])
+    assert sw.build_swing_plan(frame_of(close=100.0, atr=1.0), 2, sw.SwingGeometry(1.0, 2.0, 14), CENT, ADVERSE,
+                               START + 60 * ex.DAY, 'short') == (None, 'research_minimum_net_r_not_met')
+
+
+def test_short_plan_rejections_and_side_validation():
+    geometry = sw.SwingGeometry(3.0, 2.0, 3)
+    assert sw.build_swing_plan(frame_of(close=100.0, atr=40.0), 2, geometry, CENT, BASELINE, START + 60 * ex.DAY,
+                               'short') == (None, 'canonical_protection_target_polarity_invalid')
+    with pytest.raises(ex.ExplorationError):
+        ex.protect_and_size(ex._decimal(100.0), ex._decimal(1.0), 3.0, 3.0, CENT, BASELINE, 1, 'flat')
+    with pytest.raises(ex.ExplorationError):
+        ex.simulate(day_plan(START, side='short'), series('BTCUSDT', START, flat(10)), None, BASELINE)
 
 # -------------------------------------------------------------------------- simulation
 def test_first_touch_matches_a_minute_scan():
@@ -317,9 +382,91 @@ def test_funding_accrues_over_a_multi_day_hold():
     assert len(outcome.funding_cash) == 8 and outcome.funding == pytest.approx(-8 * 2 * 100.5 * 0.0001)
 
 
+
+def short_plan(decision=START, **values):
+    base = {'symbol': 'BTCUSDT', 'decision_ms': decision, 'entry': 100.0, 'stop': 102.0, 'target': 97.0,
+            'quantity': 2.0, 'net_risk': 4.5, 'net_r': 1.4, 'deadline_ms': decision + 3 * ex.DAY, 'side': 'short'}
+    return ex.Plan(**{**base, **values})
+
+
+def test_short_fills_stops_and_targets_on_the_mirrored_bounds():
+    path = padded([100.1] + flat(2 * 1440, 99.5) + [103.0])
+    candles = series('BTCUSDT', START, path)
+    stopped = sw.simulate_swing(short_plan(), candles, sw.extremes(candles), None, BASELINE, 60 * ex.MINUTE)
+    assert stopped.filled and stopped.fill_ms == START + ex.MINUTE and not stopped.ambiguous
+    assert stopped.reason == 'stop' and stopped.exit_price == 102.0 and stopped.exit_ms == START + 2882 * ex.MINUTE
+    assert stopped.net == pytest.approx(2 * (100.0 - 102.0) - 2 * 100.0 * 0.0002 - 2 * 102.0 * 0.0012)
+    gap = series('BTCUSDT', START, path)
+    gap.open[2 * 1440 + 1] = 102.5
+    assert sw.simulate_swing(short_plan(), gap, sw.extremes(gap), None, BASELINE, 60 * ex.MINUTE).exit_price == 102.5
+    falling = series('BTCUSDT', START, padded([100.1] + flat(1500, 99.5) + [96.5]))
+    won = sw.simulate_swing(short_plan(), falling, sw.extremes(falling), None, BASELINE, 60 * ex.MINUTE)
+    assert won.reason == 'target' and won.exit_price == 97.0 and won.net > 0
+    unfilled = series('BTCUSDT', START, flat(3 * 1440 + 1, 99.5))
+    assert not sw.simulate_swing(short_plan(), unfilled, sw.extremes(unfilled), None, BASELINE, 60 * ex.MINUTE).filled
+    spike = series('BTCUSDT', START, padded([102.5] + flat(200, 99.5)))
+    instant = sw.simulate_swing(short_plan(), spike, sw.extremes(spike), None, BASELINE, 60 * ex.MINUTE)
+    assert instant.reason == 'stop' and instant.ambiguous and instant.exit_price == 102.5
+    dip = series('BTCUSDT', START, padded([100.1] + flat(200, 99.5)))
+    dip.low[0] = 96.0
+    ignored = sw.simulate_swing(short_plan(), dip, sw.extremes(dip), None, BASELINE, 60 * ex.MINUTE)
+    assert ignored.ambiguous and ignored.reason == 'holding_deadline' and ignored.exit_price == 99.5
+    both = series('BTCUSDT', START, padded([100.1] + flat(200, 99.5)))
+    both.high[101], both.low[101] = 103.0, 96.0
+    worst = sw.simulate_swing(short_plan(), both, sw.extremes(both), None, BASELINE, 60 * ex.MINUTE)
+    assert worst.reason == 'stop' and worst.ambiguous
+
+
+def test_short_receives_positive_funding_and_never_books_an_uncertain_credit():
+    candles = series('BTCUSDT', START, padded([100.1] + flat(200, 99.5)))
+    blocks = sw.extremes(candles)
+    certain = [(START + h * 28_800_000, 0.0001, None) for h in range(1, 9)]
+    outcome = sw.simulate_swing(short_plan(), candles, blocks, ex.FundingSeries.from_events(certain), BASELINE,
+                                60 * ex.MINUTE)
+    assert len(outcome.funding_cash) == 8 and outcome.funding == pytest.approx(8 * 2 * 99.5 * 0.0001)
+    for rate, booked in ((0.0004, False), (-0.0004, True)):
+        inside = ex.FundingSeries.from_events([(START + 30_000, rate, 100.0)])  # inside the fill minute
+        result = sw.simulate_swing(short_plan(), candles, blocks, inside, BASELINE, 60 * ex.MINUTE)
+        assert result.ambiguous and bool(result.funding_cash) == booked
+        assert result.funding == (pytest.approx(2 * 100.0 * rate) if booked else 0.0)
+
+
+def test_a_short_is_the_long_of_the_reflected_series():
+    rng = random.Random(21)
+    closes, price = [], 100.0
+    for _ in range(4 * 1440):
+        price *= 1 + rng.uniform(-0.002, 0.002)
+        closes.append(round(price, 2))
+    candles = series('BTCUSDT', START, closes, spread=0.03)
+    pivot = 2.0 * max(candles.high)
+    reflect = lambda values: array('d', (pivot - v for v in values))  # noqa: E731
+    mirror = ex.CandleSeries('BTCUSDT', START, reflect(candles.open), reflect(candles.low), reflect(candles.high),
+                             reflect(candles.close))
+    events = [(START + h * 28_800_000 + (40_000 if h % 2 else 0), (-1) ** h * 0.0003, None) for h in range(1, 10)]
+    funding = ex.FundingSeries.from_events(events)
+    mirrored = ex.FundingSeries.from_events([(t, -r, m) for t, r, m in events])
+    filled = 0
+    for decision in range(START + 30 * ex.MINUTE, START + 2 * ex.DAY, 30 * ex.MINUTE):
+        close = candles.close[candles.index(decision) - 1]
+        for stop_gap, target_gap in ((0.004, 0.012), (0.01, 0.02)):
+            short = short_plan(decision, entry=close, stop=round(close * (1 + stop_gap), 2),
+                               target=round(close * (1 - target_gap), 2), deadline_ms=decision + ex.DAY)
+            long = ex.Plan(**{**short.__dict__, 'entry': pivot - short.entry, 'stop': pivot - short.stop,
+                              'target': pivot - short.target, 'side': 'long'})
+            mine = sw.simulate_swing(short, candles, sw.extremes(candles), funding, BASELINE, 30 * ex.MINUTE)
+            theirs = sw.simulate_swing(long, mirror, sw.extremes(mirror), mirrored, BASELINE, 30 * ex.MINUTE)
+            assert (mine.filled, mine.fill_ms, mine.exit_ms, mine.reason, mine.ambiguous,
+                    [t for t, _ in mine.funding_cash]) == (theirs.filled, theirs.fill_ms, theirs.exit_ms, theirs.reason,
+                                                           theirs.ambiguous, [t for t, _ in theirs.funding_cash])
+            if mine.filled:
+                filled += 1
+                assert pivot - mine.exit_price == theirs.exit_price
+    assert filled > 100
+
 # --------------------------------------------------------------------------- portfolio
 NEUTRAL = {'close': 100.0, 'atr': 1.0, 'rsi': 50.0, 'adx': 20.0, 'ma21': 100.0, 'ma_21_plus_k_atr': 101.3,
            'high': 100.5, 'low': 99.5, 'dh30': 101.0, 'dh60': 101.0, 'dh120': 101.0, 'low6': 99.5,
+           'dl30': 99.0, 'dl60': 99.0, 'dl120': 99.0,
            **{f'ema{p}': 100.0 for p in sw.EMA_PERIODS}, **{f'ema{p}p': 100.0 for p in sw.EMA_PERIODS}}
 
 
@@ -337,7 +484,7 @@ def test_run_swing_admission_rules_and_summary():
     candles = {s: series(s, START, flat(3 * 1440, 99.9)) for s in symbols}
     blocks = {s: sw.extremes(c) for s, c in candles.items()}
     instruments = {s: {**CENT, 'symbol': s} for s in symbols}
-    policy = sw.SwingPolicy('every', lambda f, i: True, 'test')
+    policy = sw.SwingPolicy('every', 'test', lambda f, i: True)
     geometry = sw.SwingGeometry(3.0, 3.0, 1)
     summary, outcomes = sw.run_swing(frames, candles, blocks, None, policy, geometry, instruments, BASELINE, window)
     # Four plans at START hold until START + 24 h; four more then run to the phase end.
@@ -359,12 +506,28 @@ def test_run_swing_admission_rules_and_summary():
             sw.run_swing(frames, candles, blocks, None, policy, geometry, instruments, BASELINE, bad)
 
 
+
+def test_two_sided_portfolio_shares_capacity_and_reports_each_side():
+    symbols = ('BTCUSDT', 'ETHUSDT', 'BNBUSDT')
+    frames = portfolio_frames(symbols)
+    candles = {s: series(s, START, flat(3 * 1440, 100.0)) for s in symbols}
+    blocks = {s: sw.extremes(c) for s, c in candles.items()}
+    instruments = {s: {**CENT, 'symbol': s} for s in symbols}
+    policy = sw.SwingPolicy('alternating', 'test', lambda f, i: f.symbol == 'BTCUSDT',
+                            lambda f, i: f.symbol != 'BTCUSDT')
+    summary, outcomes = sw.run_swing(frames, candles, blocks, None, policy, sw.SwingGeometry(3.0, 3.0, 1),
+                                     instruments, BASELINE, (START, START + 2 * sw.FOUR_HOURS), max_active=2)
+    assert [(o.plan.symbol, o.plan.side) for o in outcomes] == [('BTCUSDT', 'long'), ('ETHUSDT', 'short')]
+    assert summary['rejections'] == {'research_portfolio_concurrency_exceeded': 2, 'research_symbol_already_active': 2}
+    assert set(summary['by_side']) == {'long', 'short'} and summary['by_side']['short']['trades'] == 1
+    assert summary['by_side']['long']['net'] == pytest.approx(outcomes[0].net)
+
 def test_unfilled_entries_release_capacity_and_holding_window_is_checked(monkeypatch):
     symbols = ('BTCUSDT',)
     frames = portfolio_frames(symbols)
     candles = {'BTCUSDT': series('BTCUSDT', START, flat(3 * 1440, 100.5))}
     blocks = {'BTCUSDT': sw.extremes(candles['BTCUSDT'])}
-    policy = sw.SwingPolicy('every', lambda f, i: True, 'test')
+    policy = sw.SwingPolicy('every', 'test', lambda f, i: True)
     summary, _ = sw.run_swing(frames, candles, blocks, None, policy, sw.SwingGeometry(3.0, 3.0, 1),
                               {'BTCUSDT': CENT}, BASELINE, (START, START + 4 * sw.FOUR_HOURS))
     assert summary['signals'] == 4 and summary['trades'] == 0 and summary['rejections'] == {}
@@ -456,6 +619,9 @@ def test_cli_grid_runs_in_process_and_in_workers(tmp_path, capsys, monkeypatch):
     assert sw.main(['grid', '--root', str(root), '--phase', 'training', '--geometries', 'S3.T3.H3d',
                     '--profiles', 'baseline', '--output', str(output)]) == 0
     assert [g['policy'] for g in json.loads(output.read_text())] == list(sw.SETUP_POLICIES)
+    assert sw.main(['grid', '--root', str(root), '--phase', 'training', '--policies', 'two-sided', '--geometries',
+                    'S3.T3.H3d', '--profiles', 'baseline', '--workers', '1', '--output', str(output)]) == 0
+    assert [g['policy'] for g in json.loads(output.read_text())] == list(sw.TWO_SIDED_POLICIES)
     bad = series('BTCUSDT', 1_672_531_200_000 + sw.HOUR, flat(10))
     bad.write(root / 'candles' / 'BTCUSDT.candles.bin', {})
     with pytest.raises(ex.ExplorationError):

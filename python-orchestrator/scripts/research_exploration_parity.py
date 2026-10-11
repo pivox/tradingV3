@@ -19,7 +19,9 @@ swing-kernel
            Real-data checks of ``swing.simulate_swing``: with a 90 s entry and the
            day_trading deadline it must equal ``exploration.simulate`` (itself
            checked against PortfolioSimulator); with multi-day horizons its
-           hour/day index must equal a minute-by-minute scan.
+           hour/day index must equal a minute-by-minute scan; and a short must
+           equal the long on the price series reflected around a pivot (same
+           fills, exits and funding instants, prices reflected, rates negated).
 
 Both commands exit 1 on any difference. Read-only; no holdout row is accepted.
 """
@@ -54,22 +56,25 @@ use Brick\Math\RoundingMode;
 while (($line = fgets(STDIN)) !== false) {
     $in = json_decode($line, true, 64, JSON_THROW_ON_ERROR);
     $z = $in['zone'];
+    $side = $in['side'] ?? 'long';
     $out = ['id' => $in['id']];
     try {
         $zone = EntryZonePriceMath::calculate(new CanonicalEntryZonePolicy($z['anchor_source'], $z['anchor_timeframe'],
             $z['atr_timeframe'], (float) $z['zone_atr_multiplier'], (float) $z['minimum_half_width_rate'],
             (float) $z['maximum_half_width_rate'], 0.0, 240, 60, true),
-            'long', (float) $in['anchor'], (float) $in['atr'], (float) $in['candidate'], (float) $in['tick']);
+            $side, (float) $in['anchor'], (float) $in['atr'], (float) $in['candidate'], (float) $in['tick']);
         $protection = ProtectionPriceMath::calculate(new CanonicalStopPolicy('atr', $in['stop_tf'], (float) $in['stop_mult'], null, 0.0),
-            [new CanonicalTargetPolicy('tp1', (float) $in['target_r'], 'taker')], 'long', $zone['entry_price'],
+            [new CanonicalTargetPolicy('tp1', (float) $in['target_r'], 'taker')], $side, $zone['entry_price'],
             (float) $in['tick'], (float) $in['stop_atr']);
         $entry = BigDecimal::of(json_encode($zone['entry_price'], JSON_PRESERVE_ZERO_FRACTION));
         $step = BigDecimal::of(json_encode((float) $in['qty_step'], JSON_PRESERVE_ZERO_FRACTION));
         $qty = BigDecimal::of('250')->dividedBy($entry->multipliedBy($step), 0, RoundingMode::FLOOR)->multipliedBy($step);
         $p = $in['profile'];
-        $risk = NetRCostMath::risk('long', $zone['entry_price'], $protection['stop_price'], $qty->toFloat(), 1.0,
+        // Research reserves the same provision for a short: NetRCostMath reserves -rate on that side.
+        $provision = (float) $p['funding_provision_rate'] * ($side === 'long' ? 1.0 : -1.0);
+        $risk = NetRCostMath::risk($side, $zone['entry_price'], $protection['stop_price'], $qty->toFloat(), 1.0,
             0.0002, 0.0005, (float) $p['entry_spread_rate'], (float) $p['stop_spread_rate'],
-            (float) $p['entry_slippage_rate'], (float) $p['stop_slippage_rate'], (float) $p['funding_provision_rate'],
+            (float) $p['entry_slippage_rate'], (float) $p['stop_slippage_rate'], $provision,
             (int) ($in['intervals'] ?? 1));
         $target = $protection['targets'][0];
         $amounts = NetRCostMath::target($zone['entry_price'], $target->price, $qty->toFloat(), 1.0, 0.0005,
@@ -139,20 +144,21 @@ def swing_plan_math(args: argparse.Namespace) -> int:
             'minimum_half_width_rate': 0.0005, 'maximum_half_width_rate': 0.01}
     inputs, expected = [], {}
     for case in args.cases.split(','):
-        geometry_id, profile_id = case.split(':')
+        geometry_id, profile_id, *rest = case.split(':')
+        side = rest[0] if rest else 'long'
         geometry, profile = sw.GEOMETRIES[geometry_id], profiles[profile_id]
         for symbol in ex.SYMBOLS:
             frame = frames[symbol]
             for index in frame.decisions(start, end):
                 close, atr = frame['close'][index], frame['atr'][index]
                 key = len(inputs)
-                expected[key] = sw.build_swing_plan(frame, index, geometry, instruments[symbol], profile, end)
+                expected[key] = sw.build_swing_plan(frame, index, geometry, instruments[symbol], profile, end, side)
                 inputs.append(json.dumps({
                     'id': key, 'anchor': close, 'atr': atr, 'stop_atr': atr, 'candidate': close, 'zone': zone,
                     'tick': instruments[symbol]['tick_size'], 'qty_step': instruments[symbol]['quantity_step'],
                     'stop_tf': '4h', 'stop_mult': geometry.stop_atr_multiplier,
                     'target_r': geometry.target_risk_multiple, 'profile': profile,
-                    'intervals': geometry.funding_intervals}))
+                    'intervals': geometry.funding_intervals, 'side': side}))
     return _compare_with_php(args, inputs, expected)
 
 
@@ -165,11 +171,21 @@ def swing_kernel(args: argparse.Namespace) -> int:
     candles, blocks, funding, instruments, profiles = sw._load_market(args.root)
     profile = profiles[args.profile]
     start, end = ex.PHASES[args.phase]
-    plans = differences = 0
+    plans = differences = mirrored_plans = mirror_differences = 0
     examples = []
     for symbol in ex.SYMBOLS:
         frame, series = frames[symbol], candles[symbol]
         unindexed = sw.Extremes(*(array('d', [-math.inf] * len(values)) for values in astuple(blocks[symbol])))
+        # A short on the series is a long on the series reflected around ``pivot``: same fills,
+        # exits and funding instants, prices pivot - p, funding rates negated.
+        pivot = 2.0 * max(series.high)
+        reflect = lambda values: array('d', (pivot - value for value in values))  # noqa: E731
+        mirror = ex.CandleSeries(symbol, series.start_ms, reflect(series.open), reflect(series.low),
+                                 reflect(series.high), reflect(series.close))
+        mirror_blocks = sw.extremes(mirror)
+        rates = funding[symbol]
+        mirror_funding = ex.FundingSeries(rates.timestamps, array('d', (-rate for rate in rates.rates)),
+                                          [None if mark is None else pivot - mark for mark in rates.marks])
         for number, index in enumerate(frame.decisions(start, end)):
             for geometry_id in args.geometries.split(','):
                 geometry = sw.GEOMETRIES[geometry_id]
@@ -187,6 +203,23 @@ def swing_kernel(args: argparse.Namespace) -> int:
                                                     geometry.entry_ttl_ms),
                                   sw.simulate_swing(plan, series, unindexed, funding[symbol], profile,
                                                     geometry.entry_ttl_ms)))
+                    short, _ = sw.build_swing_plan(frame, index, geometry, instruments[symbol], profile, end, 'short')
+                    if short is not None:
+                        mirrored_plans += 1
+                        mine = sw.simulate_swing(short, series, blocks[symbol], funding[symbol], profile,
+                                                 geometry.entry_ttl_ms)
+                        long = replace(short, entry=pivot - short.entry, stop=pivot - short.stop,
+                                       target=pivot - short.target, side='long')
+                        reference = sw.simulate_swing(long, mirror, mirror_blocks, mirror_funding, profile,
+                                                      geometry.entry_ttl_ms)
+                        if ((mine.filled, mine.fill_ms, mine.exit_ms, mine.reason, mine.ambiguous, mine.release_ms,
+                             [at for at, _ in mine.funding_cash])
+                                != (reference.filled, reference.fill_ms, reference.exit_ms, reference.reason,
+                                    reference.ambiguous, reference.release_ms,
+                                    [at for at, _ in reference.funding_cash])
+                                or (mine.filled and pivot - mine.exit_price != reference.exit_price)):
+                            mirror_differences += 1
+                            examples.append(f'mirror:{symbol}:{short.decision_ms}:{geometry_id}')
                 for mine, reference in pairs:
                     plans += 1
                     reason = 'holding_deadline' if reference.reason == 'midnight' else reference.reason
@@ -198,8 +231,9 @@ def swing_kernel(args: argparse.Namespace) -> int:
                         differences += 1
                         examples.append(f'{symbol}:{plan.decision_ms}:{geometry_id}')
     print(json.dumps({'phase': args.phase, 'profile': args.profile, 'compared_plans': plans,
-                      'differences': differences, 'examples': examples[:20]}))
-    return 1 if differences else 0
+                      'differences': differences, 'mirrored_short_plans': mirrored_plans,
+                      'mirror_differences': mirror_differences, 'examples': examples[:20]}))
+    return 1 if differences or mirror_differences else 0
 
 
 def _compare_with_php(args: argparse.Namespace, inputs: list[str], expected: dict) -> int:

@@ -347,6 +347,7 @@ class Plan:
     net_risk: float
     net_r: float
     deadline_ms: int
+    side: str = 'long'
 
 
 def build_plan(row: Mapping[str, Any], symbol: str, geometry: Geometry, instrument: Mapping[str, Any],
@@ -387,23 +388,37 @@ def build_plan(row: Mapping[str, Any], symbol: str, geometry: Geometry, instrume
 
 
 def protect_and_size(entry: Decimal, stop_atr: Decimal, stop_atr_multiplier: float, target_risk_multiple: float,
-                     instrument: Mapping[str, Any], profile: Mapping[str, float], funding_intervals: int = 1
-                     ) -> tuple[tuple[Decimal, ...] | None, str | None]:
+                     instrument: Mapping[str, Any], profile: Mapping[str, float], funding_intervals: int = 1,
+                     side: str = 'long') -> tuple[tuple[Decimal, ...] | None, str | None]:
     """ProtectionPriceMath (ATR stop, one R-multiple target), CanonicalRiskEngine's 250 quote
-    sizing and the NetRCostMath gate, on a tick-exact long entry.
+    sizing and the NetRCostMath gate, on a tick-exact entry.
 
     Returns ((stop, target, quantity, net_risk, net_r), None) or (None, reason). The funding
     provision reserves ``funding_intervals`` periods, like ``funding_intervals_provisioned``.
+    A short mirrors ProtectionPriceMath: stop above the entry and target below it, both
+    rounded up to the tick. Its provision is the same reserve as a long's: NetRCostMath
+    reserves only the rate adverse to the side, so research passes the negated rate for a short.
     """
     x = _EXACT
     tick, step = _decimal(instrument['tick_size']), _decimal(instrument['quantity_step'])
-    stop = _floor_to(x.subtract(entry, x.multiply(stop_atr, _decimal(stop_atr_multiplier))), tick)
+    distance = x.multiply(stop_atr, _decimal(stop_atr_multiplier))
+    if side == 'long':
+        stop = _floor_to(x.subtract(entry, distance), tick)
+    elif side == 'short':
+        stop = _ceil_to(x.add(entry, distance), tick)
+    else:
+        raise ExplorationError('plan side must be long or short')
     if stop <= 0:
         return None, 'canonical_protection_stop_invalid'
-    if stop >= entry:
+    if (stop >= entry) if side == 'long' else (stop <= entry):
         return None, 'canonical_protection_stop_polarity_invalid'
-    target = _floor_to(x.add(entry, x.multiply(x.subtract(entry, stop), _decimal(target_risk_multiple))), tick)
-    if target <= entry:
+    risk_distance = x.abs(x.subtract(entry, stop))
+    reward = x.multiply(risk_distance, _decimal(target_risk_multiple))
+    if side == 'long':
+        target = _floor_to(x.add(entry, reward), tick)
+    else:
+        target = _ceil_to(x.subtract(entry, reward), tick)
+    if target <= 0 or ((target <= entry) if side == 'long' else (target >= entry)):
         return None, 'canonical_protection_target_polarity_invalid'
     contract = _decimal(instrument['contract_size'])
     quantity = x.multiply(x.divide(_decimal(NOTIONAL_CAP), x.multiply(x.multiply(entry, contract), step))
@@ -423,9 +438,9 @@ def protect_and_size(entry: Decimal, stop_atr: Decimal, stop_atr_multiplier: flo
     entry_costs = x.multiply(notional, _decimal(MAKER_FEE) + rate['entry_spread_rate'] + rate['entry_slippage_rate'])
     funding = x.multiply(x.multiply(notional, max(Decimal(0), rate['funding_provision_rate'])),
                          Decimal(funding_intervals))
-    net_risk = (x.multiply(x.multiply(x.subtract(entry, stop), contract), quantity) + entry_costs + funding
+    net_risk = (x.multiply(x.multiply(risk_distance, contract), quantity) + entry_costs + funding
                 + x.multiply(stop_notional, _decimal(TAKER_FEE) + rate['stop_spread_rate'] + rate['stop_slippage_rate']))
-    net_reward = (x.multiply(x.multiply(x.subtract(target, entry), contract), quantity) - entry_costs - funding
+    net_reward = (x.multiply(x.multiply(x.abs(x.subtract(target, entry)), contract), quantity) - entry_costs - funding
                   - x.multiply(target_notional,
                                _decimal(TAKER_FEE) + rate['target_spread_rate'] + rate['target_slippage_rate']))
     net_r = x.divide(net_reward, net_risk).quantize(Decimal('1e-18'), rounding=ROUND_DOWN)
@@ -460,6 +475,8 @@ class Outcome:
 def simulate(plan: Plan, candles: CandleSeries, funding: FundingSeries | None,
              profile: Mapping[str, float]) -> Outcome:
     """PortfolioSimulator rules for one admitted plan (conservative closed-OHLC proxy)."""
+    if plan.side != 'long':
+        raise ExplorationError('the day_trading kernel is long-only')
     outcome = Outcome(plan, release_ms=plan.decision_ms + PENDING_RELEASE_MS)
     first = candles.index(plan.decision_ms)
     if not 0 <= first < candles.count:
@@ -502,7 +519,10 @@ def settle(outcome: Outcome, candles: CandleSeries, funding: FundingSeries | Non
     plan = outcome.plan
     if funding is not None:
         _apply_funding(outcome, candles, funding, first, last)
-    gross = plan.quantity * (outcome.exit_price - plan.entry)
+    if plan.side == 'long':
+        gross = plan.quantity * (outcome.exit_price - plan.entry)
+    else:
+        gross = plan.quantity * (plan.entry - outcome.exit_price)
     leg = 'target' if outcome.reason == 'target' else 'stop'
     exit_rate = TAKER_FEE + profile[f'{leg}_spread_rate'] + profile[f'{leg}_slippage_rate']
     outcome.exit_cash = gross - plan.quantity * outcome.exit_price * exit_rate
@@ -527,13 +547,14 @@ def _apply_funding(outcome: Outcome, candles: CandleSeries, funding: FundingSeri
         uncertain_exit = exiting and outcome.reason not in DEADLINE_REASONS
         if timestamp < boundary and (batch == first or uncertain_exit):
             outcome.ambiguous = True  # funding_path: exposure at the instant is uncertain
-            if rate <= 0:
+            if (rate <= 0) if plan.side == 'long' else (rate >= 0):
                 continue  # adverse_possible_credit_certain.v1: an uncertain credit is never booked.
         if mark is None:
             if batch < 1:
                 raise ExplorationError('no prior close: the canonical prephase mark is outside the series')
             mark = candles.close[batch - 1]
-        amount = -plan.quantity * mark * rate
+        # A long pays a positive rate and a short receives it.
+        amount = -plan.quantity * mark * rate if plan.side == 'long' else plan.quantity * mark * rate
         outcome.funding += amount
         outcome.funding_cash.append((timestamp, amount))
 

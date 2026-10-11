@@ -1,4 +1,4 @@
-"""Fast exploratory screen of a long swing family: 4h decisions held for days.
+"""Fast exploratory screen of swing hypotheses: 4h decisions held for days, long or short.
 
 The day_trading family closed negative (report of 2026-10-11): with intraday stops,
 costs took 0.1 to 0.2 R per trade. This screen keeps the exploration kernel's plan
@@ -12,6 +12,8 @@ horizon:
 * A decision is taken at every 4h close. The entry is a limit at that close resting
   ``entry_ttl_minutes``; the stop is a multiple of the 4h ATR, the target an R multiple,
   and an open position is closed at its holding deadline at the strictly prior close.
+  A short mirrors a long (sell limit, stop above, target below); its funding is received
+  when the rate is positive, and its net-R provision is the same reserve as a long's.
 * An hour/day index of 1m extremes finds the first stop or target touch in a few
   hundred steps instead of scanning up to 20,160 minutes.
 
@@ -194,7 +196,8 @@ def snapshot(bars: Bars, index: int) -> dict[str, float] | None:
 
 INDICATORS = ('close', *(f'ema{p}' for p in EMA_PERIODS), *(f'ema{p}p' for p in EMA_PERIODS),
               'rsi', 'atr', 'adx', 'ma21', 'ma_21_plus_k_atr')
-COLUMNS = (*INDICATORS, 'high', 'low', *(f'dh{n}' for n in DONCHIAN_BARS), f'low{PULLBACK_BARS}')
+COLUMNS = (*INDICATORS, 'high', 'low', *(f'dh{n}' for n in DONCHIAN_BARS), *(f'dl{n}' for n in DONCHIAN_BARS),
+           f'low{PULLBACK_BARS}')
 
 
 @dataclass
@@ -236,6 +239,7 @@ def build_frame(symbol: str, bars: Bars) -> Frame:
         for n in DONCHIAN_BARS:
             if index >= n:
                 columns[f'dh{n}'][index] = max(bars.high[index - n:index])
+                columns[f'dl{n}'][index] = min(bars.low[index - n:index])
         if index >= PULLBACK_BARS - 1:
             columns[f'low{PULLBACK_BARS}'][index] = min(bars.low[index - PULLBACK_BARS + 1:index + 1])
         values = snapshot(bars, index)
@@ -253,21 +257,50 @@ def _frame_job(path: str) -> dict:
 # --------------------------------------------------------------------------- policies
 @dataclass(frozen=True)
 class SwingPolicy:
+    """A long rule, a short rule or both; the rules of one policy never fire together."""
     id: str
-    predicate: Callable[[Frame, int], bool]
     description: str
+    long: Callable[[Frame, int], bool] | None = None
+    short: Callable[[Frame, int], bool] | None = None
+
+    def side(self, frame: Frame, index: int) -> str | None:
+        if self.long is not None and self.long(frame, index):
+            return 'long'
+        if self.short is not None and self.short(frame, index):
+            return 'short'
+        return None
+
+
+def _both(*rules: Callable[[Frame, int], bool]) -> Callable[[Frame, int], bool]:
+    return lambda f, i: all(rule(f, i) for rule in rules)
 
 
 def _up200(f: Frame, i: int) -> bool:
     return f['close'][i] > f['ema200'][i]
 
 
+def _down200(f: Frame, i: int) -> bool:
+    return f['close'][i] < f['ema200'][i]
+
+
 def _stacked(f: Frame, i: int) -> bool:
     return f['ema20'][i] > f['ema50'][i] > f['ema200'][i] and f['close'][i] > f['ema50'][i]
 
 
+def _stacked_down(f: Frame, i: int) -> bool:
+    return f['ema20'][i] < f['ema50'][i] < f['ema200'][i] and f['close'][i] < f['ema50'][i]
+
+
+def _adx25(f: Frame, i: int) -> bool:
+    return f['adx'][i] >= 25.0
+
+
 def _breakout(bars: int) -> Callable[[Frame, int], bool]:
     return lambda f, i: f['close'][i] > f[f'dh{bars}'][i]
+
+
+def _breakdown(bars: int) -> Callable[[Frame, int], bool]:
+    return lambda f, i: f['close'][i] < f[f'dl{bars}'][i]
 
 
 def _reclaim20(f: Frame, i: int) -> bool:
@@ -291,32 +324,70 @@ def _control(f: Frame, i: int) -> bool:
     return sampled(f.symbol, f.close_ms(i))
 
 
-POLICIES: dict[str, SwingPolicy] = {p.id: p for p in (
-    SwingPolicy('B30_up200', lambda f, i: _up200(f, i) and _breakout(30)(f, i),
-                '4h close above the 5-day high, above the 4h EMA200.'),
-    SwingPolicy('B60_up200', lambda f, i: _up200(f, i) and _breakout(60)(f, i),
-                '4h close above the 10-day high, above the 4h EMA200.'),
-    SwingPolicy('B120_up200', lambda f, i: _up200(f, i) and _breakout(120)(f, i),
-                '4h close above the 20-day high, above the 4h EMA200.'),
-    SwingPolicy('B60_any', _breakout(60), '4h close above the 10-day high, no trend filter.'),
-    SwingPolicy('PB20_stack', lambda f, i: _stacked(f, i) and _reclaim20(f, i),
-                'EMA20 > EMA50 > EMA200: close back above the EMA20 after a close below it.'),
-    SwingPolicy('PB50_stack', lambda f, i: _stacked(f, i) and _touch50(f, i),
-                'EMA20 > EMA50 > EMA200: a low within a day touched the EMA50, close above it.'),
-    SwingPolicy('OS30_up200', lambda f, i: _up200(f, i) and f['rsi'][i] < 30.0,
-                'Above the EMA200 with the 4h RSI below 30.'),
-    SwingPolicy('OS40_up200', lambda f, i: _up200(f, i) and f['rsi'][i] < 40.0,
-                'Above the EMA200 with the 4h RSI below 40.'),
-    SwingPolicy('X921_up200', lambda f, i: _up200(f, i) and _cross921(f, i),
-                'Fresh 4h EMA9-over-EMA21 cross above the EMA200.'),
-    SwingPolicy('TR_stack_adx25', lambda f, i: _stacked(f, i) and f['adx'][i] >= 25.0,
-                'EMA20 > EMA50 > EMA200 with ADX14 at least 25 (trend continuation).'),
-    SwingPolicy('R_all', _control, f'Random timing: 1 / {CONTROL_MODULUS} of all 4h decisions.'),
-    SwingPolicy('R_up200', lambda f, i: _up200(f, i) and _control(f, i),
-                'Random timing restricted to closes above the 4h EMA200.'),
-)}
-CONTROL_POLICIES = ('R_all', 'R_up200')
-SETUP_POLICIES = tuple(p for p in POLICIES if p not in CONTROL_POLICIES)
+_LONG = (
+    SwingPolicy('B30_up200', '4h close above the 5-day high, above the 4h EMA200.', _both(_up200, _breakout(30))),
+    SwingPolicy('B60_up200', '4h close above the 10-day high, above the 4h EMA200.', _both(_up200, _breakout(60))),
+    SwingPolicy('B120_up200', '4h close above the 20-day high, above the 4h EMA200.', _both(_up200, _breakout(120))),
+    SwingPolicy('B60_any', '4h close above the 10-day high, no trend filter.', _breakout(60)),
+    SwingPolicy('PB20_stack', 'EMA20 > EMA50 > EMA200: close back above the EMA20 after a close below it.',
+                _both(_stacked, _reclaim20)),
+    SwingPolicy('PB50_stack', 'EMA20 > EMA50 > EMA200: a low within a day touched the EMA50, close above it.',
+                _both(_stacked, _touch50)),
+    SwingPolicy('OS30_up200', 'Above the EMA200 with the 4h RSI below 30.',
+                lambda f, i: _up200(f, i) and f['rsi'][i] < 30.0),
+    SwingPolicy('OS40_up200', 'Above the EMA200 with the 4h RSI below 40.',
+                lambda f, i: _up200(f, i) and f['rsi'][i] < 40.0),
+    SwingPolicy('X921_up200', 'Fresh 4h EMA9-over-EMA21 cross above the EMA200.', _both(_up200, _cross921)),
+    SwingPolicy('TR_stack_adx25', 'EMA20 > EMA50 > EMA200 with ADX14 at least 25 (trend continuation).',
+                _both(_stacked, _adx25)),
+)
+_SHORT = (
+    SwingPolicy('S30_dn200', '4h close below the 5-day low, below the 4h EMA200.',
+                short=_both(_down200, _breakdown(30))),
+    SwingPolicy('S60_dn200', '4h close below the 10-day low, below the 4h EMA200.',
+                short=_both(_down200, _breakdown(60))),
+    SwingPolicy('S120_dn200', '4h close below the 20-day low, below the 4h EMA200.',
+                short=_both(_down200, _breakdown(120))),
+    SwingPolicy('S60_any', '4h close below the 10-day low, no trend filter.', short=_breakdown(60)),
+    SwingPolicy('TRS_stack_adx25', 'EMA20 < EMA50 < EMA200 with ADX14 at least 25 (downtrend continuation).',
+                short=_both(_stacked_down, _adx25)),
+)
+_TWO_SIDED = (
+    SwingPolicy('B30_2s', '5-day breakout above the EMA200, or 5-day breakdown below it.',
+                _both(_up200, _breakout(30)), _both(_down200, _breakdown(30))),
+    SwingPolicy('B60_2s', '10-day breakout above the EMA200, or 10-day breakdown below it.',
+                _both(_up200, _breakout(60)), _both(_down200, _breakdown(60))),
+    SwingPolicy('B120_2s', '20-day breakout above the EMA200, or 20-day breakdown below it.',
+                _both(_up200, _breakout(120)), _both(_down200, _breakdown(120))),
+    SwingPolicy('B60_any_2s', '10-day breakout or breakdown, no trend filter.', _breakout(60), _breakdown(60)),
+    SwingPolicy('TR_2s_adx25', 'Stacked EMAs with ADX14 at least 25, in either direction.',
+                _both(_stacked, _adx25), _both(_stacked_down, _adx25)),
+)
+_CONTROLS = (
+    SwingPolicy('R_all', f'Random long timing: 1 / {CONTROL_MODULUS} of all 4h decisions.', _control),
+    SwingPolicy('R_up200', 'Random long timing restricted to closes above the 4h EMA200.', _both(_up200, _control)),
+    SwingPolicy('R_dn200', 'Random short timing restricted to closes below the 4h EMA200.',
+                short=_both(_down200, _control)),
+    SwingPolicy('R_regime', 'Random timing: long above the 4h EMA200, short below it.',
+                _both(_up200, _control), _both(_down200, _control)),
+)
+POLICIES: dict[str, SwingPolicy] = {p.id: p for p in (*_LONG, *_SHORT, *_TWO_SIDED, *_CONTROLS)}
+LONG_POLICIES = tuple(p.id for p in _LONG)
+SHORT_POLICIES = tuple(p.id for p in _SHORT)
+TWO_SIDED_POLICIES = tuple(p.id for p in _TWO_SIDED)
+CONTROL_POLICIES = tuple(p.id for p in _CONTROLS)
+SETUP_POLICIES = LONG_POLICIES  # the default grid, as screened on 2026-10-11
+POLICY_GROUPS = {'long': LONG_POLICIES, 'short': SHORT_POLICIES, 'two-sided': TWO_SIDED_POLICIES,
+                 'controls': CONTROL_POLICIES}
+
+
+def expand_policies(text: str) -> tuple[str, ...]:
+    """Comma-separated policy ids or group names (long, short, two-sided, controls)."""
+    names = [name for token in text.split(',') for name in POLICY_GROUPS.get(token, (token,))]
+    unknown = [name for name in names if name not in POLICIES]
+    if unknown:
+        raise ExplorationError('unknown swing policy: ' + ','.join(unknown))
+    return tuple(dict.fromkeys(names))
 
 
 # ------------------------------------------------------------------------- geometries
@@ -353,22 +424,28 @@ GEOMETRIES: dict[str, SwingGeometry] = {
 
 # ------------------------------------------------------------------------------ plans
 def build_swing_plan(frame: Frame, index: int, geometry: SwingGeometry, instrument: Mapping[str, Any],
-                     profile: Mapping[str, float], phase_end: int) -> tuple[ex.Plan | None, str | None]:
-    """Limit at the 4h close, ATR stop and R target with ``exploration``'s exact arithmetic."""
+                     profile: Mapping[str, float], phase_end: int,
+                     side: str = 'long') -> tuple[ex.Plan | None, str | None]:
+    """Limit at the 4h close, ATR stop and R target with ``exploration``'s exact arithmetic.
+
+    The entry is the close rounded to the tick like EntryZonePriceMath: up for a long, down
+    for a short.
+    """
     close, atr = frame['close'][index], frame['atr'][index]
     for value in (close, atr):
         if not isinstance(value, float) or not math.isfinite(value) or value <= 0:
             return None, 'research_signal_price_context_missing'
-    entry = ex._ceil_to(ex._decimal(close), ex._decimal(instrument['tick_size']))
+    rounding = ex._ceil_to if side == 'long' else ex._floor_to
+    entry = rounding(ex._decimal(close), ex._decimal(instrument['tick_size']))
     protected, reason = ex.protect_and_size(entry, ex._decimal(atr), geometry.stop_atr_multiplier,
                                             geometry.target_risk_multiple, instrument, profile,
-                                            geometry.funding_intervals)
+                                            geometry.funding_intervals, side)
     if protected is None:
         return None, reason
     stop, target, quantity, net_risk, net_r = protected
     decision = frame.close_ms(index)
     return ex.Plan(frame.symbol, decision, float(entry), float(stop), float(target), float(quantity),
-                   float(net_risk), float(net_r), min(decision + geometry.horizon_ms, phase_end)), None
+                   float(net_risk), float(net_r), min(decision + geometry.horizon_ms, phase_end), side), None
 
 
 # -------------------------------------------------------------------------- simulation
@@ -392,23 +469,26 @@ def extremes(candles: ex.CandleSeries) -> Extremes:
     return Extremes(*blocks)
 
 
-def first_touch(candles: ex.CandleSeries, blocks: Extremes, begin: int, end: int, stop: float,
-                target: float) -> int | None:
-    """First index in [begin, end) whose low reaches ``stop`` or whose high reaches ``target``."""
+def first_touch(candles: ex.CandleSeries, blocks: Extremes, begin: int, end: int, lower: float,
+                upper: float) -> int | None:
+    """First index in [begin, end) whose low reaches ``lower`` or whose high reaches ``upper``.
+
+    For a long ``lower`` is the stop and ``upper`` the target; for a short, the reverse.
+    """
     low, high = candles.low, candles.high
     index = begin
     while index < end:
         if index % 1440 == 0 and index + 1440 <= end:
             day = index // 1440
-            if blocks.day_low[day] > stop and blocks.day_high[day] < target:
+            if blocks.day_low[day] > lower and blocks.day_high[day] < upper:
                 index += 1440
                 continue
         if index % 60 == 0 and index + 60 <= end:
             hour = index // 60
-            if blocks.hour_low[hour] > stop and blocks.hour_high[hour] < target:
+            if blocks.hour_low[hour] > lower and blocks.hour_high[hour] < upper:
                 index += 60
                 continue
-        if low[index] <= stop or high[index] >= target:
+        if low[index] <= lower or high[index] >= upper:
             return index
         index += 1
     return None
@@ -416,12 +496,25 @@ def first_touch(candles: ex.CandleSeries, blocks: Extremes, begin: int, end: int
 
 def simulate_swing(plan: ex.Plan, candles: ex.CandleSeries, blocks: Extremes, funding: ex.FundingSeries | None,
                    profile: Mapping[str, float], entry_ttl_ms: int) -> ex.Outcome:
-    """``exploration.simulate`` with a resting entry and a multi-day deadline.
+    """``exploration.simulate`` with a resting entry, a multi-day deadline and either side.
 
-    The limit fills on the first 1m bar closing within the TTL whose low reaches it. On
-    the fill bar a stop exits (ambiguous) and a target is ignored (ambiguous). The stop
-    wins when a later bar reaches both bounds; the deadline exits at the prior close.
+    The limit fills on the first 1m bar closing within the TTL that trades through it (low
+    for a buy, high for a sell). On the fill bar a stop exits (ambiguous) and a target is
+    ignored (ambiguous). The stop wins when a later bar reaches both bounds, at the worse of
+    the stop and the bar's open; the deadline exits at the prior close.
     """
+    long = plan.side == 'long'
+    low, high, opening = candles.low, candles.high, candles.open
+
+    def stop_hit(index: int) -> bool:
+        return low[index] <= plan.stop if long else high[index] >= plan.stop
+
+    def target_hit(index: int) -> bool:
+        return high[index] >= plan.target if long else low[index] <= plan.target
+
+    def stop_price(index: int) -> float:
+        return min(opening[index], plan.stop) if long else max(opening[index], plan.stop)
+
     outcome = ex.Outcome(plan, release_ms=plan.decision_ms + (entry_ttl_ms // MINUTE + 1) * MINUTE)
     first = candles.index(plan.decision_ms)
     eligible = entry_ttl_ms // MINUTE
@@ -431,7 +524,7 @@ def simulate_swing(plan: ex.Plan, candles: ex.CandleSeries, blocks: Extremes, fu
     for index in range(first, first + eligible):
         if candles.start_ms + (index + 1) * MINUTE >= plan.deadline_ms:
             break
-        if candles.low[index] <= plan.entry:
+        if (low[index] <= plan.entry) if long else (high[index] >= plan.entry):
             fill = index
             break
     if fill is None:
@@ -442,21 +535,21 @@ def simulate_swing(plan: ex.Plan, candles: ex.CandleSeries, blocks: Extremes, fu
     deadline_index = -((candles.start_ms - plan.deadline_ms) // MINUTE) - 1  # first bar closing at or after it
     if deadline_index >= candles.count:
         raise ExplorationError('position outlives candle coverage')
-    if candles.low[fill] <= plan.stop:
+    if stop_hit(fill):
         outcome.ambiguous = True
-        outcome.exit_ms, outcome.exit_price = outcome.fill_ms, min(candles.open[fill], plan.stop)
-        outcome.reason = 'stop'
+        outcome.exit_ms, outcome.exit_price, outcome.reason = outcome.fill_ms, stop_price(fill), 'stop'
         return ex.settle(outcome, candles, funding, profile, fill, fill)
-    outcome.ambiguous = candles.high[fill] >= plan.target
-    hit = first_touch(candles, blocks, fill + 1, deadline_index, plan.stop, plan.target)
+    outcome.ambiguous = target_hit(fill)
+    lower, upper = (plan.stop, plan.target) if long else (plan.target, plan.stop)
+    hit = first_touch(candles, blocks, fill + 1, deadline_index, lower, upper)
     if hit is None:
         outcome.exit_ms, outcome.exit_price = plan.deadline_ms, candles.close[deadline_index - 1]
         outcome.reason, last = 'holding_deadline', deadline_index
     else:
         outcome.exit_ms, last = candles.start_ms + (hit + 1) * MINUTE, hit
-        if candles.low[hit] <= plan.stop:
-            outcome.ambiguous = outcome.ambiguous or candles.high[hit] >= plan.target
-            outcome.exit_price, outcome.reason = min(candles.open[hit], plan.stop), 'stop'
+        if stop_hit(hit):
+            outcome.ambiguous = outcome.ambiguous or target_hit(hit)
+            outcome.exit_price, outcome.reason = stop_price(hit), 'stop'
         else:
             outcome.exit_price, outcome.reason = plan.target, 'target'
     return ex.settle(outcome, candles, funding, profile, fill, last)
@@ -466,12 +559,12 @@ def run_swing(frames: Mapping[str, Frame], candles: Mapping[str, ex.CandleSeries
               blocks: Mapping[str, Extremes], funding: Mapping[str, ex.FundingSeries] | None,
               policy: SwingPolicy, geometry: SwingGeometry, instruments: Mapping[str, Mapping[str, Any]],
               profile: Mapping[str, float], window: tuple[int, int], *, max_active: int = MAX_ACTIVE,
-              signals: Sequence[tuple[int, int, str, int]] | None = None) -> tuple[dict, list[ex.Outcome]]:
+              signals: Sequence[tuple[int, int, str, int, str]] | None = None) -> tuple[dict, list[ex.Outcome]]:
     """Replay one swing hypothesis over a pre-holdout phase with shared portfolio admission.
 
-    Admission order: one active plan per symbol, then ``max_active`` (pending entries
-    included), then the plan arithmetic. A rejected plan never holds capacity, so the
-    order changes only the rejection counts.
+    Admission order: one active plan per symbol whatever its side, then ``max_active``
+    (pending entries included), then the plan arithmetic. A rejected plan never holds
+    capacity, so the order changes only the rejection counts.
     """
     start, end = window
     if start >= end or end > HOLDOUT_START_MS:
@@ -481,7 +574,7 @@ def run_swing(frames: Mapping[str, Frame], candles: Mapping[str, ex.CandleSeries
     rejections: Counter[str] = Counter()
     active: list[ex.Outcome] = []
     closed: list[ex.Outcome] = []
-    for decision, _, symbol, index in signals:
+    for decision, _, symbol, index, side in signals:
         still = []
         for outcome in active:
             if outcome.release_ms <= decision:
@@ -496,7 +589,7 @@ def run_swing(frames: Mapping[str, Frame], candles: Mapping[str, ex.CandleSeries
         if len(active) >= max_active:
             rejections['research_portfolio_concurrency_exceeded'] += 1
             continue
-        plan, reason = build_swing_plan(frames[symbol], index, geometry, instruments[symbol], profile, end)
+        plan, reason = build_swing_plan(frames[symbol], index, geometry, instruments[symbol], profile, end, side)
         if plan is None:
             rejections[reason] += 1
             continue
@@ -512,15 +605,27 @@ def run_swing(frames: Mapping[str, Frame], candles: Mapping[str, ex.CandleSeries
     summary['mean_holding_hours'] = (statistics.fmean((o.exit_ms - o.fill_ms) / HOUR for o in trades)
                                      if trades else None)
     summary['phase_end_exits'] = sum(1 for o in trades if o.reason == 'holding_deadline' and o.plan.deadline_ms == end)
+    summary['by_side'] = {}
+    for side in ('long', 'short'):
+        rows = [o for o in trades if o.plan.side == side]
+        if rows:
+            summary['by_side'][side] = {'trades': len(rows), 'wins': sum(1 for o in rows if o.net > 0),
+                                        'mean_net_r': statistics.fmean(o.net_r for o in rows),
+                                        'net': sum(o.net for o in rows)}
     return summary, closed
 
 
 def select_signals(frames: Mapping[str, Frame], policy: SwingPolicy,
-                   window: tuple[int, int]) -> list[tuple[int, int, str, int]]:
+                   window: tuple[int, int]) -> list[tuple[int, int, str, int, str]]:
+    """(decision, symbol order, symbol, frame index, side) for every decision the policy takes."""
     start, end = window
-    return sorted((frame.close_ms(index), SYMBOLS.index(symbol), symbol, index)
-                  for symbol, frame in frames.items() for index in frame.decisions(start, end)
-                  if policy.predicate(frame, index))
+    signals = []
+    for symbol, frame in frames.items():
+        for index in frame.decisions(start, end):
+            side = policy.side(frame, index)
+            if side is not None:
+                signals.append((frame.close_ms(index), SYMBOLS.index(symbol), symbol, index, side))
+    return sorted(signals)
 
 
 # ------------------------------------------------------------------------------ parity
@@ -654,7 +759,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument('--root', type=Path, required=True)
     run.add_argument('--phase', choices=tuple(PHASES), required=True)
     run.add_argument('--policies', default=','.join(SETUP_POLICIES),
-                     help=f"default: the setup policies; controls ({','.join(CONTROL_POLICIES)}) run separately")
+                     help='policy ids or groups (long, short, two-sided, controls); default: the long setups')
     run.add_argument('--geometries', default=','.join(GEOMETRIES))
     run.add_argument('--profiles', default='baseline,adverse')
     run.add_argument('--max-active', type=int, default=MAX_ACTIVE)
@@ -694,7 +799,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     geometries = tuple(args.geometries.split(','))
     profiles = tuple(args.profiles.split(','))
     jobs = [(str(args.root), args.phase, policy, geometries, profiles, args.max_active)
-            for policy in args.policies.split(',')]
+            for policy in expand_policies(args.policies)]
     results = [row for rows in _map(_grid_job, jobs, args.workers) for row in rows]
     args.output.write_text(json.dumps(results))
     print(json.dumps({'runs': len(results), 'output': str(args.output)}))
