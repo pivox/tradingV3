@@ -52,11 +52,8 @@ final class ResearchPlanSession
             $keys[] = 'profile';
         }
         self::exact($frame, $keys, 'research_plan_open_invalid');
-        try {
-            $profile = ResearchProfile::fromFrame($frame);
-        } catch (\InvalidArgumentException $exception) {
-            throw new \InvalidArgumentException('research_plan_open_invalid', previous: $exception);
-        }
+        // Same reason code as the signal session: research_profile_invalid.
+        $profile = ResearchProfile::fromFrame($frame);
         if (($frame['schema_version'] ?? null) !== 'research-plan-open.v1'
             || !is_string($frame['session_id']) || preg_match('/\A[A-Za-z0-9][A-Za-z0-9._:-]{0,95}\z/D', $frame['session_id']) !== 1
             || !is_int($frame['expected_signals']) || $frame['expected_signals'] < 0 || $frame['expected_signals'] > 10_000_000

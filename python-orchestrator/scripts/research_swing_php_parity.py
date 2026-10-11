@@ -7,8 +7,12 @@ evaluated, and the passed decisions must equal the exploration frames' ``B30_2s`
 
 The passed signals are then replayed through ``app:research:plans`` with an empty
 one-plan-per-pair portfolio. Each plan must equal ``swing.build_swing_plan`` for
-``S3.T5.H14d``: entry, stop, target, quantity, net risk and net R. The holding deadline
-is compared only when the exploration did not clip it at the phase end.
+``S3.T5.H14d``: entry, stop, target, quantity, net risk and net R. A PHP plan always holds
+for the full 14 days after its decision; the exploration clips that deadline at the phase
+end, so every PHP deadline is compared with the unclipped one.
+
+A reused signal transcript must carry the identity it was produced with: phase window,
+dataset and PHP code.
 
 Outputs (worker transcripts and a JSON report) land in ``--out``.
 """
@@ -28,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.backtesting.research import exploration as ex  # noqa: E402
 from app.backtesting.research import swing  # noqa: E402
+from app.backtesting.research.plans import code_inventory  # noqa: E402
 from app.backtesting.research.portfolio_simulator import canonical_hash  # noqa: E402
 from app.backtesting.research.signal_sources import iter_verified_candles, select_sources  # noqa: E402
 
@@ -67,8 +72,13 @@ def _worker(app: Path, command: str, frames, out: Path) -> list[dict]:
         try:
             for frame in frames:
                 process.stdin.write(_line(frame))
+        except BrokenPipeError:
+            pass  # The worker stopped early; its error frame and exit code say why.
         finally:
-            process.stdin.close()
+            try:
+                process.stdin.close()
+            except BrokenPipeError:
+                pass
         code = process.wait()
     records = [json.loads(line) for line in out.read_bytes().splitlines()]
     failures = [r for r in records if str(r.get('schema_version', '')).endswith('-error.v1')]
@@ -98,11 +108,20 @@ def run_signals(args: argparse.Namespace, symbol: str, side: str, start: int, en
         yield {'schema_version': 'research-signal-close.v1', 'session_id': session}
 
     path = out / f'signals-{side}-{symbol}.jsonl'
-    if args.reuse and path.is_file() and path.read_bytes().rstrip().endswith(b'}'):
+    # A transcript is reusable only for the window, dataset and PHP code it was produced with.
+    identity = {'phase': args.phase, 'symbol': symbol, 'side': side, 'source_start_ms': source_start,
+                'score_start_ms': start, 'end_ms': end, 'dataset_sha256': selection.dataset_sha256,
+                'php_code_hash': canonical_hash(code_inventory(args.trading_app))}
+    sidecar = path.with_name(path.name + '.identity.json')
+    if (args.reuse and path.is_file() and sidecar.is_file() and json.loads(sidecar.read_text()) == identity
+            and path.read_bytes().rstrip().endswith(b'}')):
         records = [json.loads(line) for line in path.read_bytes().splitlines()]
         if records and records[-1].get('schema_version') == 'research-signal-summary.v1':
             return records, path
-    return _worker(args.trading_app, 'app:research:signals', frames(), path), path
+    sidecar.unlink(missing_ok=True)
+    records = _worker(args.trading_app, 'app:research:signals', frames(), path)
+    sidecar.write_text(json.dumps(identity, sort_keys=True) + '\n')
+    return records, path
 
 
 def _scored(records: list[dict], end: int) -> list[tuple[int, dict]]:
@@ -194,9 +213,9 @@ def compare_plans(plans: list[dict], frame: swing.Frame, side: str, instrument: 
                     'net_r': plan['targets'][0]['net_r']}
         wanted = {'side': expected.side, 'entry': expected.entry, 'stop': expected.stop, 'target': expected.target,
                   'quantity': expected.quantity, 'net_risk': expected.net_risk, 'net_r': expected.net_r}
-        if expected.deadline_ms == plan['evaluated_ms'] + geometry.horizon_ms:
-            observed['deadline'], wanted['deadline'] = plan['holding_deadline_ms'], expected.deadline_ms
-        else:
+        # PHP keeps the full horizon; the exploration clips it at the phase end.
+        observed['deadline'], wanted['deadline'] = plan['holding_deadline_ms'], plan['evaluated_ms'] + geometry.horizon_ms
+        if expected.deadline_ms != wanted['deadline']:
             clipped += 1
         if observed != wanted:
             differences.append({'at': plan['evaluated_ms'], 'php': observed, 'exploration': wanted})

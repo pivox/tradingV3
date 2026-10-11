@@ -188,6 +188,15 @@ final class ResearchSwingProfileTest extends TestCase
         sort($others, SORT_STRING);
         $nine = self::portfolio($portfolio, $others, 5, 4);
         self::assertSame('research-plan.v1', $builder->build($signal, 3, $nine)['schema_version']);
+
+        // A full portfolio holding the pair is refused for the pair, not for the limit (PortfolioSimulator order).
+        $all = ResearchInstrumentAssumptions::SYMBOLS;
+        sort($all, SORT_STRING);
+        $full = self::portfolio($portfolio, $all, 6, 4);
+        self::assertSame('research_portfolio_symbol_active', $builder->build($signal, 3, $full)['reason_code']);
+        // The daily cap is checked first.
+        $capped = self::portfolio(['reserved_risk_quote' => 99_999.9] + $portfolio, ['BTCUSDT', 'ETHUSDT'], 1, 1);
+        self::assertSame('research_portfolio_daily_loss_exceeded', $builder->build($signal, 3, $capped)['reason_code']);
     }
 
     public function testSwingPortfolioViewMustCarryExactSortedActiveSymbols(): void
@@ -225,10 +234,13 @@ final class ResearchSwingProfileTest extends TestCase
             $s['trace']['execution_timeframe'] = '15m';
             $s['trace_hash'] = CanonicalBacktestRuleEvaluator::canonicalHash($s['trace']);
         });
-        $mutations['stale 4h context'] = self::rehash($signal, static function (array &$s): void {
-            $s['contexts']['4h']['open_ms'] -= self::FOUR_HOURS;
-            $s['contexts']['4h']['available_ms'] -= self::FOUR_HOURS;
-        });
+        // Every timeframe must close at the 4h decision.
+        foreach (['1m' => 60_000, '5m' => 300_000, '15m' => 900_000, '1h' => 3_600_000, '4h' => self::FOUR_HOURS] as $tf => $step) {
+            $mutations['stale ' . $tf . ' context'] = self::rehash($signal, static function (array &$s) use ($tf, $step): void {
+                $s['contexts'][$tf]['open_ms'] -= $step;
+                $s['contexts'][$tf]['available_ms'] -= $step;
+            });
+        }
         foreach ($mutations as $label => $mutation) {
             try {
                 $builder->build($mutation, 3, $portfolio);
@@ -249,6 +261,16 @@ final class ResearchSwingProfileTest extends TestCase
             'signal_index' => 3, 'signal' => $signal, 'portfolio' => $portfolio]);
         self::assertSame('short', $plan['side']);
         self::assertSame(1, $session->close(['schema_version' => 'research-plan-close.v1', 'session_id' => $open['session_id'], 'expected_signals' => 1])['planned']);
+
+        // A plan session refuses an invalid profile with the signal session's reason code.
+        foreach (['day_trading', 'swing', null] as $invalid) {
+            try {
+                (new ResearchPlanSession(new EffectiveTradingConfigResolver()))->open(['profile' => $invalid] + $open);
+                self::fail('Accepted plan profile ' . var_export($invalid, true));
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('research_profile_invalid', $exception->getMessage());
+            }
+        }
 
         // The same frame without its profile resolves the day_trading baseline and fails closed.
         unset($open['profile']);
