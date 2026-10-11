@@ -40,7 +40,7 @@ def swing(fixture):
     return f
 
 
-def test_the_swing_campaign_has_its_own_spec_and_stays_unpinned_until_its_frozen_commit():
+def test_the_swing_campaign_has_its_own_spec_and_its_frozen_verifier_pin(monkeypatch):
     day, swing_spec = h.campaign_spec(), h.campaign_spec(h.SWING_CAMPAIGN_ID)
     assert (day.campaign_id, day.family, day.profiles) == (h.CAMPAIGN_ID, 'day_trading', ())
     assert (swing_spec.family, swing_spec.profiles) == ('swing', ('swing.long', 'swing.short'))
@@ -50,8 +50,12 @@ def test_the_swing_campaign_has_its_own_spec_and_stays_unpinned_until_its_frozen
     assert h._authority_path(h.SWING_CAMPAIGN_ID).name == 'swing-2026-10-11.json'
     with pytest.raises(h.HoldoutError, match='unknown_holdout_campaign'):
         h.campaign_spec('scalping-2026')
+    # Pinned to the frozen commit of the swing campaign; an unpinned spec installs nothing.
+    assert swing_spec.frozen_commit == h.SWING_FROZEN_COMMIT
+    assert set(h._trusted_repository_inventory(swing_spec)) == set(h.FROZEN_FILES)
+    monkeypatch.setattr(h, 'SWING_FROZEN_COMMIT', None)
     with pytest.raises(h.HoldoutError, match='campaign_frozen_commit_not_pinned'):
-        h._trusted_repository_inventory(swing_spec)
+        h._trusted_repository_inventory(h.campaign_spec(h.SWING_CAMPAIGN_ID))
 
 
 def test_a_swing_claim_names_its_family_profiles_and_cells(swing):
@@ -121,8 +125,9 @@ def test_a_swing_authority_installs_only_from_a_pinned_swing_orchestration(retai
     f.write(f.attempt, attempt)
     f.terminal_value['attempt_sha256'] = h._file_hash(f.attempt)
     f.write(f.terminal, f.terminal_value)
-    # Until the swing pin lands, its frozen verifier inventory does not exist.
+    # An unpinned swing campaign has no frozen verifier inventory to install from.
     monkeypatch.setattr(h, '_trusted_repository_inventory', h_real_inventory)
+    monkeypatch.setattr(h, 'SWING_FROZEN_COMMIT', None)
     with pytest.raises(h.HoldoutError, match='campaign_frozen_commit_not_pinned'):
         h.install_campaign_authority(f.attempt, f.snapshot, campaign_id=h.SWING_CAMPAIGN_ID)
     monkeypatch.setattr(h, '_trusted_repository_inventory', lambda spec=None: frozen)

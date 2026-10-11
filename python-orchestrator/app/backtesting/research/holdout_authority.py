@@ -42,7 +42,7 @@ RISK_ASSUMPTIONS = (('daily_loss_limit_quote','30'), ('per_position_notional_cap
 # The swing candidate's own campaign (swing@1.0.0, both sides). Its frozen verifier pin lands
 # after its frozen commit; until then no swing authority can be installed or claimed.
 SWING_CAMPAIGN_ID = 'swing-2026-10-11'
-SWING_FROZEN_COMMIT = None
+SWING_FROZEN_COMMIT = '6dfb43b31b7c2396051d28e6166d9cf1b381ab96'
 SWING_INVENTORY = 'frozen_verifier_inventory.swing.json'
 SWING_PROFILES = ('swing.long','swing.short')
 SWING_RISK_ASSUMPTIONS = (('daily_loss_limit_quote','100000'), ('daily_loss_limit_rate','1'),
@@ -576,8 +576,9 @@ def _verified_freeze(authority, *, timeout=VERIFIER_SECONDS):
 
 def _new_code_inventory():
     root = Path(__file__).parent
-    names = ('holdout.py','holdout_authority.py','frozen_verifier_inventory.json','signals.py','signal_sources.py',
-        'campaign.py','campaign_evidence.py','plans.py','portfolio_simulator.py','statistics.py','funding.py',
+    names = ('holdout.py','holdout_authority.py','frozen_verifier_inventory.json',
+        'frozen_verifier_inventory.swing.json','signals.py','signal_sources.py','campaign.py',
+        'campaign_evidence.py','plans.py','portfolio_simulator.py','statistics.py','funding.py',
         'binance_history.py','source_complements.py','orchestration.py','experiments.py')
     return {str(root/name):_file_hash(root/name) for name in names} | {
         str(root.parents[1]/'modern_trading_contracts.py'):_file_hash(root.parents[1]/'modern_trading_contracts.py')}
