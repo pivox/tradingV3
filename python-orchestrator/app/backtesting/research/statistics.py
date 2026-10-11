@@ -220,6 +220,8 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
     maximum_closed_drawdown = peak_wallet = ZERO
     wallet = Decimal('100000'); peak_wallet = wallet
     marked_positions = {}
+    # One active plan per pair (pending or open), as the kernel admits them under such a profile.
+    active_pairs = {}
     marked_peak = wallet; marked_drawdown = ZERO
     marked_initial = marked_terminal = False
     marked_at = start_ms
@@ -335,6 +337,12 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                         reason = row['reason']
                         if reason == 'admitted':
                             counts['admitted'] += 1
+                            if profile.one_active_per_symbol:
+                                if symbol in active_pairs:
+                                    raise StatisticsError('pair_active_plan_conflict')
+                                active_pairs[symbol] = key
+                        elif reason in ('entry_expired','research_end_pending') and active_pairs.get(symbol) == key:
+                            del active_pairs[symbol]
                         if reason == 'limit_fill_proxy':
                             counts['filled'] += 1
                             if check_marked:
@@ -422,6 +430,8 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                         years[year]['outcomes'].add(net,risk)
                         exits[row['exit_reason']] += 1
                         connection.execute('UPDATE plans SET closed=1 WHERE hash=?',(key,))
+                        if active_pairs.get(symbol) == key:
+                            del active_pairs[symbol]
                 elif name == 'rejections':
                     if row.get('schema_version') == 'research-simulation-rejection.v1':
                         counts['rejected'] += 1
@@ -534,9 +544,21 @@ def verify_holdout_campaign(root: Path, *, authorization, variant_id: str,
 
 def _verify_bound_campaign(root, protocol, registration, binding, phase, start, end,
                            manifest, manifest_sha, *, authorization=None):
-    """Identical ledger arithmetic and campaign reconciliation after scope guards."""
-    from .experiments import hash_bytes, canonical_bytes, WINDOWS
-    from .portfolio_simulator import canonical_hash, SYMBOLS
+    """Identical ledger arithmetic and campaign reconciliation after scope guards.
+
+    A swing unit carries one cell per side: each side is checked against its protocol cell,
+    and each (symbol, side) stream against its frozen source run.
+    """
+    from .experiments import hash_bytes, canonical_bytes, WINDOWS, protocol_family
+    from .portfolio_simulator import canonical_hash, SYMBOLS, KernelProfile, SWING_PROFILE, stream_key
+    swing = protocol_family(protocol) == 'swing'
+    if swing != ('cells' in manifest) or (swing and authorization is not None):
+        raise StatisticsError('campaign_research_family_conflict')
+    if swing and (manifest['kernel_profile'] != protocol['kernel_profile']
+                  or KernelProfile.from_wire(manifest['kernel_profile']) != SWING_PROFILE
+                  or [(c['profile'],c['side']) for c in manifest['cells']] != [('swing.'+s,s) for s in SWING_PROFILE.sides]
+                  or any(k in manifest for k in ('variant','baseline','source_runs'))):
+        raise StatisticsError('campaign_research_cells_conflict')
     summary,summary_sha = _read_json(root/'summary.json')
     status,_ = _read_json(root/'status.json')
     if (manifest['schema_version'] != 'research-campaign-manifest.v1'
@@ -549,15 +571,20 @@ def _verify_bound_campaign(root, protocol, registration, binding, phase, start, 
         or not manifest['run_id'] == summary['run_id'] == status['run_id']
         or any(doc.get('execution_authority','none') != 'none' for doc in (manifest,summary,status))):
         raise StatisticsError('campaign_status_hash_or_identity_conflict')
+    cells = manifest['cells'] if swing else [{'side':'long','baseline':manifest['baseline'],
+        'variant':manifest['variant'],'source_runs':manifest['source_runs']}]
     if (manifest['phase'] != phase or summary['phase'] != phase or
         manifest['start_ms'] != start or summary['start_ms'] != start or
         manifest['end_ms'] != end or summary['end_ms'] != end or manifest['end_exclusive'] is not True
         or manifest['symbol_priority'] != list(SYMBOLS) or summary['symbol_priority'] != list(SYMBOLS)
         or manifest['cost_profile'] != registration['cost_profile']
-        or manifest['variant']['id'] != registration['variant_id']
+        or any(c['variant']['id'] != registration['variant_id'] for c in cells)
         or manifest['initial_wallet_quote'] != '100000'):
         raise StatisticsError('campaign_protocol_scope_conflict')
-    for field in ('source_runs','signal_reports','runner_code_sha256'):
+    source_runs = {c['side']:c['source_runs'] for c in cells} if swing else manifest['source_runs']
+    if source_runs != binding['source_runs']:
+        raise StatisticsError('campaign_frozen_source_or_code_conflict')
+    for field in ('signal_reports','runner_code_sha256'):
         if manifest[field] != binding[field]:
             raise StatisticsError('campaign_frozen_source_or_code_conflict')
     if (manifest['funding_inventory_hash'] != binding['funding_inventory_hash']
@@ -578,10 +605,12 @@ def _verify_bound_campaign(root, protocol, registration, binding, phase, start, 
             raise StatisticsError('holdout_physical_input_denominator_conflict')
     if any(canonical_hash(report['code_sha256']) != identity['signal_code_hash'] for report in manifest['signal_reports']):
         raise StatisticsError('signal_code_identity_conflict')
-    baseline = manifest['baseline']
-    for target,source in (('base_setup_hash','setup_hash'),('base_config_hash','config_hash'),
-                          ('base_catalog_hash','condition_catalog_hash'),('base_snapshot_hash','snapshot_hash')):
-        if baseline[source] != identity[target]:
+    bases = (('base_setup_hash','setup_hash'),('base_config_hash','config_hash'),
+             ('base_catalog_hash','condition_catalog_hash'),('base_snapshot_hash','snapshot_hash'))
+    for c in cells:
+        # A swing side matches its protocol cell; the protocol identity holds their composites.
+        frozen = protocol['cells'][c['side']] if swing else identity
+        if any(c['baseline'][source] != frozen[target] for target,source in bases):
             raise StatisticsError('baseline_identity_conflict')
     if manifest['research_code_hash'] != identity['research_code_hash']:
         raise StatisticsError('research_code_identity_conflict')
@@ -599,25 +628,33 @@ def _verify_bound_campaign(root, protocol, registration, binding, phase, start, 
         raise StatisticsError('assumption_protocol_identity_conflict')
     selected = next(row for row in protocol['variants'] if row['id'] == registration['variant_id'])
     diff = selected['diff'] or []  # PHP baseline serializes its empty array as [].
-    variant_hash = canonical_hash({'schema_version':'research-variant.v1','id':selected['id'],'diff':diff,
-        'base_setup_hash':baseline['setup_hash'],'base_config_hash':baseline['config_hash'],
-        'base_catalog_hash':baseline['condition_catalog_hash']})
-    if manifest['variant']['diff'] != diff or manifest['variant']['variant_hash'] != variant_hash:
-        raise StatisticsError('closed_variant_identity_conflict')
-    expected = {k:v for k,v in identity.items() if k in ('base_setup_hash','base_config_hash',
-        'base_catalog_hash','base_snapshot_hash','instrument_assumptions_hash','research_code_hash')}
-    expected.update(variant_id=selected['id'],variant_hash=variant_hash,cost_assumptions_hash=costs['assumption_hash'])
-    sources = {row['symbol']:{**row['source'],'signal_run_id':row['signal_run_id'],
-               'signal_output_sha256':row['signal_output_sha256']} for row in manifest['source_runs']}
-    if list(sources) != list(SYMBOLS):
-        raise StatisticsError('source_priority_conflict')
-    # Source venue belongs to plan evidence but is absent from the trade schema.
-    sources = {symbol:{k:v for k,v in row.items() if k in ('dataset_id','dataset_sha256',
-               'signal_run_id','signal_output_sha256')} for symbol,row in sources.items()}
+    expected, sources = {}, {}
+    for c in cells:
+        baseline = c['baseline']
+        variant_hash = canonical_hash({'schema_version':'research-variant.v1','id':selected['id'],'diff':diff,
+            'base_setup_hash':baseline['setup_hash'],'base_config_hash':baseline['config_hash'],
+            'base_catalog_hash':baseline['condition_catalog_hash']})
+        if c['variant']['diff'] != diff or c['variant']['variant_hash'] != variant_hash:
+            raise StatisticsError('closed_variant_identity_conflict')
+        expected[c['side']] = {**{target:baseline[source] for target,source in bases},
+            'instrument_assumptions_hash':identity['instrument_assumptions_hash'],
+            'research_code_hash':identity['research_code_hash'],
+            'variant_id':selected['id'],'variant_hash':variant_hash,'cost_assumptions_hash':costs['assumption_hash']}
+        runs = {row['symbol']:{**row['source'],'signal_run_id':row['signal_run_id'],
+                'signal_output_sha256':row['signal_output_sha256']} for row in c['source_runs']}
+        if list(runs) != list(SYMBOLS):
+            raise StatisticsError('source_priority_conflict')
+        # Source venue belongs to plan evidence but is absent from the trade schema.
+        for symbol,row in runs.items():
+            sources[stream_key(symbol,c['side'],SWING_PROFILE.sides if swing else ('long',))] = {
+                k:v for k,v in row.items() if k in ('dataset_id','dataset_sha256','signal_run_id','signal_output_sha256')}
+    if not swing:
+        expected = expected['long']
     if authorization is None:
         result = analyze_ledgers(root,status['files'],symbols=SYMBOLS,start_ms=start,end_ms=end,
             expected_identity=expected,expected_sources=sources,expected_cost_profile=profile,
-            expected_cost_model=costs['profiles'][profile],require_marked=True)
+            expected_cost_model=costs['profiles'][profile],require_marked=True,
+            kernel_profile=SWING_PROFILE if swing else None)
     else:
         result = analyze_holdout_ledgers(root,status['files'],authorization=authorization,
             variant_id=registration['variant_id'],cost_profile=profile)

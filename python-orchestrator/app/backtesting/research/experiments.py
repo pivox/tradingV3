@@ -22,7 +22,7 @@ import stat
 import uuid
 from typing import Any
 
-from .portfolio_simulator import SYMBOLS
+from .portfolio_simulator import SWING_PROFILE, SYMBOLS, composite_hash
 from .statistics import decimal
 
 VARIANTS = (
@@ -40,6 +40,21 @@ PROFILES = ('baseline', 'adverse')
 IDENTITIES = ('dataset_hash','signal_code_hash','research_code_hash','base_setup_hash',
     'base_config_hash','base_catalog_hash','base_snapshot_hash','instrument_assumptions_hash',
     'baseline_cost_hash','adverse_cost_hash')
+# Research families and their closed catalogues. Day_trading is the frozen v1 protocol;
+# swing tests one candidate, its contract geometry, with one cell per side.
+FAMILIES = {'day_trading': VARIANTS, 'swing': (('baseline', {}),)}
+# Per-side base hashes of a swing protocol; its identity holds their composites.
+CELL_IDENTITIES = ('base_setup_hash','base_config_hash','base_catalog_hash','base_snapshot_hash')
+RISK_ASSUMPTIONS = {
+    'day_trading': {'daily_loss_limit_quote':'30','per_position_notional_cap_quote':'250',
+        'maximum_concurrent_positions':4,'risk_budget_rate':'0.05','maximum_leverage':'2',
+        'maximum_aggregate_exposure_rate':'1','execution_authority':'none'},
+    # The swing mode contract's daily cap (100 % of equity, 100,000 quote) is declared, never binding.
+    'swing': {'daily_loss_limit_quote':'100000','daily_loss_limit_rate':'1',
+        'per_position_notional_cap_quote':'250','maximum_concurrent_positions':10,
+        'one_active_plan_per_symbol':True,'risk_budget_rate':'0.05','maximum_leverage':'2',
+        'maximum_aggregate_exposure_rate':'1','execution_authority':'none'}}
+HASH_PATTERN = r'(?:sha256:)?[a-f0-9]{64}'
 WINDOWS = {'training': {'start':'2023-01-01T00:00:00Z','end':'2025-01-01T00:00:00Z'},
            'validation': {'start':'2025-01-01T00:00:00Z','end':'2026-01-01T00:00:00Z'}}
 LIMIT = 4 * 1024**3
@@ -63,31 +78,42 @@ def hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def make_protocol(identity: dict, *, phase_bindings: dict | None = None) -> dict:
+def make_protocol(identity: dict, *, phase_bindings: dict | None = None, family: str = 'day_trading',
+                  cells: dict | None = None) -> dict:
+    if not isinstance(family,str) or family not in FAMILIES or (cells is None) != (family == 'day_trading'):
+        raise ExperimentError('invalid_protocol_family')
     if (set(identity) != set(IDENTITIES) or any(not isinstance(v,str) or
-            re.fullmatch(r'(?:sha256:)?[a-f0-9]{64}',v) is None for v in identity.values())):
+            re.fullmatch(HASH_PATTERN,v) is None for v in identity.values())):
         raise ExperimentError('invalid_protocol_identity')
+    sides = SWING_PROFILE.sides
+    if cells is not None and (not isinstance(cells,dict) or set(cells) != set(sides)
+            or any(not isinstance(cell,dict) or set(cell) != set(CELL_IDENTITIES)
+                   or any(not isinstance(v,str) or re.fullmatch(HASH_PATTERN,v) is None for v in cell.values())
+                   for cell in cells.values())
+            or any(composite_hash({side:cells[side][k] for side in sides}) != identity[k] for k in CELL_IDENTITIES)):
+        raise ExperimentError('invalid_protocol_cells')
     if phase_bindings is not None and (set(phase_bindings) != set(WINDOWS) or
             any(set(phase_bindings[p]) != {'source_runs','signal_reports','runner_code_sha256',
-                'cost_assumptions_hash','funding_inventory_hash','funding_diagnostic_policy'} for p in WINDOWS)):
+                'cost_assumptions_hash','funding_inventory_hash','funding_diagnostic_policy'} for p in WINDOWS)
+            # A swing phase binds each side's source runs.
+            or (cells is not None and any(not isinstance(phase_bindings[p]['source_runs'],dict)
+                                          or set(phase_bindings[p]['source_runs']) != set(sides) for p in WINDOWS))):
         raise ExperimentError('invalid_phase_bindings')
     if phase_bindings is not None:
         for binding in phase_bindings.values():
             funding_hash,policy = binding['funding_inventory_hash'],binding['funding_diagnostic_policy']
-            if (not isinstance(funding_hash,str) or re.fullmatch(r'(?:sha256:)?[a-f0-9]{64}',funding_hash) is None
+            if (not isinstance(funding_hash,str) or re.fullmatch(HASH_PATTERN,funding_hash) is None
                     or not isinstance(policy,str) or re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}',policy) is None):
                 raise ExperimentError('invalid_frozen_funding_binding')
-    return {'schema_version':'research-experiment-protocol.v1', 'identity':dict(identity),
+    protocol = {'schema_version':'research-experiment-protocol.v1', 'identity':dict(identity),
         'phase_bindings':json.loads(canonical_bytes(phase_bindings)),
         'selection_code_sha256':{name:hash_bytes(Path(__file__).with_name(name).read_bytes())
                                  for name in ('statistics.py','experiments.py')},
         'cutoff':'2026-10-09T06:00:00Z', 'symbol_priority':list(SYMBOLS),
         'windows':json.loads(canonical_bytes(WINDOWS)), 'initial_wallet_quote':'100000',
-        'variants':[{'id':key,'diff':dict(diff)} for key,diff in VARIANTS],
+        'variants':[{'id':key,'diff':dict(diff)} for key,diff in FAMILIES[family]],
         'cost_profiles':list(PROFILES),
-        'risk_assumptions':{'daily_loss_limit_quote':'30','per_position_notional_cap_quote':'250',
-            'maximum_concurrent_positions':4,'risk_budget_rate':'0.05','maximum_leverage':'2',
-            'maximum_aggregate_exposure_rate':'1','execution_authority':'none'},
+        'risk_assumptions':dict(RISK_ASSUMPTIONS[family]),
         'thresholds':{'minimum_training_trades':100,'minimum_training_trades_per_year':30,
             'minimum_validation_trades':50,'minimum_pairs':5,'baseline_minimum_net_profit_factor':'1.2',
             'adverse_minimum_net_profit_factor':'1.0','maximum_marked_drawdown_quote':'6000',
@@ -97,10 +123,24 @@ def make_protocol(identity: dict, *, phase_bindings: dict | None = None) -> dict
             'worst_validation_marked_drawdown_asc','changed_field_count_asc','catalogue_order_asc'],
         'holdout_policy':'closed_until_verified_selection_freeze',
         'paper_transfer':'distinct_pending', 'criteria_are_statistical_significance':False}
+    if family != 'day_trading':
+        protocol.update(research_family=family, kernel_profile=json.loads(canonical_bytes(SWING_PROFILE.wire())),
+                        cells=json.loads(canonical_bytes(cells)))
+    return protocol
+
+
+def protocol_family(protocol: dict) -> str:
+    """The research family of a protocol; the frozen day_trading protocol names none."""
+    return protocol.get('research_family','day_trading')
+
+
+def variant_ids(protocol: dict) -> tuple[str, ...]:
+    return tuple(row['id'] for row in protocol['variants'])
 
 
 def _validate_protocol(protocol: dict) -> None:
-    if protocol != make_protocol(protocol.get('identity', {}),phase_bindings=protocol.get('phase_bindings')):
+    if protocol != make_protocol(protocol.get('identity', {}),phase_bindings=protocol.get('phase_bindings'),
+                                 family=protocol_family(protocol),cells=protocol.get('cells')):
         raise ExperimentError('protocol_not_prespecified')
 
 
@@ -299,7 +339,7 @@ class ExperimentRegistry(AbstractContextManager):
         return registration
 
     def _registration(self,attempt_id: str,variant: str,profile: str,phase: str) -> dict:
-        if (re.fullmatch(r'[a-f0-9]{32}',attempt_id) is None or variant not in dict(VARIANTS)
+        if (re.fullmatch(r'[a-f0-9]{32}',attempt_id) is None or variant not in variant_ids(self.protocol)
                 or profile not in PROFILES or phase not in WINDOWS):
             raise ExperimentError('unit_not_prespecified')
         return json.loads(canonical_bytes({'schema_version':'research-attempt-registration.v1','attempt_id':attempt_id,
@@ -379,7 +419,7 @@ def _candidate_rows(registry: ExperimentRegistry, *, allow_pending: bool = False
             raise ExperimentError('ambiguous_duplicate_unit')
         units[key] = terminal.get('statistics',{'status':terminal['state']})
     candidates = []
-    for variant,_ in VARIANTS:
+    for variant in variant_ids(registry.protocol):
         row = {'variant_id':variant,'training':{},'validation':{}}
         for profile in PROFILES:
             key = (variant,profile,'training')
@@ -408,7 +448,9 @@ def _candidate_rows(registry: ExperimentRegistry, *, allow_pending: bool = False
 
 
 def schedule_batch(registry: ExperimentRegistry, run_unit, *, verify_unit=None) -> list[dict]:
-    """Run exactly 26 training units, then eligible validation; sequential only.
+    """Run every training unit of the protocol catalogue, then eligible validation; sequential only.
+
+    Day_trading has 26 training units, swing 2 (its one candidate under both cost profiles).
 
     Budget-aware callbacks accept optional max_output_bytes/min_free_bytes keyword
     arguments. The production factory enforces these on every C1 write, reserving
@@ -486,9 +528,9 @@ def schedule_batch(registry: ExperimentRegistry, run_unit, *, verify_unit=None) 
             return stats
 
     training = {}
-    for variant,_ in VARIANTS:
+    for variant in variant_ids(registry.protocol):
         training[variant] = {profile:execute(variant,profile,'training') for profile in PROFILES}
-    for variant,_ in VARIANTS:
+    for variant in variant_ids(registry.protocol):
         if not any(screening_reasons(training[variant][p],'training',p) for p in PROFILES):
             for profile in PROFILES:
                 execute(variant,profile,'validation')
@@ -667,7 +709,10 @@ def write_reports(registry: ExperimentRegistry,report_root: Path,candidates: lis
         'Arrêt exclusif figé : '+registry.protocol['cutoff']+'. Entraînement : 2023–2024 ; validation : 2025.',
         'Chaque phase et scénario repart d’un portefeuille partagé de 100000 USDT. Le ROI utilise ce capital ; plafond par position : 250 USDT. Les wallets des phases ne sont pas additionnés ; les paires partagent le même wallet.',
         f"Tentatives : {len(attempts)} ; complètes : {states['complete']} ; inconclusives : {states['inconclusive']} ; échouées : {states['failed']}.",
-        'Chaque échec, interruption, résultat nul ou négatif reste inscrit. Une validation non lancée conserve une valeur manquante.', '',
+        'Chaque échec, interruption, résultat nul ou négatif reste inscrit. Une validation non lancée conserve une valeur manquante.',
+        *(('Famille swing : un seul candidat figé, long et short sur bougies 4h, un plan actif par paire (10 au plus), '
+           'horizon de 14 jours. Chaque côté garde sa propre identité de setup et ses propres runs de signaux.',)
+          if protocol_family(registry.protocol) == 'swing' else ()), '',
         ('Sélection en attente des unités requises.' if pending else
          ('Classement éligible : '+', '.join(r['variant_id'] for r in ranking)+
           ('. Sélection figée ; holdout en attente.' if freeze is not None else '. Sélection à figer avant le holdout.')
