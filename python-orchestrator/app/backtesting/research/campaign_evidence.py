@@ -176,8 +176,8 @@ def _rows(path: Path):
             yield row
 
 
-def reconcile(root: Path, summary: dict) -> dict:
-    """Replay by global evidence order, with at most four active positions."""
+def reconcile(root: Path, summary: dict, *, max_active: int = 4) -> dict:
+    """Replay by global evidence order, with at most ``max_active`` active positions."""
     fields = ('gross_pnl_quote','net_pnl_quote','fees_quote','funding_quote','spread_quote','slippage_quote')
     zero = {key:Decimal(0) for key in fields}
     totals = dict(zero)
@@ -214,7 +214,7 @@ def reconcile(root: Path, summary: dict) -> dict:
             if field in ('fees_quote','spread_quote','slippage_quote') and amount > 0:
                 raise EvidenceError('replay cost credit invalid')
             position = active.setdefault(key,dict(zero))
-            if len(active) > 4:
+            if len(active) > max_active:
                 raise EvidenceError('replay concurrency invalid')
             position['net_pnl_quote'] += amount
             position[field] += component
