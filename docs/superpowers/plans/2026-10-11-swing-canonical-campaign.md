@@ -49,9 +49,12 @@ Every PR keeps day_trading bit-identical and its tests green. Every PR gets one 
 | P1 | **PHP contracts.** Swing mode, two setups, catalog 1.3.0, the two conditions, validators, schemas, runtime layer, ADR, tests | PHPUnit suites listed in the maps, catalog stableHash pinned |
 | P2 | **PHP research workers.** Profiles in `ResearchSignalSession`, `ResearchPlanSession`, `ResearchPlanBuilder`, `ResearchVariant`: side, cadence, candidate timeframe, negated short provision, one plan per pair, policy limits | PHP plans equal `swing.build_swing_plan`; signals equal the exploration frames |
 | 5 | **Protocol and orchestration.** Swing protocol, variant catalogue, streams, resource bounds, code inventories | End-to-end rehearsal below |
+| 5b | **Holdout campaign.** A `CampaignSpec` for `swing-2026-10-11` next to the day_trading campaign: claim scope, per-profile B1 roots, per-cell unit bindings, unpinned until X | Day_trading holdout suites unchanged; synthetic end-to-end swing holdout |
 | 6 | **Rehearsal.** Real PHP end to end on a non-holdout slice, including the holdout machinery under a temporary home | Equal to the exploration, except documented phase-end and rejection-label differences |
 | — | **Frozen commit X.** Run training and validation signals (per side), the campaign, the freeze | Selection freeze |
 | 7 | **Holdout pin** (after X), then the owner installs the authority and runs the holdout once | Holdout report |
+
+Status 2026-10-11 evening: PRs 1, 2, P1 and P2 are merged (#464–#467). PRs 3, 4, 5 and 5b are open as a stack (#468–#471). The rehearsal ([report](../../handbook/reports/research-swing-rehearsal-2026-10-11.md)) found one defect, now in the pin procedure: the swing frozen-verifier inventory must be written as canonical JSON.
 
 ## Stop rules
 
