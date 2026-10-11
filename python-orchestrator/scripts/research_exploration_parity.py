@@ -22,6 +22,10 @@ swing-kernel
            hour/day index must equal a minute-by-minute scan; and a short must
            equal the long on the price series reflected around a pivot (same
            fills, exits and funding instants, prices reflected, rates negated).
+swing-canonical
+           Replays one swing hypothesis (default: the frozen candidate) through
+           the canonical PortfolioSimulator with SWING_PROFILE and compares every
+           trade with ``swing.run_swing`` at ten active plans.
 
 Both commands exit 1 on any difference. Read-only; no holdout row is accepted.
 """
@@ -236,6 +240,26 @@ def swing_kernel(args: argparse.Namespace) -> int:
     return 1 if differences or mirror_differences else 0
 
 
+def swing_canonical(args: argparse.Namespace) -> int:
+    from app.backtesting.research import swing as sw
+
+    frames = sw.load_frames(args.root)
+    candles, blocks, funding, instruments, profiles = sw._load_market(args.root)
+    events = json.loads((args.root / 'funding.json').read_text())
+    policy, geometry, profile = sw.POLICIES[args.policy], sw.GEOMETRIES[args.geometry], profiles[args.profile]
+    window = (_utc_ms(args.start), _utc_ms(args.end)) if args.start else ex.PHASES[args.phase]
+    summary, outcomes = sw.run_swing(frames, candles, blocks, funding, policy, geometry, instruments, profile,
+                                     window, max_active=10)
+    canonical, rejections = sw.canonical_replay(frames, candles, events, policy, geometry, instruments, profile,
+                                                window)
+    differences = sw.kernel_differences(outcomes, canonical, window[1])
+    print(json.dumps({'policy': args.policy, 'geometry': args.geometry, 'profile': args.profile, 'window': window,
+                      'exploration_trades': summary['trades'], 'by_side': summary['by_side'],
+                      'canonical_trades': len(canonical), 'canonical_rejections': dict(rejections),
+                      'differences': differences[:20], 'difference_count': len(differences)}))
+    return 1 if differences else 0
+
+
 def _compare_with_php(args: argparse.Namespace, inputs: list[str], expected: dict) -> int:
     autoload = Path(args.trading_app).resolve() / 'vendor' / 'autoload.php'
     result = subprocess.run(['php', '-r', PHP_HARNESS], input='\n'.join(inputs) + '\n', capture_output=True,
@@ -283,9 +307,17 @@ def main(argv: list[str] | None = None) -> int:
     k2.add_argument('--profile', default='baseline')
     k2.add_argument('--geometries', default='S2.T3.H14d,S4.T5.H7d')
     k2.add_argument('--stride', type=int, default=6, help='multi-day scan on every n-th decision')
+    c = commands.add_parser('swing-canonical')
+    c.add_argument('--root', type=Path, required=True)
+    c.add_argument('--phase', choices=tuple(ex.PHASES), default='training')
+    c.add_argument('--profile', default='baseline')
+    c.add_argument('--policy', default='B30_2s')
+    c.add_argument('--geometry', default='S3.T5.H14d')
+    c.add_argument('--start', help='UTC date; with --end, replaces the phase window')
+    c.add_argument('--end')
     args = parser.parse_args(argv)
     return {'kernel': kernel, 'plan-math': plan_math, 'swing-plan-math': swing_plan_math,
-            'swing-kernel': swing_kernel}[args.command](args)
+            'swing-kernel': swing_kernel, 'swing-canonical': swing_canonical}[args.command](args)
 
 
 if __name__ == '__main__':

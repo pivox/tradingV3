@@ -628,6 +628,47 @@ def select_signals(frames: Mapping[str, Frame], policy: SwingPolicy,
     return sorted(signals)
 
 
+# ---------------------------------------------------------------- canonical oracle
+def canonical_replay(frames: Mapping[str, Frame], candles: Mapping[str, ex.CandleSeries],
+                     funding_events: Mapping[str, Sequence[Sequence[Any]]], policy: SwingPolicy,
+                     geometry: SwingGeometry, instruments: Mapping[str, Mapping[str, Any]],
+                     profile: Mapping[str, float], window: tuple[int, int]) -> tuple[dict, Counter]:
+    """Replay a swing hypothesis through the canonical PortfolioSimulator (``SWING_PROFILE``).
+
+    The kernel profile fixes the 60 min entry and the 14-day horizon, so only those
+    geometries replay. Plans are ``build_swing_plan``'s, deadlines clipped to the phase
+    end as in ``run_swing``; candles must include the minute before the window.
+    """
+    from .portfolio_simulator import SWING_PROFILE
+    if (geometry.entry_ttl_ms != SWING_PROFILE.entry_ttl_seconds * 1000
+            or geometry.horizon_ms != SWING_PROFILE.holding_window_seconds * 1000):
+        raise ExplorationError('geometry outside the swing kernel profile')
+    end = window[1]
+    sides = {(symbol, decision): (index, side)
+             for decision, _, symbol, index, side in select_signals(frames, policy, window)}
+
+    def plan_for(symbol: str, decision: int) -> tuple[ex.Plan | None, str | None]:
+        index, side = sides[(symbol, decision)]
+        return build_swing_plan(frames[symbol], index, geometry, instruments[symbol], profile, end, side)
+
+    return ex.kernel_replay(sides, plan_for, candles, funding_events, instruments, profile, window,
+                            kernel_profile=SWING_PROFILE, funding_intervals=geometry.funding_intervals)
+
+
+def kernel_differences(outcomes: Sequence[ex.Outcome], canonical: Mapping[tuple, Any], end: int) -> list[str]:
+    """Trade-level differences between ``run_swing`` and ``canonical_replay``.
+
+    Rejection labels are not compared: ``run_swing`` checks the pair and the
+    concurrency before the plan arithmetic, the kernel after it, so a signal can be
+    counted under a different reason while the admitted plans are the same.
+    """
+    differences = ex.parity_differences(outcomes, {}, canonical, {}, end)
+    sides = {(o.plan.symbol, o.plan.decision_ms): o.plan.side for o in outcomes if o.filled}
+    differences += [f'side:{key}' for key, trade in canonical.items()
+                    if key in sides and trade.get('side') != sides[key]]
+    return differences
+
+
 # ------------------------------------------------------------------------------ parity
 _PHP_FIELDS = {'close': 'close', 'rsi': 'rsi', 'atr': 'atr', 'ema20': 'ema_20', 'ema50': 'ema_50',
                'ema9': 'e9', 'ema21': 'e21', 'ema9p': 'e9p', 'ema21p': 'e21p', 'adx': 'adx14',
