@@ -47,6 +47,7 @@ final class EffectiveTradingConfigResolver implements EffectiveTradingConfigReso
             'day_trading@1.1.0',
             'scalping@1.1.0',
             'micro_scalping@1.1.0',
+            'swing@1.0.0',
         ], true);
         if ($isModernShadow && $request->capability === null) {
             throw new TradingConfigException($request->modeId . '_shadow_capability_required');

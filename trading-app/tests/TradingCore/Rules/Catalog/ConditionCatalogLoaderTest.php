@@ -53,6 +53,7 @@ final class ConditionCatalogLoaderTest extends TestCase
         self::assertSame('1.0.0', $loader->loadVersion('1.0.0')->catalogVersion);
         self::assertSame('1.1.0', $loader->loadVersion('1.1.0')->catalogVersion);
         self::assertSame('1.2.0', $loader->loadVersion('1.2.0')->catalogVersion);
+        self::assertSame('1.3.0', $loader->loadVersion('1.3.0')->catalogVersion);
         self::assertSame(
             'executable',
             $loader->loadFile($this->catalogOneOnePath)->definition('pullback_confirmed')->status,
@@ -94,6 +95,44 @@ final class ConditionCatalogLoaderTest extends TestCase
         );
     }
 
+    public function testOneThreeAddsOnlyTheFourSwingConditionsToOneTwo(): void
+    {
+        $loader = new ConditionCatalogLoader();
+        $previous = $loader->loadFile($this->catalogOneTwoPath);
+        $catalog = $loader->loadFile(dirname($this->catalogPath) . '/1.3.0.yaml');
+
+        self::assertSame(
+            'b1a3722c5f79c5d031c25f46f917f1e515bb8cc615b62ad9a9dea49f19b17ec7',
+            hash_file('sha256', dirname($this->catalogPath) . '/1.3.0.yaml'),
+        );
+        self::assertSame('bd420cfb9c6a7f44266ff1de6478277e889f33eee80404e435b2b71dd8ca6a94', $catalog->stableHash());
+        $added = array_values(array_diff($catalog->conditionIds(), $previous->conditionIds()));
+        self::assertSame(['close_gt_ema_200', 'close_gt_prior_high', 'close_lt_ema_200', 'close_lt_prior_low'], $added);
+        self::assertSame([], array_values(array_diff($previous->conditionIds(), $catalog->conditionIds())));
+        foreach ($previous->conditionIds() as $conditionId) {
+            self::assertEquals($previous->definition($conditionId), $catalog->definition($conditionId), $conditionId);
+        }
+        foreach (['indicator_snapshot' => '4h', 'timestamped_order_book' => '1m'] as $source => $timeframe) {
+            self::assertSame($previous->freshnessSeconds($source, $timeframe), $catalog->freshnessSeconds($source, $timeframe));
+        }
+
+        foreach ([
+            'close_gt_ema_200' => ['long', 'number', 'scalar', []],
+            'close_lt_ema_200' => ['short', 'number', 'scalar', []],
+            'close_gt_prior_high' => ['long', 'series<number>', 'oldest_to_newest', ['lookback_bars']],
+            'close_lt_prior_low' => ['short', 'series<number>', 'oldest_to_newest', ['lookback_bars']],
+        ] as $conditionId => [$side, $valueType, $seriesOrder, $parameters]) {
+            $definition = $catalog->definition($conditionId);
+            self::assertSame('condition_service:' . $conditionId, $definition->implementation);
+            self::assertSame(['4h'], $definition->timeframes);
+            self::assertSame([$side], $definition->sides);
+            self::assertSame($valueType, $definition->valueType);
+            self::assertSame($seriesOrder, $definition->seriesOrder);
+            self::assertSame($parameters, array_keys($definition->parameters));
+            self::assertSame('executable', $definition->status);
+        }
+    }
+
     public function testResolverBindsVersionSourceAndHashWithoutCrossVersionFallback(): void
     {
         $catalog = (new ConditionCatalogLoader())->loadVersion('1.1.0');
@@ -121,7 +160,16 @@ final class ConditionCatalogLoaderTest extends TestCase
         $catalog = (new ConditionCatalogLoader())->loadFile($this->catalogPath);
         $referenced = [];
         foreach (glob($this->setupRoot . '/*/*.yaml') ?: [] as $path) {
-            $this->collectConditionIds(Yaml::parseFile($path), $referenced);
+            $document = Yaml::parseFile($path);
+            self::assertIsArray($document);
+            $setupReferenced = [];
+            $this->collectConditionIds($document, $setupReferenced);
+            // Every setup is covered by the exact catalog version it pins.
+            $pinned = (new ConditionCatalogResolver())->forSetupDocument($document);
+            self::assertSame([], array_values(array_diff(array_keys($setupReferenced), $pinned->conditionIds())), $path);
+            if ($pinned->catalogVersion !== '1.3.0') {
+                $referenced += $setupReferenced;
+            }
         }
         $referenced = array_keys($referenced);
         sort($referenced, SORT_STRING);

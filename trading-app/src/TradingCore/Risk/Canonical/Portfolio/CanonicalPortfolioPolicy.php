@@ -332,7 +332,7 @@ final readonly class CanonicalPortfolioPolicy
             }
         }
         if (
-            !\in_array($data['mode_id'], ['day_trading', 'scalping', 'micro_scalping'], true)
+            !\in_array($data['mode_id'], ['day_trading', 'scalping', 'micro_scalping', 'swing'], true)
             || preg_match('/\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\z/D', $data['mode_version']) !== 1
             || preg_match('/\A[a-z][a-z0-9_.-]*\z/D', $data['setup_id']) !== 1
             || preg_match('/\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\z/D', $data['setup_version']) !== 1

@@ -52,6 +52,7 @@ nav:
       - Architecture Trading Core modulaire: technical/trading-core-modular-architecture.md
       - Analyse migration Trading Core: technical/trading-core-migration-analysis.md
       - Plan PR canoniques Trading Core: technical/trading-core-canonical-pr-plan.md
+      - "ADR-309 Mode swing de recherche": technical/adr-309-swing-research-mode.md
   - Graphes:
       - Piles d'execution: graphs/execution-stacks.md
   - Runbooks:

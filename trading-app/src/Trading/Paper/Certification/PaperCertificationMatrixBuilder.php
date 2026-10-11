@@ -7,7 +7,6 @@ namespace App\Trading\Paper\Certification;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\TradingCore\Mode\ModeContractLoader;
-use App\TradingCore\Mode\ModeContractValidator;
 use App\TradingCore\Setup\SetupContractLoader;
 
 final readonly class PaperCertificationMatrixBuilder
@@ -15,6 +14,8 @@ final readonly class PaperCertificationMatrixBuilder
     private const INPUT_SCHEMA = 'paper-certification-matrix-input-v1';
     private const OUTPUT_SCHEMA = 'paper-certification-matrix-v1';
     private const MINIMUM_TRADES = 50;
+    /** Paper certification covers the first-baseline modes; swing@1.0.0 is a research shadow only. */
+    private const CERTIFIABLE_MODE_IDS = ['day_trading', 'scalping', 'micro_scalping'];
 
     public function __construct(
         private ModeContractLoader $modes,
@@ -50,7 +51,7 @@ final readonly class PaperCertificationMatrixBuilder
 
         $scopes = $this->scopes($specification['scopes']);
         $modeVersions = $this->stringMap($specification['mode_versions'], 'paper_certification_mode_versions_invalid');
-        $expectedModeIds = ModeContractValidator::MODE_IDS;
+        $expectedModeIds = self::CERTIFIABLE_MODE_IDS;
         sort($expectedModeIds, SORT_STRING);
         $actualModeIds = array_keys($modeVersions);
         sort($actualModeIds, SORT_STRING);
@@ -61,7 +62,7 @@ final readonly class PaperCertificationMatrixBuilder
         $setupVersions = $this->stringMap($specification['setup_versions'], 'paper_certification_setup_versions_invalid');
         $requiredSetupIds = [];
         $modeContracts = [];
-        foreach (ModeContractValidator::MODE_IDS as $modeId) {
+        foreach (self::CERTIFIABLE_MODE_IDS as $modeId) {
             $mode = $this->modes->load($modeId, $modeVersions[$modeId]);
             if (!$mode->isExecutable()) {
                 throw new \InvalidArgumentException('paper_certification_mode_not_executable');

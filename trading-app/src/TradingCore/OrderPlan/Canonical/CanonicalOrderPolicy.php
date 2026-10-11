@@ -17,7 +17,7 @@ final readonly class CanonicalOrderPolicy
     ) {
         $frozenEnvelope = [$ttlSeconds, $cancelAfterSeconds, $maximumSpreadBps];
         if ($type !== 'limit' || $liquidityRole !== 'maker' || $marketFallback
-            || !\in_array($frozenEnvelope, [[90, 120, 6.0], [45, 75, 6.0], [30, 60, 8.0]], true)
+            || !\in_array($frozenEnvelope, [[90, 120, 6.0], [45, 75, 6.0], [30, 60, 8.0], [3600, 3660, 6.0]], true)
             || $maximumSlippageBps !== 8.0) {
             throw new CanonicalOrderPlanException('canonical_day_trading_order_policy_invalid');
         }

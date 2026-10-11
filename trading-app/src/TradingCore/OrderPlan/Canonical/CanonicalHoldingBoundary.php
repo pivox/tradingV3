@@ -27,13 +27,21 @@ final class CanonicalHoldingBoundary
             'daily_boundary_timezone' => 'UTC',
             'close_before_boundary' => true,
         ];
+        // Swing holds across UTC days: its boundary delimits accounting days only.
+        $expectedSwing = [
+            'maximum_duration' => 'PT336H',
+            'daily_boundary_time' => '00:00:00',
+            'daily_boundary_timezone' => 'UTC',
+            'close_before_boundary' => false,
+        ];
         ksort($horizon, SORT_STRING);
         ksort($expectedDayTrading, SORT_STRING);
         ksort($expectedScalping, SORT_STRING);
         ksort($expectedMicroScalping, SORT_STRING);
+        ksort($expectedSwing, SORT_STRING);
         if (!\in_array(
             [$holdingWindowSeconds, $horizon],
-            [[28_800, $expectedDayTrading], [7200, $expectedScalping], [1800, $expectedMicroScalping]],
+            [[28_800, $expectedDayTrading], [7200, $expectedScalping], [1800, $expectedMicroScalping], [1_209_600, $expectedSwing]],
             true,
         )) {
             throw new CanonicalOrderPlanException('canonical_holding_boundary_invalid');
@@ -42,7 +50,9 @@ final class CanonicalHoldingBoundary
         $utc = $createdAt->setTimezone(new \DateTimeZone('UTC'));
         $durationExpiry = $utc->modify('+' . $holdingWindowSeconds . ' seconds');
         $dailyBoundary = $utc->modify('tomorrow')->setTime(0, 0, 0);
-        $expiry = $durationExpiry < $dailyBoundary ? $durationExpiry : $dailyBoundary;
+        $expiry = $horizon['close_before_boundary'] === false || $durationExpiry < $dailyBoundary
+            ? $durationExpiry
+            : $dailyBoundary;
         if ($expiry <= $utc) {
             throw new CanonicalOrderPlanException('canonical_holding_window_expired');
         }

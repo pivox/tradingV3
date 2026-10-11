@@ -67,7 +67,10 @@ final readonly class CanonicalExecutionPolicy
                 'micro_scalping.momentum_ofi.long',
                 'micro_scalping.momentum_ofi.short',
             ], true);
-        $shadow = $shadowIdentity === 'day_trading@1.1.0' || $scalpingShadow || $microScalpingShadow;
+        $swingShadow = $shadowIdentity === 'swing@1.0.0'
+            && $snapshot->request->setupVersion === '1.0.0'
+            && \in_array($snapshot->request->setupId, ['swing.breakout.long', 'swing.breakout.short'], true);
+        $shadow = $shadowIdentity === 'day_trading@1.1.0' || $scalpingShadow || $microScalpingShadow || $swingShadow;
         $executionKeys = [
             'side',
             'entry_zone',
@@ -110,6 +113,7 @@ final readonly class CanonicalExecutionPolicy
                 'day_trading@1.1.0' => ['15m', ['5m', '1m']],
                 'scalping@1.1.0' => ['5m', ['1m']],
                 'micro_scalping@1.1.0' => ['1m', ['1m']],
+                'swing@1.0.0' => ['4h', ['4h']],
                 default => null,
             };
             if ($expectedTimeframes === null
@@ -407,16 +411,21 @@ final readonly class CanonicalExecutionPolicy
             'micro_scalping@1.1.0@micro_scalping.momentum_ofi.long@1.1.0',
             'micro_scalping@1.1.0@micro_scalping.momentum_ofi.short@1.1.0',
         ], true);
+        $swingIdentity = \in_array($identity, [
+            'swing@1.0.0@swing.breakout.long@1.0.0',
+            'swing@1.0.0@swing.breakout.short@1.0.0',
+        ], true);
         $expected = match (true) {
-            $identity === 'day_trading@1.1.0@day_trading.trend_continuation.long@1.1.0' => [90, 120, 28_800, 'PT8H', 6.0],
-            $scalpingIdentity => [45, 75, 7200, 'PT2H', 6.0],
-            $microScalpingIdentity => [30, 60, 1800, 'PT30M', 8.0],
+            $identity === 'day_trading@1.1.0@day_trading.trend_continuation.long@1.1.0' => [90, 120, 28_800, 'PT8H', 6.0, true],
+            $scalpingIdentity => [45, 75, 7200, 'PT2H', 6.0, true],
+            $microScalpingIdentity => [30, 60, 1800, 'PT30M', 8.0, true],
+            $swingIdentity => [3600, 3660, 1_209_600, 'PT336H', 6.0, false],
             default => null,
         };
         if ($orderPolicy === null || $expected === null) {
             throw new CanonicalOrderPlanException('canonical_shadow_identity_policy_mismatch');
         }
-        [$ttlSeconds, $cancelAfterSeconds, $windowSeconds, $maximumDuration, $maximumSpreadBps] = $expected;
+        [$ttlSeconds, $cancelAfterSeconds, $windowSeconds, $maximumDuration, $maximumSpreadBps, $closeBeforeBoundary] = $expected;
         if ($orderPolicy->ttlSeconds !== $ttlSeconds
             || $orderPolicy->cancelAfterSeconds !== $cancelAfterSeconds
             || $orderPolicy->maximumSpreadBps !== $maximumSpreadBps
@@ -424,7 +433,7 @@ final readonly class CanonicalExecutionPolicy
             || ($holdingHorizon['maximum_duration'] ?? null) !== $maximumDuration
             || ($holdingHorizon['daily_boundary_time'] ?? null) !== '00:00:00'
             || ($holdingHorizon['daily_boundary_timezone'] ?? null) !== 'UTC'
-            || ($holdingHorizon['close_before_boundary'] ?? null) !== true
+            || ($holdingHorizon['close_before_boundary'] ?? null) !== $closeBeforeBoundary
         ) {
             throw new CanonicalOrderPlanException('canonical_shadow_identity_policy_mismatch');
         }
@@ -538,11 +547,20 @@ final readonly class CanonicalExecutionPolicy
                 'micro_scalping.momentum_ofi.long',
                 'micro_scalping.momentum_ofi.short',
             ], true);
-        if ($scalpingShadow || $microScalpingShadow) {
+        $swingShadow = $snapshot->request->modeId === 'swing'
+            && $snapshot->request->modeVersion === '1.0.0'
+            && $snapshot->request->setupVersion === '1.0.0'
+            && \in_array($snapshot->request->setupId, ['swing.breakout.long', 'swing.breakout.short'], true);
+        if ($scalpingShadow || $microScalpingShadow || $swingShadow) {
             array_unshift($dataContractKeys, 'condition_catalog_version');
         }
         self::requireExactKeys($dataContract, $dataContractKeys, 'canonical_execution_policy_catalog_invalid');
-        $expectedCatalogVersion = $microScalpingShadow ? '1.2.0' : ($scalpingShadow ? '1.1.0' : null);
+        $expectedCatalogVersion = match (true) {
+            $swingShadow => '1.3.0',
+            $microScalpingShadow => '1.2.0',
+            $scalpingShadow => '1.1.0',
+            default => null,
+        };
         if ($expectedCatalogVersion !== null && ($dataContract['condition_catalog_version'] ?? null) !== $expectedCatalogVersion) {
             throw new CanonicalOrderPlanException('canonical_execution_policy_catalog_invalid');
         }
