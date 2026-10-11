@@ -20,10 +20,15 @@ import time
 
 from . import campaign, experiments as e, plans, signals
 from .funding import FundingReader, REST_HYPOTHESIS
-from .portfolio_simulator import SYMBOLS, canonical_hash
+from .portfolio_simulator import SWING_PROFILE, SYMBOLS, canonical_hash, composite_hash, stream_key
 from .signal_sources import _utc
 
 GROUPS = (SYMBOLS[:5], SYMBOLS[5:])
+# B1 research profiles per family; the frozen day_trading reports name none. Each phase has
+# one root per (profile, group), in this order.
+FAMILY_PROFILES = {'day_trading': (None,), 'swing': ('swing.long', 'swing.short')}
+BASES = (('setup', 'setup_hash'), ('config', 'config_hash'), ('catalog', 'condition_catalog_hash'),
+         ('snapshot', 'snapshot_hash'))
 WINDOWS = {'training': ('2022-11-01T00:00:00Z', '2023-01-01T00:00:00Z', '2025-01-01T00:00:00Z'),
            'validation': ('2024-11-01T00:00:00Z', '2025-01-01T00:00:00Z', '2026-01-01T00:00:00Z')}
 
@@ -77,13 +82,25 @@ class Config:
     unit_timeout: float = 6*3600
     unit_bytes: int = 4*1024**3
     aggregate_bytes: int = 52*4*1024**3
+    family: str = 'day_trading'
+
+
+def _layout(c):
+    """(profile, group) of each B1 root of a phase."""
+    return tuple((profile, group) for profile in FAMILY_PROFILES[c.family] for group in GROUPS)
+
+
+def _units(c):
+    return len(e.FAMILIES[c.family])*len(e.PROFILES)*len(e.WINDOWS)
 
 
 def _validate(c):
+    if not isinstance(c.family, str) or c.family not in FAMILY_PROFILES:
+        raise OrchestrationError('invalid research family')
     if (any(not math.isfinite(v) or v <= 0 for v in (c.timeout, c.poll_interval, c.unit_timeout))
         or c.poll_interval > 30 or type(c.unit_bytes) is not int or c.unit_bytes <= 0
-        or type(c.aggregate_bytes) is not int or c.aggregate_bytes < 52*c.unit_bytes
-        or len(c.training_roots) != 2 or len(c.validation_roots) != 2):
+        or type(c.aggregate_bytes) is not int or c.aggregate_bytes < _units(c)*c.unit_bytes
+        or len(c.training_roots) != len(_layout(c)) or len(c.validation_roots) != len(_layout(c))):
         raise OrchestrationError('invalid finite orchestration bounds')
     sources = (c.dataset_root, c.app_dir, c.b1_cwd, c.python, c.instrument_path,
                c.cost_path, *c.training_roots)
@@ -106,7 +123,7 @@ def _validate(c):
                 raise OrchestrationError('overlapping input or output roots')
 
 
-def _report(root, phase, group):
+def _report(root, phase, group, profile=None):
     path = root/'report.json'
     if not path.exists() and not path.is_symlink():
         return False
@@ -114,6 +131,7 @@ def _report(root, phase, group):
         value, _ = campaign._input(path, campaign.MAX_REPORT)
         if (value.get('schema') != 'research-signal-run.v1' or value.get('status') != 'complete'
             or value.get('errors') != [] or set(value.get('symbols', {})) != set(group)
+            or value.get('profile') != profile
             or tuple(_utc(value[k]) for k in ('source_start', 'score_start', 'source_end'))
                 != tuple(map(_utc, WINDOWS[phase]))):
             raise OrchestrationError('B1 report failed or fixed group/window conflict')
@@ -177,6 +195,7 @@ class Stages:
             if canonical_hash({k:v for k,v in document.items() if k != field}) != document.get(field):
                 raise OrchestrationError('assumption canonical hash conflict')
         phase_bindings, baseline, code = {}, None, None
+        sides = SWING_PROFILE.sides if c.family == 'swing' else ('long',)
         for phase, roots in (('training', c.training_roots), ('validation', c.validation_roots)):
             reports, bindings, windows, _ = campaign._verify_reports(
                 c.dataset_root, roots, c.app_dir, SYMBOLS, phase, deadline)
@@ -193,14 +212,18 @@ class Stages:
                 for name, digest in original.items():
                     if signals._file_sha256(Path(name)) != digest:
                         raise OrchestrationError('original B1 code changed')
-            for symbol in SYMBOLS:
-                current = bindings[symbol][2]['baseline']
-                if baseline is not None and baseline != current:
-                    raise OrchestrationError('baseline differs across phases')
-                baseline = current
+            # One baseline per side, equal across pairs and phases.
+            current = {side: [bindings[stream_key(s, side, sides)][2]['baseline'] for s in SYMBOLS] for side in sides}
+            if any(row != current[side][0] for side in sides for row in current[side]):
+                raise OrchestrationError('baseline differs across pairs')
+            current = {side: rows[0] for side, rows in current.items()}
+            if baseline is not None and baseline != current:
+                raise OrchestrationError('baseline differs across phases')
+            baseline = current
             inventory = FundingReader(c.dataset_root, windows[1], windows[2], symbols=SYMBOLS,
                 supplement_root=c.funding_supplement_root, rest_interval_hypothesis=REST_HYPOTHESIS).inventory
-            phase_bindings[phase] = {'source_runs': [bindings[s][4] for s in SYMBOLS],
+            runs = {side: [bindings[stream_key(s, side, sides)][4] for s in SYMBOLS] for side in sides}
+            phase_bindings[phase] = {'source_runs': runs if c.family == 'swing' else runs['long'],
                 'signal_reports': reports, 'runner_code_sha256': campaign._runner_code(),
                 'cost_assumptions_hash': costs['assumption_hash'],
                 'funding_inventory_hash': inventory.inventory_hash,
@@ -210,9 +233,12 @@ class Stages:
             'signal_code_hash': canonical_hash(code), 'research_code_hash': canonical_hash(plans.code_inventory(c.app_dir)),
             'instrument_assumptions_hash': instrument['manifest_hash'],
             **{p+'_cost_hash': canonical_hash(costs['profiles'][p]) for p in e.PROFILES},
-            **{'base_'+key+'_hash': baseline[field] for key,field in
-               (('setup', 'setup_hash'), ('config', 'config_hash'), ('catalog', 'condition_catalog_hash'), ('snapshot', 'snapshot_hash'))}}
-        return e.make_protocol(identity, phase_bindings=phase_bindings)
+            # A swing identity holds each base hash's composite over the sides (for one side, the hash).
+            **{'base_'+key+'_hash': composite_hash({side: baseline[side][field] for side in sides}) for key,field in BASES}}
+        if c.family == 'day_trading':
+            return e.make_protocol(identity, phase_bindings=phase_bindings)
+        cells = {side: {'base_'+key+'_hash': baseline[side][field] for key, field in BASES} for side in sides}
+        return e.make_protocol(identity, phase_bindings=phase_bindings, family=c.family, cells=cells)
 
     def execute(self, c, protocol, remaining):
         with e.ExperimentRegistry(c.registry_root, protocol, max_output_bytes=c.aggregate_bytes) as registry:
@@ -277,18 +303,19 @@ def run(c: Config, *, clock=time.monotonic, sleep=time.sleep, popen=subprocess.P
         terminal['input_code_identity_sha256'] = e._publish(c.evidence_root/'input-code-identity.json', snapshot)
         while True:
             remaining()
-            ready = [_report(root, 'training', group) for root,group in zip(c.training_roots, GROUPS)]
+            ready = [_report(root, 'training', group, profile)
+                     for root,(profile, group) in zip(c.training_roots, _layout(c))]
             if all(ready):
                 break
             pause()
         if stage(stages.snapshot, c) != snapshot:
             raise OrchestrationError('frozen input or code changed before validation launch')
-        for root, group in zip(c.validation_roots, GROUPS):
+        for root, (profile, group) in zip(c.validation_roots, _layout(c)):
             remaining()
             argv = [str(c.python), '-m', 'app.backtesting.research.signals', '--dataset-root', str(c.dataset_root),
                 '--app-dir', str(c.app_dir), '--output-root', str(root), '--symbols', ','.join(group),
                 '--start', WINDOWS['validation'][0], '--score-start', WINDOWS['validation'][1],
-                '--end', WINDOWS['validation'][2]]
+                '--end', WINDOWS['validation'][2], *(('--profile', profile) if profile else ())]
             children.append(popen(argv, cwd=c.b1_cwd, env=plans.worker_environment(),
                 stdin=subprocess.DEVNULL, start_new_session=True))
         while True:
@@ -299,7 +326,8 @@ def run(c: Config, *, clock=time.monotonic, sleep=time.sleep, popen=subprocess.P
             if all(code == 0 for code in codes):
                 break
             pause()
-        if not all(_report(root, 'validation', group) for root,group in zip(c.validation_roots, GROUPS)):
+        if not all(_report(root, 'validation', group, profile)
+                   for root,(profile, group) in zip(c.validation_roots, _layout(c))):
             raise OrchestrationError('completed validation subprocess missing report')
         if stage(stages.snapshot, c) != snapshot:
             raise OrchestrationError('frozen input or code changed before protocol freeze')
@@ -343,10 +371,12 @@ def main(argv=None):
     for name in ('dataset_root', 'app_dir', 'b1_cwd', 'python', 'instrument_path', 'cost_path',
                  'registry_root', 'report_root', 'evidence_root'):
         parser.add_argument('--'+name.replace('_','-'), type=Path, required=True)
+    # One root per (profile, group): two for day_trading, four for swing (long then short).
     for name in ('training_roots', 'validation_roots'):
-        parser.add_argument('--'+name.replace('_','-'), type=Path, nargs=2, required=True)
+        parser.add_argument('--'+name.replace('_','-'), type=Path, nargs='+', required=True)
     parser.add_argument('--funding-supplement-root', type=Path)
     parser.add_argument('--timeout', type=float, required=True)
+    parser.add_argument('--family', choices=tuple(FAMILY_PROFILES), default='day_trading')
     args = vars(parser.parse_args(argv))
     for name in ('training_roots', 'validation_roots'):
         args[name] = tuple(args[name])
