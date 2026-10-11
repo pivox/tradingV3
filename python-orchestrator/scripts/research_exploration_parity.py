@@ -10,6 +10,16 @@ plan-math  Evaluates the zone, protection and net-R gate of retained rows with
            NetRCostMath) through ``php`` and the trading-app autoloader, and
            compares them with ``build_plan``. The harness applies the 250 quote
            quantity cap itself (CanonicalRiskEngine's binding cap).
+swing-plan-math
+           The same comparison for ``swing.build_swing_plan`` on the 4h decisions
+           of a swing root: the entry is the 4h close rounded up to the tick (a
+           zone anchored on that close), and NetRCostMath provisions the funding
+           intervals of the holding horizon.
+swing-kernel
+           Real-data checks of ``swing.simulate_swing``: with a 90 s entry and the
+           day_trading deadline it must equal ``exploration.simulate`` (itself
+           checked against PortfolioSimulator); with multi-day horizons its
+           hour/day index must equal a minute-by-minute scan.
 
 Both commands exit 1 on any difference. Read-only; no holdout row is accepted.
 """
@@ -17,9 +27,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
+from array import array
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,7 +69,8 @@ while (($line = fgets(STDIN)) !== false) {
         $p = $in['profile'];
         $risk = NetRCostMath::risk('long', $zone['entry_price'], $protection['stop_price'], $qty->toFloat(), 1.0,
             0.0002, 0.0005, (float) $p['entry_spread_rate'], (float) $p['stop_spread_rate'],
-            (float) $p['entry_slippage_rate'], (float) $p['stop_slippage_rate'], (float) $p['funding_provision_rate'], 1);
+            (float) $p['entry_slippage_rate'], (float) $p['stop_slippage_rate'], (float) $p['funding_provision_rate'],
+            (int) ($in['intervals'] ?? 1));
         $target = $protection['targets'][0];
         $amounts = NetRCostMath::target($zone['entry_price'], $target->price, $qty->toFloat(), 1.0, 0.0005,
             (float) $p['target_spread_rate'], (float) $p['target_slippage_rate'], $risk);
@@ -112,6 +125,84 @@ def plan_math(args: argparse.Namespace) -> int:
                     'tick': instruments[symbol]['tick_size'], 'qty_step': instruments[symbol]['quantity_step'],
                     'stop_tf': geometry.stop_timeframe, 'stop_mult': geometry.stop_atr_multiplier,
                     'target_r': geometry.target_risk_multiple, 'profile': profile}))
+    return _compare_with_php(args, inputs, expected)
+
+
+def swing_plan_math(args: argparse.Namespace) -> int:
+    from app.backtesting.research import swing as sw
+
+    frames = sw.load_frames(args.root)
+    instruments = {i['symbol']: i for i in json.loads((args.root / 'instrument-assumptions.json').read_text())['symbols']}
+    profiles = json.loads((args.root / 'cost-assumptions.json').read_text())['profiles']
+    start, end = ex.PHASES[args.phase]
+    zone = {'anchor_source': 'vwap', 'anchor_timeframe': '4h', 'atr_timeframe': '4h', 'zone_atr_multiplier': 0.3,
+            'minimum_half_width_rate': 0.0005, 'maximum_half_width_rate': 0.01}
+    inputs, expected = [], {}
+    for case in args.cases.split(','):
+        geometry_id, profile_id = case.split(':')
+        geometry, profile = sw.GEOMETRIES[geometry_id], profiles[profile_id]
+        for symbol in ex.SYMBOLS:
+            frame = frames[symbol]
+            for index in frame.decisions(start, end):
+                close, atr = frame['close'][index], frame['atr'][index]
+                key = len(inputs)
+                expected[key] = sw.build_swing_plan(frame, index, geometry, instruments[symbol], profile, end)
+                inputs.append(json.dumps({
+                    'id': key, 'anchor': close, 'atr': atr, 'stop_atr': atr, 'candidate': close, 'zone': zone,
+                    'tick': instruments[symbol]['tick_size'], 'qty_step': instruments[symbol]['quantity_step'],
+                    'stop_tf': '4h', 'stop_mult': geometry.stop_atr_multiplier,
+                    'target_r': geometry.target_risk_multiple, 'profile': profile,
+                    'intervals': geometry.funding_intervals}))
+    return _compare_with_php(args, inputs, expected)
+
+
+def swing_kernel(args: argparse.Namespace) -> int:
+    from dataclasses import astuple, replace
+
+    from app.backtesting.research import swing as sw
+
+    frames = sw.load_frames(args.root)
+    candles, blocks, funding, instruments, profiles = sw._load_market(args.root)
+    profile = profiles[args.profile]
+    start, end = ex.PHASES[args.phase]
+    plans = differences = 0
+    examples = []
+    for symbol in ex.SYMBOLS:
+        frame, series = frames[symbol], candles[symbol]
+        unindexed = sw.Extremes(*(array('d', [-math.inf] * len(values)) for values in astuple(blocks[symbol])))
+        for number, index in enumerate(frame.decisions(start, end)):
+            for geometry_id in args.geometries.split(','):
+                geometry = sw.GEOMETRIES[geometry_id]
+                plan, _ = sw.build_swing_plan(frame, index, geometry, instruments[symbol], profile, end)
+                if plan is None:
+                    continue
+                pairs = []
+                day = replace(plan, deadline_ms=min(plan.decision_ms + ex.HOLDING_MS,
+                                                    (plan.decision_ms // ex.DAY + 1) * ex.DAY))
+                pairs.append((sw.simulate_swing(day, series, blocks[symbol], funding[symbol], profile,
+                                                ex.ENTRY_TTL_MS),
+                              ex.simulate(day, series, funding[symbol], profile)))
+                if number % args.stride == 0:
+                    pairs.append((sw.simulate_swing(plan, series, blocks[symbol], funding[symbol], profile,
+                                                    geometry.entry_ttl_ms),
+                                  sw.simulate_swing(plan, series, unindexed, funding[symbol], profile,
+                                                    geometry.entry_ttl_ms)))
+                for mine, reference in pairs:
+                    plans += 1
+                    reason = 'holding_deadline' if reference.reason == 'midnight' else reference.reason
+                    if ((mine.filled, mine.fill_ms, mine.exit_ms, mine.exit_price, mine.reason, mine.ambiguous,
+                         mine.funding_cash, mine.net, mine.release_ms)
+                            != (reference.filled, reference.fill_ms, reference.exit_ms, reference.exit_price,
+                                reason, reference.ambiguous, reference.funding_cash, reference.net,
+                                reference.release_ms)):
+                        differences += 1
+                        examples.append(f'{symbol}:{plan.decision_ms}:{geometry_id}')
+    print(json.dumps({'phase': args.phase, 'profile': args.profile, 'compared_plans': plans,
+                      'differences': differences, 'examples': examples[:20]}))
+    return 1 if differences else 0
+
+
+def _compare_with_php(args: argparse.Namespace, inputs: list[str], expected: dict) -> int:
     autoload = Path(args.trading_app).resolve() / 'vendor' / 'autoload.php'
     result = subprocess.run(['php', '-r', PHP_HARNESS], input='\n'.join(inputs) + '\n', capture_output=True,
                             text=True, check=True, env={**os.environ, 'TRADING_APP_AUTOLOAD': str(autoload)})
@@ -147,8 +238,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument('--phase', choices=tuple(ex.PHASES), required=True)
     p.add_argument('--cases', required=True, help='geometry:profile,...')
     p.add_argument('--trading-app', default=str(Path(__file__).resolve().parents[2] / 'trading-app'))
+    w = commands.add_parser('swing-plan-math')
+    w.add_argument('--root', type=Path, required=True)
+    w.add_argument('--phase', choices=tuple(ex.PHASES), required=True)
+    w.add_argument('--cases', required=True, help='swing geometry:profile,...')
+    w.add_argument('--trading-app', default=str(Path(__file__).resolve().parents[2] / 'trading-app'))
+    k2 = commands.add_parser('swing-kernel')
+    k2.add_argument('--root', type=Path, required=True)
+    k2.add_argument('--phase', choices=tuple(ex.PHASES), required=True)
+    k2.add_argument('--profile', default='baseline')
+    k2.add_argument('--geometries', default='S2.T3.H14d,S4.T5.H7d')
+    k2.add_argument('--stride', type=int, default=6, help='multi-day scan on every n-th decision')
     args = parser.parse_args(argv)
-    return kernel(args) if args.command == 'kernel' else plan_math(args)
+    return {'kernel': kernel, 'plan-math': plan_math, 'swing-plan-math': swing_plan_math,
+            'swing-kernel': swing_kernel}[args.command](args)
 
 
 if __name__ == '__main__':
