@@ -680,19 +680,32 @@ def screening_reasons(summary: Mapping[str, Any], phase: str, profile: str) -> l
 
 
 def screen_report(results: Iterable[Mapping[str, Any]], minimum_trades: int = 100, top: int = 10) -> dict:
-    """Aggregate grid replays: distribution of baseline training outcomes and protocol screening."""
+    """Aggregate grid replays: distribution of baseline training outcomes and protocol screening.
+
+    A configuration is (policy, geometry, ``max_active`` when a row records one): rows of
+    different portfolio limits never combine, and a repeated row is an error instead of a
+    silent overwrite.
+    """
     by_key: dict[tuple, dict] = {}
     for row in results:
-        by_key[(row['policy'], row['geometry_id'], row['phase'], row['profile'])] = dict(row)
-    configs = sorted({(p, g) for p, g, _, _ in by_key})
-    sampled = [by_key[(p, g, 'training', 'baseline')] for p, g in configs if (p, g, 'training', 'baseline') in by_key
-               and by_key[(p, g, 'training', 'baseline')]['trades'] >= minimum_trades]
+        key = (row['policy'], row['geometry_id'], row.get('max_active'), row['phase'], row['profile'])
+        if key in by_key:
+            raise ExplorationError('duplicate screening row: ' + '|'.join(map(str, key)))
+        by_key[key] = dict(row)
+    configs = sorted({key[:3] for key in by_key}, key=lambda c: (c[0], c[1], -1 if c[2] is None else c[2]))
+
+    def name(config: tuple) -> str:
+        policy, geometry, limit = config
+        return f'{policy}|{geometry}' if limit is None else f'{policy}|{geometry}|max{limit}'
+
+    sampled = [by_key[(*c, 'training', 'baseline')] for c in configs if (*c, 'training', 'baseline') in by_key
+               and by_key[(*c, 'training', 'baseline')]['trades'] >= minimum_trades]
     means = [row['mean_net_r'] for row in sampled]
 
-    def passes(policy: str, geometry: str, phases: Sequence[str], profiles: Sequence[str]) -> bool:
-        keys = [(policy, geometry, phase, profile) for phase in phases for profile in profiles]
+    def passes(config: tuple, phases: Sequence[str], profiles: Sequence[str]) -> bool:
+        keys = [(*config, phase, profile) for phase in phases for profile in profiles]
         return all(key in by_key for key in keys) and not any(
-            screening_reasons(by_key[key], key[2], key[3]) for key in keys)
+            screening_reasons(by_key[key], key[3], key[4]) for key in keys)
 
     ranked = sorted(sampled, key=lambda row: -row['mean_net_r'])[:top]
     return {
@@ -702,14 +715,15 @@ def screen_report(results: Iterable[Mapping[str, Any]], minimum_trades: int = 10
         'configurations_with_minimum_trades': len(sampled),
         'median_mean_net_r': statistics.median(means) if means else None,
         'share_positive_mean_net_r': sum(1 for m in means if m > 0) / len(means) if means else None,
-        'training_baseline_passes': [f'{p}|{g}' for p, g in configs if passes(p, g, ('training',), ('baseline',))],
-        'training_protocol_passes': [f'{p}|{g}' for p, g in configs
-                                     if passes(p, g, ('training',), ('baseline', 'adverse'))],
-        'protocol_eligible': [f'{p}|{g}' for p, g in configs
-                              if passes(p, g, ('training', 'validation'), ('baseline', 'adverse'))],
+        'training_baseline_passes': [name(c) for c in configs if passes(c, ('training',), ('baseline',))],
+        'training_protocol_passes': [name(c) for c in configs if passes(c, ('training',), ('baseline', 'adverse'))],
+        'protocol_eligible': [name(c) for c in configs
+                              if passes(c, ('training', 'validation'), ('baseline', 'adverse'))],
         'top_baseline_training': [{'policy': row['policy'], 'geometry_id': row['geometry_id'], 'trades': row['trades'],
                                    'mean_net_r': row['mean_net_r'], 'net_r_stdev': row.get('net_r_stdev'),
-                                   'profit_factor': row['profit_factor']} for row in ranked],
+                                   'profit_factor': row['profit_factor'],
+                                   **({'max_active': row['max_active']} if row.get('max_active') is not None else {})}
+                                  for row in ranked],
     }
 
 

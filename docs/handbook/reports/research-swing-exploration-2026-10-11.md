@@ -154,14 +154,15 @@ $M prepare --root ROOT --dataset-root DATASET --funding-supplement-root SUPPLEME
   --instrument-path INSTRUMENTS --cost-path COSTS
 $M features --root ROOT
 $M parity --root ROOT --rows CONTROL/training CONTROL/validation --results <*.results.ndjson>
-$M grid --root ROOT --phase training --output training.json          # and validation
+$M grid --root ROOT --phase training --output training.json          # setup policies; and validation
+$M grid --root ROOT --phase training --policies R_all,R_up200 --output training-controls.json
 $M grid --root ROOT --phase training --max-active 10 --output training-10.json
 python -m app.backtesting.research.exploration screen training.json validation.json
 python scripts/research_exploration_parity.py swing-plan-math --root ROOT --phase training --cases S4.T5.H14d:baseline
 python scripts/research_exploration_parity.py swing-kernel --root ROOT --phase training
 ```
 
-`CONTROL` is the random-timing sample of the day_trading screen (`20261009T060000Z-explore-entry-r2/control`).
+`CONTROL` is the random-timing sample of the day_trading screen (`20261009T060000Z-explore-entry-r2/control`). `grid` runs the ten setup policies by default; the controls run separately so the screen counts setups only. `screen` keeps rows with different `--max-active` apart and rejects duplicate rows.
 
 ## Limits
 

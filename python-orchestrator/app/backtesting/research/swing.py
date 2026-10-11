@@ -653,7 +653,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     run = commands.add_parser('grid', help='replay swing hypotheses over a prepared root')
     run.add_argument('--root', type=Path, required=True)
     run.add_argument('--phase', choices=tuple(PHASES), required=True)
-    run.add_argument('--policies', default=','.join(POLICIES))
+    run.add_argument('--policies', default=','.join(SETUP_POLICIES),
+                     help=f"default: the setup policies; controls ({','.join(CONTROL_POLICIES)}) run separately")
     run.add_argument('--geometries', default=','.join(GEOMETRIES))
     run.add_argument('--profiles', default='baseline,adverse')
     run.add_argument('--max-active', type=int, default=MAX_ACTIVE)

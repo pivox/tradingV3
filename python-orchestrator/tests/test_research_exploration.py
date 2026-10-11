@@ -418,6 +418,19 @@ def test_screen_report_separates_baseline_passes_from_protocol_eligibility():
     assert ex.screen_report([])['median_mean_net_r'] is None
 
 
+
+def test_screen_report_keeps_portfolio_limits_apart_and_rejects_duplicates():
+    baseline, adverse = screening_fixture()
+    rows = [{'policy': 'A', 'geometry_id': 'g', 'max_active': limit, 'phase': 'training', 'profile': profile,
+             **summary} for limit in (4, 10) for profile, summary in (('baseline', baseline), ('adverse', adverse))]
+    report = ex.screen_report(rows)
+    assert report['configurations'] == 2 and report['training_protocol_passes'] == ['A|g|max4', 'A|g|max10']
+    assert {row['max_active'] for row in report['top_baseline_training']} == {4, 10}
+    hybrid = [{**rows[0], 'phase': 'validation'}, {**rows[3], 'phase': 'validation'}]
+    assert ex.screen_report(rows[:2] + hybrid)['protocol_eligible'] == []  # max4 training never meets max10 validation
+    with pytest.raises(ex.ExplorationError):
+        ex.screen_report(rows + rows[:1])
+
 # ---------------------------------------------------------------- extraction and CLI
 def result_line(ms, *, sections=True, setup_hash=ex.BASELINE_SETUP_HASH, symbol='BTCUSDT',
                 filters=(True, True, True, True, True)):

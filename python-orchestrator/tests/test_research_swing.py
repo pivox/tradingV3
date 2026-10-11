@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 from array import array
 
@@ -76,7 +77,7 @@ def test_indicators_equal_php_reference_vectors():
 
 def test_php_sum_keeps_left_to_right_order():
     closes = lcg_ohlc(250)['close'][-21:]
-    assert sw._php_sum(closes) / 21 == PHP_REFERENCE['ma21'] != sum(closes) / 21  # 3.12 sum() compensates
+    assert sw._php_sum(closes) / 21 == PHP_REFERENCE['ma21'] != math.fsum(closes) / 21  # a compensated sum differs
     assert sw._php_sum([1e16, 1.0, -1e16]) == 0.0
 
 
@@ -452,6 +453,9 @@ def test_cli_grid_runs_in_process_and_in_workers(tmp_path, capsys, monkeypatch):
     assert sw.main(['grid', '--root', str(root), '--phase', 'training', '--policies', 'R_all',
                     '--geometries', 'S3.T3.H3d', '--profiles', 'baseline', '--output', str(output)]) == 0
     assert len(json.loads(output.read_text())) == 1
+    assert sw.main(['grid', '--root', str(root), '--phase', 'training', '--geometries', 'S3.T3.H3d',
+                    '--profiles', 'baseline', '--output', str(output)]) == 0
+    assert [g['policy'] for g in json.loads(output.read_text())] == list(sw.SETUP_POLICIES)
     bad = series('BTCUSDT', 1_672_531_200_000 + sw.HOUR, flat(10))
     bad.write(root / 'candles' / 'BTCUSDT.candles.bin', {})
     with pytest.raises(ex.ExplorationError):
