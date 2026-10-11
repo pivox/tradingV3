@@ -363,3 +363,43 @@ def test_the_swing_report_names_its_family(tmp_path):
         assert 'Famille swing' in paths['markdown'].read_text()
     with ExperimentRegistry(tmp_path / 'day', make_protocol(IDENTITY), min_free_bytes=0) as registry:
         assert 'Famille swing' not in write_reports(registry, tmp_path / 'day-reports')['markdown'].read_text()
+
+
+
+def test_the_ledger_verifier_holds_one_active_plan_per_pair_for_swing(tmp_path):
+    from app.backtesting.research.statistics import analyze_ledgers
+
+    def plan(side, at, **extra):
+        row = {'schema_version': 'research-plan.v1', 'symbol': 'BTCUSDT', 'risk_components_quote': {'total_stop_loss': 2.0},
+               'evaluated_ms': at, 'entry_price': 100.0, 'quantity': 2.0, 'instrument_math': {'contract_size': 1.0},
+               **({'side': side} if side else {}), **extra}
+        row['plan_hash'] = canonical_hash(row)
+        return row
+
+    def run(root, rows, profile):
+        root.mkdir()
+        files = write_ledgers(root, [marked_row(START, kind='initial'), *rows, marked_row(START + 600000, kind='terminal')])
+        return analyze_ledgers(root, files, symbols=('BTCUSDT',), start_ms=START, end_ms=START + 600000,
+                               min_free_bytes=0, kernel_profile=profile)
+
+    def admitted(p):
+        return ('events', {'symbol': 'BTCUSDT', 'plan_hash': p['plan_hash'], 'reason': 'admitted'})
+
+    def released(p, reason):
+        return ('events', {'symbol': 'BTCUSDT', 'plan_hash': p['plan_hash'], 'reason': reason})
+
+    long, short = plan('long', START), plan('short', START + 60000)
+    # A pair's second plan while its first is pending is refused.
+    with pytest.raises(StatisticsError, match='pair_active_plan_conflict'):
+        run(tmp_path / 'overlap', [('plans', long), admitted(long), ('plans', short), admitted(short),
+                                   released(long, 'research_end_pending'), released(short, 'research_end_pending')],
+            SWING_PROFILE)
+    # Once the first expired, the pair is free again.
+    result = run(tmp_path / 'released', [('plans', long), admitted(long), released(long, 'entry_expired'),
+                                         ('plans', short), admitted(short), released(short, 'research_end_pending')],
+                 SWING_PROFILE)
+    assert result['counts']['admitted'] == 2
+    # Day_trading admits overlapping plans on a pair; its limit is the portfolio's four slots.
+    first, second = plan(None, START), plan(None, START + 60000)
+    run(tmp_path / 'day', [('plans', first), admitted(first), ('plans', second), admitted(second),
+                           released(first, 'research_end_pending'), released(second, 'research_end_pending')], None)

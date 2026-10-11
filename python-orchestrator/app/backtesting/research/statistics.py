@@ -220,6 +220,8 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
     maximum_closed_drawdown = peak_wallet = ZERO
     wallet = Decimal('100000'); peak_wallet = wallet
     marked_positions = {}
+    # One active plan per pair (pending or open), as the kernel admits them under such a profile.
+    active_pairs = {}
     marked_peak = wallet; marked_drawdown = ZERO
     marked_initial = marked_terminal = False
     marked_at = start_ms
@@ -335,6 +337,12 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                         reason = row['reason']
                         if reason == 'admitted':
                             counts['admitted'] += 1
+                            if profile.one_active_per_symbol:
+                                if symbol in active_pairs:
+                                    raise StatisticsError('pair_active_plan_conflict')
+                                active_pairs[symbol] = key
+                        elif reason in ('entry_expired','research_end_pending') and active_pairs.get(symbol) == key:
+                            del active_pairs[symbol]
                         if reason == 'limit_fill_proxy':
                             counts['filled'] += 1
                             if check_marked:
@@ -422,6 +430,8 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                         years[year]['outcomes'].add(net,risk)
                         exits[row['exit_reason']] += 1
                         connection.execute('UPDATE plans SET closed=1 WHERE hash=?',(key,))
+                        if active_pairs.get(symbol) == key:
+                            del active_pairs[symbol]
                 elif name == 'rejections':
                     if row.get('schema_version') == 'research-simulation-rejection.v1':
                         counts['rejected'] += 1
