@@ -32,7 +32,7 @@ Each decision is recorded here and can be overturned before the frozen commit.
    - holding window 1,209,600 s;
    - minimum net R 1.3, risk budget 5 %, exposure cap 100 %.
 4. **Signals.** One research signal run per (symbol, side), at a 4h cadence, selected by a worker `--profile` option, so the v1 frame schemas stay. The kernel identity uses composite base hashes, which are the identity function for single-side day_trading.
-5. **Breakout condition.** New conditions in catalog `1.3.0` (catalogs 1.0.0–1.2.0 stay byte-identical). The metric is scalar, computed from the 60-value `high_series` / `low_series` that excludes the current bar. New conditions accept integral closes (the canonical JSON turns them into integers).
+5. **Breakout condition.** New conditions in catalog `1.3.0` (catalogs 1.0.0–1.2.0 stay byte-identical). The metric is the 60-value `high_series` / `low_series` that excludes the current bar. New conditions accept integral closes (the canonical JSON turns them into integers). *Overturned in the P1 review:* the metric is a `series<number>` (`oldest_to_newest`), not a scalar. Each of the three producers also emits `high_series_timestamps` / `low_series_timestamps`, so the strict evaluator can prove the chronology of the window.
 6. **Variant catalogue for swing:** `baseline` only. Training, validation and holdout each run 2 units (baseline and adverse costs).
 7. **Holdout.** A new campaign spec with its own frozen commit, protocol, registry, freeze and authority. The pin lands after the frozen commit. The owner installs the authority and runs the holdout once.
 

@@ -878,25 +878,38 @@ def canonical_replay(rows: Mapping[str, Sequence[Mapping[str, Any]]], candles: M
 def kernel_replay(selected: Iterable[tuple[str, int]], plan_for: Callable[[str, int], tuple[Plan | None, str | None]],
                   candles: Mapping[str, CandleSeries], funding_events: Mapping[str, Sequence[Sequence[Any]]],
                   instruments: Mapping[str, Mapping[str, Any]], profile: Mapping[str, float], window: tuple[int, int],
-                  *, kernel_profile: Any = None, funding_intervals: int = 1) -> tuple[dict, Counter]:
+                  *, kernel_profile: Any = None, funding_intervals: int = 1,
+                  side_for: Callable[[str, int], str] | None = None) -> tuple[dict, Counter]:
     """Drive the canonical PortfolioSimulator with signals at ``selected`` (symbol, decision)
     keys and the plans ``plan_for`` returns, as research-plan.v1 documents.
 
-    ``kernel_profile`` defaults to day_trading; an extended profile adds the plan side.
+    ``kernel_profile`` defaults to day_trading; an extended profile adds the plan side. A
+    two-sided profile streams each signal by (symbol, side), so ``side_for`` is required.
     """
-    from .portfolio_simulator import (DAY_TRADING_PROFILE, IDENTITY_FIELDS, Candle, CostAssumptions,
-                                      FundingCoverage, FundingEvent, InstrumentAssumptions, PortfolioSimulator,
-                                      RunAssumptions, Signal, canonical_hash, number, wire_number)
+    from .portfolio_simulator import (CELL_FIELDS, DAY_TRADING_PROFILE, IDENTITY_FIELDS, Candle,
+                                      CostAssumptions, FundingCoverage, FundingEvent, InstrumentAssumptions,
+                                      PortfolioSimulator, RunAssumptions, Signal, canonical_hash, composite_hash,
+                                      number, stream_key, wire_number)
 
     kernel_profile = DAY_TRADING_PROFILE if kernel_profile is None else kernel_profile
+    two_sided = len(kernel_profile.sides) > 1
+    if two_sided and side_for is None:
+        raise ExplorationError('a two-sided replay needs each signal side')
     start, end = window
     symbols = tuple(s for s in SYMBOLS if s in candles)
     phase = 'training' if end <= PHASES['training'][1] else 'validation'
     d = lambda value: Decimal(repr(float(value)))  # noqa: E731 - exact decimal of the shared double
     identity = {k: ('parity' if k == 'variant_id' else 'sha256:' + format(i + 1, 'x') * 64)
                 for i, k in enumerate(IDENTITY_FIELDS)}
-    sources = {s: {'dataset_id': f'parity-{s}', 'dataset_sha256': '7' * 64, 'signal_run_id': f'parity-run-{s}',
-                   'signal_output_sha256': '9' * 64} for s in symbols}
+    sides = kernel_profile.sides if two_sided else ('long',)
+    # Two-sided runs: each side is its own cell, and the run identity holds the composites.
+    cells = {side: {k: canonical_hash({'parity_cell': side, 'field': k}) for k in CELL_FIELDS}
+             for side in sides} if two_sided else {}
+    for k in CELL_FIELDS if two_sided else ():
+        identity[k] = composite_hash({side: cells[side][k] for side in sides})
+    sources = {stream_key(s, side, sides): {'dataset_id': f'parity-{s}', 'dataset_sha256': '7' * 64,
+               'signal_run_id': f'parity-run-{s}' + (f'-{side}' if two_sided else ''),
+               'signal_output_sha256': '9' * 64} for s in symbols for side in sides}
     kernel_instruments = {s: InstrumentAssumptions(
         d(i['tick_size']), d(i['quantity_step']), d(i['min_quantity']), d(i['max_quantity']),
         d(max(EXCHANGE_MIN_NOTIONAL, i['min_notional'])), d(i['contract_size']), d(i['leverage_cap']),
@@ -910,9 +923,10 @@ def kernel_replay(selected: Iterable[tuple[str, int]], plan_for: Callable[[str, 
     events = {s: [e for e in funding_events.get(s, ()) if start <= e[0] < end] for s in symbols}
     assumptions = RunAssumptions(
         start, end, phase, symbols, tuple(kernel_instruments.items()), costs, tuple(identity.items()),
-        tuple((s, tuple(sources[s].items())) for s in symbols),
+        tuple((key, tuple(source.items())) for key, source in sources.items()),
         FundingCoverage('observed_only', 'd' * 64, tuple((s, len(events[s])) for s in symbols)),
-        'adverse_possible_credit_certain.v1', 'last_known_close.v1', kernel_profile=kernel_profile)
+        'adverse_possible_credit_certain.v1', 'last_known_close.v1', kernel_profile=kernel_profile,
+        cells=tuple((side, tuple(cells[side].items())) for side in cells))
     selected = {key for key in selected if key[0] in symbols and start <= key[1] < end}
     trades: list[Mapping[str, Any]] = []
     rejections: Counter[str] = Counter()
@@ -942,7 +956,8 @@ def kernel_replay(selected: Iterable[tuple[str, int]], plan_for: Callable[[str, 
             'schema_version': 'research-plan.v1', 'research_only': True, 'execution_authority': 'none',
             'symbol': symbol, 'signal_result_hash': payload['result_hash'], 'signal_index': signal.index,
             'evaluated_ms': payload['evaluated_ms'], 'portfolio_hash': view['portfolio_hash'], **identity,
-            **sources[symbol], 'source_venue': 'binance_usdm', 'source_network': 'mainnet', 'market_type': 'perpetual',
+            **cells.get(plan.side, {}), **sources[stream_key(symbol, plan.side, sides)],
+            'source_venue': 'binance_usdm', 'source_network': 'mainnet', 'market_type': 'perpetual',
             'instrument_math': instrument.wire(), 'cost_model': costs.wire(), 'entry_price': float(entry),
             'stop_price': float(stop), 'quantity': float(quantity), 'final_leverage': 1,
             'effective_leverage_cap': float(instrument.leverage_cap_assumed),
@@ -971,13 +986,18 @@ def kernel_replay(selected: Iterable[tuple[str, int]], plan_for: Callable[[str, 
     def signals(at: int) -> list:
         out = []
         for symbol in by_time.get(at, ()):
+            side = side_for(symbol, at) if two_sided else 'long'
+            cell = {**identity, **cells.get(side, {})}
+            source = sources[stream_key(symbol, side, sides)]
             payload = {'schema_version': 'research-signal-result.v1', 'passed': True, 'evaluated_ms': at,
-                       'symbol': symbol, 'source': {'dataset_id': sources[symbol]['dataset_id'],
-                       'dataset_sha256': sources[symbol]['dataset_sha256'], 'source_venue': 'binance_usdm',
+                       'symbol': symbol, 'source': {'dataset_id': source['dataset_id'],
+                       'dataset_sha256': source['dataset_sha256'], 'source_venue': 'binance_usdm',
                        'source_network': 'mainnet', 'market_type': 'perpetual'},
-                       'baseline': {'setup_hash': identity['base_setup_hash'], 'config_hash': identity['base_config_hash'],
-                                    'condition_catalog_hash': identity['base_catalog_hash'],
-                                    'snapshot_hash': identity['base_snapshot_hash']}}
+                       'baseline': {'setup_hash': cell['base_setup_hash'], 'config_hash': cell['base_config_hash'],
+                                    'condition_catalog_hash': cell['base_catalog_hash'],
+                                    'snapshot_hash': cell['base_snapshot_hash']}}
+            if two_sided:
+                payload['execution'] = {'side': side}
             payload['result_hash'] = canonical_hash(payload)
             out.append(Signal(next(indices), payload))
         return out

@@ -194,10 +194,14 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                     expected_sources: dict | None = None, expected_cost_profile: str | None = None,
                     expected_cost_model: dict | None = None, require_marked: bool = False,
                     deadline: float | None = None, kernel_profile=None) -> dict:
-    from .portfolio_simulator import DAY_TRADING_PROFILE, KernelProfile, canonical_hash
+    from .portfolio_simulator import DAY_TRADING_PROFILE, KernelProfile, canonical_hash, stream_key
     profile = DAY_TRADING_PROFILE if kernel_profile is None else kernel_profile
     if not isinstance(profile, KernelProfile):
         raise StatisticsError('kernel_profile_invalid')
+    # Two-sided runs bind each row to its side's cell identity and its (symbol, side) stream.
+    two_sided = len(profile.sides) > 1
+    if expected_identity is not None and two_sided and set(expected_identity) != set(profile.sides):
+        raise StatisticsError('ledger_identity_scope_invalid')
     root = Path(root)
     if set(files) != {name+'.ndjson' for name in LEDGERS} or not symbols or start_ms >= end_ms:
         raise StatisticsError('ledger_scope_invalid')
@@ -288,9 +292,15 @@ def _analyze_validated_ledgers(root: Path, files: dict, *, symbols: tuple[str,..
                 if symbol not in symbols:
                     raise StatisticsError('ledger_symbol_outside_protocol')
                 if name in ('plans','trades') and expected_identity is not None:
-                    if any(row.get(k) != v for k,v in expected_identity.items()):
+                    side = row.get('side') if two_sided else profile.sides[0]
+                    if side not in profile.sides:
                         raise StatisticsError('ledger_identity_conflict')
-                    if any(row.get(k) != v for k,v in expected_sources[symbol].items()):
+                    identity = expected_identity[side] if two_sided else expected_identity
+                    if any(row.get(k) != v for k,v in identity.items()):
+                        raise StatisticsError('ledger_identity_conflict')
+                    stream = stream_key(symbol, side, profile.sides)
+                    if (stream not in expected_sources
+                            or any(row.get(k) != v for k,v in expected_sources[stream].items())):
                         raise StatisticsError('ledger_source_binding_conflict')
                 if name == 'plans':
                     key = row.get('plan_hash')

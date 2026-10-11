@@ -5,11 +5,24 @@ from decimal import Decimal as D, ROUND_DOWN
 import pytest
 
 from app.backtesting.research.portfolio_simulator import (
-    DAY, DAY_TRADING_PROFILE, SWING_PROFILE, Candle, CostAssumptions, FundingCoverage, FundingEvent, KernelProfile,
-    PortfolioSimulator, RunAssumptions, SYMBOLS, canonical_hash, daily_capacity)
-from tests.test_research_portfolio_simulator import IDENTITY, SOURCE, START, bars, instrument, signal
+    CELL_FIELDS, DAY, DAY_TRADING_PROFILE, SWING_PROFILE, Candle, CostAssumptions, FundingCoverage, FundingEvent,
+    KernelProfile, PortfolioSimulator, RunAssumptions, SYMBOLS, Signal, canonical_hash, composite_hash,
+    daily_capacity, stream_key)
+from tests.test_research_portfolio_simulator import IDENTITY, SOURCE, START, bars, instrument
+from tests.test_research_portfolio_simulator import signal as day_signal
 
 HOUR = 3_600_000
+# Both sides share the fixture's cell hashes; the run identity holds their composites.
+CELL = tuple((k, IDENTITY[k]) for k in CELL_FIELDS)
+SWING_IDENTITY = {**IDENTITY, **{k: composite_hash({'long': IDENTITY[k], 'short': IDENTITY[k]}) for k in CELL_FIELDS}}
+
+
+def signal(t, symbol='BTCUSDT', index=0, side=None):
+    """The day_trading signal fixture on one swing stream: odd indices long, even short, as the builders."""
+    payload = {k: v for k, v in day_signal(t, symbol, index).payload.items() if k != 'result_hash'}
+    payload['execution'] = {'side': side or ('long' if index % 2 else 'short')}
+    payload['result_hash'] = canonical_hash(payload)
+    return Signal(index, payload)
 
 
 def below(t):
@@ -23,11 +36,15 @@ def swing_costs(**changes):
 
 
 def swing_assumptions(minutes=10, symbols=SYMBOLS, start=START, profile=SWING_PROFILE, costs=None, **changes):
+    sides = getattr(profile, 'sides', ('long',))
+    two_sided = len(sides) > 1
     return replace(RunAssumptions(start, start + minutes * 60000, 'training', symbols,
-        tuple((s, instrument()) for s in symbols), costs or swing_costs(), tuple(IDENTITY.items()),
-        tuple((s, tuple(SOURCE.items())) for s in symbols),
+        tuple((s, instrument()) for s in symbols), costs or swing_costs(),
+        tuple((SWING_IDENTITY if two_sided else IDENTITY).items()),
+        tuple((stream_key(s, side, sides), tuple(SOURCE.items())) for s in symbols for side in sides),
         FundingCoverage('verified_complete', 'sha256:' + 'a' * 64, tuple((s, 0) for s in symbols)),
-        'adverse_possible_credit_certain.v1', 'last_known_close.v1', kernel_profile=profile), **changes)
+        'adverse_possible_credit_certain.v1', 'last_known_close.v1', kernel_profile=profile,
+        cells=tuple((side, CELL) for side in sides) if two_sided else ()), **changes)
 
 
 def swing_plan(sig, view, side='short', *, entry=100, stop=105, target=80, quantity=2, leverage=1,
@@ -184,9 +201,9 @@ def test_one_plan_per_pair_and_ten_slots():
     sim.advance(bars(START + 60000), signals=(signal(START + 120000, 'ETHUSDT', 11),))
     assert ledger['rejections'][-1]['reason_code'] == 'research_portfolio_symbol_active'
     eleven = replace(SWING_PROFILE, one_active_per_symbol=False, max_active=10)
-    sim, ledger = simulator(swing_assumptions(profile=eleven))
-    sim.advance(bars(START), signals=tuple(signal(START + 60000, s, i) for i, s in enumerate(SYMBOLS)))
-    sim.advance(below(START + 60000), signals=(signal(START + 120000, 'ETHUSDT', 11),))
+    sim, ledger = simulator(swing_assumptions(profile=eleven))  # the default builder plans shorts
+    sim.advance(bars(START), signals=tuple(signal(START + 60000, s, i, 'short') for i, s in enumerate(SYMBOLS)))
+    sim.advance(below(START + 60000), signals=(signal(START + 120000, 'ETHUSDT', 11, 'short'),))
     assert ledger['rejections'][-1]['reason_code'] == 'research_portfolio_concurrency_exceeded'
 
 
@@ -267,7 +284,7 @@ def test_a_short_equals_the_long_on_the_reflected_market():
         builder = (lambda s, v: swing_plan(s, v, side=plan_side, entry=float(price(e)), stop=float(price(st)),
                                            target=float(price(tar)), quantity=1))
         sim, ledger = simulator(swing_assumptions(minutes=len(path) + 1), builder=builder)
-        sim.advance(bars(START), signals=(signal(START + 60000),))
+        sim.advance(bars(START), signals=(signal(START + 60000, side=plan_side),))
         for minute, (o, h, lo, c) in enumerate(path, start=1):
             high, low = (price(lo), price(h)) if reflected else (price(h), price(lo))
             rate = D('.0003') * (-1 if reflected else 1)

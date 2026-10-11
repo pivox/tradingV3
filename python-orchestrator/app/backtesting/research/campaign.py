@@ -7,6 +7,7 @@ OHLC execution proxy. No network, application database, secrets or orders.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 from dataclasses import asdict
 from decimal import Decimal
 import hashlib
@@ -21,16 +22,19 @@ import uuid
 from . import plans, signals
 from .campaign_evidence import Evidence, EvidenceError, TERMINAL_STATUS_BYTES, encoded, reconcile
 from .funding import FundingReader, REST_HYPOTHESIS
-from .portfolio_simulator import (Candle, CostAssumptions, FundingCoverage,
-    FundingEvent, InstrumentAssumptions, PortfolioSimulator, RunAssumptions,
-    Signal, SYMBOLS, canonical_hash, merge_candles, number)
-from .signal_sources import (_ms, _utc, _read_bounded, select_sources, iter_verified_candles)
+from .portfolio_simulator import (CELL_FIELDS, DAY_TRADING_PROFILE, IDENTITY_FIELDS, SWING_PROFILE, Candle,
+    CostAssumptions, FundingCoverage, FundingEvent, InstrumentAssumptions, PortfolioSimulator, RunAssumptions,
+    Signal, SYMBOLS, canonical_hash, composite_hash, merge_candles, number, stream_key)
+from .signal_sources import (DAY_TRADING, RESEARCH_PROFILES, _ms, _utc, _read_bounded, research_profile,
+                             select_sources, iter_verified_candles)
 from .signal_sources import _source_artifact_identity, _verify_bound_source_identity, MAX_MANIFEST_BYTES
 
 MAX_ARTIFACT = 4*1024**3
 MAX_REPORT = 16*1024**2
 MIN_FREE = 20*1024**3
 FUNDING_DIAGNOSTIC_POLICY = 'verified_window_declared_or_explicit_hypothesis_continuity_1000ms.v1'
+# The research cells one campaign unit may combine, in stream side order, and their kernel profile.
+CAMPAIGN_CELLS = {('day_trading',): DAY_TRADING_PROFILE, ('swing.long', 'swing.short'): SWING_PROFILE}
 
 
 class CampaignError(RuntimeError):
@@ -59,9 +63,9 @@ def _source(selection) -> dict:
         'source_network':'mainnet','market_type':'perpetual'}
 
 
-def _opened(selection, meta) -> dict:
+def _opened(selection, meta, profile=DAY_TRADING) -> dict:
     return {'schema_version':'research-signal-opened.v1',
-        'session_id':f'research-{selection.symbol}-{selection.dataset_sha256[:20]}',
+        'session_id':signals.signal_session_id(selection.symbol, selection.dataset_sha256, profile),
         'source':_source(selection),'execution':meta['execution'],'baseline':meta['baseline'],
         'effective_config_snapshot':meta['effective_config_snapshot'],
         'indicator_engine_version':meta['indicator_engine_version']}
@@ -69,7 +73,7 @@ def _opened(selection, meta) -> dict:
 
 def _scored_count(selection) -> int:
     first = signals._first_evaluable_ms(selection)
-    return max(0,(_ms(selection.end)-1-first)//900000+1)
+    return max(0,(_ms(selection.end)-1-first)//selection.step_ms+1)
 
 
 def _b1_code_matches(recorded,current) -> bool:
@@ -111,7 +115,7 @@ def _scan(root,selection,meta,opened,deadline, *, boundary=False):
             digest.update(raw)
             frame = plans._json(raw)
             tick = frame.get('evaluated_ms')
-            if (type(tick) is not int or tick != first+count*900000
+            if (type(tick) is not int or tick != first+count*selection.step_ms
                 or (tick != _ms(selection.end) if boundary else not _ms(selection.score_start) <= tick < _ms(selection.end))
                 or type(frame.get('passed')) is not bool):
                 raise CampaignError('signal artifact chronology or verdict invalid')
@@ -144,7 +148,7 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
         raise CampaignError('one to ten distinct B1 report roots required')
     current_code = signals._code_hashes(app_dir,fake_worker=False)
     reports, bindings, windows = [], {}, None
-    baseline = None
+    baselines = {}
     for root in roots:
         _deadline(deadline)
         report, report_sha = _input(root/'report.json',MAX_REPORT)
@@ -152,9 +156,11 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
             or report.get('errors') != [] or not isinstance(report.get('symbols'),dict)
             or not report['symbols'] or not _b1_code_matches(report.get('code_sha256'),current_code)):
             raise CampaignError('B1 report incomplete or code identity conflict')
-        # Campaign units replay the frozen day_trading cell only; a profiled report fails closed.
-        if 'profile' in report:
-            raise CampaignError('B1 report research profile not replayable by this campaign')
+        # A non-default cell names its profile; the frozen day_trading report never does.
+        if 'profile' in report and (report['profile'] not in RESEARCH_PROFILES or report['profile'] == DAY_TRADING.id
+                                    or contract is not None):
+            raise CampaignError('B1 report research profile invalid')
+        profile = research_profile(report['profile']) if 'profile' in report else DAY_TRADING
         this_window = (report['source_start'],report['score_start'],report['source_end'])
         start, score, end = map(lambda v:_ms(_utc(v)),this_window)
         if contract is not None:
@@ -169,7 +175,7 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
             raise CampaignError('B1 source or scored phase window invalid; holdout closed')
         windows = this_window
         for symbol,meta in report['symbols'].items():
-            if symbol not in symbols or symbol in bindings:
+            if symbol not in symbols or (symbol,profile.id) in bindings:
                 raise CampaignError('B1 symbols duplicate or outside selected universe')
             if contract is not None:
                 from .signal_sources import select_holdout_sources
@@ -177,7 +183,9 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
                 if meta.get('baseline') != contract['identities']['baseline']:
                     raise CampaignError('claimed baseline identity conflict')
             else:
-                selection = select_sources(dataset_root,report['source_start'],report['source_end'],report['score_start'],symbol)
+                cadence = {} if profile.is_default else {'step':profile.step_ms}
+                selection = select_sources(dataset_root,report['source_start'],report['source_end'],report['score_start'],
+                                           symbol,**cadence)
             expected_scored = _scored_count(selection)
             expected_boundary = selection.expected_evaluations-expected_scored
             counters = ('source_candles','evaluated_ticks','passed_rules','failed_rules',
@@ -193,11 +201,10 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
                 or meta['dataset_sha256'] != selection.dataset_sha256
                 or meta['manifest_sha256'] != selection.manifest_sha256):
                 raise CampaignError('B1 report source or denominator conflict')
-            opened = _opened(selection,meta)
-            signals._validate_opened(opened,opened['session_id'],selection,app_dir)
-            if baseline is not None and baseline != meta['baseline']:
+            opened = _opened(selection,meta,*signals._cell(profile))
+            signals._validate_opened(opened,opened['session_id'],selection,app_dir,*signals._cell(profile))
+            if baselines.setdefault(profile.id,meta['baseline']) != meta['baseline']:
                 raise CampaignError('B1 baseline differs across symbols or reports')
-            baseline = meta['baseline']
             for _ in _scan(root,selection,meta,opened,deadline):
                 pass
             # Boundary is diagnostic evidence only and is never a scored stream.
@@ -207,7 +214,7 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
             run = {'symbol':symbol,'source':_source(selection),'signal_session_id':opened['session_id'],
                 'signal_run_id':'b1-'+report_sha[:24],'signal_output_sha256':meta['result_sha256'],
                 'start_ms':start,'score_start_ms':score,'end_ms':end}
-            bindings[symbol] = (root,selection,meta,opened,run)
+            bindings[(symbol,profile.id)] = (root,selection,meta,opened,run)
         totals = report.get('totals',{})
         expected = {'completed_symbols':len(report['symbols']),
             'source_candles':sum(m['source_candles'] for m in report['symbols'].values()),
@@ -217,9 +224,28 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
             raise CampaignError('B1 report aggregate counts conflict')
         reports.append({'root':str(root),'report_sha256':report_sha,
                         'symbols':list(report['symbols']),'code_sha256':report['code_sha256']})
-    if set(bindings) != set(symbols):
+    cells = tuple(sorted({cell for _,cell in bindings},key=list(RESEARCH_PROFILES).index))
+    if cells not in CAMPAIGN_CELLS:
+        raise CampaignError('B1 reports do not form one research cell set')
+    if set(bindings) != {(s,cell) for s in symbols for cell in cells}:
         raise CampaignError('B1 reports missing selected symbols')
-    return reports,bindings,windows,current_code
+    sides = CAMPAIGN_CELLS[cells].sides
+    # Streams in symbol priority, then side order; a day_trading stream key is its symbol.
+    return reports,{stream_key(s,RESEARCH_PROFILES[cell].side,sides):bindings[(s,cell)]
+                    for s in symbols for cell in cells},windows,current_code
+
+
+def _binding_cells(bindings, symbols):
+    """The research cells of verified bindings, in stream order, and their kernel profile."""
+    executions = {tuple(sorted(b[2]['execution'].items())) for b in bindings.values()}
+    cells = tuple(sorted((p for p in RESEARCH_PROFILES.values() if tuple(sorted(p.execution().items())) in executions),
+                         key=list(RESEARCH_PROFILES.values()).index))
+    if tuple(p.id for p in cells) not in CAMPAIGN_CELLS or len(cells) != len(executions):
+        raise CampaignError('B1 bindings do not form one research cell set')
+    kernel = CAMPAIGN_CELLS[tuple(p.id for p in cells)]
+    if list(bindings) != [stream_key(s,p.side,kernel.sides) for s in symbols for p in cells]:
+        raise CampaignError('B1 bindings stream order conflict')
+    return cells,kernel
 
 
 # Setup time stops of the published research cells and their holding windows (KernelProfile).
@@ -672,7 +698,8 @@ def _run_campaign_core(dataset_root: Path, signal_root: Path | tuple[Path,...], 
         'symbol_priority':symbols}
     with Evidence(Path(output_root),exclusions,max_bytes=max_output_bytes,min_free_bytes=min_free_bytes,
                   initial_bytes=len(encoded(attempt))) as evidence:
-        worker = None
+        workers = {}
+        two_sided = False
         try:
             evidence.json('attempt.json',attempt)
             if (wall_timeout <= 0 or io_timeout <= 0
@@ -684,32 +711,52 @@ def _run_campaign_core(dataset_root: Path, signal_root: Path | tuple[Path,...], 
             else:
                 reports,bindings,windows,b1_code = _verify_reports(dataset_root,roots,app_dir,symbols,phase,deadline,
                                                                  authorization=authorization)
+            cells,kernel_profile = _binding_cells(bindings,symbols)
+            two_sided = len(cells) > 1
+            if two_sided and authorization is not None:
+                raise CampaignError('two-sided holdout units are not claimable yet')
+            sides = kernel_profile.sides
+            first = {p.id:bindings[stream_key(symbols[0],p.side,sides)] for p in cells}
+            symbol_bindings = {s:bindings[stream_key(s,cells[0].side,sides)] for s in symbols}
+            # Both sides of a pair replay the same verified candles.
+            if any(bindings[stream_key(s,p.side,sides)][1] != symbol_bindings[s][1] for s in symbols for p in cells):
+                raise CampaignError('research cells disagree on candle sources')
             source_start,start,end = map(lambda value:_ms(_utc(value)),windows)
             instruments,instrument_sha = _input(instrument_path,MAX_REPORT)
             costs,cost_sha = _input(cost_path,MAX_REPORT)
             for document,field in ((instruments,'manifest_hash'),(costs,'assumption_hash')):
                 if canonical_hash({k:v for k,v in document.items() if k != field}) != document.get(field):
                     raise CampaignError('assumption manifest hash conflict')
-            variant = plans.variant_selection(variant_id,bindings[symbols[0]][2]['baseline'])
-            kernel_costs = _kernel_costs(bindings[symbols[0]][2]['effective_config_snapshot'],costs['profiles'][cost_profile])
+            variants = {p.id:plans.variant_selection(variant_id,first[p.id][2]['baseline'],*((p.id,) if two_sided else ()))
+                        for p in cells}
+            costs_by_cell = [_kernel_costs(first[p.id][2]['effective_config_snapshot'],costs['profiles'][cost_profile])
+                             for p in cells]
+            if any(cost != costs_by_cell[0] for cost in costs_by_cell):
+                raise CampaignError('research cells disagree on kernel costs')
+            kernel_costs = costs_by_cell[0]
             kernel_instruments = _kernel_instruments(instruments,symbols)
             reader = FundingReader(dataset_root,windows[1],windows[2],symbols=symbols,
                 supplement_root=funding_supplement_root,rest_interval_hypothesis=REST_HYPOTHESIS)
             inventory = reader.inventory
             if (inventory.start_ms != start or inventory.end_exclusive_ms != end
-                or any(bindings[s][1].manifest_sha256 != inventory.acquisition_manifest_sha256 for s in symbols)):
+                or any(b[1].manifest_sha256 != inventory.acquisition_manifest_sha256 for b in bindings.values())):
                 raise CampaignError('funding inventory window conflict')
             coverage = _funding_coverage(inventory,symbols)
             php_inventory = plans.code_inventory(app_dir)
             runner_code = _runner_code()
-            counters = {key:sum(bindings[s][2][field] for s in symbols) for key,field in
+            counters = {key:sum(b[2][field] for b in bindings.values()) for key,field in
                 (('evaluated_ticks','scored_evaluations'),('passed_rules','scored_passed_rules'),
                  ('failed_rules','scored_failed_rules'))}
             manifest = {'schema_version':'research-campaign-manifest.v1','run_id':run_id,
                 'phase':phase,'source_start_ms':source_start,'start_ms':start,'end_ms':end,
-                'end_exclusive':True,'symbol_priority':symbols,'variant':variant,'cost_profile':cost_profile,
-                'baseline':bindings[symbols[0]][2]['baseline'],'signal_reports':reports,
-                'source_runs':[bindings[s][4] for s in symbols],
+                'end_exclusive':True,'symbol_priority':symbols,'cost_profile':cost_profile,
+                # A two-sided unit records one cell per side; day_trading keeps its single-cell keys.
+                **({'kernel_profile':kernel_profile.wire(),'cells':[{'profile':p.id,'side':p.side,
+                    'baseline':first[p.id][2]['baseline'],'variant':variants[p.id],
+                    'source_runs':[bindings[stream_key(s,p.side,sides)][4] for s in symbols]} for p in cells]}
+                   if two_sided else {'variant':variants[cells[0].id],'baseline':first[cells[0].id][2]['baseline']}),
+                'signal_reports':reports,
+                **({} if two_sided else {'source_runs':[bindings[s][4] for s in symbols]}),
                 'instrument_assumptions':instruments,'instrument_file_sha256':instrument_sha,
                 'cost_assumptions':costs,'cost_file_sha256':cost_sha,
                 'funding_inventory':asdict(inventory),'funding_inventory_hash':inventory.inventory_hash,
@@ -736,29 +783,41 @@ def _run_campaign_core(dataset_root: Path, signal_root: Path | tuple[Path,...], 
                 manifest.update(_holdout_metadata(authorization, input_binding, include_binding=True))
                 manifest['b1_python_code_binding_policy'] = 'claimed_current_inventory_exact.v1'
             manifest_sha = evidence.json('manifest.json',manifest)
-            opening = {'schema_version':'research-plan-open.v1','session_id':run_id,
-                'baseline':manifest['baseline'],'source_runs':manifest['source_runs'],'variant':variant,
-                'instrument_assumptions':instruments,'cost_assumptions':costs,'cost_profile':cost_profile,
-                'expected_signals':counters['passed_rules']}
-            worker = plans.PlanWorker(app_dir,opening,wall_timeout=max(.001,deadline-time.monotonic()),
-                io_timeout=io_timeout,max_output_bytes=max_output_bytes)
-            with worker:
-                if worker.opened['research_code_hash'] != manifest['research_code_hash']:
-                    raise CampaignError('planner code identity differs from frozen manifest')
-                identity = {'base_setup_hash':manifest['baseline']['setup_hash'],
-                    'base_config_hash':manifest['baseline']['config_hash'],
-                    'base_catalog_hash':manifest['baseline']['condition_catalog_hash'],
-                    'base_snapshot_hash':manifest['baseline']['snapshot_hash'],'variant_id':variant_id,
-                    'variant_hash':variant['variant_hash'],'instrument_assumptions_hash':instruments['manifest_hash'],
-                    'cost_assumptions_hash':costs['assumption_hash'],'research_code_hash':worker.opened['research_code_hash']}
+            with ExitStack() as planners:
+                for p in cells:
+                    streams = [bindings[stream_key(s,p.side,sides)] for s in symbols]
+                    opening = {'schema_version':'research-plan-open.v1',
+                        'session_id':run_id+(f'-{p.side}' if two_sided else ''),
+                        **({'profile':p.wire} if two_sided else {}),
+                        'baseline':first[p.id][2]['baseline'],'source_runs':[b[4] for b in streams],
+                        'variant':variants[p.id],'instrument_assumptions':instruments,'cost_assumptions':costs,
+                        'cost_profile':cost_profile,'expected_signals':sum(b[2]['scored_passed_rules'] for b in streams)}
+                    workers[p.side] = planners.enter_context(plans.PlanWorker(app_dir,opening,
+                        wall_timeout=max(.001,deadline-time.monotonic()),io_timeout=io_timeout,
+                        max_output_bytes=max_output_bytes))
+                    if workers[p.side].opened['research_code_hash'] != manifest['research_code_hash']:
+                        raise CampaignError('planner code identity differs from frozen manifest')
+                # Each side is a cell; the run identity holds the composites (the hash itself for one side).
+                cell_hashes = {p.side:{'base_setup_hash':first[p.id][2]['baseline']['setup_hash'],
+                    'base_config_hash':first[p.id][2]['baseline']['config_hash'],
+                    'base_catalog_hash':first[p.id][2]['baseline']['condition_catalog_hash'],
+                    'base_snapshot_hash':first[p.id][2]['baseline']['snapshot_hash'],
+                    'variant_hash':variants[p.id]['variant_hash']} for p in cells}
+                shared = {'variant_id':variant_id,'instrument_assumptions_hash':instruments['manifest_hash'],
+                    'cost_assumptions_hash':costs['assumption_hash'],'research_code_hash':manifest['research_code_hash']}
+                identity = {k:shared[k] if k in shared else composite_hash({side:h[k] for side,h in cell_hashes.items()})
+                            for k in IDENTITY_FIELDS}
                 source_fields = ('dataset_id','dataset_sha256','signal_run_id','signal_output_sha256')
-                sources = tuple((s,tuple((key,bindings[s][4]['source'][key] if key.startswith('dataset_') else bindings[s][4][key])
-                                         for key in source_fields)) for s in symbols)
+                sources = tuple((key,tuple((f,b[4]['source'][f] if f.startswith('dataset_') else b[4][f])
+                                           for f in source_fields)) for key,b in bindings.items())
                 assumptions = RunAssumptions(start,end,phase,symbols,kernel_instruments,kernel_costs,
                     tuple(identity.items()),sources,coverage,manifest['funding_path_policy'],manifest['funding_mark_policy'],
-                    authorization)
+                    authorization,kernel_profile=kernel_profile,
+                    cells=tuple((side,tuple((k,h[k]) for k in CELL_FIELDS)) for side,h in cell_hashes.items())
+                          if two_sided else ())
                 def build(signal,portfolio):
-                    result = worker.build(signal,portfolio)
+                    side = signal.payload['execution']['side'] if two_sided else cells[0].side
+                    result = workers[side].build(signal,portfolio)
                     if result['schema_version'] == 'research-plan.v1':
                         evidence.emit('plans',result)
                     else:
@@ -776,13 +835,15 @@ def _run_campaign_core(dataset_root: Path, signal_root: Path | tuple[Path,...], 
                     trade_sink=lambda row:evidence.emit('trades',row),
                     cashflow_sink=lambda row:evidence.emit('cashflows',row),rejection_sink=rejected,
                     marked_sink=lambda row:evidence.emit('marked-equity',row))
-                def passed_signals(symbol):
-                    root,selection,meta,opened,_ = bindings[symbol]
+                def passed_signals(key):
+                    root,selection,meta,opened,_ = bindings[key]
                     for signal in _scan(root,selection,meta,opened,deadline):
                         if signal.payload['passed']:
                             yield signal
-                signal_clock = _Clock(heapq.merge(*(passed_signals(s) for s in symbols),
-                    key=lambda sig:(sig.payload['evaluated_ms'],symbols.index(sig.payload['symbol']))),
+                def order(sig):
+                    side = sides.index(sig.payload['execution']['side']) if two_sided else 0
+                    return (sig.payload['evaluated_ms'],symbols.index(sig.payload['symbol']),side)
+                signal_clock = _Clock(heapq.merge(*(passed_signals(key) for key in bindings),key=order),
                     lambda sig:sig.payload['evaluated_ms'])
                 def funding_events():
                     for event in reader.iter_events():
@@ -791,7 +852,7 @@ def _run_campaign_core(dataset_root: Path, signal_root: Path | tuple[Path,...], 
                                            event.timestamp_ms if event.observed_mark is not None else None)
                 funding_clock = _Clock(funding_events(),lambda event:event.timestamp_ms)
                 def candle_stream(symbol):
-                    for row in iter_verified_candles(dataset_root,bindings[symbol][1]):
+                    for row in iter_verified_candles(dataset_root,symbol_bindings[symbol][1]):
                         yield Candle(symbol,row['open_ms'],*(number(row[key]) for key in ('open','high','low','close')))
                 source_candles = phase_batches = 0
                 previous = None
@@ -810,14 +871,14 @@ def _run_campaign_core(dataset_root: Path, signal_root: Path | tuple[Path,...], 
                                       signals=signal_clock.through(min(boundary,end-1)))
                     phase_batches += 1
                 signal_clock.exhausted();funding_clock.exhausted()
-                if source_candles != sum(bindings[s][1].expected_candles for s in symbols):
+                if source_candles != sum(b[1].expected_candles for b in symbol_bindings.values()):
                     raise CampaignError('candle source count incomplete')
                 kernel_summary = simulator.finish()
-                planner_summary = worker.close()
+                planner_summaries = {side:worker.close() for side,worker in workers.items()}
                 if (simulator.attempted_signals != counters['passed_rules']
-                    or planner_summary['received'] != counters['passed_rules']):
+                    or sum(s['received'] for s in planner_summaries.values()) != counters['passed_rules']):
                     raise CampaignError('planner or signal counts incomplete')
-                if (planner_summary['planned'] != simulator.admitted_plans
+                if (sum(s['planned'] for s in planner_summaries.values()) != simulator.admitted_plans
                     or kernel_summary['admitted_plans'] != simulator.admitted_plans):
                     raise CampaignError('planner and kernel admission counts differ')
             if (signals._code_hashes(app_dir,fake_worker=False) != b1_code or _runner_code() != runner_code
@@ -837,7 +898,9 @@ def _run_campaign_core(dataset_root: Path, signal_root: Path | tuple[Path,...], 
                 'source_quality':{'candles':'verified_complete','funding_inventory':asdict(inventory),
                     'funding_diagnostic_policy':FUNDING_DIAGNOSTIC_POLICY,
                     'kernel_funding_coverage':coverage.status},
-                'planner_summary':planner_summary,'planner_evidence':worker.evidence(),
+                'planner_summary':planner_summaries if two_sided else planner_summaries[cells[0].side],
+                'planner_evidence':({side:w.evidence() for side,w in workers.items()} if two_sided
+                                    else workers[cells[0].side].evidence()),
                 'reconciliation':replay,'profit_factor':None,
                 'profit_factor_reason':'aggregate_ratios_owned_by_campaign_selection_ledger',
                 'average_net_r':None,'average_net_r_reason':'requires_plan_risk_join_in_selection_ledger'}
@@ -860,7 +923,8 @@ def _run_campaign_core(dataset_root: Path, signal_root: Path | tuple[Path,...], 
                 'error':{'type':error_type[:96],'type_truncated':len(error_type)>96,
                     'message':message[:256],'message_truncated':len(message)>256,
                     'message_sha256':hashlib.sha256(message.encode('utf-8',errors='surrogatepass')).hexdigest()},
-                'planner_evidence':worker.evidence() if worker is not None else None}
+                'planner_evidence':(({side:w.evidence() for side,w in workers.items()} if two_sided
+                                     else next(iter(workers.values())).evidence()) if workers else None)}
             if authorization is not None:
                 failure.update(_holdout_metadata(authorization,input_binding))
             try:
