@@ -21,7 +21,8 @@ from typing import Iterator
 from app.modern_trading_contracts import CanonicalEffectiveConfigSnapshot, _canonical_json
 
 from .binance_history import SYMBOLS
-from .signal_sources import (SignalError, SourceSelection, _ms, iter_verified_candles,
+from .signal_sources import (DAY_TRADING, RESEARCH_PROFILES, ResearchProfile, SignalError,
+                             SourceSelection, _ms, iter_verified_candles, research_profile,
                              select_sources)
 
 MAX_LINE_BYTES = 2 * 1024 * 1024
@@ -31,6 +32,7 @@ DEFAULT_WALL_SECONDS = 6 * 3600
 CODE_FILES = (
     "src/Command/ResearchSignalWorkerCommand.php",
     "src/TradingCore/Backtesting/Research/ResearchSignalSession.php",
+    "src/TradingCore/Backtesting/Research/ResearchProfile.php",
     "src/TradingCore/Backtesting/Research/ResearchCandle.php",
     "src/TradingCore/Backtesting/Research/ResearchRollingWindows.php",
     "src/TradingCore/Backtesting/Indicator/CanonicalPhpIndicatorCalculator.php",
@@ -86,7 +88,20 @@ def _is_scored_tick(tick: int, score_start_ms: int, end_ms: int) -> bool:
 def _first_evaluable_ms(selection: SourceSelection) -> int:
     first_4h = ((_ms(selection.start) + 14399999) // 14400000) * 14400000
     earliest = max(_ms(selection.score_start), first_4h + 250 * 14400000)
-    return ((earliest + 899999) // 900000) * 900000
+    step = selection.step_ms
+    return ((earliest + step - 1) // step) * step
+
+
+def _cell(profile: ResearchProfile) -> tuple[ResearchProfile, ...]:
+    """Trailing profile argument; the default cell keeps the frozen call shapes."""
+    return () if profile.is_default else (profile,)
+
+
+def signal_session_id(symbol: str, dataset_sha256: str, profile: ResearchProfile = DAY_TRADING) -> str:
+    """One worker session per symbol and profile; day_trading keeps its frozen identifier."""
+    if profile.is_default:
+        return f"research-{symbol}-{dataset_sha256[:20]}"
+    return f"research-{symbol}-{profile.id}-{dataset_sha256[:20]}"
 
 
 def _validate_output_location(root: Path, dataset_root: Path) -> None:
@@ -184,8 +199,13 @@ def _worker_argv(app_dir: Path, supplied: tuple[str, ...] | None) -> tuple[str, 
             "app:research:signals", "--no-interaction")
 
 
-def _frames(selection: SourceSelection, root: Path, session_id: str) -> Iterator[bytes]:
+def _frames(selection: SourceSelection, root: Path, session_id: str,
+            profile: ResearchProfile = DAY_TRADING) -> Iterator[bytes]:
+    if profile.step_ms != selection.step_ms:
+        raise SignalError("profile and selection cadence differ")
+    profile_key = {} if profile.is_default else {"profile": profile.wire}
     yield _encode({"schema_version": "research-signal-open.v1", "session_id": session_id,
+                   **profile_key,
                    "dataset_id": "research-" + selection.dataset_sha256[:24],
                    "dataset_sha256": selection.dataset_sha256,
                    "source_venue": "binance_usdm", "source_network": "mainnet",
@@ -276,18 +296,14 @@ def _verify_baseline_files(baseline: dict, app_dir: Path, ordered_files: list[st
 
 
 def _validate_opened(frame: dict, session_id: str, selection: SourceSelection,
-                     app_dir: Path) -> None:
+                     app_dir: Path, profile: ResearchProfile = DAY_TRADING) -> None:
     if (frame.get("schema_version") != "research-signal-opened.v1"
             or set(frame) != {"schema_version", "session_id", "source", "execution",
                               "baseline", "effective_config_snapshot", "indicator_engine_version"}):
         raise SignalError("worker open acknowledgement missing")
     _identity(frame, {}, session_id, selection, require_symbol=False)
     execution = frame.get("execution")
-    expected_execution = {
-                "mode_id": "day_trading", "mode_version": "1.1.0",
-                "setup_id": "day_trading.trend_continuation.long", "setup_version": "1.1.0",
-                "exchange": "fake", "environment": "local", "side": "long",
-                "execution_capability": "backtest"}
+    expected_execution = profile.execution()
     if (execution != expected_execution or frame.get("indicator_engine_version") != "php_fallback_v1"):
         raise SignalError("worker baseline or protocol identity invalid")
     snapshot = frame.get("effective_config_snapshot")
@@ -347,8 +363,8 @@ def _validate_result(frame: dict, tick: int) -> None:
 
 def _run_symbol(root: Path, out: Path, app_dir: Path, selection: SourceSelection,
                 argv: tuple[str, ...], timeout: float, max_stderr: int,
-                max_output: int) -> dict:
-    session_id = f"research-{selection.symbol}-{selection.dataset_sha256[:20]}"
+                max_output: int, profile: ResearchProfile = DAY_TRADING) -> dict:
+    session_id = signal_session_id(selection.symbol, selection.dataset_sha256, profile)
     env = {"APP_ENV": "prod", "APP_DEBUG": "0", "SYMFONY_DOTENV_PATH": "/dev/null",
            "PATH": os.defpath, "LC_ALL": "C", "LANG": "C"}
     started = time.monotonic()
@@ -365,7 +381,7 @@ def _run_symbol(root: Path, out: Path, app_dir: Path, selection: SourceSelection
 
     def produce() -> None:
         try:
-            for line in _frames(selection, root, session_id):
+            for line in _frames(selection, root, session_id, *_cell(profile)):
                 frame = json.loads(line)
                 _write_all(proc.stdin, line, deadline)
                 proc.stdin.flush()
@@ -418,7 +434,7 @@ def _run_symbol(root: Path, out: Path, app_dir: Path, selection: SourceSelection
                 if schema == "research-signal-error.v1":
                     raise SignalError("worker structured error: " + str(frame.get("reason_code")))
                 if not opened:
-                    _validate_opened(frame, session_id, selection, app_dir)
+                    _validate_opened(frame, session_id, selection, app_dir, *_cell(profile))
                     opened = frame
                     return
                 if summary is not None:
@@ -432,7 +448,7 @@ def _run_symbol(root: Path, out: Path, app_dir: Path, selection: SourceSelection
                         next_eval = _first_evaluable_ms(selection)
                     if tick != next_eval or type(frame.get("passed")) is not bool:
                         raise SignalError("worker result chronology or verdict invalid")
-                    next_eval += 900000
+                    next_eval += selection.step_ms
                     _validate_result(frame, tick)
                     raw = line + b"\n"
                     if _is_scored_tick(tick, _ms(selection.score_start), _ms(selection.end)):
@@ -564,7 +580,8 @@ def run_signals(dataset_root: Path, output_root: Path, app_dir: Path, start: str
                 worker_argv: tuple[str, ...] | None = None,
                 wall_timeout: float = DEFAULT_WALL_SECONDS,
                 max_stderr_bytes: int = DEFAULT_STDERR_BYTES,
-                max_output_bytes: int = MAX_OUTPUT_BYTES) -> dict:
+                max_output_bytes: int = MAX_OUTPUT_BYTES,
+                profile: str = DAY_TRADING.id) -> dict:
     if (not symbols or len(set(symbols)) != len(symbols) or any(s not in SYMBOLS for s in symbols)
             or wall_timeout <= 0 or max_stderr_bytes < 0 or max_output_bytes <= 0):
         raise SignalError("runner input limits invalid")
@@ -572,13 +589,15 @@ def run_signals(dataset_root: Path, output_root: Path, app_dir: Path, start: str
     app_dir = Path(app_dir)
     if not app_dir.is_absolute() or not app_dir.is_dir():
         raise SignalError("absolute Symfony app directory required")
-    selections = [select_sources(dataset_root, start, end, score_start, symbol)
+    cell = research_profile(profile)
+    cadence = {} if cell.is_default else {"step": cell.step_ms}
+    selections = [select_sources(dataset_root, start, end, score_start, symbol, **cadence)
                   for symbol in symbols]
     argv = _worker_argv(app_dir, worker_argv)
     code_hashes = _code_hashes(app_dir, fake_worker=worker_argv is not None)
     return _run_selected_signals(dataset_root, Path(output_root), app_dir, start, end,
         score_start, selections, argv, code_hashes, wall_timeout, max_stderr_bytes,
-        max_output_bytes)
+        max_output_bytes, profile=cell)
 
 
 def run_holdout_signals(output_root: Path, *, authorization) -> dict:
@@ -602,7 +621,8 @@ def run_holdout_signals(output_root: Path, *, authorization) -> dict:
 
 def _run_selected_signals(dataset_root, output_root, app_dir, start, end, score_start,
         selections, argv, code_hashes, wall_timeout, max_stderr_bytes,
-        max_output_bytes, *, authorization=None, expected_baseline=None, report_reserve=0):
+        max_output_bytes, *, authorization=None, expected_baseline=None, report_reserve=0,
+        profile=DAY_TRADING):
     if max_output_bytes <= report_reserve:
         raise SignalError('aggregate signal report capacity exceeded')
     output_root = _private_output(Path(output_root), dataset_root)
@@ -610,6 +630,8 @@ def _run_selected_signals(dataset_root, output_root, app_dir, start, end, score_
                     "source_start": start, "source_end": end, "score_start": score_start,
                     "symbols": {}, "code_sha256": code_hashes, "worker_argv": list(argv[:1]),
                     "errors": []}
+    if not profile.is_default:
+        report["profile"] = profile.id
     started = time.monotonic()
     try:
         for selection in selections:
@@ -624,7 +646,7 @@ def _run_selected_signals(dataset_root, output_root, app_dir, start, end, score_
                     raise SignalError('aggregate signal output capacity exceeded')
             report["symbols"][selection.symbol] = _run_symbol(
                 dataset_root, output_root, app_dir, selection, argv, symbol_timeout,
-                max_stderr_bytes, symbol_bytes)
+                max_stderr_bytes, symbol_bytes, *_cell(profile))
             if authorization is not None and report['symbols'][selection.symbol]['baseline'] != expected_baseline:
                 raise SignalError('claimed baseline differs from signal worker')
         report["status"] = "complete"
@@ -660,11 +682,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end", required=True)
     parser.add_argument("--score-start", required=True)
     parser.add_argument("--symbols", required=True)
+    parser.add_argument("--profile", choices=tuple(RESEARCH_PROFILES), default=DAY_TRADING.id,
+                        help="research cell; one worker session per symbol (default: day_trading)")
     args = parser.parse_args(argv)
     try:
+        # The default cell keeps the frozen call shape.
+        cell = {} if args.profile == DAY_TRADING.id else {"profile": args.profile}
         report = run_signals(args.dataset_root, args.output_root, args.app_dir,
                              args.start, args.end, args.score_start,
-                             tuple(args.symbols.split(",")))
+                             tuple(args.symbols.split(",")), **cell)
     except SignalError as exc:
         print(f"research signals failed: {exc}", file=sys.stderr)
         return 1

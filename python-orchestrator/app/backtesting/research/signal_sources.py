@@ -25,6 +25,9 @@ MAX_MANIFEST_BYTES = 64 * 1024 * 1024
 MAX_REST_BYTES = 2 * 1024 * 1024
 SCORE_FLOOR = datetime(2023, 1, 1, tzinfo=timezone.utc)
 HOLDOUT_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+QUARTER_HOUR_MS = 900000  # day_trading decision cadence
+FOUR_HOURS_MS = 14400000  # swing decision cadence; also the readiness window step
+EVALUATION_STEPS = (QUARTER_HOUR_MS, FOUR_HOURS_MS)
 
 
 class SignalError(RuntimeError):
@@ -44,6 +47,51 @@ class SourceSelection:
     expected_evaluations: int
     expected_warmup: int
     expected_before_score: int
+    step_ms: int = QUARTER_HOUR_MS
+
+
+@dataclass(frozen=True)
+class ResearchProfile:
+    """Python mirror of PHP ``ResearchProfile``: one worker cell and its decision cadence.
+
+    ``wire`` is the open-frame ``profile`` value. The frozen day_trading cell has none,
+    so its frames, sessions and reports stay byte-identical.
+    """
+    id: str
+    wire: str | None
+    mode_id: str
+    mode_version: str
+    setup_id: str
+    setup_version: str
+    side: str
+    step_ms: int
+
+    @property
+    def is_default(self) -> bool:
+        return self.wire is None
+
+    def execution(self) -> dict[str, str]:
+        return {"mode_id": self.mode_id, "mode_version": self.mode_version,
+                "setup_id": self.setup_id, "setup_version": self.setup_version,
+                "exchange": "fake", "environment": "local", "side": self.side,
+                "execution_capability": "backtest"}
+
+
+RESEARCH_PROFILES = {profile.id: profile for profile in (
+    ResearchProfile("day_trading", None, "day_trading", "1.1.0",
+                    "day_trading.trend_continuation.long", "1.1.0", "long", QUARTER_HOUR_MS),
+    ResearchProfile("swing.long", "swing.long", "swing", "1.0.0",
+                    "swing.breakout.long", "1.0.0", "long", FOUR_HOURS_MS),
+    ResearchProfile("swing.short", "swing.short", "swing", "1.0.0",
+                    "swing.breakout.short", "1.0.0", "short", FOUR_HOURS_MS),
+)}
+DAY_TRADING = RESEARCH_PROFILES["day_trading"]
+
+
+def research_profile(name: str) -> ResearchProfile:
+    if name not in RESEARCH_PROFILES:
+        raise SignalError("unknown research profile")
+    return RESEARCH_PROFILES[name]
 
 
 def _utc(value: object) -> datetime:
@@ -120,15 +168,19 @@ def _archive_source(entry: dict, symbol: str) -> ArchiveSource:
     return expected
 
 
-def _expected_ticks(start: datetime, end: datetime, score_start: datetime) -> tuple[int, int, int]:
+def _expected_ticks(start: datetime, end: datetime, score_start: datetime,
+                    step: int = QUARTER_HOUR_MS) -> tuple[int, int, int]:
+    """Decision ticks of one session at ``step``: (evaluated, warm-up, before score)."""
+    if step not in EVALUATION_STEPS:
+        raise SignalError("unsupported decision cadence")
     start_ms, end_ms, score_ms = _ms(start), _ms(end), _ms(score_start)
-    quarter, four_hours = 900000, 14400000
+    four_hours = FOUR_HOURS_MS
     first_4h_open = ((start_ms + four_hours - 1) // four_hours) * four_hours
     ready = first_4h_open + 250 * four_hours
     warmup = before = evaluated = 0
-    tick = ((start_ms + quarter - 1) // quarter) * quarter
+    tick = ((start_ms + step - 1) // step) * step
     if tick <= start_ms:
-        tick += quarter
+        tick += step
     while tick <= end_ms:
         if tick < ready:
             warmup += 1
@@ -136,17 +188,17 @@ def _expected_ticks(start: datetime, end: datetime, score_start: datetime) -> tu
             before += 1
         else:
             evaluated += 1
-        tick += quarter
+        tick += step
     return evaluated, warmup, before
 
 
 def select_sources(root: Path, start: str, end: str, score_start: str,
-                   symbol: str) -> SourceSelection:
+                   symbol: str, *, step: int = QUARTER_HOUR_MS) -> SourceSelection:
     beginning, ending, score = _utc(start), _utc(end), _utc(score_start)
     if (symbol not in SYMBOLS or beginning >= ending or score < SCORE_FLOOR
             or score < beginning or score >= ending or ending > HOLDOUT_START):
         raise SignalError("unsupported research range or symbol")
-    return _select_sources_validated(root, beginning, ending, score, symbol)
+    return _select_sources_validated(root, beginning, ending, score, symbol, step=step)
 
 
 def select_holdout_sources(root: Path, symbol: str, *, authorization) -> SourceSelection:
@@ -164,13 +216,14 @@ def select_holdout_sources(root: Path, symbol: str, *, authorization) -> SourceS
 
 
 def _select_sources_validated(root: Path, beginning: datetime, ending: datetime,
-                             score: datetime, symbol: str) -> SourceSelection:
+                             score: datetime, symbol: str, *,
+                             step: int = QUARTER_HOUR_MS) -> SourceSelection:
     """Coverage and provenance validation shared after separate scope guards."""
     root = Path(root)
     if not root.is_absolute() or root.is_symlink():
         raise SignalError("absolute non-symlink dataset root required")
     raw_manifest = _read_bounded(root, "manifest.json", MAX_MANIFEST_BYTES)
-    return _selection_from_manifest(raw_manifest, beginning, ending, score, symbol)
+    return _selection_from_manifest(raw_manifest, beginning, ending, score, symbol, step=step)
 
 
 def _identity_deadline(deadline):
@@ -178,7 +231,8 @@ def _identity_deadline(deadline):
         raise SignalError('source identity deadline')
 
 
-def _selection_from_manifest(raw_manifest, beginning, ending, score, symbol, *, deadline=None):
+def _selection_from_manifest(raw_manifest, beginning, ending, score, symbol, *, deadline=None,
+                             step=QUARTER_HOUR_MS):
     """One exact metadata/subset schema, for selection and read-only replay."""
     _identity_deadline(deadline)
     if len(raw_manifest)>MAX_MANIFEST_BYTES:
@@ -241,10 +295,10 @@ def _selection_from_manifest(raw_manifest, beginning, ending, score, symbol, *, 
                "start": beginning.isoformat(), "end": ending.isoformat(),
                "score_start": score.isoformat(), "sources": frozen}
     subset = hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    evaluated, warmup, before = _expected_ticks(beginning, ending, score)
+    evaluated, warmup, before = _expected_ticks(beginning, ending, score, step)
     return SourceSelection(symbol, beginning, ending, score, hashlib.sha256(raw_manifest).hexdigest(),
                            subset, tuple(selected), (_ms(ending) - _ms(beginning)) // 60000,
-                           evaluated, warmup, before)
+                           evaluated, warmup, before, step)
 
 
 def _source_artifact_identity(root, name, maximum, deadline, *, capture=False):

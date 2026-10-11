@@ -18,6 +18,7 @@ import subprocess
 import time
 
 from .portfolio_simulator import SYMBOLS, Signal, canonical_hash, digest
+from .signal_sources import DAY_TRADING, RESEARCH_PROFILES
 from .signals import _terminate, _file_sha256
 
 VARIANT_DIFFS = {
@@ -31,6 +32,8 @@ VARIANT_DIFFS = {
     'target_150': {'target_risk_multiple':1.5}, 'target_250': {'target_risk_multiple':2.5},
     'ema20_5m_width_050': {'anchor_source':'ema_20','zone_atr_multiplier':.50},
 }
+# The swing candidate is frozen: its contract geometry is the only variant (PHP SWING_DIFFS).
+SWING_VARIANT_DIFFS = {'baseline': {}}
 CODE_SCOPE = 'research_plan_app_php_vendor_config_content_v2'
 CODE_POLICY = 'content_at_open_and_close_immutable_appdir_during_session'
 INTEGRITY = 'sha256_and_local_baseline_only_runner_verifies_b1_artifact'
@@ -40,10 +43,17 @@ class PlanError(RuntimeError):
     """A planner failure invalidates a campaign; it is never a zero-trade result."""
 
 
-def variant_selection(name: str, baseline: Mapping) -> dict:
-    if name not in VARIANT_DIFFS:
+def variant_catalogue(profile: str = DAY_TRADING.id) -> Mapping[str, Mapping]:
+    if profile not in RESEARCH_PROFILES:
+        raise PlanError('unknown research profile')
+    return VARIANT_DIFFS if RESEARCH_PROFILES[profile].is_default else SWING_VARIANT_DIFFS
+
+
+def variant_selection(name: str, baseline: Mapping, profile: str = DAY_TRADING.id) -> dict:
+    catalogue = variant_catalogue(profile)
+    if name not in catalogue:
         raise PlanError('unknown closed research variant')
-    diff = dict(VARIANT_DIFFS[name]) if VARIANT_DIFFS[name] else []
+    diff = dict(catalogue[name]) if catalogue[name] else []
     payload = {'schema_version':'research-variant.v1','id':name,'diff':diff,
         'base_setup_hash':baseline['setup_hash'],'base_config_hash':baseline['config_hash'],
         'base_catalog_hash':baseline['condition_catalog_hash']}
@@ -129,6 +139,10 @@ class PlanWorker:
         if not worker_argv or not Path(worker_argv[0]).is_absolute():
             raise PlanError('absolute worker executable required')
         self.opening = _json(json.dumps(opening, allow_nan=False,default=_wire_mapping).encode())
+        wires = {p.wire: p for p in RESEARCH_PROFILES.values() if not p.is_default}
+        if 'profile' in self.opening and self.opening['profile'] not in wires:
+            raise PlanError('planner research profile invalid')
+        self.profile = wires[self.opening['profile']] if 'profile' in self.opening else DAY_TRADING
         self.received = self.planned = 0
         self.rejections: Counter = Counter()
         self.indices: dict[str, int] = {}
@@ -262,6 +276,9 @@ class PlanWorker:
             raise PlanError('planner result identity conflict')
         schema = result.get('schema_version')
         if schema == 'research-plan.v1':
+            # Profile plans carry their side; frozen day_trading plans never do.
+            if ('side' in result) == self.profile.is_default or result.get('side', 'long') != self.profile.side:
+                raise PlanError('planner plan side conflict')
             if (result.get('execution_authority') != 'none' or result.get('symbol') != symbol
                 or result.get('evaluated_ms') != signal.payload['evaluated_ms']
                 or canonical_hash({k:v for k,v in result.items() if k != 'plan_hash'}) != result.get('plan_hash')):
