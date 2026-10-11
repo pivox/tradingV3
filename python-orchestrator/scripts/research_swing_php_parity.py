@@ -166,7 +166,10 @@ def run_plans(args: argparse.Namespace, symbol: str, side: str, records: list[di
         yield {'schema_version': 'research-plan-close.v1', 'session_id': session, 'expected_signals': len(passed)}
 
     records = _worker(args.trading_app, 'app:research:plans', frames(), out / f'plans-{side}-{symbol}.jsonl')
-    return [r for r in records if r.get('schema_version') in ('research-plan.v1', 'research-plan-rejection.v1')]
+    # A rejection names its signal by index only; the comparison keys every response by decision time.
+    decided = {index: signal['evaluated_ms'] for index, signal in passed}
+    return [r if 'evaluated_ms' in r else {**r, 'evaluated_ms': decided[r['signal_index']]}
+            for r in records if r.get('schema_version') in ('research-plan.v1', 'research-plan-rejection.v1')]
 
 
 def compare_plans(plans: list[dict], frame: swing.Frame, side: str, instrument: dict, profile: dict, end: int) -> dict:
