@@ -152,6 +152,9 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
             or report.get('errors') != [] or not isinstance(report.get('symbols'),dict)
             or not report['symbols'] or not _b1_code_matches(report.get('code_sha256'),current_code)):
             raise CampaignError('B1 report incomplete or code identity conflict')
+        # Campaign units replay the frozen day_trading cell only; a profiled report fails closed.
+        if 'profile' in report:
+            raise CampaignError('B1 report research profile not replayable by this campaign')
         this_window = (report['source_start'],report['score_start'],report['source_end'])
         start, score, end = map(lambda v:_ms(_utc(v)),this_window)
         if contract is not None:

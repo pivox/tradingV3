@@ -285,3 +285,12 @@ def test_kernel_costs_provision_every_funding_interval_of_the_holding_window() -
     assert campaign._kernel_costs(_snapshot('PT336H'), rates).funding_intervals_provisioned == 42
     with pytest.raises(campaign.CampaignError, match='holding'):
         campaign._kernel_costs(_snapshot('PT2H'), rates)
+
+
+def test_a_campaign_unit_refuses_a_profiled_b1_report(tmp_path, monkeypatch) -> None:
+    from tests.test_research_campaign import fixture
+    kwargs, report, _ = fixture(tmp_path, monkeypatch)
+    report['profile'] = 'swing.long'
+    (kwargs['signal_root']/'report.json').write_text(json.dumps(report))
+    with pytest.raises(campaign.CampaignError, match='research profile not replayable'):
+        campaign.run_campaign(**kwargs)
