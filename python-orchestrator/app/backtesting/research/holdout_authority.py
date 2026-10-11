@@ -39,6 +39,16 @@ END = '2026-10-09T06:00:00Z'
 RISK_ASSUMPTIONS = (('daily_loss_limit_quote','30'), ('per_position_notional_cap_quote','250'),
     ('maximum_concurrent_positions',4), ('risk_budget_rate','0.05'), ('maximum_leverage','2'),
     ('maximum_aggregate_exposure_rate','1'), ('execution_authority','none'))
+# The swing candidate's own campaign (swing@1.0.0, both sides). Its frozen verifier pin lands
+# after its frozen commit; until then no swing authority can be installed or claimed.
+SWING_CAMPAIGN_ID = 'swing-2026-10-11'
+SWING_FROZEN_COMMIT = None
+SWING_INVENTORY = 'frozen_verifier_inventory.swing.json'
+SWING_PROFILES = ('swing.long','swing.short')
+SWING_RISK_ASSUMPTIONS = (('daily_loss_limit_quote','100000'), ('daily_loss_limit_rate','1'),
+    ('per_position_notional_cap_quote','250'), ('maximum_concurrent_positions',10),
+    ('one_active_plan_per_symbol',True), ('risk_budget_rate','0.05'), ('maximum_leverage','2'),
+    ('maximum_aggregate_exposure_rate','1'), ('execution_authority','none'))
 OVERALL_SECONDS = 7*24*3600
 VERIFIER_SECONDS = 6*3600
 OVERALL_BYTES = 24*1024**3
@@ -60,6 +70,46 @@ class HoldoutError(ValueError):
     """Fail-closed identity, scope, runtime or publication violation."""
 
 
+@dataclass(frozen=True)
+class CampaignSpec:
+    """One guarded campaign: its frozen verifier pin, universe, window, risk and B1 profiles."""
+    campaign_id: str
+    family: str
+    frozen_commit: str | None
+    inventory_name: str
+    frozen_files: tuple[str, ...]
+    symbols: tuple[str, ...]
+    source_start: str
+    score_start: str
+    end: str
+    risk_assumptions: tuple
+    profiles: tuple[str, ...]
+
+    @property
+    def two_sided(self) -> bool:
+        return self.family == 'swing'
+
+
+def campaign_spec(campaign_id: str = CAMPAIGN_ID) -> CampaignSpec:
+    """Built from the module constants at call time; day_trading is the original campaign."""
+    if campaign_id == CAMPAIGN_ID:
+        return CampaignSpec(CAMPAIGN_ID,'day_trading',FROZEN_COMMIT,'frozen_verifier_inventory.json',FROZEN_FILES,
+            SYMBOLS,SOURCE_START,SCORE_START,END,RISK_ASSUMPTIONS,())
+    if campaign_id == SWING_CAMPAIGN_ID:
+        return CampaignSpec(SWING_CAMPAIGN_ID,'swing',SWING_FROZEN_COMMIT,SWING_INVENTORY,FROZEN_FILES,
+            SYMBOLS,SOURCE_START,SCORE_START,END,SWING_RISK_ASSUMPTIONS,SWING_PROFILES)
+    raise HoldoutError('unknown_holdout_campaign')
+
+
+def _spec_args(spec: CampaignSpec) -> tuple:
+    """Trailing campaign argument; the day_trading campaign keeps its original call shapes."""
+    return () if spec.campaign_id == CAMPAIGN_ID else (spec,)
+
+
+def _window_ms(value: str) -> int:
+    return int(datetime.fromisoformat(value.replace('Z','+00:00')).timestamp()*1000)
+
+
 def canonical_bytes(value) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(',',':'), ensure_ascii=False,
                        allow_nan=False)+'\n').encode()
@@ -69,8 +119,8 @@ def hash_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _authority_path() -> Path:
-    return Path.home()/'.config/tradingV3/research-authorities'/f'{CAMPAIGN_ID}.json'
+def _authority_path(campaign_id: str = CAMPAIGN_ID) -> Path:
+    return Path.home()/'.config/tradingV3/research-authorities'/f'{campaign_spec(campaign_id).campaign_id}.json'
 
 
 def _safe_path(path: Path, *, directory=False, private=False) -> Path:
@@ -138,14 +188,18 @@ class CampaignAuthority:
     cost_path: Path
     python: Path
     frozen_python_root: Path
+    campaign_id: str = CAMPAIGN_ID
 
     @property
     def authority_hash(self): return hash_bytes(self.config_bytes)
 
+    @property
+    def spec(self) -> CampaignSpec: return campaign_spec(self.campaign_id)
+
 
 def _decode_authority(config, raw) -> CampaignAuthority:
     if (config.get('schema_version') != 'research-campaign-authority.v1' or
-            config.get('campaign_id') != CAMPAIGN_ID):
+            config.get('campaign_id') not in (CAMPAIGN_ID, SWING_CAMPAIGN_ID)):
         raise HoldoutError('campaign_authority_schema')
     try:
         registry = Path(config['registry']); paths = config['paths']
@@ -162,28 +216,39 @@ def _decode_authority(config, raw) -> CampaignAuthority:
         for name,path in fields.items():
             _safe_path(path, directory=name.endswith('_root') or name=='app_dir')
         return CampaignAuthority(raw, canonical_bytes(config['runtime']), registry,
-            registry.parent/(registry.name+'.c2b-holdout'), **fields)
+            registry.parent/(registry.name+'.c2b-holdout'), **fields,
+            **({} if config['campaign_id'] == CAMPAIGN_ID else {'campaign_id':config['campaign_id']}))
     except (KeyError, TypeError) as exc:
         raise HoldoutError('campaign_authority_structure') from exc
 
 
-def load_campaign_authority() -> CampaignAuthority:
-    path = _authority_path()
+def load_campaign_authority(campaign_id: str = CAMPAIGN_ID) -> CampaignAuthority:
+    path = _authority_path(campaign_id)
     _safe_path(path.parent,directory=True,private=True)
     config, raw = _read_json(path, INVENTORY_JSON_BYTES+METADATA_BYTES, private=True)
-    return _decode_authority(config,raw)
+    authority = _decode_authority(config,raw)
+    if authority.campaign_id != campaign_id: raise HoldoutError('campaign_authority_schema')
+    return authority
+
+
+def _load(campaign_id: str) -> CampaignAuthority:
+    """The installed authority of a campaign; the day_trading call shape is unchanged."""
+    return load_campaign_authority(*(() if campaign_id == CAMPAIGN_ID else (campaign_id,)))
 
 
 def _installed(authority: CampaignAuthority) -> CampaignAuthority:
-    current = load_campaign_authority()
-    if not isinstance(authority,CampaignAuthority) or authority != current:
+    if not isinstance(authority,CampaignAuthority): raise HoldoutError('installed_authority_conflict')
+    current = _load(authority.campaign_id)
+    if authority != current:
         raise HoldoutError('installed_authority_conflict')
     return current
 
 
-def _trusted_repository_inventory():
-    value, _ = _read_json(Path(__file__).with_name('frozen_verifier_inventory.json'), INVENTORY_JSON_BYTES)
-    if value.get('commit') != FROZEN_COMMIT or set(value.get('files',{})) != set(FROZEN_FILES):
+def _trusted_repository_inventory(spec: CampaignSpec | None = None):
+    spec = spec or campaign_spec()
+    if spec.frozen_commit is None: raise HoldoutError('campaign_frozen_commit_not_pinned')
+    value, _ = _read_json(Path(__file__).with_name(spec.inventory_name), INVENTORY_JSON_BYTES)
+    if value.get('commit') != spec.frozen_commit or set(value.get('files',{})) != set(spec.frozen_files):
         raise HoldoutError('frozen_inventory_schema')
     return value['files']
 
@@ -259,7 +324,7 @@ def _verify_runtime_inventory(authority):
     original = Path(config['recovery']['python'] if config['recovery'] else config['original_runtime']['python'])
     if _runtime_inventory(authority.python,original)!=runtime:
         raise HoldoutError('runtime_dependency_inventory_changed')
-    inventory = _trusted_repository_inventory()
+    inventory = _trusted_repository_inventory(*_spec_args(authority.spec))
     if config['repository_inventory'] != inventory: raise HoldoutError('frozen_repository_inventory_conflict')
     _check_files({str(authority.frozen_python_root/name):digest for name,digest in inventory.items()})
 
@@ -288,9 +353,14 @@ def _publish_bytes(path: Path, raw: bytes):
 
 
 def install_campaign_authority(retained_attempt_path: Path, retained_snapshot_path: Path,
-        recovery_environment_record_path: Path|None=None) -> CampaignAuthority:
-    """Trusted explicit provisioning only. Evaluation has no provisioning flags."""
-    destination = _authority_path()
+        recovery_environment_record_path: Path|None=None, *, campaign_id: str = CAMPAIGN_ID) -> CampaignAuthority:
+    """Trusted explicit provisioning only. Evaluation has no provisioning flags.
+
+    The retained orchestration must be the campaign's family: a swing authority installs only
+    from a swing orchestration attempt.
+    """
+    spec = campaign_spec(campaign_id)
+    destination = _authority_path(campaign_id)
     if destination.exists() or destination.is_symlink(): raise HoldoutError('authority_already_installed')
     attempt_path, snapshot_path = Path(retained_attempt_path), Path(retained_snapshot_path)
     if (attempt_path.name != 'attempt.json' or snapshot_path != attempt_path.with_name('input-code-identity.json')):
@@ -308,12 +378,13 @@ def install_campaign_authority(retained_attempt_path: Path, retained_snapshot_pa
     try:
         c = attempt['config']
         if Path(c['evidence_root']) != attempt_path.parent: raise HoldoutError('retained_config_relationship')
+        if c.get('family','day_trading') != spec.family: raise HoldoutError('retained_campaign_family_conflict')
         registry = _safe_path(Path(c['registry_root']),directory=True,private=True)
         protocol,protocol_raw = _read_json(registry/'protocol.json',PROTOCOL_BYTES,private=True)
         experiments = [Path(p) for p in snapshot['files'] if p.endswith('/app/backtesting/research/experiments.py')]
         if len(experiments)!=1: raise HoldoutError('frozen_root_ambiguous')
         frozen_root = experiments[0].parents[3]
-        repository_inventory = _trusted_repository_inventory()
+        repository_inventory = _trusted_repository_inventory(*_spec_args(spec))
         _check_files({str(frozen_root/name):digest for name,digest in repository_inventory.items()})
         original_python = Path(c['python'])
         original_digest = snapshot['files'][str(original_python)]
@@ -340,7 +411,7 @@ def install_campaign_authority(retained_attempt_path: Path, retained_snapshot_pa
             for name in ('dataset_root','app_dir','instrument_path','cost_path')}
         paths.update(python=str(python),frozen_python_root=str(frozen_root),
             funding_supplement_root=c.get('funding_supplement_root'))
-        config = {'schema_version':'research-campaign-authority.v1','campaign_id':CAMPAIGN_ID,
+        config = {'schema_version':'research-campaign-authority.v1','campaign_id':spec.campaign_id,
             'registry':str(registry),'protocol_hash':hash_bytes(protocol_raw),'paths':paths,
             'runtime':runtime,'repository_inventory':repository_inventory,'snapshot':snapshot,
             'original_runtime':{'python':str(original_python),'sha256':original_digest,
@@ -356,7 +427,7 @@ def install_campaign_authority(retained_attempt_path: Path, retained_snapshot_pa
     _safe_path(destination.parent,directory=True,private=True)
     if any(destination.parent.glob('.publish-*.tmp')): raise HoldoutError('ambiguous_authority_installation')
     _publish_bytes(destination,raw)
-    return load_campaign_authority()
+    return _load(spec.campaign_id)
 
 
 # The only subprocess program. Its roots come from the fixed installed authority,
@@ -366,12 +437,15 @@ import sys,os,json,hashlib,pathlib,sysconfig,importlib.abc,importlib.machinery
 def canonical(v):
     return (json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)+'\n').encode()
 home=pathlib.Path.home()
-authority_path=home/'.config/tradingV3/research-authorities/historical-2026-10-09.json'
+request=json.loads(sys.stdin.buffer.read(65537))
+campaign,registry=(request['campaign_id'],request['registry']) if isinstance(request,dict) else ('historical-2026-10-09',request)
+if campaign not in ('historical-2026-10-09','swing-2026-10-11'): raise RuntimeError('campaign_conflict')
+authority_path=home/'.config/tradingV3/research-authorities'/(campaign+'.json')
 with authority_path.open('rb') as f: raw=f.read(72*1024**2+1)
 if len(raw)>72*1024**2: raise RuntimeError('authority_size_limit')
 a=json.loads(raw)
 if canonical(a)!=raw: raise RuntimeError('authority_not_canonical')
-registry=json.loads(sys.stdin.buffer.read(65537))
+if a['campaign_id']!=campaign: raise RuntimeError('campaign_conflict')
 if registry!=a['registry']: raise RuntimeError('registry_conflict')
 root=pathlib.Path(a['paths']['frozen_python_root'])
 files=dict(a['runtime']['files'])
@@ -464,14 +538,18 @@ def _invoke_frozen_verifier(authority: CampaignAuthority, *, timeout: float) -> 
         raise HoldoutError('verifier_timeout_lower_only')
     _verify_runtime_inventory(authority)
     try:
+        # The original campaign keeps its bare registry request; another names its campaign.
+        request = (str(authority.registry) if authority.campaign_id == CAMPAIGN_ID else
+                   {'campaign_id':authority.campaign_id,'registry':str(authority.registry)})
         return _bounded_child([str(authority.python),'-I','-S','-B','-c',FIXED_BOOTSTRAP],
             cwd=authority.frozen_python_root, env={'HOME':str(Path.home()),'LANG':'C.UTF-8'},
-            stdin=canonical_bytes(str(authority.registry)), timeout=timeout)
+            stdin=canonical_bytes(request), timeout=timeout)
     finally:
         _verify_runtime_inventory(authority)
 
 
 def _verified_freeze(authority, *, timeout=VERIFIER_SECONDS):
+    spec = authority.spec
     protocol,protocol_raw = _read_json(authority.registry/'protocol.json',PROTOCOL_BYTES,private=True)
     config = json.loads(authority.config_bytes)
     if hash_bytes(protocol_raw)!=config['protocol_hash']: raise HoldoutError('protocol_identity_changed')
@@ -479,7 +557,7 @@ def _verified_freeze(authority, *, timeout=VERIFIER_SECONDS):
     result = _invoke_frozen_verifier(authority,timeout=timeout)
     if result != freeze_raw: raise HoldoutError('frozen_verifier_response_mismatch')
     if (freeze.get('schema_version')!='research-selection-freeze.v1' or
-            freeze.get('protocol_hash')!=config['protocol_hash'] or freeze.get('cutoff')!=END or
+            freeze.get('protocol_hash')!=config['protocol_hash'] or freeze.get('cutoff')!=spec.end or
             freeze.get('identity')!=protocol.get('identity') or
             freeze.get('execution_authority')!='none' or freeze.get('holdout_status')!='pending'):
         raise HoldoutError('invalid_selection_freeze')
@@ -489,8 +567,9 @@ def _verified_freeze(authority, *, timeout=VERIFIER_SECONDS):
             selected not in protocol.get('variants',[]) or
             freeze.get('holdout_authorization')!='guarded_selected_identity_only'):
         raise HoldoutError('invalid_selected_identity')
-    if (protocol.get('symbol_priority')!=list(SYMBOLS) or protocol.get('cost_profiles')!=['baseline','adverse']
-            or protocol.get('risk_assumptions')!=dict(RISK_ASSUMPTIONS) or protocol.get('cutoff')!=END):
+    if (protocol.get('symbol_priority')!=list(spec.symbols) or protocol.get('cost_profiles')!=['baseline','adverse']
+            or protocol.get('risk_assumptions')!=dict(spec.risk_assumptions) or protocol.get('cutoff')!=spec.end
+            or protocol.get('research_family','day_trading')!=spec.family):
         raise HoldoutError('frozen_protocol_scope_conflict')
     return protocol,freeze,freeze_raw
 
@@ -522,9 +601,12 @@ def _preflight_identities(authority, protocol):
     from .portfolio_simulator import canonical_hash
     if plans.code_inventory(authority.app_dir)!=snapshot['php']:
         raise HoldoutError('php_inventory_changed')
-    baseline = None
+    spec = authority.spec
+    # Each B1 report is one side's cell: its baseline is equal across pairs, reports and phases.
+    sides = tuple(profile.split('.')[1] for profile in spec.profiles) if spec.two_sided else ('long',)
+    baselines = {}
     for binding in protocol['phase_bindings'].values():
-        seen = []
+        seen = {side:[] for side in sides}
         for summary in binding['signal_reports']:
             root = _safe_path(Path(summary['root']),directory=True,private=True)
             report,report_raw = _read_json(root/'report.json',16*1024**2,private=True,canonical=False)
@@ -532,21 +614,26 @@ def _preflight_identities(authority, protocol):
                     report.get('schema')!='research-signal-run.v1' or report.get('status')!='complete' or
                     report.get('errors')!=[] or not isinstance(report.get('symbols'),dict) or
                     list(report['symbols'])!=summary['symbols'] or
-                    report.get('code_sha256')!=summary['code_sha256']):
+                    report.get('code_sha256')!=summary['code_sha256'] or
+                    (report.get('profile') not in spec.profiles if spec.two_sided else 'profile' in report)):
                 raise HoldoutError('original_report_binding_conflict')
             _check_files(summary['code_sha256'])
+            side = report['profile'].split('.')[1] if spec.two_sided else 'long'
             for symbol,metadata in report['symbols'].items():
-                seen.append(symbol)
+                seen[side].append(symbol)
                 current = metadata['baseline']
-                if baseline is not None and current!=baseline: raise HoldoutError('baseline_identity_conflict')
-                baseline = current
+                if baselines.setdefault(side,current)!=current: raise HoldoutError('baseline_identity_conflict')
                 signals._verify_baseline_files(current,authority.app_dir,
                     metadata['effective_config_snapshot']['ordered_files'])
-        if len(seen)!=len(SYMBOLS) or set(seen)!=set(SYMBOLS): raise HoldoutError('original_symbol_binding_conflict')
-    if baseline is None: raise HoldoutError('baseline_binding_missing')
+        if any(len(seen[side])!=len(spec.symbols) or set(seen[side])!=set(spec.symbols) for side in sides):
+            raise HoldoutError('original_symbol_binding_conflict')
+    if set(baselines)!=set(sides): raise HoldoutError('baseline_binding_missing')
     identity = protocol['identity']
-    for name,key in (('setup','setup_hash'),('config','config_hash'),('catalog','condition_catalog_hash'),('snapshot','snapshot_hash')):
-        if identity['base_'+name+'_hash']!=baseline[key]: raise HoldoutError('baseline_protocol_conflict')
+    for side in sides:
+        # A swing side matches its protocol cell; the identity holds the cells' composites.
+        frozen = protocol['cells'][side] if spec.two_sided else identity
+        for name,key in (('setup','setup_hash'),('config','config_hash'),('catalog','condition_catalog_hash'),('snapshot','snapshot_hash')):
+            if frozen['base_'+name+'_hash']!=baselines[side][key]: raise HoldoutError('baseline_protocol_conflict')
     instrument,instrument_raw = _read_json(authority.instrument_path,METADATA_BYTES,canonical=False)
     costs,cost_raw = _read_json(authority.cost_path,METADATA_BYTES,canonical=False)
     for value,key in ((instrument,'manifest_hash'),(costs,'assumption_hash')):
@@ -560,7 +647,8 @@ def _preflight_identities(authority, protocol):
         if identity[profile+'_cost_hash']!=canonical_hash(costs['profiles'][profile]):
             raise HoldoutError('cost_identity_conflict')
     return {'original_snapshot':snapshot,'original_runtime':config['original_runtime'],'recovery':config['recovery'],
-        'protocol_identity':identity,'baseline':baseline,'php':snapshot['php'],
+        'protocol_identity':identity,**({'baselines':baselines} if spec.two_sided else {'baseline':baselines['long']}),
+        'php':snapshot['php'],
         'instrument_sha256':hash_bytes(instrument_raw),'cost_sha256':hash_bytes(cost_raw),
         'new_code':_new_code_inventory(),'source_manifest_sha256':_file_hash(authority.dataset_root/'manifest.json')}
 
@@ -618,7 +706,7 @@ def _check_issuance(auth):
 
 def _retained(authority):
     _safe_path(authority.anchor,directory=True,private=True)
-    expected = {'campaign_id':CAMPAIGN_ID,'registry':str(authority.registry),
+    expected = {'campaign_id':authority.campaign_id,'registry':str(authority.registry),
                 'protocol_hash':json.loads(authority.config_bytes)['protocol_hash']}
     anchor,_ = _read_json(authority.anchor/'authority.json',METADATA_BYTES,private=True)
     if anchor!=expected: raise HoldoutError('anchor_authority_conflict')
@@ -629,7 +717,8 @@ def _retained(authority):
             claim.get('authority_hash')!=authority.authority_hash or
             claim.get('contract_hash')!=hash_bytes(contract_raw) or
             claim.get('output_root')!=contract.get('output_root') or
-            claim.get('campaign_id')!=CAMPAIGN_ID or not re.fullmatch('[a-f0-9]{32}',claim.get('run_id',''))):
+            claim.get('campaign_id')!=authority.campaign_id or contract.get('campaign_id')!=authority.campaign_id
+            or not re.fullmatch('[a-f0-9]{32}',claim.get('run_id',''))):
         raise HoldoutError('retained_claim_conflict')
     return contract,contract_raw,claim_raw
 
@@ -640,7 +729,7 @@ def _fresh_output(output: Path,authority):
     if output.exists() or output.is_symlink(): raise HoldoutError('fresh_output_required')
     _safe_path(output.parent,directory=True)
     config = json.loads(authority.config_bytes)
-    inputs = [authority.registry,authority.anchor,_authority_path(),
+    inputs = [authority.registry,authority.anchor,_authority_path(authority.campaign_id),
         *(Path(p) for p in config['paths'].values() if p is not None),
         *(Path(p) for p in config['retained'])]
     if any(_overlap(output,p) for p in inputs): raise HoldoutError('input_output_overlap')
@@ -698,27 +787,17 @@ def prepare_claim(authority: CampaignAuthority,output_root: Path,*,timeout: floa
     _verify_runtime_inventory(authority)
     protocol,freeze,freeze_raw = _verified_freeze(authority,timeout=min(VERIFIER_SECONDS,timeout))
     identities = _preflight_identities(authority,protocol)
-    selected = freeze['selected']
-    variants = [selected] if selected['id']=='baseline' else [selected,next(v for v in protocol['variants'] if v['id']=='baseline')]
-    slots = [{'variant_id':v['id'],'cost_profile':cost,
-        'output_root':str(output/'units'/v['id']/cost),
-        'input_binding_path':str(output/'inputs'/v['id']/(cost+'.json'))}
-        for v in variants for cost in ('baseline','adverse')]
+    scope = _fixed_scope(authority,protocol,freeze,output)
+    slots = scope['slots']
     if len({(s['variant_id'],s['cost_profile']) for s in slots})!=len(slots): raise HoldoutError('duplicate_slots')
     config = json.loads(authority.config_bytes)
     runner_path = Path(sys.executable).resolve()
-    contract = {'schema_version':'research-holdout-contract.v1','campaign_id':CAMPAIGN_ID,
-        'authority_hash':authority.authority_hash,'registry':str(authority.registry),
-        'protocol_hash':config['protocol_hash'],'freeze_sha256':hash_bytes(freeze_raw),
-        'freeze':freeze,'identities':identities,'paths':config['paths'],'output_root':str(output),
+    contract = {'schema_version':'research-holdout-contract.v1',**scope,
+        'freeze_sha256':hash_bytes(freeze_raw),'identities':identities,'output_root':str(output),
         'runner_interpreter':{'invoked_path':sys.executable,'resolved_path':str(runner_path),
             'version':sys.version,'on_disk_binary_sha256':_file_hash(runner_path),
             'binary_hash_scope':'on_disk_file_not_process_memory_or_host_os',
             'dependency_environment_attestation':'unavailable'},
-        'symbols':list(SYMBOLS),'variants':variants,'selected':selected,'slots':slots,
-        'window':{'source_start':SOURCE_START,'score_start':SCORE_START,'end':END,
-            'end_ms':int(datetime.fromisoformat(END.replace('Z','+00:00')).timestamp()*1000)},
-        'risk_assumptions':dict(RISK_ASSUMPTIONS),'cost_profiles':protocol['cost_profiles'],
         'limits':{'overall_seconds':timeout,'overall_bytes':max_output_bytes,'signal_bytes':SIGNAL_BYTES,
             'unit_bytes':UNIT_BYTES,'statistics_spool_bytes':SPOOL_BYTES,'disk_reserve_bytes':DISK_RESERVE,
             'metadata_bytes':METADATA_BYTES,'terminal_reserve_bytes':TERMINAL_RESERVE,
@@ -727,9 +806,9 @@ def prepare_claim(authority: CampaignAuthority,output_root: Path,*,timeout: floa
     raw = canonical_bytes(contract)
     if len(raw)>METADATA_BYTES:
         raise HoldoutError('metadata_capacity_exceeded')
-    expected = canonical_bytes({'campaign_id':CAMPAIGN_ID,'registry':str(authority.registry),
+    expected = canonical_bytes({'campaign_id':authority.campaign_id,'registry':str(authority.registry),
         'protocol_hash':config['protocol_hash']})
-    claim_raw = canonical_bytes({'schema_version':'research-holdout-claim.v1','campaign_id':CAMPAIGN_ID,
+    claim_raw = canonical_bytes({'schema_version':'research-holdout-claim.v1','campaign_id':authority.campaign_id,
         'authority_hash':authority.authority_hash,'contract_hash':hash_bytes(raw),
         'output_root':str(output),'run_id':uuid.uuid4().hex})
     # The shared budget charges these three inode-unique publications plus any
@@ -799,27 +878,39 @@ def mint_retained_authorization(authority: CampaignAuthority) -> HoldoutAuthoriz
         deadline=started+VERIFIER_SECONDS)
 
 
-def _validate_retained_scope(authority,contract,protocol,freeze):
-    """Replay derives the fixed scope again; consistent rewritten hashes cannot
-    broaden a retained contract's dates, risk, catalogue or resource limits.
+def _fixed_scope(authority,protocol,freeze,output):
+    """The contract's fixed scope, derived again on replay. A swing contract also names its
+    family, its B1 profiles, its kernel profile and the protocol's cells.
     """
+    spec = authority.spec
     selected = freeze['selected']
     variants = [selected] if selected['id']=='baseline' else [selected,
         next(v for v in protocol['variants'] if v['id']=='baseline')]
     config = json.loads(authority.config_bytes)
-    output = Path(contract['output_root'])
     slots = [{'variant_id':v['id'],'cost_profile':cost,
         'output_root':str(output/'units'/v['id']/cost),
         'input_binding_path':str(output/'inputs'/v['id']/(cost+'.json'))}
         for v in variants for cost in ('baseline','adverse')]
-    expected = {'campaign_id':CAMPAIGN_ID,'authority_hash':authority.authority_hash,
+    scope = {'campaign_id':spec.campaign_id,'authority_hash':authority.authority_hash,
         'registry':str(authority.registry),'protocol_hash':config['protocol_hash'],
         'freeze':freeze,'selected':selected,'variants':variants,'slots':slots,
-        'symbols':list(SYMBOLS),'paths':config['paths'],'risk_assumptions':dict(RISK_ASSUMPTIONS),
+        'symbols':list(spec.symbols),'paths':config['paths'],'risk_assumptions':dict(spec.risk_assumptions),
         'cost_profiles':['baseline','adverse'],
-        'window':{'source_start':SOURCE_START,'score_start':SCORE_START,'end':END,
-            'end_ms':int(datetime.fromisoformat(END.replace('Z','+00:00')).timestamp()*1000)}}
-    if any(contract.get(key)!=value for key,value in expected.items()):
+        'window':{'source_start':spec.source_start,'score_start':spec.score_start,'end':spec.end,
+            'end_ms':_window_ms(spec.end)}}
+    if spec.two_sided:
+        scope.update(family=spec.family,profiles=list(spec.profiles),kernel_profile=protocol['kernel_profile'],
+                     cells=protocol['cells'])
+    return scope
+
+
+def _validate_retained_scope(authority,contract,protocol,freeze):
+    """Replay derives the fixed scope again; consistent rewritten hashes cannot
+    broaden a retained contract's dates, risk, catalogue or resource limits.
+    """
+    expected = _fixed_scope(authority,protocol,freeze,Path(contract['output_root']))
+    if (any(contract.get(key)!=value for key,value in expected.items())
+            or (not authority.spec.two_sided and any(k in contract for k in ('family','profiles','kernel_profile','cells')))):
         raise HoldoutError('retained_contract_scope_conflict')
     limits = contract.get('limits',{})
     fixed = {'signal_bytes':SIGNAL_BYTES,'unit_bytes':UNIT_BYTES,'statistics_spool_bytes':SPOOL_BYTES,
@@ -843,7 +934,7 @@ def require_claim(auth: HoldoutAuthorization,*,operation: str,variant_id: str|No
         raise HoldoutError('unknown_authorized_operation')
     if auth.mode=='verify' and operation in ('source','signals','simulate','binding','report'):
         raise HoldoutError('verify_only_authorization')
-    authority = load_campaign_authority()
+    authority = _load(json.loads(auth.contract_bytes)['campaign_id'])
     if auth.authority_hash!=authority.authority_hash or auth.anchor!=authority.anchor:
         raise HoldoutError('authorization_authority_conflict')
     contract,raw,claim_raw = _retained(authority)

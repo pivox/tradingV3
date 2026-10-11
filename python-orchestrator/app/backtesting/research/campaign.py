@@ -135,6 +135,12 @@ def _scan(root,selection,meta,opened,deadline, *, boundary=False):
         raise CampaignError('signal artifact hash or counts conflict')
 
 
+def _claimed_signal_roots(signal_root, contract):
+    """The claimed B1 roots: the signal root itself, or one subroot per swing profile."""
+    profiles = contract.get('profiles')
+    return tuple(Path(signal_root)/name for name in profiles) if profiles else (Path(signal_root),)
+
+
 def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, authorization=None):
     contract = None
     if authorization is not None:
@@ -142,7 +148,7 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
         contract = require_claim(authorization, operation='binding', symbols=symbols)
         if (phase != 'holdout' or dataset_root != Path(contract['paths']['dataset_root'])
             or app_dir != Path(contract['paths']['app_dir'])
-            or roots != (authorization.output_root/'signals',)):
+            or roots != _claimed_signal_roots(authorization.output_root/'signals',contract)):
             raise CampaignError('claimed B1 input scope conflict')
     if not roots or len(roots) > 10 or len(set(roots)) != len(roots):
         raise CampaignError('one to ten distinct B1 report roots required')
@@ -157,8 +163,9 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
             or not report['symbols'] or not _b1_code_matches(report.get('code_sha256'),current_code)):
             raise CampaignError('B1 report incomplete or code identity conflict')
         # A non-default cell names its profile; the frozen day_trading report never does.
-        if 'profile' in report and (report['profile'] not in RESEARCH_PROFILES or report['profile'] == DAY_TRADING.id
-                                    or contract is not None):
+        # Under a swing claim, each claimed root holds the profile it is named after.
+        if (('profile' in report and (report['profile'] not in RESEARCH_PROFILES or report['profile'] == DAY_TRADING.id))
+                or (contract is not None and report.get('profile') != (root.name if contract.get('profiles') else None))):
             raise CampaignError('B1 report research profile invalid')
         profile = research_profile(report['profile']) if 'profile' in report else DAY_TRADING
         this_window = (report['source_start'],report['score_start'],report['source_end'])
@@ -179,8 +186,11 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
                 raise CampaignError('B1 symbols duplicate or outside selected universe')
             if contract is not None:
                 from .signal_sources import select_holdout_sources
-                selection = select_holdout_sources(dataset_root, symbol, authorization=authorization)
-                if meta.get('baseline') != contract['identities']['baseline']:
+                selection = select_holdout_sources(dataset_root, symbol, authorization=authorization,
+                                                   **({} if profile.is_default else {'profile':profile.id}))
+                identities = contract['identities']
+                if meta.get('baseline') != (identities['baseline'] if profile.is_default
+                                            else identities['baselines'][profile.side]):
                     raise CampaignError('claimed baseline identity conflict')
             else:
                 cadence = {} if profile.is_default else {'step':profile.step_ms}
@@ -343,36 +353,53 @@ def _unit_inputs(authorization, variant_id, cost_profile, reports, bindings, win
     contract = require_claim(authorization, operation='binding', variant_id=variant_id,
         cost_profile=cost_profile)
     symbols = tuple(contract['symbols'])
-    variant = plans.variant_selection(variant_id,bindings[symbols[0]][2]['baseline'])
-    kernel = _kernel_costs(bindings[symbols[0]][2]['effective_config_snapshot'],costs['profiles'][cost_profile])
+    # A swing unit binds one cell per side, as its manifest records them, each side's ledger
+    # identity and each (symbol, side) stream's sources; day_trading keeps its single cell.
+    cells,kernel_profile = _binding_cells(bindings,symbols)
+    two_sided, sides = len(cells) > 1, kernel_profile.sides
+    first = {p.id:bindings[stream_key(symbols[0],p.side,sides)] for p in cells}
+    variants = {p.id:plans.variant_selection(variant_id,first[p.id][2]['baseline'],*((p.id,) if two_sided else ()))
+                for p in cells}
+    kernels = [_kernel_costs(first[p.id][2]['effective_config_snapshot'],costs['profiles'][cost_profile]) for p in cells]
+    if any(kernel != kernels[0] for kernel in kernels):
+        raise CampaignError('research cells disagree on kernel costs')
+    kernel = kernels[0]
     coverage = _funding_coverage(inventory,symbols)
-    baseline = bindings[symbols[0]][2]['baseline']
-    identity = {'base_setup_hash':baseline['setup_hash'],'base_config_hash':baseline['config_hash'],
-        'base_catalog_hash':baseline['condition_catalog_hash'],'base_snapshot_hash':baseline['snapshot_hash'],
-        'variant_id':variant_id,'variant_hash':variant['variant_hash'],
-        'instrument_assumptions_hash':instruments['manifest_hash'],'cost_assumptions_hash':costs['assumption_hash'],
-        'research_code_hash':canonical_hash(php)}
-    runs = [bindings[s][4] for s in symbols]
-    sources = {r['symbol']:{k:(r['source'][k] if k.startswith('dataset_') else r[k]) for k in
-        ('dataset_id','dataset_sha256','signal_run_id','signal_output_sha256')} for r in runs}
+    identity, runs, sources = {}, {}, {}
+    for p in cells:
+        baseline = first[p.id][2]['baseline']
+        identity[p.side] = {'base_setup_hash':baseline['setup_hash'],'base_config_hash':baseline['config_hash'],
+            'base_catalog_hash':baseline['condition_catalog_hash'],'base_snapshot_hash':baseline['snapshot_hash'],
+            'variant_id':variant_id,'variant_hash':variants[p.id]['variant_hash'],
+            'instrument_assumptions_hash':instruments['manifest_hash'],'cost_assumptions_hash':costs['assumption_hash'],
+            'research_code_hash':canonical_hash(php)}
+        runs[p.side] = [bindings[stream_key(s,p.side,sides)][4] for s in symbols]
+        sources.update({stream_key(r['symbol'],p.side,sides):{k:(r['source'][k] if k.startswith('dataset_') else r[k])
+            for k in ('dataset_id','dataset_sha256','signal_run_id','signal_output_sha256')} for r in runs[p.side]})
+    cell = cells[0]
     document = {'schema_version':'research-holdout-unit-inputs.v1',
         'authority_hash':authorization.authority_hash,'contract_hash':authorization.contract_hash,
         'claim_hash':authorization.claim_hash,'variant_id':variant_id,'cost_profile':cost_profile,
         'phase':'holdout','window':contract['window'],'symbols':contract['symbols'],
-        'risk_assumptions':contract['risk_assumptions'],'baseline':baseline,'variant':variant,
-        'b1_counters':{key:sum(bindings[s][2][field] for s in symbols) for key,field in
+        'risk_assumptions':contract['risk_assumptions'],
+        **({'kernel_profile':kernel_profile.wire(),'cells':[{'profile':p.id,'side':p.side,
+            'baseline':first[p.id][2]['baseline'],'variant':variants[p.id],'source_runs':runs[p.side]} for p in cells]}
+           if two_sided else {'baseline':first[cell.id][2]['baseline'],'variant':variants[cell.id]}),
+        'b1_counters':{key:sum(b[2][field] for b in bindings.values()) for key,field in
             (('evaluated_ticks','scored_evaluations'),('passed_rules','scored_passed_rules'),
              ('failed_rules','scored_failed_rules'))},
-        'source_candles':sum(bindings[s][1].expected_candles for s in symbols),
+        'source_candles':sum(bindings[stream_key(s,cell.side,sides)][1].expected_candles for s in symbols),
         'phase_batches':(_ms(_utc(windows[2]))-_ms(_utc(windows[1])))//60000,
-        'signal_reports':reports,'source_runs':runs,'source_manifest_sha256':inventory.acquisition_manifest_sha256,
+        'signal_reports':reports,**({} if two_sided else {'source_runs':runs[cell.side]}),
+        'source_manifest_sha256':inventory.acquisition_manifest_sha256,
         'instrument_assumptions':instruments,'instrument_file_sha256':instrument_sha,
         'cost_assumptions':costs,'cost_file_sha256':cost_sha,'kernel_costs':kernel.wire(),
         'kernel_instruments':{s:asdict(i) for s,i in _kernel_instruments(instruments,symbols)},
         'funding_inventory':asdict(inventory),'funding_inventory_hash':inventory.inventory_hash,
         'funding_coverage':asdict(coverage),'funding_diagnostic_policy':FUNDING_DIAGNOSTIC_POLICY,
         'funding_path_policy':'adverse_possible_credit_certain.v1','funding_mark_policy':'last_known_close.v1',
-        'php_code_inventory':php,'runner_code_sha256':runner,'identity':identity,'sources':sources}
+        'php_code_inventory':php,'runner_code_sha256':runner,
+        'identity':identity if two_sided else identity[cell.side],'sources':sources}
     # Evidence's Decimal serialization is the canonical retained representation.
     return json.loads(encoded(document))
 
@@ -394,12 +421,17 @@ def build_holdout_unit_inputs(signal_root: Path, *, authorization, variant_id: s
     p = contract['paths']; symbols = tuple(contract['symbols'])
     limits = remaining_limits(authorization)
     deadline = time.monotonic()+limits['seconds']
-    reports,bindings,windows,_ = _verify_reports(Path(p['dataset_root']), (Path(signal_root),),
+    reports,bindings,windows,_ = _verify_reports(Path(p['dataset_root']),_claimed_signal_roots(signal_root,contract),
         Path(p['app_dir']),symbols,'holdout',deadline,authorization=authorization)
     _,_,raw_manifest = _source_artifact_identity(Path(p['dataset_root']),'manifest.json',
         MAX_MANIFEST_BYTES,deadline,capture=True)
+    # Both sides of a swing pair replay the same verified source subset.
+    pairs = {}
+    for b in bindings.values():
+        if pairs.setdefault(b[1].symbol,b[1]).dataset_sha256 != b[1].dataset_sha256:
+            raise CampaignError('research cells disagree on candle sources')
     for symbol in symbols:
-        selection = bindings[symbol][1]
+        selection = pairs[symbol]
         _verify_bound_source_identity(Path(p['dataset_root']),raw_manifest,selection.start,selection.end,
             selection.score_start,symbol,selection.dataset_sha256,deadline)
     instruments, instrument_sha = _input(Path(p['instrument_path']), MAX_REPORT)
@@ -412,7 +444,7 @@ def build_holdout_unit_inputs(signal_root: Path, *, authorization, variant_id: s
         rest_interval_hypothesis=REST_HYPOTHESIS)
     inventory = reader.inventory
     if (inventory.start_ms != _ms(_utc(windows[1])) or inventory.end_exclusive_ms != _ms(_utc(windows[2]))
-        or any(bindings[s][1].manifest_sha256 != inventory.acquisition_manifest_sha256 for s in symbols)):
+        or any(b[1].manifest_sha256 != inventory.acquisition_manifest_sha256 for b in bindings.values())):
         raise CampaignError('funding inventory window conflict')
     binding = _unit_inputs(authorization,variant_id,cost_profile,reports,bindings,windows,instruments,
         instrument_sha,costs,cost_sha,inventory,plans.code_inventory(Path(p['app_dir'])),_runner_code())
@@ -459,12 +491,15 @@ def publish_holdout_unit_inputs(signal_root: Path, *, authorization, variant_id:
 
 
 def _validate_binding_scope(binding, authorization, contract):
-    from .holdout_authority import RISK_ASSUMPTIONS
+    from .holdout_authority import campaign_spec
+    spec = campaign_spec(contract['campaign_id'])
     ident, w = contract['identities'],contract['window']
+    # A swing binding carries its kernel profile and one cell per side instead of one baseline.
+    cell_scope = ({'kernel_profile':contract['kernel_profile']} if spec.two_sided else {'baseline':ident['baseline']})
     for key,value in {'schema_version':'research-holdout-unit-inputs.v1','phase':'holdout',
         'authority_hash':authorization.authority_hash,'contract_hash':authorization.contract_hash,
         'claim_hash':authorization.claim_hash,'window':w,'symbols':contract['symbols'],
-        'risk_assumptions':dict(RISK_ASSUMPTIONS),'baseline':ident['baseline'],
+        'risk_assumptions':dict(spec.risk_assumptions),**cell_scope,
         'source_manifest_sha256':ident['source_manifest_sha256'],
         'instrument_file_sha256':ident['instrument_sha256'],'cost_file_sha256':ident['cost_sha256'],
         'php_code_inventory':ident['php'],'runner_code_sha256':ident['new_code'],
@@ -473,8 +508,16 @@ def _validate_binding_scope(binding, authorization, contract):
         if binding.get(key) != value:
             raise CampaignError('unit input contract scope conflict: '+key)
     selected = next(v for v in contract['variants'] if v['id'] == binding['variant_id'])
-    variant = plans.variant_selection(selected['id'],ident['baseline'])
-    if (binding['variant'] != variant or (variant['diff'] or []) != (selected['diff'] or [])
+    if spec.two_sided:
+        cells = binding['cells']
+        if ([(c['profile'],c['side']) for c in cells] != [(name,research_profile(name).side) for name in spec.profiles]
+                or any(key in binding for key in ('baseline','variant','source_runs'))
+                or any(c['baseline'] != ident['baselines'][c['side']] for c in cells)):
+            raise CampaignError('unit input research cells conflict')
+        variants = [(c['variant'],plans.variant_selection(selected['id'],c['baseline'],c['profile'])) for c in cells]
+    else:
+        variants = [(binding['variant'],plans.variant_selection(selected['id'],ident['baseline']))]
+    if (any(bound != variant or (variant['diff'] or []) != (selected['diff'] or []) for bound,variant in variants)
         or binding['cost_profile'] not in contract['cost_profiles']):
         raise CampaignError('unit input variant or cost profile conflict')
     instruments,costs = binding['instrument_assumptions'],binding['cost_assumptions']
@@ -482,9 +525,10 @@ def _validate_binding_scope(binding, authorization, contract):
         if canonical_hash({k:v for k,v in doc.items() if k != field}) != doc[field]:
             raise CampaignError('unit input assumption hash conflict')
     pi = ident['protocol_identity']; profile = binding['cost_profile']
+    identities = binding['identity'].values() if spec.two_sided else (binding['identity'],)
     if (instruments['manifest_hash'] != pi['instrument_assumptions_hash']
         or canonical_hash(costs['profiles'][profile]) != pi[profile+'_cost_hash']
-        or binding['identity']['research_code_hash'] != canonical_hash(ident['php'])):
+        or any(identity['research_code_hash'] != canonical_hash(ident['php']) for identity in identities)):
         raise CampaignError('unit input frozen identity conflict')
     funding = binding['funding_inventory']
     if (canonical_hash({k:v for k,v in funding.items() if k != 'inventory_hash'}) != funding['inventory_hash']
@@ -526,15 +570,19 @@ def validate_holdout_unit_inputs(*, authorization, variant_id: str, cost_profile
     if _runner_code() != binding['runner_code_sha256'] or plans.code_inventory(Path(p['app_dir'])) != ident['php']:
         raise CampaignError('unit input retained code identity conflict')
     reports = binding['signal_reports']
-    if len(reports) != 1 or reports[0]['root'] != str(authorization.output_root/'signals'):
+    roots = _claimed_signal_roots(authorization.output_root/'signals',contract)
+    if [r['root'] for r in reports] != list(map(str,roots)):
         raise CampaignError('unit input retained B1 root conflict')
-    report, digest = _input(Path(reports[0]['root'])/'report.json',MAX_REPORT)
-    if (digest != reports[0]['report_sha256'] or set(report['symbols']) != set(contract['symbols'])
-        or list(report['symbols']) != reports[0]['symbols']
-        or report['code_sha256'] != reports[0]['code_sha256']
-        or report['code_sha256'] != signals._code_hashes(Path(p['app_dir']),fake_worker=False)):
-        raise CampaignError('unit input retained B1 identity conflict')
-    _validate_retained_metadata(binding,contract,report,digest,deadline,raw_manifest)
+    retained = []
+    for summary,root in zip(reports,roots):
+        report, digest = _input(root/'report.json',MAX_REPORT)
+        if (digest != summary['report_sha256'] or set(report['symbols']) != set(contract['symbols'])
+            or list(report['symbols']) != summary['symbols']
+            or report['code_sha256'] != summary['code_sha256']
+            or report['code_sha256'] != signals._code_hashes(Path(p['app_dir']),fake_worker=False)):
+            raise CampaignError('unit input retained B1 identity conflict')
+        retained.append((research_profile(root.name) if contract.get('profiles') else DAY_TRADING,report,digest,root))
+    _validate_retained_metadata(binding,contract,retained,deadline,raw_manifest)
     # Provenance metadata can be revalidated in verify mode; no funding events,
     # candles, signal rows, planner or simulator are generated here.
     reader = FundingReader(Path(p['dataset_root']),contract['window']['score_start'],contract['window']['end'],
@@ -565,70 +613,87 @@ def _artifact_identity(path,deadline):
     return digest.hexdigest(),count
 
 
-def _validate_retained_metadata(binding,contract,report,report_sha,deadline,raw_manifest):
+def _validate_retained_metadata(binding,contract,retained,deadline,raw_manifest):
     """Reconstruct the unit's immutable expected inputs from hashed metadata.
 
     No source selector, candle/signal row iterator, worker or simulation is used.
     The anchor binds the actual source subsets established during publication;
     their source/session/output links are independently reconstructed here.
+    ``retained`` holds (profile, report, report sha256, root) per claimed B1 root: one for
+    day_trading, one per side for swing. Both sides of a pair share one source subset.
     """
     import json
     from app.modern_trading_contracts import CanonicalEffectiveConfigSnapshot
-    w, symbols, baseline = contract['window'],contract['symbols'],contract['identities']['baseline']
-    if (report.get('schema') != 'research-signal-run.v1' or report.get('status') != 'complete'
-        or report.get('errors') != [] or (report.get('source_start'),report.get('score_start'),report.get('source_end'))
-        != (w['source_start'],w['score_start'],w['end'])):
-        raise CampaignError('unit input retained B1 scope conflict')
-    runs = []
-    for symbol in symbols:
-        meta = report['symbols'][symbol]
-        snapshot = meta['effective_config_snapshot']
-        verified = CanonicalEffectiveConfigSnapshot.model_validate(snapshot)
-        if (meta['baseline'] != baseline or meta['manifest_sha256'] != contract['identities']['source_manifest_sha256']
-            or not signals._hash_shape(meta['dataset_sha256'],prefix=False)
-            or not verified.executable or verified.blockers
-            or any(snapshot[key] != baseline[key] for key in ('config_hash','condition_catalog_hash','snapshot_hash'))):
-            raise CampaignError('unit input retained baseline or source identity conflict')
-        selection = _verify_bound_source_identity(Path(contract['paths']['dataset_root']),raw_manifest,
-            _utc(w['source_start']),_utc(w['end']),_utc(w['score_start']),symbol,meta['dataset_sha256'],deadline)
-        if selection.expected_candles!=meta['source_candles']:
-            raise CampaignError('unit input retained source denominator conflict')
-        root = Path(binding['signal_reports'][0]['root'])
-        if _artifact_identity(root/(symbol+'.results.ndjson'),deadline) != (meta['result_sha256'],meta['scored_evaluations']):
-            raise CampaignError('unit input retained signal artifact identity conflict')
-        boundary = root/(symbol+'.boundary.ndjson')
-        if meta['boundary_diagnostic_count'] or boundary.exists() or boundary.is_symlink():
-            if _artifact_identity(boundary,deadline) != (meta['boundary_sha256'],meta['boundary_diagnostic_count']):
-                raise CampaignError('unit input retained boundary artifact identity conflict')
-        source = {'dataset_id':'research-'+meta['dataset_sha256'][:24],'dataset_sha256':meta['dataset_sha256'],
-            'source_venue':'binance_usdm','source_network':'mainnet','market_type':'perpetual'}
-        runs.append({'symbol':symbol,'source':source,
-            'signal_session_id':f"research-{symbol}-{meta['dataset_sha256'][:20]}",
-            'signal_run_id':'b1-'+report_sha[:24],'signal_output_sha256':meta['result_sha256'],
-            'start_ms':_ms(_utc(w['source_start'])),'score_start_ms':_ms(_utc(w['score_start'])),
-            'end_ms':w['end_ms']})
-    sources = {r['symbol']:{k:(r['source'][k] if k.startswith('dataset_') else r[k]) for k in
-        ('dataset_id','dataset_sha256','signal_run_id','signal_output_sha256')} for r in runs}
-    if binding['source_runs'] != runs or binding['sources'] != sources:
+    w, symbols = contract['window'],contract['symbols']
+    two_sided = bool(contract.get('profiles'))
+    sides = tuple(profile.side for profile,_,_,_ in retained)
+    instruments,costs = binding['instrument_assumptions'],binding['cost_assumptions']
+    cells = binding['cells'] if two_sided else [{'side':'long','variant':binding['variant']}]
+    if [c['side'] for c in cells] != list(sides):
+        raise CampaignError('unit input retained research cells conflict')
+    runs, sources, identities, kernels, pairs = {}, {}, {}, [], {}
+    counters = dict.fromkeys(('evaluated_ticks','passed_rules','failed_rules'),0)
+    for (profile,report,report_sha,root),cell in zip(retained,cells):
+        identity_set = contract['identities']
+        baseline = identity_set['baselines'][profile.side] if two_sided else identity_set['baseline']
+        if (report.get('schema') != 'research-signal-run.v1' or report.get('status') != 'complete'
+            or report.get('errors') != [] or (report.get('source_start'),report.get('score_start'),report.get('source_end'))
+            != (w['source_start'],w['score_start'],w['end'])
+            or report.get('profile') != (None if profile.is_default else profile.id)):
+            raise CampaignError('unit input retained B1 scope conflict')
+        runs[profile.side] = []
+        for symbol in symbols:
+            meta = report['symbols'][symbol]
+            snapshot = meta['effective_config_snapshot']
+            verified = CanonicalEffectiveConfigSnapshot.model_validate(snapshot)
+            if (meta['baseline'] != baseline or meta['manifest_sha256'] != identity_set['source_manifest_sha256']
+                or not signals._hash_shape(meta['dataset_sha256'],prefix=False)
+                or not verified.executable or verified.blockers
+                or any(snapshot[key] != baseline[key] for key in ('config_hash','condition_catalog_hash','snapshot_hash'))):
+                raise CampaignError('unit input retained baseline or source identity conflict')
+            if symbol not in pairs:
+                selection = _verify_bound_source_identity(Path(contract['paths']['dataset_root']),raw_manifest,
+                    _utc(w['source_start']),_utc(w['end']),_utc(w['score_start']),symbol,meta['dataset_sha256'],deadline)
+                pairs[symbol] = (meta['dataset_sha256'],selection.expected_candles)
+            if pairs[symbol] != (meta['dataset_sha256'],meta['source_candles']):
+                raise CampaignError('unit input retained source denominator conflict')
+            if _artifact_identity(root/(symbol+'.results.ndjson'),deadline) != (meta['result_sha256'],meta['scored_evaluations']):
+                raise CampaignError('unit input retained signal artifact identity conflict')
+            boundary = root/(symbol+'.boundary.ndjson')
+            if meta['boundary_diagnostic_count'] or boundary.exists() or boundary.is_symlink():
+                if _artifact_identity(boundary,deadline) != (meta['boundary_sha256'],meta['boundary_diagnostic_count']):
+                    raise CampaignError('unit input retained boundary artifact identity conflict')
+            source = {'dataset_id':'research-'+meta['dataset_sha256'][:24],'dataset_sha256':meta['dataset_sha256'],
+                'source_venue':'binance_usdm','source_network':'mainnet','market_type':'perpetual'}
+            runs[profile.side].append({'symbol':symbol,'source':source,
+                'signal_session_id':signals.signal_session_id(symbol,meta['dataset_sha256'],*signals._cell(profile)),
+                'signal_run_id':'b1-'+report_sha[:24],'signal_output_sha256':meta['result_sha256'],
+                'start_ms':_ms(_utc(w['source_start'])),'score_start_ms':_ms(_utc(w['score_start'])),
+                'end_ms':w['end_ms']})
+        sources.update({stream_key(r['symbol'],profile.side,sides):{k:(r['source'][k] if k.startswith('dataset_') else r[k])
+            for k in ('dataset_id','dataset_sha256','signal_run_id','signal_output_sha256')} for r in runs[profile.side]})
+        variant = cell['variant']
+        identities[profile.side] = {'base_setup_hash':baseline['setup_hash'],'base_config_hash':baseline['config_hash'],
+            'base_catalog_hash':baseline['condition_catalog_hash'],'base_snapshot_hash':baseline['snapshot_hash'],
+            'variant_id':variant['id'],'variant_hash':variant['variant_hash'],
+            'instrument_assumptions_hash':instruments['manifest_hash'],'cost_assumptions_hash':costs['assumption_hash'],
+            'research_code_hash':canonical_hash(identity_set['php'])}
+        kernels.append(_kernel_costs(report['symbols'][symbols[0]]['effective_config_snapshot'],
+                                     costs['profiles'][binding['cost_profile']]))
+        for key,field in (('evaluated_ticks','scored_evaluations'),('passed_rules','scored_passed_rules'),
+                          ('failed_rules','scored_failed_rules')):
+            counters[key] += sum(report['symbols'][s][field] for s in symbols)
+    bound_runs = {c['side']:c['source_runs'] for c in cells} if two_sided else {'long':binding['source_runs']}
+    if bound_runs != runs or binding['sources'] != sources:
         raise CampaignError('unit input retained source links conflict')
-    instruments,costs,variant = binding['instrument_assumptions'],binding['cost_assumptions'],binding['variant']
-    identity = {'base_setup_hash':baseline['setup_hash'],'base_config_hash':baseline['config_hash'],
-        'base_catalog_hash':baseline['condition_catalog_hash'],'base_snapshot_hash':baseline['snapshot_hash'],
-        'variant_id':variant['id'],'variant_hash':variant['variant_hash'],
-        'instrument_assumptions_hash':instruments['manifest_hash'],'cost_assumptions_hash':costs['assumption_hash'],
-        'research_code_hash':canonical_hash(contract['identities']['php'])}
-    if binding['identity'] != identity:
+    if binding['identity'] != (identities if two_sided else identities['long']):
         raise CampaignError('unit input retained ledger identity conflict')
-    kernel = _kernel_costs(report['symbols'][symbols[0]]['effective_config_snapshot'],costs['profiles'][binding['cost_profile']])
     expected_instruments = json.loads(encoded({s:asdict(i) for s,i in _kernel_instruments(instruments,tuple(symbols))}))
-    if (binding['kernel_costs'] != kernel.wire()
+    if (any(binding['kernel_costs'] != kernel.wire() for kernel in kernels)
         or binding['kernel_instruments'] != expected_instruments):
         raise CampaignError('unit input retained exact kernel assumptions conflict')
-    counters = {key:sum(report['symbols'][s][field] for s in symbols) for key,field in
-        (('evaluated_ticks','scored_evaluations'),('passed_rules','scored_passed_rules'),
-         ('failed_rules','scored_failed_rules'))}
     if (binding['b1_counters'] != counters
-        or binding['source_candles'] != sum(report['symbols'][s]['source_candles'] for s in symbols)
+        or binding['source_candles'] != sum(candles for _,candles in pairs.values())
         or binding['phase_batches'] != (w['end_ms']-_ms(_utc(w['score_start'])))//60000):
         raise CampaignError('unit input retained physical denominators conflict')
     funding = binding['funding_inventory']
@@ -666,7 +731,7 @@ def run_holdout_campaign(signal_root: Path, *, authorization, variant_id: str,
     limits = remaining_limits(authorization)
     p, cap = contract['paths'], contract['limits']
     output = authorization.output_root/'units'/variant_id/cost_profile
-    return _run_campaign_core(Path(p['dataset_root']), Path(signal_root), output,
+    return _run_campaign_core(Path(p['dataset_root']), _claimed_signal_roots(signal_root,contract), output,
         Path(p['app_dir']), 'holdout', variant_id, cost_profile,
         Path(p['instrument_path']), Path(p['cost_path']), symbols=tuple(contract['symbols']),
         funding_supplement_root=Path(p['funding_supplement_root']) if p['funding_supplement_root'] else None,
@@ -713,8 +778,6 @@ def _run_campaign_core(dataset_root: Path, signal_root: Path | tuple[Path,...], 
                                                                  authorization=authorization)
             cells,kernel_profile = _binding_cells(bindings,symbols)
             two_sided = len(cells) > 1
-            if two_sided and authorization is not None:
-                raise CampaignError('two-sided holdout units are not claimable yet')
             sides = kernel_profile.sides
             first = {p.id:bindings[stream_key(symbols[0],p.side,sides)] for p in cells}
             symbol_bindings = {s:bindings[stream_key(s,cells[0].side,sides)] for s in symbols}

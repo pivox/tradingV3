@@ -167,14 +167,19 @@ def _report_data(auth, contract, units, *, fatal=None):
         u['statistics']['coverage_complete'] and u['statistics']['cost_evidence_complete']
         for u in units) else 'inconclusive')
     identities = contract['identities']
-    signal_path = auth.output_root/'signals'/'report.json'
-    b1_identity = None
-    if signal_path.exists():
+    def b1(signal_path, baseline):
         signal_report,_ = h._read_json(signal_path,h.METADATA_BYTES,private=True,canonical=False)
-        b1_identity = {'report':_file_reference(signal_path),
-            'code_sha256':signal_report['code_sha256'], 'baseline':identities['baseline'],
-            'generation_status':signal_report['status']}
-    installed = h.load_campaign_authority()
+        return {'report':_file_reference(signal_path), 'code_sha256':signal_report['code_sha256'],
+                'baseline':baseline, 'generation_status':signal_report['status']}
+    b1_identity = None
+    if contract.get('profiles'):
+        # A swing claim has one B1 report per profile, each with its side's baseline.
+        paths = {name:auth.output_root/'signals'/name/'report.json' for name in contract['profiles']}
+        b1_identity = {name:b1(path,identities['baselines'][name.split('.')[1]])
+                       for name,path in paths.items() if path.exists()} or None
+    elif (auth.output_root/'signals'/'report.json').exists():
+        b1_identity = b1(auth.output_root/'signals'/'report.json',identities['baseline'])
+    installed = h._load(contract['campaign_id'])
     if installed.authority_hash != auth.authority_hash:
         raise h.HoldoutError('report_authority_conflict')
     return {'schema_version':REPORT_SCHEMA, 'campaign_id':contract['campaign_id'], 'phase':'holdout',
@@ -416,14 +421,15 @@ def _publish_batch_failure_best_effort(auth, contract, units, error):
         pass
 
 
-def run_holdout(output_root: Path, *, timeout=OVERALL_SECONDS, max_output_bytes=OVERALL_BYTES) -> dict:
+def run_holdout(output_root: Path, *, timeout=OVERALL_SECONDS, max_output_bytes=OVERALL_BYTES,
+                campaign_id: str = h.CAMPAIGN_ID) -> dict:
     # Validate before arming a POSIX timer; prepare_claim repeats the boundary.
     if (isinstance(timeout,bool) or not isinstance(timeout,(int,float)) or not math.isfinite(timeout)
         or not 0<timeout<=OVERALL_SECONDS): raise h.HoldoutError('resource_limits_lower_only')
     authority = None
     try:
         with _wall_guard(timeout):
-            authority = h.load_campaign_authority()
+            authority = h._load(campaign_id)
             auth = h.prepare_claim(authority,Path(output_root),timeout=timeout,max_output_bytes=max_output_bytes)
     except BaseException as exc:
         try:
@@ -461,10 +467,10 @@ def run_holdout(output_root: Path, *, timeout=OVERALL_SECONDS, max_output_bytes=
         raise
 
 
-def verify_retained_holdout() -> dict:
+def verify_retained_holdout(campaign_id: str = h.CAMPAIGN_ID) -> dict:
     """Read-only replay of the originally consumed output; no caller-selected root."""
     with _wall_guard(h.VERIFIER_SECONDS):
-        authority = h.load_campaign_authority()
+        authority = h._load(campaign_id)
         auth = h.mint_retained_authorization(authority)
         contract = h.require_claim(auth,operation='retained')
         limits = h.remaining_limits(auth)
@@ -501,11 +507,15 @@ def main(argv=None):
     mode.add_argument('--verify-retained',action='store_true')
     parser.add_argument('--timeout',type=float,default=OVERALL_SECONDS)
     parser.add_argument('--max-output-bytes',type=int,default=OVERALL_BYTES)
+    parser.add_argument('--campaign',choices=(h.CAMPAIGN_ID,h.SWING_CAMPAIGN_ID),default=h.CAMPAIGN_ID,
+                        help='guarded campaign (default: the original day_trading campaign)')
     args = parser.parse_args(argv)
     if args.verify_retained and (args.timeout!=OVERALL_SECONDS or args.max_output_bytes!=OVERALL_BYTES):
         parser.error('resource limits apply only to evaluation')
-    report = verify_retained_holdout() if args.verify_retained else run_holdout(args.output_root,
-        timeout=args.timeout,max_output_bytes=args.max_output_bytes)
+    # The original campaign keeps its call shapes.
+    campaign = {} if args.campaign == h.CAMPAIGN_ID else {'campaign_id':args.campaign}
+    report = verify_retained_holdout(**campaign) if args.verify_retained else run_holdout(args.output_root,
+        timeout=args.timeout,max_output_bytes=args.max_output_bytes,**campaign)
     stdout = h.canonical_bytes({'schema_version':REPORT_SCHEMA,'output_root':report['output_root'],
         'holdout_status':report['holdout_status'],'execution_authority':'none','paper_transfer':'distinct_pending'})
     if len(stdout)>h.STDOUT_BYTES: raise h.HoldoutError('report_stdout_capacity')
