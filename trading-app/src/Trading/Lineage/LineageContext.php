@@ -31,6 +31,8 @@ final readonly class LineageContext
         'scalping.trend_momentum.short' => ['mode' => 'scalping', 'side' => 'SHORT', 'versions' => ['1.0.0', '1.1.0']],
         'micro_scalping.momentum_ofi.long' => ['mode' => 'micro_scalping', 'side' => 'LONG', 'versions' => ['1.0.0', '1.1.0']],
         'micro_scalping.momentum_ofi.short' => ['mode' => 'micro_scalping', 'side' => 'SHORT', 'versions' => ['1.0.0', '1.1.0']],
+        'swing.breakout.long' => ['mode' => 'swing', 'side' => 'LONG', 'versions' => ['1.0.0']],
+        'swing.breakout.short' => ['mode' => 'swing', 'side' => 'SHORT', 'versions' => ['1.0.0']],
     ];
 
     /** @var string[] */
@@ -569,7 +571,7 @@ final readonly class LineageContext
             }
         }
         $modeId = self::string($payload['mode_id'] ?? null);
-        if (!\in_array($modeId, ['day_trading', 'scalping', 'micro_scalping'], true)) {
+        if (!\in_array($modeId, ['day_trading', 'scalping', 'micro_scalping', 'swing'], true)) {
             throw new LineageContextException('canonical_identity_invalid:mode_id');
         }
         $setupId = self::string($payload['setup_id'] ?? null);

@@ -132,6 +132,20 @@ def test_result_rejects_hash_and_nondeterministic_trace_drift() -> None:
         CanonicalBacktestRuleResult.model_validate(forged)
 
 
+def test_result_accepts_the_published_swing_research_identity() -> None:
+    import hashlib
+
+    payload = result_payload(CanonicalBacktestRuleRequest.model_validate(request_payload()))
+    payload.update({"mode_id": "swing", "mode_version": "1.0.0",
+                    "setup_id": "swing.breakout.short", "setup_version": "1.0.0", "side": "short"})
+    payload.pop("result_hash")
+    payload["result_hash"] = "sha256:" + hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
+
+    result = CanonicalBacktestRuleResult.model_validate(payload)
+
+    assert (result.mode_id, result.setup_id, result.side) == ("swing", "swing.breakout.short", "short")
+
+
 def test_bridge_uses_exact_shell_free_argv_and_canonical_stdin(tmp_path: Path) -> None:
     request = CanonicalBacktestRuleRequest.model_validate(request_payload())
     response = _canonical_json(result_payload(request))

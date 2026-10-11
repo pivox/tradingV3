@@ -50,6 +50,7 @@ PUBLISHED_MODE_VERSIONS = MappingProxyType(
         "day_trading": ("1.0.0", "1.1.0"),
         "scalping": ("1.0.0", "1.1.0"),
         "micro_scalping": ("1.0.0",),
+        "swing": ("1.0.0",),
     }
 )
 
@@ -63,6 +64,8 @@ PUBLISHED_SETUP_VERSIONS = MappingProxyType(
         "scalping.trend_momentum.short": ("1.0.0", "1.1.0"),
         "micro_scalping.momentum_ofi.long": ("1.0.0",),
         "micro_scalping.momentum_ofi.short": ("1.0.0",),
+        "swing.breakout.long": ("1.0.0",),
+        "swing.breakout.short": ("1.0.0",),
     }
 )
 
@@ -81,6 +84,9 @@ _PUBLISHED_RUN_IDENTITIES = frozenset(
         ("scalping", "1.1.0", "scalping.trend_momentum.short", "1.1.0", "short"),
         ("micro_scalping", "1.0.0", "micro_scalping.momentum_ofi.long", "1.0.0", "long"),
         ("micro_scalping", "1.0.0", "micro_scalping.momentum_ofi.short", "1.0.0", "short"),
+        # ADR-309: swing@1.0.0 is published directly as an executable research shadow.
+        ("swing", "1.0.0", "swing.breakout.long", "1.0.0", "long"),
+        ("swing", "1.0.0", "swing.breakout.short", "1.0.0", "short"),
     }
 )
 
@@ -304,7 +310,7 @@ def calculate_snapshot_hash(snapshot: Mapping[str, Any] | BaseModel) -> str:
     ).hexdigest()
 
 
-ModeId = Literal["day_trading", "scalping", "micro_scalping"]
+ModeId = Literal["day_trading", "scalping", "micro_scalping", "swing"]
 PublishedVersion = Literal["1.0.0", "1.1.0"]
 SetupId = Literal[
     "crash_short",
@@ -315,6 +321,8 @@ SetupId = Literal[
     "scalping.trend_momentum.short",
     "micro_scalping.momentum_ofi.long",
     "micro_scalping.momentum_ofi.short",
+    "swing.breakout.long",
+    "swing.breakout.short",
 ]
 
 
@@ -360,7 +368,7 @@ class CanonicalEffectiveConfigRequest(ModernTradingIdentity):
             raise ValueError("private_mainnet_execution_forbidden")
         if (
             (self.mode_id, self.mode_version)
-            in {("day_trading", "1.1.0"), ("scalping", "1.1.0")}
+            in {("day_trading", "1.1.0"), ("scalping", "1.1.0"), ("swing", "1.0.0")}
             and self.execution_capability is None
         ):
             raise ValueError(f"{self.mode_id}_shadow_capability_required")

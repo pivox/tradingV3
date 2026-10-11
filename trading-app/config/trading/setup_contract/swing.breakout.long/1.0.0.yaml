@@ -1,0 +1,109 @@
+schema_version: '1.0.0'
+setup_id: swing.breakout.long
+setup_version: '1.0.0'
+status: shadow
+executable: true
+family: breakout
+side: long
+thesis: 'A 4h close above the highest high of the previous thirty 4h bars (five days), on the same side of the 4h EMA200, starts an upward move that persists for days.'
+source_origin: { file: 'docs/handbook/reports/research-swing-two-sided-exploration-2026-10-11.md', line_range: '59-69,104-131', content_sha256: 797484ddefa493a5ccf6b53bd153f689e28d099d90bbd56f51f40072efd4559a, commit: 50ba5805906af79fe028498cff403e17c514496f }
+compatible_modes: [{ mode_id: swing, mode_version: '1.0.0' }]
+mode_compatibility: { state: defined, issue: null, justification: 'Exact compatibility with swing@1.0.0; no alias or version range.' }
+hypothesis: 'The two-sided breakout B30_2s x S3.T5.H14d selected on 2026-10-11 is a shadow-only falsifiable hypothesis awaiting its canonical campaign and the guarded 2026 holdout; it makes no profitability claim.'
+context:
+  side: long
+  regime:
+    op: all_of
+    provenance: 'docs/handbook/reports/research-swing-two-sided-exploration-2026-10-11.md method: trend side of the 4h EMA200'
+    nodes:
+      - { condition: close_gt_ema_200, timeframe: 4h, provenance: 'B30_2s long regime leg' }
+  context:
+    op: all_of
+    provenance: 'docs/handbook/reports/research-swing-two-sided-exploration-2026-10-11.md method: the context repeats the regime leg'
+    nodes:
+      - { condition: close_gt_ema_200, timeframe: 4h, provenance: 'B30_2s long regime leg' }
+  trigger:
+    op: all_of
+    provenance: 'docs/handbook/reports/research-swing-two-sided-exploration-2026-10-11.md method: 30-bar (five-day) breakout of the closed 4h bars'
+    nodes:
+      - { condition: close_gt_prior_high, timeframe: 4h, parameters: { lookback_bars: 30 }, provenance: 'B30_2s long breakout leg' }
+  confirmations:
+    op: all_of
+    provenance: 'docs/handbook/reports/research-swing-two-sided-exploration-2026-10-11.md method: the confirmation repeats the breakout leg'
+    nodes:
+      - { condition: close_gt_prior_high, timeframe: 4h, parameters: { lookback_bars: 30 }, provenance: 'B30_2s long breakout leg' }
+filters: []
+no_trade_rules: []
+missing_data_policy: { absent: reject, stale: reject, critical: reject }
+execution:
+  side: long
+  execution_timeframe: { state: defined, value: 4h, unit: timeframe, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'Decisions and entries use the 4h close.' }
+  mandatory_confirmations: { state: defined, value: ['4h'], unit: timeframes, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'The confirmation section runs on the same closed 4h bar.' }
+  entry_zone:
+    state: defined
+    value: { anchor_source: close, anchor_timeframe: 4h, atr_timeframe: 4h, atr_multiplier: 0.30, minimum_half_width_rate: 0.0005, maximum_half_width_rate: 0.0100, asymmetry_rate: 0.0, ttl_seconds: 3600, maximum_input_age_seconds: 60, quantize_outward: true }
+    unit: price_zone_policy
+    source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11'
+    justification: 'The limit is the 4h close rounded toward the market side; the zone always contains it.'
+  stop:
+    state: defined
+    value: { kind: atr, timeframe: 4h, atr_multiplier: 3.0, pivot_id: null, buffer_rate: 0.0 }
+    unit: stop_policy
+    source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11'
+    justification: 'Three 4h ATR from the entry, without a pivot fallback.'
+  targets:
+    state: defined
+    value: [{ id: tp1, risk_multiple: 5.0, liquidity_role: taker }]
+    unit: target_policy
+    source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11'
+    justification: 'One target at five gross R.'
+  minimum_net_r: { state: defined, value: 1.3, unit: net_r_multiple, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'The research acceptance floor after costs and the fourteen-day funding provision.' }
+  invalidation: { state: defined, value: { kind: close_beyond_stop }, unit: invalidation_policy, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'The stop is the sole price invalidation boundary.' }
+  time_stop: { state: defined, value: PT336H, unit: duration, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'Fourteen days, without a daily boundary.' }
+  cost_contract:
+    state: defined
+    value: { entry_liquidity_role: maker, stop_liquidity_role: taker, entry_spread_source: order_book, entry_slippage_source: execution_model, stop_spread_source: order_book, stop_slippage_source: execution_model, target_spread_source: order_book, target_slippage_source: execution_model, funding_source: venue_schedule, funding_interval_seconds: 28800 }
+    unit: cost_policy
+    source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11'
+    justification: 'Fees are exchange-owned; spread, slippage and funding keep their live and model sources.'
+  order_policy:
+    state: defined
+    value: { type: limit, liquidity_role: maker, ttl_seconds: 3600, cancel_after_seconds: 3660, market_fallback: false, maximum_spread_bps: 6.0, maximum_slippage_bps: 8.0 }
+    unit: order_policy
+    source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11'
+    justification: 'The limit rests one hour and is cancelled at the first minute boundary after.'
+data_condition_contract:
+  condition_catalog_version: '1.3.0'
+  required_data: [ohlcv_4h, ohlcv_1m, ema, atr, order_book, fee_schedule, funding_schedule]
+  missing_conditions: []
+  external_dependencies: []
+  condition_catalog_hash: { state: defined, value: bd420cfb9c6a7f44266ff1de6478277e889f33eee80404e435b2b71dd8ca6a94, unit: sha256, source: 'config/trading/condition_catalog/1.3.0.yaml', justification: 'Pinned to the catalogue that adds the swing breakout and EMA200 conditions.' }
+  unknown_condition_policy: reject
+validity_window: { state: defined, value: PT4H, unit: duration, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'No decision carry-forward beyond its 4h evaluation.' }
+governance:
+  shadow: ['capture complete identity and typed decision trace', 'reject every missing or stale critical input', 'use the canonical plan and one active plan per pair']
+  paper: ['pass the canonical campaign and the guarded holdout', 'run Paper with exact venue costs and no tuning']
+  promotion: ['guarded 2026 holdout passed once', 'independent risk review', 'publish a new semantic version']
+  suspension: ['critical data or cost absent or stale', 'condition contract breach', 'trace or risk invariant gap']
+  rollback: ['holdout failure', 'schema or provenance defect', 'risk invariant breach']
+  activation_requires_trace: true
+  activation_requires_certified_net_baseline: true
+known_defects: []
+provenance:
+  - { path: mode_compatibility, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'Pinned exclusively to swing@1.0.0.' }
+  - { path: context.regime, source: 'docs/handbook/reports/research-swing-two-sided-exploration-2026-10-11.md', justification: 'B30_2s long: side of the 4h EMA200.' }
+  - { path: context.context, source: 'docs/handbook/reports/research-swing-two-sided-exploration-2026-10-11.md', justification: 'Repeats the regime leg; every section needs a node.' }
+  - { path: context.trigger, source: 'docs/handbook/reports/research-swing-two-sided-exploration-2026-10-11.md', justification: 'B30_2s long: 30-bar breakout.' }
+  - { path: context.confirmations, source: 'docs/handbook/reports/research-swing-two-sided-exploration-2026-10-11.md', justification: 'Repeats the breakout leg; every section needs a node.' }
+  - { path: execution.execution_timeframe, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: '4h only.' }
+  - { path: execution.mandatory_confirmations, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'The same closed 4h bar.' }
+  - { path: execution.entry_zone, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'Limit at the 4h close.' }
+  - { path: execution.stop, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'Three 4h ATR.' }
+  - { path: execution.targets, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'One 5R gross target.' }
+  - { path: execution.minimum_net_r, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: '1.3R net acceptance floor.' }
+  - { path: execution.invalidation, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'Close beyond stop.' }
+  - { path: execution.time_stop, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'PT336H without a daily boundary.' }
+  - { path: execution.cost_contract, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'Exact venue, live and model cost sources.' }
+  - { path: execution.order_policy, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'One-hour limit, cancelled at 3660 s.' }
+  - { path: validity_window, source: 'docs/superpowers/plans/2026-10-11-swing-canonical-campaign.md owner decision 2026-10-11', justification: 'PT4H validity.' }
+ownership_model: setup-contract-ownership-v1

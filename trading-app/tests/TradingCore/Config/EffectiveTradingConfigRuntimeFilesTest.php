@@ -196,6 +196,58 @@ final class EffectiveTradingConfigRuntimeFilesTest extends TestCase
         self::assertFalse($snapshot->payload()['environment']['write_enabled']);
     }
 
+    #[DataProvider('swingSetupProvider')]
+    public function testSwingBacktestResolvesThroughSixLayersAgainstTheFakeExchange(string $setupId, string $side): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'swing', '1.0.0', $setupId, '1.0.0',
+            'fake', 'test', $side, ShadowExecutionCapability::Backtest,
+        ));
+        $payload = $snapshot->payload();
+
+        self::assertSame(
+            ['base', 'mode', 'setup', 'exchange', 'mode_exchange', 'environment'],
+            array_column($snapshot->orderedLayers(), 'type'),
+        );
+        self::assertSame('swing', $payload['mode']['mode_id']);
+        self::assertSame('1.0.0', $payload['mode']['mode_version']);
+        self::assertSame('PT336H', $payload['mode']['horizon']['value']['maximum_duration']);
+        self::assertFalse($payload['mode']['horizon']['value']['close_before_boundary']);
+        self::assertSame($setupId, $payload['setup']['setup_id']);
+        self::assertSame($side, $payload['setup']['side']);
+        self::assertSame('fake', $payload['exchange']['id']);
+        self::assertFalse($payload['environment']['write_enabled']);
+        self::assertMatchesRegularExpression('/^sha256:[a-f0-9]{64}$/', $snapshot->configHash);
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function swingSetupProvider(): iterable
+    {
+        yield 'long' => ['swing.breakout.long', 'long'];
+        yield 'short' => ['swing.breakout.short', 'short'];
+    }
+
+    public function testSwingBacktestRequiresTheFakeExchange(): void
+    {
+        $this->expectException(TradingConfigException::class);
+        $this->expectExceptionMessage('swing_backtest_requires_fake_exchange');
+        (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'swing', '1.0.0', 'swing.breakout.long', '1.0.0',
+            'okx', 'demo', 'long', ShadowExecutionCapability::Backtest,
+        ));
+    }
+
+    public function testSwingHasNoVenueOverlayForPaperExecution(): void
+    {
+        // Research shadow only: no OKX or Hyperliquid mode_exchange layer is published.
+        $this->expectException(TradingConfigException::class);
+        $this->expectExceptionMessage('Required trading config layer "mode_exchange" is missing');
+        (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'swing', '1.0.0', 'swing.breakout.short', '1.0.0',
+            'okx', 'demo', 'short', ShadowExecutionCapability::Paper,
+        ));
+    }
+
     /** @dataProvider microScalpingShadowTargetProvider */
     public function testMicroScalpingShadowResolvesOnlyPublicVenueLayers(
         string $setupId,

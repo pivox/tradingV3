@@ -28,6 +28,11 @@ final readonly class CanonicalPortfolioAdmissionEngine
         $plan = $request->plan;
         $snapshot = $request->snapshot;
         $scope = $request->scope;
+        // The portfolio snapshot carries no occupied symbols, so a per-symbol limit cannot be checked here:
+        // such a mode (swing@1.0.0) runs only where occupancy is known, the research plan builder and kernel.
+        if ($policy->perSymbolLimit !== null) {
+            throw new CanonicalPortfolioException('canonical_portfolio_symbol_occupancy_unavailable');
+        }
         try {
             (new CanonicalOrderPlanValidator($this->clock))->validate($plan);
         } catch (CanonicalOrderPlanException $exception) {

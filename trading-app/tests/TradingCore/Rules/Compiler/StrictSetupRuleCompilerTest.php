@@ -34,7 +34,9 @@ final class StrictSetupRuleCompilerTest extends TestCase
             self::assertNotSame([], $plan->sections, $path);
         }
 
-        self::assertCount(15, $plans);
+        self::assertCount(17, $plans);
+        self::assertSame([], $plans['swing.breakout.long@1.0.0']->blockers);
+        self::assertSame([], $plans['swing.breakout.short@1.0.0']->blockers);
         self::assertSame([], $plans['day_trading.trend_continuation.long@1.1.0']->blockers);
         self::assertSame([], $plans['scalping.trend_continuation.long@1.1.0']->blockers);
         self::assertSame([], $plans['scalping.pullback.long@1.1.0']->blockers);

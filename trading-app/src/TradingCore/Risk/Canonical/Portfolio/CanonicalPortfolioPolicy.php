@@ -31,6 +31,8 @@ final readonly class CanonicalPortfolioPolicy
         public int $maxConcurrentPositions,
         public bool $includePendingEntries,
         public float $modeExposureRate,
+        /** Active plans allowed per symbol; null when the mode sets no per-symbol limit. */
+        public ?int $perSymbolLimit = null,
     ) {
     }
 
@@ -127,8 +129,16 @@ final readonly class CanonicalPortfolioPolicy
             'canonical_portfolio_concurrency_policy_invalid',
         );
         $concurrencyValue = self::mapping($concurrency, 'value', 'canonical_portfolio_concurrency_policy_invalid');
-        self::exactKeys($concurrencyValue, ['limit', 'include_pending_entries'], 'canonical_portfolio_concurrency_policy_invalid');
+        $concurrencyKeys = array_key_exists('per_symbol_limit', $concurrencyValue)
+            ? ['limit', 'include_pending_entries', 'per_symbol_limit']
+            : ['limit', 'include_pending_entries'];
+        self::exactKeys($concurrencyValue, $concurrencyKeys, 'canonical_portfolio_concurrency_policy_invalid');
         if (!\is_int($concurrencyValue['limit']) || $concurrencyValue['limit'] < 1 || !\is_bool($concurrencyValue['include_pending_entries'])) {
+            throw new CanonicalPortfolioException('canonical_portfolio_concurrency_policy_invalid');
+        }
+        $perSymbolLimit = $concurrencyValue['per_symbol_limit'] ?? null;
+        if ($perSymbolLimit !== null
+            && (!\is_int($perSymbolLimit) || $perSymbolLimit < 1 || $perSymbolLimit > $concurrencyValue['limit'])) {
             throw new CanonicalPortfolioException('canonical_portfolio_concurrency_policy_invalid');
         }
 
@@ -164,6 +174,7 @@ final readonly class CanonicalPortfolioPolicy
             $concurrencyValue['limit'],
             $concurrencyValue['include_pending_entries'],
             self::percentageRate($exposurePercent, 'canonical_portfolio_exposure_policy_invalid'),
+            $perSymbolLimit,
         );
     }
 
@@ -283,6 +294,11 @@ final readonly class CanonicalPortfolioPolicy
     /** @return array<string, bool|int|string> */
     public function toAdmissionProofArray(): array
     {
+        // An admission proof cannot attest symbol occupancy, so a per-symbol policy has none.
+        if ($this->perSymbolLimit !== null) {
+            throw new CanonicalPortfolioException('canonical_portfolio_symbol_occupancy_unavailable');
+        }
+
         return [
             'mode_id' => $this->modeId,
             'mode_version' => $this->modeVersion,
@@ -332,7 +348,7 @@ final readonly class CanonicalPortfolioPolicy
             }
         }
         if (
-            !\in_array($data['mode_id'], ['day_trading', 'scalping', 'micro_scalping'], true)
+            !\in_array($data['mode_id'], ['day_trading', 'scalping', 'micro_scalping', 'swing'], true)
             || preg_match('/\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\z/D', $data['mode_version']) !== 1
             || preg_match('/\A[a-z][a-z0-9_.-]*\z/D', $data['setup_id']) !== 1
             || preg_match('/\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\z/D', $data['setup_version']) !== 1

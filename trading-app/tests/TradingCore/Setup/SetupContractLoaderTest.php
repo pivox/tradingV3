@@ -46,6 +46,8 @@ final class SetupContractLoaderTest extends TestCase
             'scalping.pullback.long/1.0.0.yaml' => '12c0d593a3271d8ab61c2efc4039a2d6ac286f6781ad3f6d3163c7a1ed6f9bae',
             'scalping.trend_continuation.long/1.0.0.yaml' => 'df4936f8f4fbb72f58720c9430c165164e1cd3df8e9173cee34e57f4df95b470',
             'scalping.trend_momentum.short/1.0.0.yaml' => '921623fd143bc39b2b75e2cbd86941c37194b4ea00ef43bc34f221c331490f25',
+            'swing.breakout.long/1.0.0.yaml' => 'eab752c4b3de6bade0d28a7b79bdf9be8c73840199356f3027616e424c94171f',
+            'swing.breakout.short/1.0.0.yaml' => '4e9a74f2f87591c4b469d5c1c993f88025e8fbbcdb298bfb99a0ff7c6abffd8d',
         ];
 
         foreach ($expected as $relativePath => $expectedHash) {
@@ -53,7 +55,7 @@ final class SetupContractLoaderTest extends TestCase
         }
     }
 
-    public function testLoadsExactlyTheFrozenEightSourceHypotheses(): void
+    public function testLoadsTheFrozenEightSourceHypothesesAndTheTwoSwingBreakouts(): void
     {
         $expected = [
             'day_trading.trend_continuation.long' => 'draft',
@@ -66,13 +68,20 @@ final class SetupContractLoaderTest extends TestCase
             'crash_short' => 'draft',
         ];
 
-        self::assertCount(8, glob($this->root . '/*/1.0.0.yaml') ?: []);
+        self::assertCount(10, glob($this->root . '/*/1.0.0.yaml') ?: []);
         $loader = new SetupContractLoader($this->root);
         foreach ($expected as $id => $status) {
             $contract = $loader->load($id, '1.0.0');
             self::assertSame($id, $contract->setupId);
             self::assertSame($status, $contract->status);
             self::assertFalse($contract->isExecutable());
+        }
+        // ADR-309 publishes swing directly as an executable research shadow.
+        foreach (['swing.breakout.long', 'swing.breakout.short'] as $id) {
+            $contract = $loader->load($id, '1.0.0');
+            self::assertSame($id, $contract->setupId);
+            self::assertSame('shadow', $contract->status);
+            self::assertTrue($contract->isExecutable());
         }
     }
 
@@ -144,6 +153,82 @@ final class SetupContractLoaderTest extends TestCase
             self::assertSame($ofiCondition, $trigger[2]['condition']);
             self::assertSame($threshold, $trigger[2]['parameters'][$parameter]);
             self::assertSame($side, $document['side']);
+        }
+    }
+
+    public function testPublishesExecutableSwingBreakoutShadowSetups(): void
+    {
+        $loader = new SetupContractLoader($this->root);
+        foreach ([
+            'swing.breakout.long' => ['long', 'close_gt_ema_200', 'close_gt_prior_high'],
+            'swing.breakout.short' => ['short', 'close_lt_ema_200', 'close_lt_prior_low'],
+        ] as $setupId => [$side, $regime, $breakout]) {
+            $contract = $loader->load($setupId, '1.0.0');
+            $document = $contract->toArray();
+            $compiled = (new SetupCompiler())->compile($contract);
+            $execution = $document['execution'];
+
+            self::assertSame('shadow', $contract->status);
+            self::assertTrue($contract->isExecutable());
+            self::assertTrue($compiled->publishable);
+            self::assertSame([], $contract->unresolvedPaths());
+            self::assertSame(['swing' => '1.0.0'], $compiled->modeVersions);
+            self::assertSame('1.3.0', $document['data_condition_contract']['condition_catalog_version']);
+            self::assertSame(
+                (new ConditionCatalogLoader())->loadVersion('1.3.0')->stableHash(),
+                $document['data_condition_contract']['condition_catalog_hash']['value'],
+            );
+            self::assertSame($side, $document['side']);
+            self::assertSame($regime, $document['context']['regime']['nodes'][0]['condition']);
+            self::assertSame($breakout, $document['context']['trigger']['nodes'][0]['condition']);
+            self::assertSame(['lookback_bars' => 30], $document['context']['trigger']['nodes'][0]['parameters']);
+            self::assertSame('4h', $execution['execution_timeframe']['value']);
+            self::assertSame(['4h'], $execution['mandatory_confirmations']['value']);
+            self::assertSame('PT4H', $document['validity_window']['value']);
+            self::assertSame(['kind' => 'atr', 'timeframe' => '4h', 'atr_multiplier' => 3.0, 'pivot_id' => null, 'buffer_rate' => 0.0], $execution['stop']['value']);
+            self::assertSame(5.0, $execution['targets']['value'][0]['risk_multiple']);
+            self::assertSame('PT336H', $execution['time_stop']['value']);
+            self::assertSame(3600, $execution['order_policy']['value']['ttl_seconds']);
+            self::assertSame(3660, $execution['order_policy']['value']['cancel_after_seconds']);
+            self::assertFalse($execution['order_policy']['value']['market_fallback']);
+        }
+    }
+
+    public function testSwingShadowHasPhpAndSchemaParityForFrozenDecisions(): void
+    {
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+        foreach (['long', 'short'] as $side) {
+            $document = $this->yaml($this->root . '/swing.breakout.' . $side . '/1.0.0.yaml');
+            $object = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertTrue((new JsonSchemaValidator())->validate($object, $schema)->isValid(), $side);
+
+            $mutations = [];
+            $mutations['lookback'] = $document;
+            $mutations['lookback']['context']['trigger']['nodes'][0]['parameters']['lookback_bars'] = 20;
+            $mutations['regime'] = $document;
+            $mutations['regime']['context']['regime']['nodes'][0]['condition'] = $side === 'long' ? 'close_above_ema_200' : 'close_below_ema_200';
+            $mutations['catalog'] = $document;
+            $mutations['catalog']['data_condition_contract']['condition_catalog_version'] = '1.2.0';
+            $mutations['stop'] = $document;
+            $mutations['stop']['execution']['stop']['value']['atr_multiplier'] = 2.0;
+            $mutations['target'] = $document;
+            $mutations['target']['execution']['targets']['value'][0]['risk_multiple'] = 4.0;
+            $mutations['time stop'] = $document;
+            $mutations['time stop']['execution']['time_stop']['value'] = 'PT8H';
+            $mutations['order ttl'] = $document;
+            $mutations['order ttl']['execution']['order_policy']['value']['ttl_seconds'] = 90;
+            $mutations['validity'] = $document;
+            $mutations['validity']['validity_window']['value'] = 'PT15M';
+            $mutations['mode version'] = $document;
+            $mutations['mode version']['compatible_modes'][0]['mode_version'] = '1.1.0';
+            $mutations['source'] = $document;
+            $mutations['source']['source_origin']['line_range'] = '59-69';
+            $mutations['known defect'] = $document;
+            $mutations['known defect']['known_defects'] = ['untested'];
+
+            foreach ($mutations as $label => $mutation) {
+                $this->assertPhpAndSchemaReject($mutation, $side . ' ' . $label);
+            }
         }
     }
 
@@ -591,14 +676,19 @@ final class SetupContractLoaderTest extends TestCase
         }
     }
 
-    public function testCatalogContainsNoSwingOrNinthCrashPullbackSetup(): void
+    public function testCatalogContainsOnlyTheTwoSwingBreakoutsAndNoCrashPullbackSetup(): void
     {
         $paths = glob($this->root . '/*/1.0.0.yaml') ?: [];
         $ids = array_map(static fn (string $path): mixed => Yaml::parseFile($path)['setup_id'] ?? null, $paths);
+        $swingIds = array_values(array_filter(
+            array_map('strval', $ids),
+            static fn (string $id): bool => str_contains($id, 'swing'),
+        ));
+        sort($swingIds, SORT_STRING);
 
-        self::assertStringNotContainsString('swing', implode(' ', array_map('strval', $ids)));
+        self::assertSame(['swing.breakout.long', 'swing.breakout.short'], $swingIds);
         self::assertNotContains('crash_pullback', $ids);
-        self::assertCount(8, array_unique($ids));
+        self::assertCount(10, array_unique($ids));
     }
 
     public function testCrashDecisionUsesANewExactVersionWithoutCreatingANinthIdentity(): void
@@ -627,7 +717,9 @@ final class SetupContractLoaderTest extends TestCase
         self::assertSame($document['source_origins'], (new SetupCompiler())->compile($decided)->sourceOrigins);
 
         $ids = array_map('basename', glob($this->root . '/*', GLOB_ONLYDIR) ?: []);
-        self::assertCount(8, array_unique($ids));
+        // ADR-309 adds the two swing identities; the crash decision adds none.
+        self::assertCount(8, array_diff(array_unique($ids), ['swing.breakout.long', 'swing.breakout.short']));
+        self::assertCount(10, array_unique($ids));
         self::assertNotContains('crash', $ids);
         self::assertNotContains('crash_pullback', $ids);
     }
@@ -777,6 +869,7 @@ final class SetupContractLoaderTest extends TestCase
             'validations.scalper_micro.yaml' => ['47969bd5055b28ba5871b0b22e503482730a368c56fad3d0963aaad3808808e2', '75a4cef8852f99d6e8202422fdd0531cdfce60bb'],
             'validations.crash.yaml' => ['5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2', 'd1d9a174960660e88f84c54850ef61181d39a880'],
             'trade_entry.crash.yaml' => ['722bd2ee013a24ae86ffae2aa846437db7a51898ef8de4a0cd58e693a8ffb90f', '6ff8ab88e1bb9465f92f39424ae64305ca20ee0d'],
+            'research-swing-two-sided-exploration-2026-10-11.md' => ['797484ddefa493a5ccf6b53bd153f689e28d099d90bbd56f51f40072efd4559a', '50ba5805906af79fe028498cff403e17c514496f'],
         ];
         $expectedDecisionRanges = [
             'src/MtfValidator/config/validations.crash.yaml' => '5-16,136-137,164-167,169-305',
@@ -789,7 +882,12 @@ final class SetupContractLoaderTest extends TestCase
             'scalping.trend_momentum.short' => '6-14,216-356',
             'micro_scalping.momentum_ofi.long' => '5-19,87-115',
             'micro_scalping.momentum_ofi.short' => '5-19,95-125',
+            'swing.breakout.long' => '59-69,104-131',
+            'swing.breakout.short' => '59-69,104-131',
         ];
+        // Research reports live under the repository root, as in FakePaperGoldenScenarioCatalogTest.
+        $configuredRoot = getenv('TRADINGV3_REPO_ROOT');
+        $repositoryRoot = is_string($configuredRoot) && $configuredRoot !== '' ? $configuredRoot : dirname(__DIR__, 4);
 
         foreach (glob($this->root . '/*/*.yaml') ?: [] as $path) {
             $document = Yaml::parseFile($path);
@@ -801,10 +899,13 @@ final class SetupContractLoaderTest extends TestCase
                 $basename = basename($origin['file']);
                 self::assertSame($expected[$basename][0], $origin['content_sha256'], $path);
                 self::assertSame($expected[$basename][1], $origin['commit'], $path);
-                $sourcePath = dirname(__DIR__, 3) . '/' . $origin['file'];
+                $sourcePath = str_starts_with($origin['file'], 'docs/')
+                    ? $repositoryRoot . '/' . $origin['file']
+                    : dirname(__DIR__, 3) . '/' . $origin['file'];
+                self::assertFileExists($sourcePath);
                 self::assertSame($origin['content_sha256'], hash_file('sha256', $sourcePath), $sourcePath);
                 self::assertMatchesRegularExpression('/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/', $origin['line_range']);
-                if (($document['setup_version'] ?? null) === '1.1.0') {
+                if (($document['setup_version'] ?? null) === '1.1.0' || str_starts_with($document['setup_id'], 'swing.')) {
                     $expectedRange = $expectedScalpingDecisionRanges[$document['setup_id']]
                         ?? $expectedDecisionRanges[$origin['file']];
                     self::assertSame($expectedRange, $origin['line_range']);
@@ -877,7 +978,12 @@ final class SetupContractLoaderTest extends TestCase
             'close_above_ma_9', 'close_above_vwap', 'close_below_ma_9',
             'ema_20_gt_50', 'ema_20_slope_pos', 'ma9_cross_up_ma21',
         ];
-        $publicConditionIds = array_values(array_diff($this->catalog()->conditionIds(), $internalCompositeDependencies));
+        $catalogConditionIds = [];
+        foreach ($this->publishedCatalogs() as $catalog) {
+            $catalogConditionIds = array_merge($catalogConditionIds, $catalog->conditionIds());
+        }
+        $publicConditionIds = array_values(array_diff(array_unique($catalogConditionIds), $internalCompositeDependencies));
+        sort($publicConditionIds, SORT_STRING);
 
         self::assertSame($publicConditionIds, $schemaConditionIds);
     }
@@ -893,9 +999,10 @@ final class SetupContractLoaderTest extends TestCase
         $schemaParameterKeys = array_keys($schema['$defs']['parameters']['properties'] ?? []);
         sort($schemaParameterKeys, SORT_STRING);
         $catalogParameterKeys = [];
-        $catalog = $this->catalog();
-        foreach ($catalog->conditionIds() as $conditionId) {
-            $catalogParameterKeys = array_merge($catalogParameterKeys, array_keys($catalog->definition($conditionId)->parameters));
+        foreach ($this->publishedCatalogs() as $catalog) {
+            foreach ($catalog->conditionIds() as $conditionId) {
+                $catalogParameterKeys = array_merge($catalogParameterKeys, array_keys($catalog->definition($conditionId)->parameters));
+            }
         }
         $catalogParameterKeys = array_values(array_unique($catalogParameterKeys));
         sort($catalogParameterKeys, SORT_STRING);
@@ -1335,6 +1442,17 @@ final class SetupContractLoaderTest extends TestCase
         self::assertIsObject($object);
 
         return $object;
+    }
+
+    /** @return list<ConditionCatalog> */
+    private function publishedCatalogs(): array
+    {
+        $loader = new ConditionCatalogLoader();
+
+        return array_map(
+            static fn (string $path): ConditionCatalog => $loader->loadFile($path),
+            glob(dirname(__DIR__, 3) . '/config/trading/condition_catalog/*.yaml') ?: [],
+        );
     }
 
     private function catalog(): ConditionCatalog

@@ -80,6 +80,24 @@ final class CanonicalPortfolioPolicyCompilerTest extends TestCase
         self::assertSame(0.75, $policy->modeExposureRate);
     }
 
+    public function testCompilesTheSwingOnePlanPerPairLimitAndRefusesToProveIt(): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'swing', '1.0.0', 'swing.breakout.long', '1.0.0',
+            'fake', 'local', 'long', ShadowExecutionCapability::Backtest,
+        ));
+        $policy = (new CanonicalPortfolioPolicyCompiler())->compile($snapshot);
+
+        self::assertSame(10, $policy->maxConcurrentPositions);
+        self::assertSame(1, $policy->perSymbolLimit);
+        self::assertSame([1.0, 100000.0], [$policy->dailyLossRate, $policy->dailyLossAbsoluteQuote]);
+        self::assertNull((new CanonicalPortfolioPolicyCompiler())->compile(CanonicalPortfolioFixture::snapshot())->perSymbolLimit);
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_symbol_occupancy_unavailable');
+        $policy->toAdmissionProofArray();
+    }
+
     public function testCompilesExplicitPortfolioSemanticsAndPercentagePointsExactlyOnce(): void
     {
         $policy = (new CanonicalPortfolioPolicyCompiler())->compile(CanonicalPortfolioFixture::snapshot());
@@ -141,6 +159,11 @@ final class CanonicalPortfolioPolicyCompilerTest extends TestCase
         yield 'scalar concurrency without pending semantics' => [[
             'max_concurrent_positions' => ['state' => 'defined', 'value' => 4, 'unit' => 'positions'],
         ], 'canonical_portfolio_concurrency_policy_invalid'];
+        foreach (['zero per symbol' => 0, 'above the limit' => 5, 'float per symbol' => 1.0, 'string per symbol' => '1'] as $label => $perSymbol) {
+            yield $label => [[
+                'max_concurrent_positions' => ['state' => 'defined', 'value' => ['limit' => 4, 'include_pending_entries' => true, 'per_symbol_limit' => $perSymbol], 'unit' => 'positions'],
+            ], 'canonical_portfolio_concurrency_policy_invalid'];
+        }
         yield 'unresolved exposure' => [[
             'mode_exposure_cap' => ['state' => 'unresolved', 'value' => null, 'unit' => 'percent_equity_notional'],
         ], 'canonical_portfolio_exposure_policy_unresolved'];

@@ -279,6 +279,10 @@ class IndicatorContextBuilder
             $highSeries = $highTail;
             $lowSeries  = $lowTail;
         }
+        // Series conditions on highs/lows need their own chronology, aligned like ema_200_series_timestamps.
+        $hlcTimestamped = $hlcSeries !== null && $seriesTimestamps !== null
+            && count($hlcSeries['highs']) === count($seriesTimestamps)
+            && count($hlcSeries['lows']) === count($seriesTimestamps);
 
 
         $context = array_filter([
@@ -287,6 +291,12 @@ class IndicatorContextBuilder
             'close' => $close,
             'high_series' => $highSeries,
             'low_series' => $lowSeries,
+            'high_series_timestamps' => $hlcTimestamped && $highSeries !== null && $seriesTimestamps !== null
+                ? array_slice($seriesTimestamps, -count($highSeries))
+                : null,
+            'low_series_timestamps' => $hlcTimestamped && $lowSeries !== null && $seriesTimestamps !== null
+                ? array_slice($seriesTimestamps, -count($lowSeries))
+                : null,
             'ema' => $emaMap ?: null,
             'ema_prev' => $emaPrevMap ?: null,
             'ema_200_slope' => $ema200Slope,

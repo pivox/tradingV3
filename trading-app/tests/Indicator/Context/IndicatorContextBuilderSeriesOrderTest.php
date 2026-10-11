@@ -52,6 +52,8 @@ final class IndicatorContextBuilderSeriesOrderTest extends TestCase
         self::assertSame(array_slice($expectedHistogram, -3), $context['macd_hist_last3']);
         self::assertSame(array_slice($highs, -60), $context['high_series']);
         self::assertSame(array_slice($lows, -60), $context['low_series']);
+        self::assertSame(array_slice($timestamps, -60), $context['high_series_timestamps']);
+        self::assertSame(array_slice($timestamps, -60), $context['low_series_timestamps']);
         self::assertSame('oldest_to_newest', $context['series_order']);
         self::assertSame($timestamps, $context['series_timestamps']);
         self::assertSame(
@@ -89,6 +91,8 @@ final class IndicatorContextBuilderSeriesOrderTest extends TestCase
         self::assertArrayNotHasKey('macd_line_signal_series_timestamps', $context);
         self::assertArrayNotHasKey('ema_200_series', $context);
         self::assertArrayNotHasKey('ema_200_series_timestamps', $context);
+        self::assertArrayNotHasKey('high_series_timestamps', $context);
+        self::assertArrayNotHasKey('low_series_timestamps', $context);
     }
 
     public function testSingleTimestampCannotProveSeriesDirection(): void

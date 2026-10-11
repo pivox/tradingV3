@@ -328,6 +328,8 @@ class CanonicalProjectedIndicatorSnapshot(BaseModel):
     close: int | float
     high_series: tuple[int | float, ...]
     low_series: tuple[int | float, ...]
+    high_series_timestamps: tuple[int, ...]
+    low_series_timestamps: tuple[int, ...]
     rsi: int | float
     ema_20: int | float
     ema_50: int | float
@@ -419,6 +421,8 @@ class CanonicalProjectedIndicatorSnapshot(BaseModel):
         return tuple(value)
 
     @field_validator(
+        "high_series_timestamps",
+        "low_series_timestamps",
         "ema_200_series_timestamps",
         "macd_hist_series_timestamps",
         "macd_line_signal_series_timestamps",
@@ -530,6 +534,8 @@ class CanonicalProjectedIndicatorSnapshot(BaseModel):
             or self.series_timestamps[-1] != int(observed)
             or len(self.high_series) != 60
             or len(self.low_series) != 60
+            or self.high_series_timestamps != self.series_timestamps[-60:]
+            or self.low_series_timestamps != self.series_timestamps[-60:]
             or len(self.ema_200_series) != 2
             or self.ema_200_series_timestamps != self.series_timestamps[-2:]
             or len(self.macd_hist_series) != 60

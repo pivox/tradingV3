@@ -34,6 +34,8 @@ PUBLISHED_RUN_IDENTITIES = (
     ("scalping", "1.1.0", "scalping.trend_momentum.short", "1.1.0", "short"),
     ("micro_scalping", "1.0.0", "micro_scalping.momentum_ofi.long", "1.0.0", "long"),
     ("micro_scalping", "1.0.0", "micro_scalping.momentum_ofi.short", "1.0.0", "short"),
+    ("swing", "1.0.0", "swing.breakout.long", "1.0.0", "long"),
+    ("swing", "1.0.0", "swing.breakout.short", "1.0.0", "short"),
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "backtesting"
@@ -143,6 +145,7 @@ def test_catalogue_versions_match_the_exact_contract_files() -> None:
         "day_trading": ("1.0.0", "1.1.0"),
         "scalping": ("1.0.0", "1.1.0"),
         "micro_scalping": ("1.0.0",),
+        "swing": ("1.0.0",),
     }
     assert PUBLISHED_SETUP_VERSIONS == {
         "crash_short": ("1.0.0", "1.1.0"),
@@ -153,6 +156,8 @@ def test_catalogue_versions_match_the_exact_contract_files() -> None:
         "scalping.trend_momentum.short": ("1.0.0", "1.1.0"),
         "micro_scalping.momentum_ofi.long": ("1.0.0",),
         "micro_scalping.momentum_ofi.short": ("1.0.0",),
+        "swing.breakout.long": ("1.0.0",),
+        "swing.breakout.short": ("1.0.0",),
     }
 
 
@@ -184,6 +189,32 @@ def test_modern_identity_rejects_aliases_versions_and_catalogue_mismatches(
 
     with pytest.raises(ValidationError):
         ModernTradingIdentity(**payload)
+
+
+@pytest.mark.parametrize(
+    "override",
+    (
+        {"setup_id": "day_trading.trend_continuation.long", "setup_version": "1.1.0"},
+        {"setup_id": "swing.breakout.short"},
+        {"side": "short"},
+        {"mode_version": "1.1.0"},
+        {"setup_version": "1.1.0"},
+    ),
+)
+def test_swing_identity_accepts_only_its_two_breakout_cells(override: dict[str, str]) -> None:
+    payload = {
+        "mode_id": "swing",
+        "mode_version": "1.0.0",
+        "setup_id": "swing.breakout.long",
+        "setup_version": "1.0.0",
+        "exchange": "fake",
+        "environment": "test",
+        "side": "long",
+    }
+    ModernTradingIdentity(**payload)
+
+    with pytest.raises(ValidationError):
+        ModernTradingIdentity(**{**payload, **override})
 
 
 @pytest.mark.parametrize("setup_version", ("1.0.0", "1.1.0"))
@@ -276,6 +307,15 @@ def test_effective_config_request_reuses_the_exact_modern_identity_contract() ->
             "exchange": "fake",
             "environment": "test",
             "side": "long",
+        },
+        {
+            "mode_id": "swing",
+            "mode_version": "1.0.0",
+            "setup_id": "swing.breakout.short",
+            "setup_version": "1.0.0",
+            "exchange": "fake",
+            "environment": "test",
+            "side": "short",
         },
     ),
 )

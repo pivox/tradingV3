@@ -1,0 +1,4 @@
+mode_id: swing
+mode_version: '1.0.0'
+exchange: fake
+overrides: { }

@@ -8,13 +8,14 @@ use App\TradingCore\Mode\Exception\ModeContractException;
 
 final class ModeContractValidator
 {
-    public const MODE_IDS = ['day_trading', 'scalping', 'micro_scalping'];
+    public const MODE_IDS = ['day_trading', 'scalping', 'micro_scalping', 'swing'];
     public const LIFECYCLE_STATUSES = ['draft', 'shadow', 'paper', 'candidate', 'active', 'retired'];
     private const TIMEFRAMES = ['4h', '1h', '15m', '5m', '1m'];
     private const PUBLISHED_VERSIONS = [
         'day_trading' => ['1.0.0', '1.1.0'],
         'scalping' => ['1.0.0', '1.1.0'],
         'micro_scalping' => ['1.0.0', '1.1.0'],
+        'swing' => ['1.0.0'],
     ];
     private const GOVERNANCE_TARGETS = [
         'promotion' => 'shadow',
@@ -35,6 +36,10 @@ final class ModeContractValidator
         'micro_scalping' => [
             'micro_scalping.momentum_ofi.long',
             'micro_scalping.momentum_ofi.short',
+        ],
+        'swing' => [
+            'swing.breakout.long',
+            'swing.breakout.short',
         ],
     ];
 
@@ -68,8 +73,10 @@ final class ModeContractValidator
                 $document['mode_id'],
             ));
         }
-        $isShadowContract = $document['mode_version'] === '1.1.0'
-            && in_array($document['mode_id'], ['day_trading', 'scalping', 'micro_scalping'], true);
+        // swing@1.0.0 is published directly as an executable shadow contract.
+        $isShadowContract = ($document['mode_version'] === '1.1.0'
+                && in_array($document['mode_id'], ['day_trading', 'scalping', 'micro_scalping'], true))
+            || ($document['mode_id'] === 'swing' && $document['mode_version'] === '1.0.0');
 
         $lifecycle = $this->mapping($document, 'lifecycle');
         $this->assertExactKeys($lifecycle, ['status', 'executable', 'rationale'], 'lifecycle');
@@ -88,7 +95,7 @@ final class ModeContractValidator
         $this->assertUnit($this->mapping($document, 'horizon'), 'horizon', 'holding_horizon_policy');
         $this->assertUnit($this->mapping($document, 'session_policy'), 'session_policy', 'session_policy');
         if ($isShadowContract) {
-            $this->assertShadowHorizon($this->mapping($document, 'horizon'), $document['mode_id']);
+            $this->assertShadowHorizon($this->mapping($document, 'horizon'), $document['mode_id'], $document['mode_version']);
             $this->assertShadowSession($this->mapping($document, 'session_policy'));
         } else {
             $this->assertDefinedString($this->mapping($document, 'horizon'), 'horizon');
@@ -366,21 +373,23 @@ final class ModeContractValidator
     }
 
     /** @param array<string, mixed> $decision */
-    private function assertShadowHorizon(array $decision, string $modeId): void
+    private function assertShadowHorizon(array $decision, string $modeId, string $modeVersion): void
     {
         $value = $decision['value'] ?? null;
         if (!is_array($value) || array_is_list($value)) {
-            throw new ModeContractException(sprintf('%s 1.1.0 horizon must be a mapping.', $modeId));
+            throw new ModeContractException(sprintf('%s %s horizon must be a mapping.', $modeId, $modeVersion));
         }
         $this->assertExactKeys($value, ['maximum_duration', 'daily_boundary_time', 'daily_boundary_timezone', 'close_before_boundary'], 'horizon.value');
-        $duration = match ($modeId) {
-            'day_trading' => 'PT8H',
-            'scalping' => 'PT2H',
-            'micro_scalping' => 'PT30M',
+        [$duration, $closeBeforeBoundary] = match ($modeId) {
+            'day_trading' => ['PT8H', true],
+            'scalping' => ['PT2H', true],
+            'micro_scalping' => ['PT30M', true],
+            // Swing holds across UTC days; the boundary only delimits accounting days.
+            'swing' => ['PT336H', false],
             default => throw new ModeContractException(sprintf('Unsupported shadow mode "%s".', $modeId)),
         };
-        if (!$this->frozenValuesEqual($value, ['maximum_duration' => $duration, 'daily_boundary_time' => '00:00:00', 'daily_boundary_timezone' => 'UTC', 'close_before_boundary' => true])) {
-            throw new ModeContractException(sprintf('%s 1.1.0 horizon differs from the frozen shadow decision.', $modeId));
+        if (!$this->frozenValuesEqual($value, ['maximum_duration' => $duration, 'daily_boundary_time' => '00:00:00', 'daily_boundary_timezone' => 'UTC', 'close_before_boundary' => $closeBeforeBoundary])) {
+            throw new ModeContractException(sprintf('%s %s horizon differs from the frozen shadow decision.', $modeId, $modeVersion));
         }
     }
 
@@ -399,9 +408,14 @@ final class ModeContractValidator
         if (!is_array($value) || array_is_list($value)) {
             throw new ModeContractException('risk.max_concurrent_positions shadow value must be a mapping.');
         }
-        $this->assertExactKeys($value, ['limit', 'include_pending_entries'], 'risk.max_concurrent_positions.value');
-        $limit = $modeId === 'day_trading' ? 4 : 3;
-        if (!$this->frozenValuesEqual($value, ['limit' => $limit, 'include_pending_entries' => true])) {
+        $expected = match ($modeId) {
+            'day_trading' => ['limit' => 4, 'include_pending_entries' => true],
+            // Swing admits one active plan per pair, explicitly, below its ten-plan limit.
+            'swing' => ['limit' => 10, 'include_pending_entries' => true, 'per_symbol_limit' => 1],
+            default => ['limit' => 3, 'include_pending_entries' => true],
+        };
+        $this->assertExactKeys($value, array_keys($expected), 'risk.max_concurrent_positions.value');
+        if (!$this->frozenValuesEqual($value, $expected)) {
             throw new ModeContractException('risk.max_concurrent_positions differs from the frozen shadow decision.');
         }
     }
@@ -435,6 +449,14 @@ final class ModeContractValidator
                 'mode_exposure_cap' => 20.0,
                 'leverage' => 2.0,
             ],
+            'swing' => [
+                'timeframes' => ['regime' => ['4h'], 'context' => ['4h'], 'trigger' => ['4h'], 'execution' => ['4h'], 'confirmations' => ['4h']],
+                'cadence' => 'PT4H',
+                'trade_budget' => 5.0,
+                'daily_loss_cap' => ['percent_equity' => 100.0, 'absolute_quote' => 100000.0, 'quote_currency' => 'USDT', 'day_timezone' => 'UTC', 'day_boundary_local' => '00:00:00', 'include_unrealized_loss' => true],
+                'mode_exposure_cap' => 100.0,
+                'leverage' => 2.0,
+            ],
             default => throw new ModeContractException('Unsupported shadow mode.'),
         };
 
@@ -447,7 +469,7 @@ final class ModeContractValidator
             || !$this->frozenValuesEqual($document['risk']['mode_exposure_cap']['value'], $frozen['mode_exposure_cap'])
             || !$this->frozenValuesEqual($document['leverage']['value'], $frozen['leverage'])
             || $document['order_policy']['value'] !== ['margin_mode' => 'isolated', 'preferred_type' => 'limit', 'market_fallback' => false]) {
-            throw new ModeContractException(sprintf('%s 1.1.0 differs from the frozen shadow contract.', $document['mode_id']));
+            throw new ModeContractException(sprintf('%s %s differs from the frozen shadow contract.', $document['mode_id'], $document['mode_version']));
         }
 
         if ($document['mode_id'] === 'scalping') {
