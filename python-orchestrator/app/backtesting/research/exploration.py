@@ -12,24 +12,32 @@ the whole universe at a time, through:
   ``CanonicalRiskEngine``) with exact decimal tick/step quantization;
 * the fill, exit, cost, funding and admission rules of ``PortfolioSimulator``.
 
-Parity with the canonical kernel is a tested property (see
-``tests/test_research_exploration.py``), not an assumption. Results remain an
-exploratory screen: they never read holdout data, never create campaign
-artifacts and grant no execution authority. A promising hypothesis must still
-be published as a versioned setup and confirmed by the canonical campaign.
+``canonical_replay`` runs the same signals and plans through the canonical
+``PortfolioSimulator``; tests and ``scripts/research_exploration_parity.py``
+use it as the parity oracle. Results remain an exploratory screen: no value at
+or after 2026-01-01 enters any input or output, no campaign artifact is created
+and no execution authority is granted. A promising hypothesis must still be
+published as a versioned setup and confirmed by the canonical campaign.
+
+Paths that cannot bind under the frozen research limits are not modelled: the
+250 quote position cap keeps ``final_leverage`` at 1 on a 100,000 quote wallet,
+so the isolated-liquidation proxy, the exposure and margin checks and the 6 %
+equity side of the daily-loss cap stay inactive (the 30 quote cap binds).
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+import statistics
 from array import array
 from bisect import bisect_right
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, Context, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -44,26 +52,27 @@ CONTEXT_FIELDS = ('close', 'rsi', 'vwap', 'atr', 'ma_21_plus_k_atr', 'pullback_a
 
 MINUTE = 60_000
 DAY = 86_400_000
-HOLDOUT_START_MS = 1_767_225_600_000  # 2026-01-01T00:00:00Z, never readable here.
+HOLDOUT_START_MS = 1_767_225_600_000  # 2026-01-01T00:00:00Z
 PHASES = {'training': (1_672_531_200_000, 1_735_689_600_000),
           'validation': (1_735_689_600_000, HOLDOUT_START_MS)}
+PHASE_YEARS = {'training': ('2023', '2024'), 'validation': ('2025',)}
 
 MAKER_FEE = 0.0002
 TAKER_FEE = 0.0005
 NOTIONAL_CAP = 250.0
 EXCHANGE_MIN_NOTIONAL = 5.0
-MINIMUM_NET_R = 1.3
 HOLDING_MS = 8 * 3_600_000
-ENTRY_FILL_WINDOW_MS = 90_000
-PENDING_RELEASE_MS = 2 * MINUTE
+ENTRY_TTL_MS = 90_000  # a resting entry expires once a bar boundary passes decision + 90 s
+PENDING_RELEASE_MS = (ENTRY_TTL_MS // MINUTE + 1) * MINUTE
 MAX_CONCURRENT = 4
 DAILY_LOSS_CAP = 30.0
 DEADLINE_REASONS = ('holding_deadline', 'midnight')
 
-TRAINING_THRESHOLDS = {'minimum_trades': 100, 'minimum_trades_per_year': 30, 'minimum_pairs': 5,
-                       'baseline_profit_factor': 1.2, 'adverse_profit_factor': 1.0,
-                       'maximum_drawdown_quote': 6000.0}
-MINIMUM_VALIDATION_TRADES = 50
+# experiments.screening_reasons, applied to every phase x cost profile.
+PROTOCOL = {'minimum_trades': {'training': 100, 'validation': 50}, 'minimum_pairs': 5,
+            'minimum_annual_training_trades': 30,
+            'minimum_profit_factor': {'baseline': 1.2, 'adverse': 1.0},
+            'maximum_drawdown_quote': 6000.0}
 
 
 class ExplorationError(ValueError):
@@ -170,7 +179,10 @@ POLICIES: dict[str, FilterPolicy] = {p.id: p for p in (
     FilterPolicy('N3_noconf_pullback15_3_ext15', _NO_CONFIRMATIONS,
                  lambda r: rsi_below(r['15m']) and adx_at_least(r['1h']) and recent_pullback(r['15m'])
                  and below_ma21_plus_k_atr(r['15m']), 'Q2 without the 5m/1m confirmation section.'),
+    FilterPolicy('R_random_control', (), lambda r: True,
+                 'Control on sampled rows: no section or filter (meaningful only on a control root).'),
 )}
+SETUP_POLICIES = tuple(p for p in POLICIES if p != 'R_random_control')
 
 
 # --------------------------------------------------------------------------- geometries
@@ -194,7 +206,8 @@ class Geometry:
             raise ExplorationError('geometry invalid')
 
 
-# The canonical ResearchVariant catalogue, then a bounded higher-timeframe stop family.
+# The canonical ResearchVariant catalogue (plans.VARIANT_DIFFS), then a bounded
+# higher-timeframe stop family without geometries equal to a canonical one.
 GEOMETRIES: dict[str, Geometry] = {
     'baseline': Geometry(),
     'ema20_5m': Geometry(anchor_source='ema_20'),
@@ -224,24 +237,36 @@ _TARGETS = {'T15': 1.5, 'T20': 2.0, 'T30': 3.0}
 for _zone, _zone_diff in _ZONES.items():
     for _stop, (_stop_tf, _stop_multiple) in _STOPS.items():
         for _target, _risk_multiple in _TARGETS.items():
-            GEOMETRIES[f'{_zone}.{_stop}.{_target}'] = Geometry(
-                **_zone_diff, stop_timeframe=_stop_tf, stop_atr_multiplier=_stop_multiple,
-                target_risk_multiple=_risk_multiple)
+            _candidate = Geometry(**_zone_diff, stop_timeframe=_stop_tf, stop_atr_multiplier=_stop_multiple,
+                                  target_risk_multiple=_risk_multiple)
+            if _candidate not in GEOMETRIES.values():
+                GEOMETRIES[f'{_zone}.{_stop}.{_target}'] = _candidate
 EXTENDED_GEOMETRIES = tuple(g for g in GEOMETRIES if g not in CANONICAL_GEOMETRIES)
 
 
 # --------------------------------------------------------------------------- market data
-def _ticks(count: int, tick: float) -> float:
-    """Nearest double to an exact decimal multiple, matching decimal price strings."""
-    return float(Decimal(count) * Decimal(repr(tick)))
+_EXACT = Context(prec=80)  # BigDecimal-like exactness for the plan arithmetic
+
+
+def _decimal(value: float) -> Decimal:
+    """CanonicalOrderPlanDecimal::fromFloat: the shortest round-trip decimal of a double."""
+    return Decimal(repr(float(value)))
+
+
+def _floor_to(value: Decimal, tick: Decimal) -> Decimal:
+    return _EXACT.multiply(_EXACT.divide(value, tick).to_integral_value(rounding=ROUND_FLOOR), tick)
+
+
+def _ceil_to(value: Decimal, tick: Decimal) -> Decimal:
+    return _EXACT.multiply(_EXACT.divide(value, tick).to_integral_value(rounding=ROUND_CEILING), tick)
 
 
 def floor_to(value: float, tick: float) -> float:
-    return _ticks(math.floor(value / tick + 1e-9), tick)
+    return float(_floor_to(_decimal(value), _decimal(tick)))
 
 
 def ceil_to(value: float, tick: float) -> float:
-    return _ticks(math.ceil(value / tick - 1e-9), tick)
+    return float(_ceil_to(_decimal(value), _decimal(tick)))
 
 
 @dataclass
@@ -265,6 +290,13 @@ class CandleSeries:
 
     def index(self, open_ms: int) -> int:
         return (open_ms - self.start_ms) // MINUTE
+
+    def prior_close(self, boundary_ms: int) -> float:
+        """Close known strictly before the bar that ends at ``boundary_ms`` (the canonical mark)."""
+        index = self.index(boundary_ms) - 2
+        if index < 0:
+            raise ExplorationError('no prior close: the canonical prephase mark is outside the series')
+        return self.close[index]
 
     def write(self, path: Path, header: Mapping[str, Any]) -> None:
         raw = json.dumps({**header, 'symbol': self.symbol, 'start_ms': self.start_ms, 'count': self.count}).encode()
@@ -319,52 +351,72 @@ class Plan:
 
 def build_plan(row: Mapping[str, Any], symbol: str, geometry: Geometry, instrument: Mapping[str, Any],
                profile: Mapping[str, float]) -> tuple[Plan | None, str | None]:
-    """ResearchPlanBuilder arithmetic for one signal; returns (plan, None) or (None, reason)."""
-    anchor = row[geometry.anchor_timeframe].get(geometry.anchor_source)
-    atr = row[geometry.atr_timeframe].get('atr')
-    stop_atr = row[geometry.stop_timeframe].get('atr')
-    candidate = row['15m'].get('close')
-    for value in (anchor, atr, stop_atr, candidate):
+    """ResearchPlanBuilder arithmetic up to the net-R gate; returns (plan, None) or (None, reason).
+
+    Decimal arithmetic on the shortest decimal of every double, as the PHP value
+    classes do. Portfolio admission and the holding-window check follow in
+    ``run_hypothesis``, in the builder's order.
+    """
+    inputs = (row[geometry.anchor_timeframe].get(geometry.anchor_source), row[geometry.atr_timeframe].get('atr'),
+              row[geometry.stop_timeframe].get('atr'), row['15m'].get('close'))
+    for value in inputs:
         if (not isinstance(value, (int, float)) or isinstance(value, bool)
                 or not math.isfinite(value) or value <= 0):
             return None, 'research_signal_price_context_missing'
-    tick = instrument['tick_size']
-    half_width = min(max(atr * geometry.zone_atr_multiplier, anchor * geometry.minimum_half_width_rate),
-                     anchor * geometry.maximum_half_width_rate)
-    lower, upper = floor_to(anchor - half_width, tick), ceil_to(anchor + half_width, tick)
+    x = _EXACT
+    anchor, atr, stop_atr, candidate = (_decimal(v) for v in inputs)
+    tick, step = _decimal(instrument['tick_size']), _decimal(instrument['quantity_step'])
+    half_width = min(max(x.multiply(atr, _decimal(geometry.zone_atr_multiplier)),
+                         x.multiply(anchor, _decimal(geometry.minimum_half_width_rate))),
+                     x.multiply(anchor, _decimal(geometry.maximum_half_width_rate)))
+    lower, upper = _floor_to(x.subtract(anchor, half_width), tick), _ceil_to(x.add(anchor, half_width), tick)
     if lower <= 0 or upper <= lower:
         return None, 'canonical_entry_zone_bounds_invalid'
-    entry = ceil_to(candidate, tick)
+    entry = _ceil_to(candidate, tick)
     if not lower <= entry <= upper:
         return None, 'canonical_entry_zone_candidate_outside'
-    stop = floor_to(entry - stop_atr * geometry.stop_atr_multiplier, tick)
-    if not 0 < stop < entry:
+    stop = _floor_to(x.subtract(entry, x.multiply(stop_atr, _decimal(geometry.stop_atr_multiplier))), tick)
+    if stop <= 0:
         return None, 'canonical_protection_stop_invalid'
-    risk_distance = entry - stop
-    target = floor_to(entry + risk_distance * geometry.target_risk_multiple, tick)
+    if stop >= entry:
+        return None, 'canonical_protection_stop_polarity_invalid'
+    risk_distance = x.subtract(entry, stop)
+    target = _floor_to(x.add(entry, x.multiply(risk_distance, _decimal(geometry.target_risk_multiple))), tick)
     if target <= entry:
         return None, 'canonical_protection_target_polarity_invalid'
-    quantity = floor_to(NOTIONAL_CAP / entry, instrument['quantity_step'])
-    if quantity <= 0 or quantity < instrument['min_quantity']:
+    contract = _decimal(instrument['contract_size'])
+    quantity = x.multiply(x.divide(_decimal(NOTIONAL_CAP), x.multiply(x.multiply(entry, contract), step))
+                          .to_integral_value(rounding=ROUND_FLOOR), step)
+    if quantity <= 0 or quantity < _decimal(instrument['min_quantity']):
         return None, 'canonical_risk_quantity_below_minimum'
-    notional = entry * quantity
-    if notional < max(EXCHANGE_MIN_NOTIONAL, instrument['min_notional']):
+    notional = x.multiply(x.multiply(entry, contract), quantity)
+    if notional < _decimal(EXCHANGE_MIN_NOTIONAL):
+        return None, 'canonical_risk_notional_below_minimum'
+    if notional < max(_decimal(EXCHANGE_MIN_NOTIONAL), _decimal(instrument['min_notional'])):
         return None, 'research_instrument_notional_below_minimum'
-    stop_notional, target_notional = stop * quantity, target * quantity
-    funding = notional * max(0.0, profile['funding_provision_rate'])
-    net_risk = (risk_distance * quantity + notional * MAKER_FEE + stop_notional * TAKER_FEE
-                + notional * (profile['entry_spread_rate'] + profile['entry_slippage_rate'])
-                + stop_notional * (profile['stop_spread_rate'] + profile['stop_slippage_rate']) + funding)
-    net_reward = ((target - entry) * quantity - notional * MAKER_FEE - target_notional * TAKER_FEE
-                  - notional * (profile['entry_spread_rate'] + profile['entry_slippage_rate'])
-                  - target_notional * (profile['target_spread_rate'] + profile['target_slippage_rate']) - funding)
-    if net_reward / net_risk < MINIMUM_NET_R:
+    rate = {key: _decimal(profile[key]) for key in ('entry_spread_rate', 'stop_spread_rate', 'target_spread_rate',
+                                                     'entry_slippage_rate', 'stop_slippage_rate',
+                                                     'target_slippage_rate', 'funding_provision_rate')}
+    stop_notional = x.multiply(x.multiply(stop, contract), quantity)
+    target_notional = x.multiply(x.multiply(target, contract), quantity)
+    entry_costs = x.multiply(notional, _decimal(MAKER_FEE) + rate['entry_spread_rate'] + rate['entry_slippage_rate'])
+    funding = x.multiply(notional, max(Decimal(0), rate['funding_provision_rate']))
+    net_risk = (x.multiply(x.multiply(risk_distance, contract), quantity) + entry_costs + funding
+                + x.multiply(stop_notional, _decimal(TAKER_FEE) + rate['stop_spread_rate'] + rate['stop_slippage_rate']))
+    net_reward = (x.multiply(x.multiply(target - entry, contract), quantity) - entry_costs - funding
+                  - x.multiply(target_notional,
+                               _decimal(TAKER_FEE) + rate['target_spread_rate'] + rate['target_slippage_rate']))
+    net_r = x.divide(net_reward, net_risk).quantize(Decimal('1e-18'), rounding=ROUND_DOWN)
+    if net_r < Decimal('1.3'):
         return None, 'research_minimum_net_r_not_met'
     decision = row['ms']
     deadline = min(decision + HOLDING_MS, (decision // DAY + 1) * DAY)
-    if deadline <= decision + MINUTE:
-        return None, 'research_holding_window_unavailable'
-    return Plan(symbol, decision, entry, stop, target, quantity, net_risk, net_reward / net_risk, deadline), None
+    return Plan(symbol, decision, float(entry), float(stop), float(target), float(quantity), float(net_risk),
+                float(net_r), deadline), None
+
+
+def holding_window_available(plan: Plan) -> bool:
+    return plan.deadline_ms > plan.decision_ms + MINUTE
 
 
 # ------------------------------------------------------------------------- simulation
@@ -393,8 +445,10 @@ def simulate(plan: Plan, candles: CandleSeries, funding: FundingSeries | None,
     first = candles.index(plan.decision_ms)
     if not 0 <= first < candles.count:
         raise ExplorationError('decision outside candle coverage')
+    # Only bars whose boundary is within the entry TTL can fill: with 1m bars, the first one.
     fill_boundary = plan.decision_ms + MINUTE
-    if not (candles.low[first] <= plan.entry and fill_boundary < plan.deadline_ms):
+    if not (fill_boundary <= plan.decision_ms + ENTRY_TTL_MS and candles.low[first] <= plan.entry
+            and fill_boundary < plan.deadline_ms):
         return outcome
     outcome.filled, outcome.fill_ms = True, fill_boundary
     outcome.entry_cost = plan.quantity * plan.entry * (MAKER_FEE + profile['entry_spread_rate'] + profile['entry_slippage_rate'])
@@ -406,7 +460,7 @@ def simulate(plan: Plan, candles: CandleSeries, funding: FundingSeries | None,
             outcome.reason = 'midnight' if plan.deadline_ms // DAY > plan.decision_ms // DAY else 'holding_deadline'
             break
         if candles.low[index] <= plan.stop:
-            outcome.ambiguous = candles.high[index] >= plan.target or new
+            outcome.ambiguous = outcome.ambiguous or candles.high[index] >= plan.target or new
             outcome.exit_ms, outcome.exit_price = boundary, min(candles.open[index], plan.stop)
             outcome.reason = 'stop'
             break
@@ -445,9 +499,15 @@ def _apply_funding(outcome: Outcome, candles: CandleSeries, funding: FundingSeri
         if timestamp >= plan.deadline_ms or (timestamp == boundary and exiting):
             continue
         uncertain_exit = exiting and outcome.reason not in DEADLINE_REASONS
-        if timestamp < boundary and (batch == first or uncertain_exit) and rate <= 0:
-            continue  # adverse_possible_credit_certain.v1: an uncertain credit is never booked.
-        amount = -plan.quantity * (mark if mark is not None else candles.close[batch - 1]) * rate
+        if timestamp < boundary and (batch == first or uncertain_exit):
+            outcome.ambiguous = True  # funding_path: exposure at the instant is uncertain
+            if rate <= 0:
+                continue  # adverse_possible_credit_certain.v1: an uncertain credit is never booked.
+        if mark is None:
+            if batch < 1:
+                raise ExplorationError('no prior close: the canonical prephase mark is outside the series')
+            mark = candles.close[batch - 1]
+        amount = -plan.quantity * mark * rate
         outcome.funding += amount
         outcome.funding_cash.append((timestamp, amount))
 
@@ -481,7 +541,7 @@ def run_hypothesis(rows: Mapping[str, Sequence[Mapping[str, Any]]], candles: Map
                      key=lambda item: item[:2])
     rejections: Counter[str] = Counter()
     active: list[Outcome] = []
-    recent: list[Outcome] = []  # closed today or still carrying today's cashflows
+    recent: list[Outcome] = []  # filled outcomes whose exit cashflow may belong to the current UTC day
     closed: list[Outcome] = []
     for decision, _, symbol, row in signals:
         still = []
@@ -500,8 +560,7 @@ def run_hypothesis(rows: Mapping[str, Sequence[Mapping[str, Any]]], candles: Map
             rejections[reason] += 1
             continue
         realized = realized_today(decision, recent + active)
-        unrealized = sum(o.plan.quantity * (candles[o.plan.symbol].close[candles[o.plan.symbol].index(decision) - 1]
-                                            - o.plan.entry)
+        unrealized = sum(o.plan.quantity * (candles[o.plan.symbol].prior_close(decision + MINUTE) - o.plan.entry)
                          for o in active if o.filled and o.fill_ms <= decision)
         consumed = max(0.0, -realized) + max(0.0, -unrealized) + sum(o.plan.net_risk for o in active)
         if plan.net_risk > DAILY_LOSS_CAP - consumed:
@@ -510,12 +569,20 @@ def run_hypothesis(rows: Mapping[str, Sequence[Mapping[str, Any]]], candles: Map
         if len(active) >= MAX_CONCURRENT:
             rejections['research_portfolio_concurrency_exceeded'] += 1
             continue
+        if not holding_window_available(plan):
+            rejections['research_holding_window_unavailable'] += 1
+            continue
         active.append(simulate(plan, candles[symbol], funding[symbol] if funding is not None else None, profile))
     closed.extend(o for o in active if o.filled)
     return summarize(len(signals), rejections, closed), closed
 
 
+def _year(timestamp_ms: int) -> str:
+    return str(datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).year)
+
+
 def summarize(signals: int, rejections: Mapping[str, int], outcomes: Sequence[Outcome]) -> dict:
+    """Statistics with the canonical attribution: trades by exit year, cash by cashflow timestamp."""
     trades = sorted((o for o in outcomes if o.filled), key=lambda o: o.exit_ms)
     count = len(trades)
     gains = sum(o.net for o in trades if o.net > 0)
@@ -525,21 +592,30 @@ def summarize(signals: int, rejections: Mapping[str, int], outcomes: Sequence[Ou
         equity += outcome.net
         peak = max(peak, equity)
         drawdown = max(drawdown, peak - equity)
-    by_year: dict[str, dict[str, float]] = defaultdict(lambda: {'trades': 0, 'net': 0.0, 'net_r': 0.0})
+    by_year: dict[str, dict[str, float]] = defaultdict(lambda: {'trades': 0, 'net_r': 0.0, 'cashflow_net': 0.0})
     by_pair: dict[str, dict[str, float]] = defaultdict(lambda: {'trades': 0, 'net': 0.0, 'net_r': 0.0})
     for outcome in trades:
-        year = str(datetime.fromtimestamp(outcome.plan.decision_ms / 1000, tz=timezone.utc).year)
-        for bucket in (by_year[year], by_pair[outcome.plan.symbol]):
-            bucket['trades'] += 1
-            bucket['net'] += outcome.net
-            bucket['net_r'] += outcome.net_r
+        year = by_year[_year(outcome.exit_ms)]
+        year['trades'] += 1
+        year['net_r'] += outcome.net_r
+        by_year[_year(outcome.fill_ms)]['cashflow_net'] -= outcome.entry_cost
+        by_year[_year(outcome.exit_ms)]['cashflow_net'] += outcome.exit_cash
+        for at, amount in outcome.funding_cash:
+            by_year[_year(at)]['cashflow_net'] += amount
+        pair = by_pair[outcome.plan.symbol]
+        pair['trades'] += 1
+        pair['net'] += outcome.net
+        pair['net_r'] += outcome.net_r
+    net_rs = [o.net_r for o in trades]
     return {
+        'execution_authority': 'none',
         'signals': signals, 'rejections': dict(sorted(rejections.items())), 'trades': count,
         'wins': sum(1 for o in trades if o.net > 0),
         'win_rate': sum(1 for o in trades if o.net > 0) / count if count else None,
         'net_pnl': sum(o.net for o in trades), 'funding_quote': sum(o.funding for o in trades),
-        'total_net_r': sum(o.net_r for o in trades),
-        'mean_net_r': sum(o.net_r for o in trades) / count if count else None,
+        'total_net_r': sum(net_rs),
+        'mean_net_r': sum(net_rs) / count if count else None,
+        'net_r_stdev': statistics.stdev(net_rs) if count > 1 else None,
         'profit_factor': gains / losses if losses > 0 else None,
         'realized_drawdown_quote': drawdown,
         'exit_reasons': dict(sorted(Counter(o.reason for o in trades).items())),
@@ -550,23 +626,76 @@ def summarize(signals: int, rejections: Mapping[str, int], outcomes: Sequence[Ou
     }
 
 
-def training_eligible(baseline: Mapping[str, Any], adverse: Mapping[str, Any],
-                      years: Sequence[str] = ('2023', '2024')) -> bool:
-    """The frozen campaign protocol's training gates, applied to an exploratory replay."""
-    t = TRAINING_THRESHOLDS
-    by_year = baseline['by_year']
-    return (baseline['trades'] >= t['minimum_trades'] and baseline['pairs_with_trades'] >= t['minimum_pairs']
-            and all(by_year.get(y, {}).get('trades', 0) >= t['minimum_trades_per_year'] for y in years)
-            and all(by_year.get(y, {}).get('net', 0.0) > 0 for y in years)
-            and (baseline['profit_factor'] or 0.0) >= t['baseline_profit_factor']
-            and (adverse['profit_factor'] or 0.0) >= t['adverse_profit_factor']
-            and (baseline['mean_net_r'] or 0.0) > 0
-            and baseline['realized_drawdown_quote'] <= t['maximum_drawdown_quote'])
+# ----------------------------------------------------------------------------- protocol
+def screening_reasons(summary: Mapping[str, Any], phase: str, profile: str) -> list[str]:
+    """``experiments.screening_reasons`` for an exploratory summary (realized drawdown as proxy)."""
+    if phase not in PHASES or profile not in PROTOCOL['minimum_profit_factor']:
+        raise ExplorationError('screening phase or profile invalid')
+    reasons = []
+    if summary['trades'] < PROTOCOL['minimum_trades'][phase]:
+        reasons.append('insufficient_trades')
+    if summary['pairs_with_trades'] < PROTOCOL['minimum_pairs']:
+        reasons.append('insufficient_pairs')
+    if summary['mean_net_r'] is None or summary['mean_net_r'] <= 0:
+        reasons.append('nonpositive_mean_net_r')
+    if summary['profit_factor'] is None:
+        reasons.append('undefined_net_profit_factor')
+    elif summary['profit_factor'] < PROTOCOL['minimum_profit_factor'][profile]:
+        reasons.append('net_profit_factor_below_threshold')
+    if summary['realized_drawdown_quote'] > PROTOCOL['maximum_drawdown_quote']:
+        reasons.append('marked_drawdown_exceeded')
+    for year in PHASE_YEARS[phase]:
+        annual = summary['by_year'].get(year, {})
+        if phase == 'training' and annual.get('trades', 0) < PROTOCOL['minimum_annual_training_trades']:
+            reasons.append('insufficient_annual_training_trades:' + year)
+        if annual.get('cashflow_net', 0.0) <= 0:
+            reasons.append('nonpositive_annual_net_pnl:' + year)
+    return reasons
+
+
+def screen_report(results: Iterable[Mapping[str, Any]], minimum_trades: int = 100, top: int = 10) -> dict:
+    """Aggregate grid replays: distribution of baseline training outcomes and protocol screening."""
+    by_key: dict[tuple, dict] = {}
+    for row in results:
+        by_key[(row['policy'], row['geometry_id'], row['phase'], row['profile'])] = dict(row)
+    configs = sorted({(p, g) for p, g, _, _ in by_key})
+    sampled = [by_key[(p, g, 'training', 'baseline')] for p, g in configs if (p, g, 'training', 'baseline') in by_key
+               and by_key[(p, g, 'training', 'baseline')]['trades'] >= minimum_trades]
+    means = [row['mean_net_r'] for row in sampled]
+
+    def passes(policy: str, geometry: str, phases: Sequence[str], profiles: Sequence[str]) -> bool:
+        keys = [(policy, geometry, phase, profile) for phase in phases for profile in profiles]
+        return all(key in by_key for key in keys) and not any(
+            screening_reasons(by_key[key], key[2], key[3]) for key in keys)
+
+    ranked = sorted(sampled, key=lambda row: -row['mean_net_r'])[:top]
+    return {
+        'execution_authority': 'none',
+        'configurations': len(configs),
+        'minimum_trades': minimum_trades,
+        'configurations_with_minimum_trades': len(sampled),
+        'median_mean_net_r': statistics.median(means) if means else None,
+        'share_positive_mean_net_r': sum(1 for m in means if m > 0) / len(means) if means else None,
+        'training_baseline_passes': [f'{p}|{g}' for p, g in configs if passes(p, g, ('training',), ('baseline',))],
+        'training_protocol_passes': [f'{p}|{g}' for p, g in configs
+                                     if passes(p, g, ('training',), ('baseline', 'adverse'))],
+        'protocol_eligible': [f'{p}|{g}' for p, g in configs
+                              if passes(p, g, ('training', 'validation'), ('baseline', 'adverse'))],
+        'top_baseline_training': [{'policy': row['policy'], 'geometry_id': row['geometry_id'], 'trades': row['trades'],
+                                   'mean_net_r': row['mean_net_r'], 'net_r_stdev': row.get('net_r_stdev'),
+                                   'profit_factor': row['profit_factor']} for row in ranked],
+    }
 
 
 # -------------------------------------------------------------------------- extraction
-def extract_rows(lines: Iterable[bytes | str], symbol: str) -> tuple[list[dict], dict]:
-    """Keep rows whose regime, context and trigger passed; prove filter parity on every row."""
+def extract_rows(lines: Iterable[bytes | str], symbol: str, sample_modulus: int | None = None) -> tuple[list[dict], dict]:
+    """Prove filter parity on every row; keep section-ready rows, or a deterministic random-timing sample.
+
+    With ``sample_modulus`` the kept rows are those with sha256("SYMBOL:ms") % modulus == 0,
+    whatever their verdicts: a control for the ``R_random_control`` policy.
+    """
+    if sample_modulus is not None and sample_modulus < 2:
+        raise ExplorationError('sample modulus must be at least 2')
     parity: Counter[str] = Counter()
     kept: list[dict] = []
     previous = None
@@ -591,9 +720,14 @@ def extract_rows(lines: Iterable[bytes | str], symbol: str) -> tuple[list[dict],
             if mine != theirs:
                 parity[identifier] += 1
         sections = {name: bool(record['verdicts']['sections'][name]['passed']) for name in SECTIONS}
-        if sections['regime'] and sections['context'] and sections['trigger']:
+        if sample_modulus is not None:
+            keep = int(hashlib.sha256(f'{symbol}:{decision}'.encode()).hexdigest(), 16) % sample_modulus == 0
+        else:
+            keep = sections['regime'] and sections['context'] and sections['trigger']
+        if keep:
             kept.append({'ms': decision, 'sec': sections, 'bf': list(stored), **compact})
-    return kept, {'symbol': symbol, 'rows': rows, 'kept': len(kept), 'filter_mismatches': dict(parity)}
+    return kept, {'execution_authority': 'none', 'symbol': symbol, 'rows': rows, 'kept': len(kept),
+                  'sample_modulus': sample_modulus, 'filter_mismatches': dict(parity)}
 
 
 def _compact(context: Mapping[str, Any]) -> dict:
@@ -605,14 +739,18 @@ def _compact(context: Mapping[str, Any]) -> dict:
 
 # ----------------------------------------------------------------------- preparation
 def prepare(root: Path, dataset_root: Path, supplement_root: Path, instrument_path: Path, cost_path: Path) -> dict:
-    """Materialize verified pre-holdout candles/funding and the frozen assumptions into ``root``."""
+    """Materialize verified pre-holdout candles/funding and the frozen assumptions into ``root``.
+
+    The funding inventory is the canonical one: like the campaign, it opens the next
+    archive only to attest continuity at the window end; no 2026 value is kept.
+    """
     from .funding import REST_HYPOTHESIS, FundingReader
     from .portfolio_simulator import canonical_hash
     from .signal_sources import iter_verified_candles, select_sources
 
-    start, end = '2023-01-01T00:00:00Z', '2026-01-01T00:00:00Z'  # holdout stays unread
+    start, end = '2023-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
     (root / 'candles').mkdir(parents=True, exist_ok=True)
-    report: dict[str, Any] = {'candles': {}, 'funding': {}}
+    report: dict[str, Any] = {'execution_authority': 'none', 'window': [start, end], 'candles': {}, 'funding': {}}
     for symbol in SYMBOLS:
         selection = select_sources(dataset_root, start, end, start, symbol)
         values = [array('d') for _ in range(4)]
@@ -627,12 +765,18 @@ def prepare(root: Path, dataset_root: Path, supplement_root: Path, instrument_pa
         report['candles'][symbol] = {'count': series.count, 'dataset_subset_sha256': selection.dataset_sha256}
     reader = FundingReader(dataset_root, start, end, supplement_root=supplement_root,
                            rest_interval_hypothesis=REST_HYPOTHESIS)
+    inventory = reader.inventory
+    if not inventory.evidence_complete:
+        raise ExplorationError('funding evidence incomplete for the exploration window')
     events: dict[str, list] = {symbol: [] for symbol in SYMBOLS}
     for event in reader.iter_events():
+        if not reader.start_ms <= event.timestamp_ms < reader.end_ms:
+            raise ExplorationError('funding event outside the exploration window')
         events[event.symbol].append([event.timestamp_ms, float(event.rate),
                                      None if event.observed_mark is None else float(event.observed_mark)])
     (root / 'funding.json').write_text(json.dumps(events))
-    report['funding'] = {symbol: len(rows) for symbol, rows in events.items()}
+    report['funding'] = {'inventory_hash': inventory.inventory_hash, 'coverage': inventory.coverage,
+                         'events': {symbol: len(rows) for symbol, rows in events.items()}}
     for source, name, hash_field in ((instrument_path, 'instrument-assumptions.json', 'manifest_hash'),
                                      (cost_path, 'cost-assumptions.json', 'assumption_hash')):
         document = json.loads(source.read_text())
@@ -641,6 +785,164 @@ def prepare(root: Path, dataset_root: Path, supplement_root: Path, instrument_pa
         (root / name).write_text(json.dumps(document))
     (root / 'prepare-report.json').write_text(json.dumps(report, indent=1))
     return report
+
+
+# ---------------------------------------------------------------- canonical oracle
+def canonical_replay(rows: Mapping[str, Sequence[Mapping[str, Any]]], candles: Mapping[str, CandleSeries],
+                     funding_events: Mapping[str, Sequence[Sequence[Any]]], policy: FilterPolicy, geometry: Geometry,
+                     instruments: Mapping[str, Mapping[str, Any]], profile: Mapping[str, float],
+                     window: tuple[int, int]) -> tuple[dict, Counter]:
+    """Replay the same signals and plans through the canonical PortfolioSimulator (parity oracle).
+
+    Identities are placeholders: the kernel's own fill, exit, cost, funding and admission
+    rules are what is compared. Candles must include the prephase minute before the window.
+    """
+    from .portfolio_simulator import (IDENTITY_FIELDS, Candle, CostAssumptions, FundingCoverage, FundingEvent,
+                                      InstrumentAssumptions, PortfolioSimulator, RunAssumptions, Signal,
+                                      canonical_hash, number, wire_number)
+
+    start, end = window
+    symbols = tuple(s for s in SYMBOLS if s in candles)
+    phase = 'training' if end <= PHASES['training'][1] else 'validation'
+    d = lambda value: Decimal(repr(float(value)))  # noqa: E731 - exact decimal of the shared double
+    identity = {k: ('parity' if k == 'variant_id' else 'sha256:' + format(i + 1, 'x') * 64)
+                for i, k in enumerate(IDENTITY_FIELDS)}
+    sources = {s: {'dataset_id': f'parity-{s}', 'dataset_sha256': '7' * 64, 'signal_run_id': f'parity-run-{s}',
+                   'signal_output_sha256': '9' * 64} for s in symbols}
+    kernel_instruments = {s: InstrumentAssumptions(
+        d(i['tick_size']), d(i['quantity_step']), d(i['min_quantity']), d(i['max_quantity']),
+        d(max(EXCHANGE_MIN_NOTIONAL, i['min_notional'])), d(i['contract_size']), d(i['leverage_cap']),
+        d(i['mmr_proxy_rate']), d(i['liquidation_fee_rate']), '2026-10-09T07:12:34Z', 'c' * 64)
+        for s, i in ((s, instruments[s]) for s in symbols)}
+    costs = CostAssumptions(Decimal('.0002'), Decimal('.0005'), Decimal('.0005'), d(profile['entry_spread_rate']),
+                            d(profile['stop_spread_rate']), d(profile['target_spread_rate']),
+                            d(profile['entry_slippage_rate']), d(profile['stop_slippage_rate']),
+                            d(profile['target_slippage_rate']), d(profile['funding_provision_rate']), 28800, 1)
+    events = {s: [e for e in funding_events.get(s, ()) if start <= e[0] < end] for s in symbols}
+    assumptions = RunAssumptions(
+        start, end, phase, symbols, tuple(kernel_instruments.items()), costs, tuple(identity.items()),
+        tuple((s, tuple(sources[s].items())) for s in symbols),
+        FundingCoverage('observed_only', 'd' * 64, tuple((s, len(events[s])) for s in symbols)),
+        'adverse_possible_credit_certain.v1', 'last_known_close.v1')
+    selected = {(s, row['ms']): row for s in symbols for row in rows.get(s, ())
+                if start <= row['ms'] < end and all(row['sec'][k] for k in policy.sections) and policy.predicate(row)}
+    trades: list[Mapping[str, Any]] = []
+    rejections: Counter[str] = Counter()
+
+    def builder(signal: Any, view: Mapping[str, Any]) -> dict:
+        payload = signal.payload
+        symbol = payload['symbol']
+        plan, reason = build_plan(selected[(symbol, payload['evaluated_ms'])], symbol, geometry,
+                                  instruments[symbol], profile)
+        if plan is None:
+            return {'schema_version': 'research-plan-rejection.v1', 'reason_code': reason}
+        if not holding_window_available(plan):  # never binds on 15m decisions; the builder checks it last
+            return {'schema_version': 'research-plan-rejection.v1', 'reason_code': 'research_holding_window_unavailable'}
+        instrument = kernel_instruments[symbol]
+        entry, stop, target, quantity = (d(v) for v in (plan.entry, plan.stop, plan.target, plan.quantity))
+        units = quantity * instrument.contract_size
+        parts = {'gross_stop_loss': (entry - stop) * units, 'entry_fee': entry * units * costs.entry_fee_rate,
+                 'stop_exit_fee': stop * units * costs.stop_fee_rate,
+                 'entry_spread': entry * units * costs.entry_spread_rate,
+                 'stop_spread': stop * units * costs.stop_spread_rate,
+                 'entry_slippage': entry * units * costs.entry_slippage_rate,
+                 'stop_slippage': stop * units * costs.stop_slippage_rate,
+                 'funding_provision': entry * units * costs.funding_provision_rate * costs.funding_intervals_provisioned}
+        risk = sum(parts.values(), Decimal(0))
+        parts['total_stop_loss'] = risk
+        reward = ((target - entry) * units - parts['entry_fee'] - parts['entry_spread'] - parts['entry_slippage']
+                  - parts['funding_provision']
+                  - target * units * (costs.target_fee_rate + costs.target_spread_rate + costs.target_slippage_rate))
+        document = {
+            'schema_version': 'research-plan.v1', 'research_only': True, 'execution_authority': 'none',
+            'symbol': symbol, 'signal_result_hash': payload['result_hash'], 'signal_index': signal.index,
+            'evaluated_ms': payload['evaluated_ms'], 'portfolio_hash': view['portfolio_hash'], **identity,
+            **sources[symbol], 'source_venue': 'binance_usdm', 'source_network': 'mainnet', 'market_type': 'perpetual',
+            'instrument_math': instrument.wire(), 'cost_model': costs.wire(), 'entry_price': float(entry),
+            'stop_price': float(stop), 'quantity': float(quantity), 'final_leverage': 1,
+            'effective_leverage_cap': float(instrument.leverage_cap_assumed),
+            'position_notional_quote': float(entry * quantity * instrument.contract_size),
+            'targets': [{'price': float(target),
+                         'net_r': wire_number((reward / risk).quantize(Decimal('1e-18'), rounding=ROUND_DOWN)),
+                         'net_reward_quote': wire_number(reward), 'net_risk_quote': wire_number(risk)}],
+            'entry_ttl_seconds': ENTRY_TTL_MS // 1000, 'cancel_after_seconds': PENDING_RELEASE_MS // 1000,
+            'holding_deadline_exclusive': True, 'holding_deadline_ms': plan.deadline_ms,
+            'risk_components_quote': {k: wire_number(v) for k, v in parts.items()},
+            'risk_budget_quote': wire_number(number(view['equity_quote']) * Decimal('.05'))}
+        document['plan_hash'] = canonical_hash(document)
+        return document
+
+    simulator = PortfolioSimulator(assumptions, builder, event_sink=lambda event: None, trade_sink=trades.append,
+                                   cashflow_sink=lambda cashflow: None,
+                                   rejection_sink=lambda row: rejections.update([row['reason_code']]))
+    indices = iter(range(10 ** 12))
+    by_time: dict[int, list[str]] = defaultdict(list)
+    for symbol, decision in sorted(selected, key=lambda key: (key[1], SYMBOLS.index(key[0]))):
+        by_time[decision].append(symbol)
+
+    def signals(at: int) -> list:
+        out = []
+        for symbol in by_time.get(at, ()):
+            payload = {'schema_version': 'research-signal-result.v1', 'passed': True, 'evaluated_ms': at,
+                       'symbol': symbol, 'source': {'dataset_id': sources[symbol]['dataset_id'],
+                       'dataset_sha256': sources[symbol]['dataset_sha256'], 'source_venue': 'binance_usdm',
+                       'source_network': 'mainnet', 'market_type': 'perpetual'},
+                       'baseline': {'setup_hash': identity['base_setup_hash'], 'config_hash': identity['base_config_hash'],
+                                    'condition_catalog_hash': identity['base_catalog_hash'],
+                                    'snapshot_hash': identity['base_snapshot_hash']}}
+            payload['result_hash'] = canonical_hash(payload)
+            out.append(Signal(next(indices), payload))
+        return out
+
+    def batch(open_ms: int) -> list:
+        out = []
+        for symbol in symbols:
+            series, index = candles[symbol], candles[symbol].index(open_ms)
+            if not 0 <= index < series.count:
+                raise ExplorationError('canonical replay needs candles from the prephase minute')
+            out.append(Candle(symbol, open_ms, *(d(values[index]) for values in
+                                                 (series.open, series.high, series.low, series.close))))
+        return out
+
+    startup, by_batch = [], defaultdict(list)
+    for symbol in symbols:
+        for timestamp, rate, *rest in events[symbol]:
+            mark = rest[0] if rest else None
+            event = FundingEvent(symbol, timestamp, d(rate), None if mark is None else d(mark),
+                                 None if mark is None else timestamp)
+            if timestamp == start:
+                startup.append(event)
+            else:
+                by_batch[start + (-((start - timestamp) // MINUTE) - 1) * MINUTE].append(event)
+    simulator.prime(batch(start - MINUTE), funding=startup, signals=signals(start))
+    for opening in range(start, end, MINUTE):
+        simulator.advance(batch(opening), funding=by_batch.get(opening, ()),
+                          signals=signals(opening + MINUTE) if opening + MINUTE < end else ())
+    simulator.finish()
+    return {(trade['symbol'], trade['decision_ms']): trade for trade in trades}, rejections
+
+
+def parity_differences(outcomes: Sequence[Outcome], rejections: Mapping[str, int], canonical: Mapping[tuple, Any],
+                       canonical_rejections: Mapping[str, int], end: int) -> list[str]:
+    """Every observable difference between this replay and the canonical oracle."""
+    ours = {(o.plan.symbol, o.plan.decision_ms): o for o in outcomes if o.filled and o.exit_ms <= end}
+    differences = [f'only_canonical:{key}' for key in sorted(set(canonical) - set(ours))]
+    differences += [f'only_exploration:{key}' for key in sorted(set(ours) - set(canonical))]
+    for key in sorted(set(canonical) & set(ours)):
+        trade, outcome = canonical[key], ours[key]
+        expected = {'exit_reason': outcome.reason, 'fill_boundary_ms': outcome.fill_ms,
+                    'exit_boundary_ms': outcome.exit_ms, 'ambiguous': outcome.ambiguous}
+        for name, value in expected.items():
+            if trade[name] != value:
+                differences.append(f'{name}:{key}:{trade[name]}!={value}')
+        if float(trade['exit_price']) != outcome.exit_price:
+            differences.append(f'exit_price:{key}')
+        for name, value in (('net_pnl_quote', outcome.net), ('funding_quote', outcome.funding)):
+            if abs(float(trade[name]) - value) > 1e-9:
+                differences.append(f'{name}:{key}:{trade[name]}!={value}')
+    if dict(canonical_rejections) != dict(rejections):
+        differences.append(f'rejections:{dict(canonical_rejections)}!={dict(rejections)}')
+    return differences
 
 
 # ------------------------------------------------------------------------------- CLI
@@ -671,6 +973,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands = parser.add_subparsers(dest='command', required=True)
     extract = commands.add_parser('extract', help='retained signal results -> kept rows + parity proof')
     extract.add_argument('--output', type=Path, required=True)
+    extract.add_argument('--control-modulus', type=int, help='keep a deterministic 1/N random-timing sample')
     extract.add_argument('results', type=Path, nargs='+')
     prep = commands.add_parser('prepare', help='materialize verified candles, funding and assumptions')
     prep.add_argument('--root', type=Path, required=True)
@@ -681,10 +984,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     run = commands.add_parser('grid', help='replay hypotheses over a prepared exploration root')
     run.add_argument('--root', type=Path, required=True)
     run.add_argument('--phase', choices=tuple(PHASES), required=True)
-    run.add_argument('--policies', default=','.join(POLICIES))
+    run.add_argument('--policies', default=','.join(SETUP_POLICIES))
     run.add_argument('--geometries', default='canonical')
     run.add_argument('--profiles', default='baseline,adverse')
     run.add_argument('--output', type=Path, required=True)
+    screen = commands.add_parser('screen', help='aggregate grid outputs with the protocol screening')
+    screen.add_argument('grids', type=Path, nargs='+')
+    screen.add_argument('--minimum-trades', type=int, default=100)
     args = parser.parse_args(argv)
     if args.command == 'extract':
         args.output.mkdir(parents=True, exist_ok=True)
@@ -692,7 +998,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for path in args.results:
             symbol = path.name.split('.')[0]
             with open(path, 'rb') as handle:
-                kept, report = extract_rows(handle, symbol)
+                kept, report = extract_rows(handle, symbol, args.control_modulus)
             (args.output / f'{symbol}.kept.json').write_text(json.dumps(kept))
             reports.append(report)
         (args.output / 'extract-report.json').write_text(json.dumps(reports, indent=1))
@@ -701,6 +1007,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == 'prepare':
         print(json.dumps(prepare(args.root, args.dataset_root, args.funding_supplement_root,
                                  args.instrument_path, args.cost_path)))
+        return 0
+    if args.command == 'screen':
+        results = [row for path in args.grids for row in json.loads(path.read_text())]
+        print(json.dumps(screen_report(results, args.minimum_trades), indent=1))
         return 0
     geometries = {'canonical': CANONICAL_GEOMETRIES, 'extended': EXTENDED_GEOMETRIES,
                   'all': tuple(GEOMETRIES)}.get(args.geometries) or tuple(args.geometries.split(','))
