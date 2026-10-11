@@ -152,6 +152,9 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
             or report.get('errors') != [] or not isinstance(report.get('symbols'),dict)
             or not report['symbols'] or not _b1_code_matches(report.get('code_sha256'),current_code)):
             raise CampaignError('B1 report incomplete or code identity conflict')
+        # Campaign units replay the frozen day_trading cell only; a profiled report fails closed.
+        if 'profile' in report:
+            raise CampaignError('B1 report research profile not replayable by this campaign')
         this_window = (report['source_start'],report['score_start'],report['source_end'])
         start, score, end = map(lambda v:_ms(_utc(v)),this_window)
         if contract is not None:
@@ -219,15 +222,20 @@ def _verify_reports(dataset_root, roots, app_dir, symbols, phase, deadline, *, a
     return reports,bindings,windows,current_code
 
 
+# Setup time stops of the published research cells and their holding windows (KernelProfile).
+HOLDING_TIME_STOPS = {'PT8H':28800, 'PT336H':1209600}
+
+
 def _kernel_costs(snapshot,profile) -> CostAssumptions:
     config = snapshot['config']
     execution = config['setup']['ast']['execution']
     contract = execution['cost_contract']['value']
     fees = config['exchange']['fees']
+    holding = HOLDING_TIME_STOPS.get(execution['time_stop']['value'])
     if (contract['entry_liquidity_role'] != 'maker' or contract['stop_liquidity_role'] != 'taker'
         or contract['funding_interval_seconds'] != 28800
         or config['exchange']['funding']['interval'] != 'PT8H'
-        or execution['time_stop']['value'] != 'PT8H'):
+        or holding is None):
         raise CampaignError('baseline cost or holding policy differs')
     target = execution['targets']['value']
     if len(target) != 1 or target[0]['liquidity_role'] not in ('maker','taker'):
@@ -236,7 +244,8 @@ def _kernel_costs(snapshot,profile) -> CostAssumptions:
         number(fees[target[0]['liquidity_role']+'_rate']),
         *(number(profile[key]) for key in ('entry_spread_rate','stop_spread_rate','target_spread_rate',
             'entry_slippage_rate','stop_slippage_rate','target_slippage_rate','funding_provision_rate')),
-        contract['funding_interval_seconds'],1)
+        # The funding provision covers every interval the holding window can touch (PHP planner).
+        contract['funding_interval_seconds'],(holding-1)//contract['funding_interval_seconds']+1)
 
 
 def _kernel_instruments(manifest,symbols):
