@@ -316,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument('--start', help='UTC date; with --end, replaces the phase window')
     c.add_argument('--end')
     args = parser.parse_args(argv)
+    if args.command == 'swing-canonical' and (args.start is None) != (args.end is None):
+        parser.error('swing-canonical: --start and --end go together')
     return {'kernel': kernel, 'plan-math': plan_math, 'swing-plan-math': swing_plan_math,
             'swing-kernel': swing_kernel, 'swing-canonical': swing_canonical}[args.command](args)
 
