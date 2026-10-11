@@ -24,6 +24,7 @@ use Brick\Math\BigDecimal;
 final readonly class ResearchPlanBuilder
 {
     private string $codeHash;
+    private ResearchProfile $profile;
 
     /**
      * @param array<string, mixed> $baseline
@@ -39,20 +40,26 @@ final readonly class ResearchPlanBuilder
         private array $baseline,
         private array $sourceRun,
         ?string $codeHash = null,
+        ?ResearchProfile $profile = null,
     ) {
+        $profile ??= ResearchProfile::fromId(ResearchProfile::DAY_TRADING);
         if ($policy->riskPolicy->riskRate !== 0.05
             || $policy->riskPolicy->environmentMaxNotional !== 250.0
             || $policy->riskPolicy->modeLeverageCap !== 2.0
             || $policy->riskPolicy->exchangeMinNotional !== 5.0
             || $policy->riskPolicy->exchangeMaxNotional !== 1000.0
-            || $portfolioPolicy->dailyLossRate !== 0.06
-            || $portfolioPolicy->dailyLossAbsoluteQuote !== 30.0
-            || $portfolioPolicy->maxConcurrentPositions !== 4
+            || $portfolioPolicy->dailyLossRate !== $profile->dailyLossRate
+            || $portfolioPolicy->dailyLossAbsoluteQuote !== $profile->dailyLossAbsoluteQuote
+            || $portfolioPolicy->maxConcurrentPositions !== $profile->maxConcurrentPositions
+            || $portfolioPolicy->perSymbolLimit !== ($profile->oneActivePlanPerSymbol ? 1 : null)
             || $portfolioPolicy->modeExposureRate !== 1.0
             || !$portfolioPolicy->includePendingEntries || !$portfolioPolicy->includeUnrealizedLoss
             || $policy->orderPolicy?->type !== 'limit' || $policy->orderPolicy->marketFallback
-            || $policy->orderPolicy->ttlSeconds !== 90 || $policy->orderPolicy->cancelAfterSeconds !== 120
-            || $policy->holdingWindowSeconds !== 28800 || $policy->minimumNetR !== 1.3
+            || $policy->orderPolicy->ttlSeconds !== $profile->entryTtlSeconds
+            || $policy->orderPolicy->cancelAfterSeconds !== $profile->cancelAfterSeconds
+            || $policy->holdingWindowSeconds !== $profile->holdingWindowSeconds || $policy->minimumNetR !== 1.3
+            || $policy->riskPolicy->modeId !== $profile->modeId || $policy->riskPolicy->setupId !== $profile->setupId
+            || $policy->riskPolicy->side !== $profile->side
             || $policy->riskPolicy->makerFeeRate !== 0.0002 || $policy->riskPolicy->takerFeeRate !== 0.0005
         ) {
             throw new \InvalidArgumentException('research_baseline_limits_mismatch');
@@ -62,6 +69,7 @@ final readonly class ResearchPlanBuilder
             throw new \InvalidArgumentException('research_plan_code_hash_invalid');
         }
         $this->codeHash = $codeHash ?? ResearchCodeIdentity::current();
+        $this->profile = $profile;
     }
 
     /**
@@ -92,19 +100,21 @@ final readonly class ResearchPlanBuilder
         $atrContext = $contexts[$this->variant->entryZone->atrTimeframe];
         $stopContext = $contexts[$this->variant->stop->timeframe];
         $anchorKey = $this->variant->entryZone->anchorSource;
-        foreach ([[$anchorContext, $anchorKey], [$atrContext, 'atr'], [$stopContext, 'atr'], [$contexts['15m'], 'close']] as [$context, $key]) {
+        $candidateContext = $contexts[$this->profile->candidateTimeframe];
+        foreach ([[$anchorContext, $anchorKey], [$atrContext, 'atr'], [$stopContext, 'atr'], [$candidateContext, 'close']] as [$context, $key]) {
             if (!isset($context[$key]) || !is_numeric($context[$key]) || !is_finite((float) $context[$key]) || (float) $context[$key] <= 0.0) {
                 return $this->reject($identity, 'research_signal_price_context_missing');
             }
         }
-        $candidate = (float) $contexts['15m']['close'];
+        $candidate = (float) $candidateContext['close'];
+        $side = $this->profile->side;
         try {
             $zone = EntryZonePriceMath::calculate(
-                $this->variant->entryZone, 'long', (float) $anchorContext[$anchorKey], (float) $atrContext['atr'],
+                $this->variant->entryZone, $side, (float) $anchorContext[$anchorKey], (float) $atrContext['atr'],
                 $candidate, (float) $instrument['tick_size'],
             );
             $protection = ProtectionPriceMath::calculate(
-                $this->variant->stop, $this->variant->targets, 'long', $zone['entry_price'],
+                $this->variant->stop, $this->variant->targets, $side, $zone['entry_price'],
                 (float) $instrument['tick_size'], (float) $stopContext['atr'],
             );
         } catch (CanonicalOrderPlanException $exception) {
@@ -113,12 +123,14 @@ final readonly class ResearchPlanBuilder
 
         $profile = $this->costs->profile($this->costProfile);
         $fundingIntervals = intdiv($this->policy->holdingWindowSeconds - 1, $this->policy->costContract->fundingIntervalSeconds) + 1;
+        // Both engines reserve only the rate adverse to the side; a short reserves the same provision at -rate.
+        $fundingRate = $side === 'long' ? $profile['funding_provision_rate'] : -$profile['funding_provision_rate'];
         $riskCosts = new CanonicalCostSnapshot(
             $this->policy->costContract->entryLiquidityRole,
             $this->policy->costContract->stopLiquidityRole,
             $profile['entry_spread_rate'], $profile['stop_spread_rate'],
             $profile['entry_slippage_rate'], $profile['stop_slippage_rate'],
-            $profile['funding_provision_rate'], $fundingIntervals,
+            $fundingRate, $fundingIntervals,
         );
         // This fake/local instrument is a synthetic arithmetic adapter bound to the research manifest hash.
         // It is not a historical Binance instrument observation and grants no order authority.
@@ -131,7 +143,7 @@ final readonly class ResearchPlanBuilder
         );
         try {
             $risk = (new CanonicalRiskEngine())->calculate(new CanonicalRiskCalculationRequest(
-                $this->policy->riskPolicy, $symbol, 'perpetual', 'USDT', 'long',
+                $this->policy->riskPolicy, $symbol, 'perpetual', 'USDT', $side,
                 (float) $portfolio['equity_quote'], (float) $portfolio['available_balance_quote'],
                 $zone['entry_price'], $protection['stop_price'],
                 (float) $instrument['contract_size'], (float) $instrument['quantity_step'],
@@ -147,12 +159,12 @@ final readonly class ResearchPlanBuilder
         }
 
         $riskAmounts = NetRCostMath::risk(
-            'long', $zone['entry_price'], $protection['stop_price'], $risk->quantity, (float) $instrument['contract_size'],
+            $side, $zone['entry_price'], $protection['stop_price'], $risk->quantity, (float) $instrument['contract_size'],
             $this->feeRate($this->policy->costContract->entryLiquidityRole),
             $this->feeRate($this->policy->costContract->stopLiquidityRole),
             $profile['entry_spread_rate'], $profile['stop_spread_rate'],
             $profile['entry_slippage_rate'], $profile['stop_slippage_rate'],
-            $profile['funding_provision_rate'], $fundingIntervals,
+            $fundingRate, $fundingIntervals,
         );
         if ($riskAmounts['gross_risk']->toFloat() !== $risk->grossStopLoss
             || $riskAmounts['entry_fee']->toFloat() !== $risk->entryFee
@@ -182,7 +194,7 @@ final readonly class ResearchPlanBuilder
                 'funding_provision_quote' => $risk->fundingCost, 'net_reward_quote' => $amounts['net_reward']->toFloat(),
                 'net_risk_quote' => $risk->totalStopLoss, 'net_r' => $amounts['net_r']->toFloat()];
         }
-        $portfolioRejection = $this->portfolioRejection($portfolio, $risk->totalStopLoss, $risk->positionNotional);
+        $portfolioRejection = $this->portfolioRejection($portfolio, $symbol, $risk->totalStopLoss, $risk->positionNotional);
         if ($portfolioRejection !== null) {
             return $this->reject($identity, $portfolioRejection);
         }
@@ -193,7 +205,8 @@ final readonly class ResearchPlanBuilder
         }
         $plan = ['schema_version' => 'research-plan.v1', 'research_only' => true, 'execution_authority' => 'none',
             ...$identity, 'symbol' => $symbol,
-            'evaluated_ms' => $signal['evaluated_ms'], 'candidate_price_source' => 'last_closed_15m_close', 'candidate_price' => $candidate,
+            ...($this->profile->isDefault() ? [] : ['side' => $side]),
+            'evaluated_ms' => $signal['evaluated_ms'], 'candidate_price_source' => $this->profile->candidatePriceSource(), 'candidate_price' => $candidate,
             'zone_lower_price' => $zone['lower_price'], 'zone_upper_price' => $zone['upper_price'],
             'entry_price' => $zone['entry_price'], 'stop_price' => $protection['stop_price'],
             'risk_distance' => $protection['risk_distance'], 'targets' => $targets,
@@ -248,12 +261,13 @@ final readonly class ResearchPlanBuilder
             || !is_array($signal['source']) || !is_array($signal['execution']) || !is_array($signal['baseline'])
             || CanonicalBacktestRuleEvaluator::canonicalJson($signal['source']) !== CanonicalBacktestRuleEvaluator::canonicalJson($this->sourceRun['source'])
             || CanonicalBacktestRuleEvaluator::canonicalJson($signal['baseline']) !== CanonicalBacktestRuleEvaluator::canonicalJson($this->baseline)
-            || ($signal['execution']['mode_id'] ?? null) !== 'day_trading' || ($signal['execution']['mode_version'] ?? null) !== '1.1.0'
-            || ($signal['execution']['setup_id'] ?? null) !== 'day_trading.trend_continuation.long'
-            || ($signal['execution']['setup_version'] ?? null) !== '1.1.0'
+            || ($signal['execution']['mode_id'] ?? null) !== $this->profile->modeId
+            || ($signal['execution']['mode_version'] ?? null) !== $this->profile->modeVersion
+            || ($signal['execution']['setup_id'] ?? null) !== $this->profile->setupId
+            || ($signal['execution']['setup_version'] ?? null) !== $this->profile->setupVersion
             || ($signal['execution']['exchange'] ?? null) !== 'fake' || ($signal['execution']['environment'] ?? null) !== 'local'
-            || ($signal['execution']['side'] ?? null) !== 'long' || ($signal['execution']['execution_capability'] ?? null) !== 'backtest'
-            || !is_int($signal['evaluated_ms']) || $signal['evaluated_ms'] < 0 || $signal['evaluated_ms'] % 900000 !== 0
+            || ($signal['execution']['side'] ?? null) !== $this->profile->side || ($signal['execution']['execution_capability'] ?? null) !== 'backtest'
+            || !is_int($signal['evaluated_ms']) || $signal['evaluated_ms'] < 0 || $signal['evaluated_ms'] % $this->profile->evaluationStepMs !== 0
             || !is_string($signal['evaluated_at']) || $signal['evaluated_at'] !== gmdate('Y-m-d\TH:i:s', intdiv($signal['evaluated_ms'], 1000)) . '.000000Z'
             || !is_bool($signal['passed']) || !is_string($signal['reason_code'])
             || !is_array($signal['contexts']) || !is_array($signal['verdicts'])
@@ -275,16 +289,16 @@ final readonly class ResearchPlanBuilder
         if ($signal['passed'] === true && (!is_array($signal['trace']) || !is_string($signal['trace_hash'])
             || !hash_equals(CanonicalBacktestRuleEvaluator::canonicalHash($signal['trace']), $signal['trace_hash'])
             || ($signal['trace']['schema_version'] ?? null) !== 'canonical-setup-rule-runtime.v1'
-            || ($signal['trace']['mode_id'] ?? null) !== 'day_trading'
-            || ($signal['trace']['mode_version'] ?? null) !== '1.1.0'
-            || ($signal['trace']['setup_id'] ?? null) !== 'day_trading.trend_continuation.long'
-            || ($signal['trace']['setup_version'] ?? null) !== '1.1.0'
-            || ($signal['trace']['side'] ?? null) !== 'long'
+            || ($signal['trace']['mode_id'] ?? null) !== $this->profile->modeId
+            || ($signal['trace']['mode_version'] ?? null) !== $this->profile->modeVersion
+            || ($signal['trace']['setup_id'] ?? null) !== $this->profile->setupId
+            || ($signal['trace']['setup_version'] ?? null) !== $this->profile->setupVersion
+            || ($signal['trace']['side'] ?? null) !== $this->profile->side
             || self::digest($signal['trace']['setup_hash'] ?? null) !== self::digest($this->baseline['setup_hash'])
             || self::digest($signal['trace']['catalog_hash'] ?? null) !== self::digest($this->baseline['condition_catalog_hash'])
             || self::digest($signal['trace']['config_hash'] ?? null) !== self::digest($this->baseline['config_hash'])
-            || ($signal['trace']['execution_timeframe'] ?? null) !== '15m'
-            || ($signal['trace']['mandatory_confirmations'] ?? null) !== ['5m', '1m']
+            || ($signal['trace']['execution_timeframe'] ?? null) !== $this->profile->executionTimeframe
+            || ($signal['trace']['mandatory_confirmations'] ?? null) !== $this->profile->mandatoryConfirmations
             || ($signal['trace']['evaluated_at'] ?? null) !== $signal['evaluated_at']
         )) {
             throw new \InvalidArgumentException('research_signal_trace_invalid');
@@ -306,7 +320,7 @@ final readonly class ResearchPlanBuilder
             if ($context['available_ms'] > $signal['evaluated_ms']) {
                 throw new \InvalidArgumentException('research_signal_context_future');
             }
-            if (in_array($tf, ['1m', '5m', '15m'], true) && $context['available_ms'] !== $signal['evaluated_ms']) {
+            if (in_array($tf, $this->profile->freshTimeframes, true) && $context['available_ms'] !== $signal['evaluated_ms']) {
                 throw new \InvalidArgumentException('research_signal_context_stale');
             }
         }
@@ -318,7 +332,11 @@ final readonly class ResearchPlanBuilder
      */
     private function validatePortfolio(array $portfolio, array $signal): void
     {
-        self::exact($portfolio, ['schema_version', 'as_of_ms', 'equity_quote', 'available_balance_quote', 'realized_net_pnl_quote', 'unrealized_net_pnl_quote', 'open_positions', 'pending_entries', 'open_notional_quote', 'pending_notional_quote', 'reserved_risk_quote', 'active_signal_hashes', 'portfolio_hash'], 'research_portfolio_view_invalid');
+        $viewKeys = ['schema_version', 'as_of_ms', 'equity_quote', 'available_balance_quote', 'realized_net_pnl_quote', 'unrealized_net_pnl_quote', 'open_positions', 'pending_entries', 'open_notional_quote', 'pending_notional_quote', 'reserved_risk_quote', 'active_signal_hashes', 'portfolio_hash'];
+        if ($this->profile->oneActivePlanPerSymbol) {
+            $viewKeys[] = 'active_symbols';
+        }
+        self::exact($portfolio, $viewKeys, 'research_portfolio_view_invalid');
         if (($portfolio['schema_version'] ?? null) !== 'research-portfolio-view.v1'
             || ($portfolio['as_of_ms'] ?? null) !== $signal['evaluated_ms']
             || !is_int($portfolio['open_positions']) || $portfolio['open_positions'] < 0
@@ -342,6 +360,20 @@ final readonly class ResearchPlanBuilder
                 throw new \InvalidArgumentException('research_portfolio_view_invalid');
             }
         }
+        if ($this->profile->oneActivePlanPerSymbol) {
+            $symbols = $portfolio['active_symbols'];
+            $sorted = is_array($symbols) && array_is_list($symbols) ? $symbols : [];
+            sort($sorted, SORT_STRING);
+            if (!is_array($symbols) || $sorted !== $symbols || count($symbols) !== count(array_unique($symbols))
+                || count($symbols) !== (int) $portfolio['open_positions'] + (int) $portfolio['pending_entries']) {
+                throw new \InvalidArgumentException('research_portfolio_view_invalid');
+            }
+            foreach ($symbols as $activeSymbol) {
+                if (!is_string($activeSymbol) || !in_array($activeSymbol, ResearchInstrumentAssumptions::SYMBOLS, true)) {
+                    throw new \InvalidArgumentException('research_portfolio_view_invalid');
+                }
+            }
+        }
         $withoutHash = $portfolio;
         unset($withoutHash['portfolio_hash']);
         if (!is_string($portfolio['portfolio_hash']) || !hash_equals(CanonicalBacktestRuleEvaluator::canonicalHash($withoutHash), $portfolio['portfolio_hash'])) {
@@ -350,7 +382,7 @@ final readonly class ResearchPlanBuilder
     }
 
     /** @param array<string, mixed> $portfolio */
-    private function portfolioRejection(array $portfolio, float $riskQuote, float $notionalQuote): ?string
+    private function portfolioRejection(array $portfolio, string $symbol, float $riskQuote, float $notionalQuote): ?string
     {
         $equity = self::portfolioDecimal((float) $portfolio['equity_quote']);
         $dailyPct = $equity->multipliedBy(self::portfolioDecimal($this->portfolioPolicy->dailyLossRate));
@@ -363,6 +395,10 @@ final readonly class ResearchPlanBuilder
             ->plus(self::portfolioDecimal((float) $portfolio['reserved_risk_quote']));
         if (self::portfolioDecimal($riskQuote)->isGreaterThan($dailyCap->minus($consumed))) {
             return 'research_portfolio_daily_loss_exceeded';
+        }
+        // Same order as PortfolioSimulator: one plan per pair before the concurrency limit.
+        if ($this->profile->oneActivePlanPerSymbol && in_array($symbol, $portfolio['active_symbols'], true)) {
+            return 'research_portfolio_symbol_active';
         }
         if ((int) $portfolio['open_positions'] + (int) $portfolio['pending_entries'] >= $this->portfolioPolicy->maxConcurrentPositions) {
             return 'research_portfolio_concurrency_exceeded';

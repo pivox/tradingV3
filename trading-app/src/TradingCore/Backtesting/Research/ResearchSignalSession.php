@@ -9,10 +9,8 @@ use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
 use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluator;
 use App\TradingCore\Backtesting\Indicator\CanonicalPhpIndicatorCalculator;
-use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Config\EffectiveTradingConfigResolverInterface;
-use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\Rules\Catalog\ConditionCatalogResolver;
 use App\TradingCore\Setup\SetupContractLoader;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -50,6 +48,7 @@ final class ResearchSignalSession
     private int $beforeScore = 0;
     private bool $baselineInvalid = false;
     private string $catalogVersion = '';
+    private ResearchProfile $profile;
 
     public function __construct(
         #[Autowire(service: EffectiveTradingConfigResolver::class)]
@@ -66,7 +65,10 @@ final class ResearchSignalSession
     public function open(array $frame): array
     {
         if ($this->windows !== null) { throw new \InvalidArgumentException('research_session_already_open'); }
-        ResearchCandle::exactKeys($frame, ['schema_version', 'session_id', 'dataset_id', 'dataset_sha256', 'source_venue', 'source_network', 'market_type', 'symbol', 'start_ms', 'end_ms', 'score_start_ms']);
+        $keys = ['schema_version', 'session_id', 'dataset_id', 'dataset_sha256', 'source_venue', 'source_network', 'market_type', 'symbol', 'start_ms', 'end_ms', 'score_start_ms'];
+        if (array_key_exists('profile', $frame)) { $keys[] = 'profile'; }
+        ResearchCandle::exactKeys($frame, $keys);
+        $profile = ResearchProfile::fromFrame($frame);
         if ($frame['schema_version'] !== 'research-signal-open.v1' || $frame['source_venue'] !== 'binance_usdm'
             || $frame['source_network'] !== 'mainnet' || $frame['market_type'] !== 'perpetual'
             || !is_string($frame['symbol']) || !in_array($frame['symbol'], ResearchCandle::SYMBOLS, true)
@@ -81,7 +83,7 @@ final class ResearchSignalSession
         }
         if ($frame['end_ms'] > self::FROZEN_END_MS || $frame['start_ms'] >= $frame['end_ms']
             || $frame['score_start_ms'] < $frame['start_ms'] || $frame['score_start_ms'] >= $frame['end_ms']) { throw new \InvalidArgumentException('research_session_time_invalid'); }
-        $request = new EffectiveTradingConfigRequest('day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0', 'fake', 'local', 'long', ShadowExecutionCapability::Backtest);
+        $request = $profile->request();
         $snapshot = $this->resolver->resolve($request)->toArray();
         if (($snapshot['executable'] ?? null) !== true || ($snapshot['blockers'] ?? null) !== [] || ($snapshot['request'] ?? null) !== $request->toArray()) {
             throw new \InvalidArgumentException('research_baseline_not_executable');
@@ -111,7 +113,7 @@ final class ResearchSignalSession
         $this->catalogVersion = $catalog->catalogVersion;
         $this->baseline = ['config_hash' => $snapshot['config_hash'], 'condition_catalog_hash' => $snapshot['condition_catalog_hash'], 'snapshot_hash' => $snapshot['snapshot_hash'], 'setup_hash' => $setup->stableHash(), 'file_hashes' => $fileHashes, 'mode_risk' => $snapshot['config']['mode']['risk']];
         $this->lineage = LineageContext::fromOrchestratorPayload([
-            ...$request->toArray(), 'side' => 'LONG', 'origin' => LineageContext::ORIGIN_REPLAY,
+            ...$request->toArray(), 'side' => strtoupper($profile->side), 'origin' => LineageContext::ORIGIN_REPLAY,
             'orchestration_run_id' => 'research-' . substr(hash('sha256', $frame['session_id']), 0, 24),
             'correlation_run_id' => 'research-' . substr(hash('sha256', $frame['session_id']), 0, 24),
             'orchestration_set_id' => 'research-set-' . substr(hash('sha256', $frame['dataset_id']), 0, 24),
@@ -121,6 +123,7 @@ final class ResearchSignalSession
             'effective_config_reference' => 'effective-config-snapshot:' . $snapshot['snapshot_hash'], 'effective_config_snapshot' => $canonical->toArray(),
         ]);
         $this->binding = $frame;
+        $this->profile = $profile;
         $this->snapshot = $snapshot;
         $this->contextCache = $this->compactContextCache = $this->contextTimes = $this->diagnosticCounts = [];
         $this->consumed = $this->warmup = $this->evaluated = $this->passed = $this->beforeScore = 0;
@@ -154,7 +157,7 @@ final class ResearchSignalSession
         foreach ($candles as $candle) {
             $this->windows->append($candle); ++$this->consumed;
             $tick = $candle->openMs + 60000;
-            if ($tick % 900000 !== 0) { continue; }
+            if ($tick % $this->profile->evaluationStepMs !== 0) { continue; }
             if (!$this->windows->ready()) { ++$this->warmup; continue; }
             if ($tick < $this->binding['score_start_ms']) { ++$this->beforeScore; continue; }
             $results[] = $this->evaluate($tick);
