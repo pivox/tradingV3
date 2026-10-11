@@ -365,7 +365,7 @@ def build_plan(row: Mapping[str, Any], symbol: str, geometry: Geometry, instrume
             return None, 'research_signal_price_context_missing'
     x = _EXACT
     anchor, atr, stop_atr, candidate = (_decimal(v) for v in inputs)
-    tick, step = _decimal(instrument['tick_size']), _decimal(instrument['quantity_step'])
+    tick = _decimal(instrument['tick_size'])
     half_width = min(max(x.multiply(atr, _decimal(geometry.zone_atr_multiplier)),
                          x.multiply(anchor, _decimal(geometry.minimum_half_width_rate))),
                      x.multiply(anchor, _decimal(geometry.maximum_half_width_rate)))
@@ -375,13 +375,34 @@ def build_plan(row: Mapping[str, Any], symbol: str, geometry: Geometry, instrume
     entry = _ceil_to(candidate, tick)
     if not lower <= entry <= upper:
         return None, 'canonical_entry_zone_candidate_outside'
-    stop = _floor_to(x.subtract(entry, x.multiply(stop_atr, _decimal(geometry.stop_atr_multiplier))), tick)
+    protected, reason = protect_and_size(entry, stop_atr, geometry.stop_atr_multiplier, geometry.target_risk_multiple,
+                                         instrument, profile)
+    if protected is None:
+        return None, reason
+    stop, target, quantity, net_risk, net_r = protected
+    decision = row['ms']
+    deadline = min(decision + HOLDING_MS, (decision // DAY + 1) * DAY)
+    return Plan(symbol, decision, float(entry), float(stop), float(target), float(quantity), float(net_risk),
+                float(net_r), deadline), None
+
+
+def protect_and_size(entry: Decimal, stop_atr: Decimal, stop_atr_multiplier: float, target_risk_multiple: float,
+                     instrument: Mapping[str, Any], profile: Mapping[str, float], funding_intervals: int = 1
+                     ) -> tuple[tuple[Decimal, ...] | None, str | None]:
+    """ProtectionPriceMath (ATR stop, one R-multiple target), CanonicalRiskEngine's 250 quote
+    sizing and the NetRCostMath gate, on a tick-exact long entry.
+
+    Returns ((stop, target, quantity, net_risk, net_r), None) or (None, reason). The funding
+    provision reserves ``funding_intervals`` periods, like ``funding_intervals_provisioned``.
+    """
+    x = _EXACT
+    tick, step = _decimal(instrument['tick_size']), _decimal(instrument['quantity_step'])
+    stop = _floor_to(x.subtract(entry, x.multiply(stop_atr, _decimal(stop_atr_multiplier))), tick)
     if stop <= 0:
         return None, 'canonical_protection_stop_invalid'
     if stop >= entry:
         return None, 'canonical_protection_stop_polarity_invalid'
-    risk_distance = x.subtract(entry, stop)
-    target = _floor_to(x.add(entry, x.multiply(risk_distance, _decimal(geometry.target_risk_multiple))), tick)
+    target = _floor_to(x.add(entry, x.multiply(x.subtract(entry, stop), _decimal(target_risk_multiple))), tick)
     if target <= entry:
         return None, 'canonical_protection_target_polarity_invalid'
     contract = _decimal(instrument['contract_size'])
@@ -400,19 +421,17 @@ def build_plan(row: Mapping[str, Any], symbol: str, geometry: Geometry, instrume
     stop_notional = x.multiply(x.multiply(stop, contract), quantity)
     target_notional = x.multiply(x.multiply(target, contract), quantity)
     entry_costs = x.multiply(notional, _decimal(MAKER_FEE) + rate['entry_spread_rate'] + rate['entry_slippage_rate'])
-    funding = x.multiply(notional, max(Decimal(0), rate['funding_provision_rate']))
-    net_risk = (x.multiply(x.multiply(risk_distance, contract), quantity) + entry_costs + funding
+    funding = x.multiply(x.multiply(notional, max(Decimal(0), rate['funding_provision_rate'])),
+                         Decimal(funding_intervals))
+    net_risk = (x.multiply(x.multiply(x.subtract(entry, stop), contract), quantity) + entry_costs + funding
                 + x.multiply(stop_notional, _decimal(TAKER_FEE) + rate['stop_spread_rate'] + rate['stop_slippage_rate']))
-    net_reward = (x.multiply(x.multiply(target - entry, contract), quantity) - entry_costs - funding
+    net_reward = (x.multiply(x.multiply(x.subtract(target, entry), contract), quantity) - entry_costs - funding
                   - x.multiply(target_notional,
                                _decimal(TAKER_FEE) + rate['target_spread_rate'] + rate['target_slippage_rate']))
     net_r = x.divide(net_reward, net_risk).quantize(Decimal('1e-18'), rounding=ROUND_DOWN)
     if net_r < Decimal('1.3'):
         return None, 'research_minimum_net_r_not_met'
-    decision = row['ms']
-    deadline = min(decision + HOLDING_MS, (decision // DAY + 1) * DAY)
-    return Plan(symbol, decision, float(entry), float(stop), float(target), float(quantity), float(net_risk),
-                float(net_r), deadline), None
+    return (stop, target, quantity, net_risk, net_r), None
 
 
 def holding_window_available(plan: Plan) -> bool:
@@ -474,8 +493,15 @@ def simulate(plan: Plan, candles: CandleSeries, funding: FundingSeries | None,
         index += 1
         if index >= candles.count:
             raise ExplorationError('position outlives candle coverage')
+    return settle(outcome, candles, funding, profile, first, index)
+
+
+def settle(outcome: Outcome, candles: CandleSeries, funding: FundingSeries | None, profile: Mapping[str, float],
+           first: int, last: int) -> Outcome:
+    """Funding between the fill bar ``first`` and the exit bar ``last``, exit costs and net R."""
+    plan = outcome.plan
     if funding is not None:
-        _apply_funding(outcome, candles, funding, first, index)
+        _apply_funding(outcome, candles, funding, first, last)
     gross = plan.quantity * (outcome.exit_price - plan.entry)
     leg = 'target' if outcome.reason == 'target' else 'stop'
     exit_rate = TAKER_FEE + profile[f'{leg}_spread_rate'] + profile[f'{leg}_slippage_rate']
@@ -738,11 +764,14 @@ def _compact(context: Mapping[str, Any]) -> dict:
 
 
 # ----------------------------------------------------------------------- preparation
-def prepare(root: Path, dataset_root: Path, supplement_root: Path, instrument_path: Path, cost_path: Path) -> dict:
+def prepare(root: Path, dataset_root: Path, supplement_root: Path, instrument_path: Path, cost_path: Path,
+            candle_start: str = '2023-01-01T00:00:00Z') -> dict:
     """Materialize verified pre-holdout candles/funding and the frozen assumptions into ``root``.
 
-    The funding inventory is the canonical one: like the campaign, it opens the next
-    archive only to attest continuity at the window end; no 2026 value is kept.
+    Candles may start before 2023 (``candle_start``) to warm up indicators; scoring,
+    funding and every simulated position stay in 2023-2025. The funding inventory is
+    the canonical one: like the campaign, it opens the next archive only to attest
+    continuity at the window end; no 2026 value is kept.
     """
     from .funding import REST_HYPOTHESIS, FundingReader
     from .portfolio_simulator import canonical_hash
@@ -750,9 +779,10 @@ def prepare(root: Path, dataset_root: Path, supplement_root: Path, instrument_pa
 
     start, end = '2023-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
     (root / 'candles').mkdir(parents=True, exist_ok=True)
-    report: dict[str, Any] = {'execution_authority': 'none', 'window': [start, end], 'candles': {}, 'funding': {}}
+    report: dict[str, Any] = {'execution_authority': 'none', 'window': [start, end], 'candle_start': candle_start,
+                              'candles': {}, 'funding': {}}
     for symbol in SYMBOLS:
-        selection = select_sources(dataset_root, start, end, start, symbol)
+        selection = select_sources(dataset_root, candle_start, end, start, symbol)
         values = [array('d') for _ in range(4)]
         first = None
         for record in iter_verified_candles(dataset_root, selection):
