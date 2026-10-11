@@ -1,4 +1,4 @@
-"""Incremental, research-only long linear-USDT portfolio simulation.
+"""Incremental, research-only linear-USDT portfolio simulation.
 
 No exchange, dataset, strategy or environment access occurs here. OHLC fills and
 isolated liquidation are declared proxies, never evidence of live execution.
@@ -10,6 +10,10 @@ fees do not reconstruct a historical venue collateral account or bracket.
 Forced exits settle at the supplied exclusive deadline using a strictly prior
 known close, even when the deadline is midnight; this is a research valuation,
 not a claim that an intrabar exchange order executed at that price or instant.
+A ``KernelProfile`` carries the mode's lifecycle and portfolio rules. The default
+is day_trading@1.1.0 (long only, 8 h or midnight, four plans); other profiles may
+hold shorts, multi-day plans and one active plan per symbol, and only they add
+``side`` to plans and trades and ``active_symbols`` to the portfolio view.
 """
 from __future__ import annotations
 
@@ -89,9 +93,60 @@ def utc_metadata_instant(value: Any) -> bool:
 
 
 def daily_capacity(equity: Decimal, realized: Decimal, unrealized: Decimal,
-                   reserved: Decimal) -> Decimal:
+                   reserved: Decimal, rate: Decimal = D('.06'), absolute: Decimal = D('30')) -> Decimal:
     """CanonicalPortfolioAdmissionEngine: aggregate unrealized, then loss floor."""
-    return min(equity * D('.06'), D('30')) - max(-realized, ZERO) - max(-unrealized, ZERO) - reserved
+    return min(equity * rate, absolute) - max(-realized, ZERO) - max(-unrealized, ZERO) - reserved
+
+
+@dataclass(frozen=True)
+class KernelProfile:
+    """Lifecycle and portfolio rules of one mode, enforced on every plan.
+
+    ``cancel_after_seconds`` is the first bar boundary after the entry TTL, as
+    90 s -> 120 s for day_trading. With ``daily_boundary`` a plan ends before the
+    next UTC midnight; ``one_active_per_symbol`` rejects a plan while the symbol
+    holds a pending entry or a position, whatever its side.
+    """
+    profile_id: str = 'day_trading.v1'
+    sides: tuple[str, ...] = ('long',)
+    entry_ttl_seconds: int = 90
+    cancel_after_seconds: int = 120
+    holding_window_seconds: int = 28800
+    daily_boundary: bool = True
+    max_active: int = 4
+    one_active_per_symbol: bool = False
+    daily_loss_rate: Decimal = D('.06')
+    daily_loss_absolute_quote: Decimal = D('30')
+
+    def __post_init__(self) -> None:
+        integers = (self.entry_ttl_seconds, self.cancel_after_seconds, self.holding_window_seconds, self.max_active)
+        if (not identifier(self.profile_id) or type(self.sides) is not tuple or not self.sides
+                or len(set(self.sides)) != len(self.sides) or set(self.sides) - {'long', 'short'}
+                or any(type(v) is not int for v in integers) or self.entry_ttl_seconds <= 0
+                or self.cancel_after_seconds != (self.entry_ttl_seconds // 60 + 1) * 60
+                or self.holding_window_seconds <= 60 or not 1 <= self.max_active <= len(SYMBOLS)
+                or type(self.daily_boundary) is not bool or type(self.one_active_per_symbol) is not bool
+                or not isinstance(self.daily_loss_rate, D) or not ZERO < self.daily_loss_rate <= 1
+                or not isinstance(self.daily_loss_absolute_quote, D)
+                or not self.daily_loss_absolute_quote.is_finite() or self.daily_loss_absolute_quote <= 0):
+            raise ValueError('research_kernel_profile_invalid')
+
+    @property
+    def extended(self) -> bool:
+        """Whether plans, trades and views carry the side and active-symbol fields."""
+        return self != DAY_TRADING_PROFILE
+
+    def wire(self) -> dict[str, Any]:
+        return {f.name: (wire_number(v) if isinstance(v := getattr(self, f.name), D)
+                         else list(v) if isinstance(v, tuple) else v) for f in fields(self)}
+
+
+DAY_TRADING_PROFILE = KernelProfile()
+# The swing breakout candidate of 2026-10-11: both sides, 60 min entries, 14 days,
+# one plan per pair; its daily-loss cap (100 % of equity, 100,000 quote) cannot bind.
+SWING_PROFILE = KernelProfile('swing.v1', ('long', 'short'), 3600, 3660, 1209600, False, 10, True,
+                              D('1'), D('100000'))
+HOLDING_WINDOWS = tuple(sorted({DAY_TRADING_PROFILE.holding_window_seconds, SWING_PROFILE.holding_window_seconds}))
 
 
 @dataclass(frozen=True)
@@ -162,10 +217,13 @@ class CostAssumptions:
             v = getattr(self, f.name)
             if not isinstance(v, D) or not v.is_finite() or not 0 <= v < 1:
                 raise ValueError('research_cost_invalid')
+        # The provision covers every funding interval of a profile's holding window;
+        # RunAssumptions then requires the window of its own profile.
         if (self.entry_fee_rate != D('.0002') or self.stop_fee_rate != D('.0005')
             or self.target_fee_rate not in (D('.0002'), D('.0005'))
             or type(self.funding_interval_seconds) is not int or self.funding_interval_seconds <= 0
-            or self.funding_intervals_provisioned != (28800-1)//self.funding_interval_seconds+1):
+            or self.funding_intervals_provisioned not in
+                {(window-1)//self.funding_interval_seconds+1 for window in HOLDING_WINDOWS}):
             raise ValueError('research_baseline_cost_mismatch')
 
     def wire(self) -> dict[str, Any]:
@@ -214,6 +272,7 @@ class RunAssumptions:
     funding_path_policy: str
     funding_mark_policy: str
     authorization: HoldoutAuthorization | None = None
+    kernel_profile: KernelProfile = DAY_TRADING_PROFILE
 
     def __post_init__(self) -> None:
         binding = None
@@ -273,6 +332,10 @@ class RunAssumptions:
             or self.funding_path_policy != 'adverse_possible_credit_certain.v1'
             or self.funding_mark_policy != 'last_known_close.v1'):
             raise ValueError('research_funding_coverage_invalid')
+        if (not isinstance(self.kernel_profile, KernelProfile)
+            or self.costs.funding_intervals_provisioned
+                != (self.kernel_profile.holding_window_seconds-1)//self.costs.funding_interval_seconds+1):
+            raise ValueError('research_baseline_cost_mismatch')
         if binding is not None:
             from dataclasses import asdict
             from .campaign_evidence import encoded
@@ -283,7 +346,8 @@ class RunAssumptions:
                 or json.loads(encoded({s:asdict(i) for s,i in self.instruments})) != binding['kernel_instruments']
                 or json.loads(encoded(asdict(self.funding))) != binding['funding_coverage']
                 or self.funding_path_policy != binding['funding_path_policy']
-                or self.funding_mark_policy != binding['funding_mark_policy']):
+                or self.funding_mark_policy != binding['funding_mark_policy']
+                or binding.get('kernel_profile', DAY_TRADING_PROFILE.wire()) != self.kernel_profile.wire()):
                 raise ValueError('research_holdout_input_binding_conflict')
 
 
@@ -325,6 +389,15 @@ class _Position:
     @property
     def units(self) -> Decimal:
         return number(self.plan['quantity']) * number(self.plan['instrument_math']['contract_size'])
+
+    @property
+    def long(self) -> bool:
+        return self.plan.get('side', 'long') == 'long'
+
+    def gain(self, price: Decimal) -> Decimal:
+        """Gross PnL of closing the position at ``price``."""
+        entry = number(self.plan['entry_price'])
+        return self.units * ((price - entry) if self.long else (entry - price))
 
 
 class PortfolioSimulator:
@@ -371,8 +444,7 @@ class PortfolioSimulator:
         return self._assumptions
 
     def _balances(self) -> dict[str, Decimal]:
-        unrealized = sum((p.units * (self.marks[p.plan['symbol']] - number(p.plan['entry_price']))
-                          for p in self.positions.values()), ZERO)
+        unrealized = sum((p.gain(self.marks[p.plan['symbol']]) for p in self.positions.values()), ZERO)
         committed = list(self.pending.values()) + [p.plan for p in self.positions.values()]
         margin = sum((number(p['position_notional_quote'])/number(p['final_leverage']) for p in committed), ZERO)
         return {'equity_quote':self.wallet+unrealized,
@@ -388,8 +460,13 @@ class PortfolioSimulator:
             **{k:wire_number(v) for k,v in self._balances().items()},
             'open_positions': len(self.positions), 'pending_entries': len(self.pending),
             'active_signal_hashes': [p['signal_result_hash'] for p in committed]}
+        if self.assumptions.kernel_profile.extended:
+            value['active_symbols'] = sorted(self._active_symbols())
         value['portfolio_hash'] = canonical_hash(value)
         return value
+
+    def _active_symbols(self) -> set[str]:
+        return {p['symbol'] for p in self.pending.values()} | {p.plan['symbol'] for p in self.positions.values()}
 
     def _event(self, reason: str, at: int, plan: Mapping[str, Any], *, ambiguous: bool = False) -> None:
         if ambiguous:
@@ -422,7 +499,7 @@ class PortfolioSimulator:
 
     def _close(self, key: str, p: _Position, price: Decimal, reason: str, at: int,
                price_known_ms: int, ambiguous: bool = False) -> None:
-        gross = p.units * (price - number(p.plan['entry_price']))
+        gross = p.gain(price)
         self._cash(p, 'gross_pnl', gross, at)
         self._costs(p, 'target' if reason == 'target' else 'stop', price, at)
         if reason == 'liquidation_proxy':
@@ -444,27 +521,38 @@ class PortfolioSimulator:
             'funding_provision_quote': number(p.plan['risk_components_quote']['funding_provision']),
             'exit_reason': reason, 'ambiguous': ambiguous or bool(p.ambiguity),
             'ambiguity_reasons': tuple(sorted(p.ambiguity)),
+            **({'side': 'long' if p.long else 'short'} if self.assumptions.kernel_profile.extended else {}),
             'execution_authority': 'none', 'liquidation_is_exchange_certified': False})
 
     def _exit(self, p: _Position, candle: Candle, new: bool) -> tuple[Decimal,str,bool] | None:
         plan = p.plan
         stop = number(plan['stop_price'])
         leverage = number(plan['final_leverage'])
-        liquidation = number(plan['entry_price']) * (1-1/leverage)/(1-number(plan['instrument_math']['mmr_proxy_rate']))
+        mmr = number(plan['instrument_math']['mmr_proxy_rate'])
+        entry = number(plan['entry_price'])
         target = number(plan['targets'][0]['price'])
-        stop_hit, liq_hit, target_hit = candle.low <= stop, liquidation > 0 and candle.low <= liquidation, candle.high >= target
+        if p.long:
+            liquidation = entry * (1-1/leverage)/(1-mmr)
+            stop_hit, liq_hit, target_hit = candle.low <= stop, liquidation > 0 and candle.low <= liquidation, candle.high >= target
+        else:  # mirrored isolated proxy; inactive at leverage 1 below a ~+99 % move
+            liquidation = entry * (1+1/leverage)/(1+mmr)
+            stop_hit, liq_hit, target_hit = candle.high >= stop, candle.high >= liquidation, candle.low <= target
+        worst = min if p.long else max
         if stop_hit or liq_hit:
             ambiguous = target_hit or (stop_hit and liq_hit) or new
             if ambiguous:
                 self._event('protection_path', candle.open_ms+MINUTE, plan, ambiguous=True)
             if liq_hit:
-                liq_price = min(candle.open, liquidation)
-                stop_price = min(candle.open, stop)
+                liq_price = worst(candle.open, liquidation)
+                stop_price = worst(candle.open, stop)
                 cost_rate = self.assumptions.costs.stop_fee_rate + self.assumptions.costs.stop_spread_rate + self.assumptions.costs.stop_slippage_rate
-                # Compare cash returned after costs, including the extra proxy fee.
-                if not stop_hit or liq_price*(1-cost_rate-number(plan['instrument_math']['liquidation_fee_rate'])) <= stop_price*(1-cost_rate):
+                liq_rate = cost_rate + number(plan['instrument_math']['liquidation_fee_rate'])
+                # Compare the cash of each exit after costs, including the extra proxy fee:
+                # a long receives price*(1-rate), a short pays price*(1+rate).
+                if not stop_hit or (liq_price*(1-liq_rate) <= stop_price*(1-cost_rate) if p.long
+                                    else liq_price*(1+liq_rate) >= stop_price*(1+cost_rate)):
                     return liq_price, 'liquidation_proxy', ambiguous
-            return min(candle.open, stop), 'stop', ambiguous
+            return worst(candle.open, stop), 'stop', ambiguous
         if target_hit:
             if new:
                 self._event('fill_bar_target', candle.open_ms+MINUTE, plan, ambiguous=True)
@@ -508,25 +596,37 @@ class PortfolioSimulator:
         if (canonical_hash(p['instrument_math']) != canonical_hash(i.wire())
             or canonical_hash(p['cost_model']) != canonical_hash(self.assumptions.costs.wire())):
             raise ValueError('research_plan_assumption_mismatch')
+        profile = self.assumptions.kernel_profile
+        if profile.extended:
+            if p.get('side') not in profile.sides:
+                raise ValueError('research_plan_side_invalid')
+        elif 'side' in p:
+            raise ValueError('research_plan_side_invalid')
+        long = p.get('side', 'long') == 'long'
         entry, stop, quantity, leverage, notional = (number(p[k]) for k in
             ('entry_price','stop_price','quantity','final_leverage','position_notional_quote'))
         targets = p['targets']
-        if (not 0 < stop < entry or entry % i.tick_size or stop % i.tick_size
+        if (not (0 < stop < entry if long else 0 < entry < stop) or entry % i.tick_size or stop % i.tick_size
             or quantity % i.quantity_step or not i.min_quantity <= quantity <= i.max_quantity
             or not 1 <= leverage <= i.leverage_cap_assumed
             or number(p['effective_leverage_cap']) != i.leverage_cap_assumed
             or notional != entry*quantity*i.contract_size or not i.min_notional <= notional <= 250
-            or len(targets) != 1 or number(targets[0]['price']) <= entry
+            or len(targets) != 1
+            or (number(targets[0]['price']) <= entry if long else not 0 < number(targets[0]['price']) < entry)
             or number(targets[0]['price']) % i.tick_size):
             raise ValueError('research_plan_geometry_invalid')
         deadline = p['holding_deadline_ms']
-        if (p['entry_ttl_seconds'] != 90 or p['cancel_after_seconds'] != 120
+        latest = self.now + profile.holding_window_seconds*1000
+        if profile.daily_boundary:
+            latest = min(latest, (self.now//DAY+1)*DAY)
+        if (p['entry_ttl_seconds'] != profile.entry_ttl_seconds
+            or p['cancel_after_seconds'] != profile.cancel_after_seconds
             or p['holding_deadline_exclusive'] is not True or type(deadline) is not int
-            or not self.now+MINUTE < deadline <= min(self.now+28800000,(self.now//DAY+1)*DAY)):
+            or not self.now+MINUTE < deadline <= latest):
             raise ValueError('research_plan_lifetime_invalid')
         units = quantity*i.contract_size
         c = self.assumptions.costs
-        parts = {'gross_stop_loss': (entry-stop)*units, 'entry_fee': entry*units*c.entry_fee_rate,
+        parts = {'gross_stop_loss': abs(entry-stop)*units, 'entry_fee': entry*units*c.entry_fee_rate,
             'stop_exit_fee': stop*units*c.stop_fee_rate, 'entry_spread': entry*units*c.entry_spread_rate,
             'stop_spread': stop*units*c.stop_spread_rate, 'entry_slippage': entry*units*c.entry_slippage_rate,
             'stop_slippage': stop*units*c.stop_slippage_rate,
@@ -539,7 +639,7 @@ class PortfolioSimulator:
             or p['risk_budget_quote'] != wire_number(number(view['equity_quote'])*D('.05'))):
             raise ValueError('research_plan_risk_invalid')
         target = number(targets[0]['price'])
-        reward = (target-entry)*units - parts['entry_fee'] - parts['entry_spread'] - parts['entry_slippage'] - parts['funding_provision'] - target*units*(c.target_fee_rate+c.target_spread_rate+c.target_slippage_rate)
+        reward = abs(target-entry)*units - parts['entry_fee'] - parts['entry_spread'] - parts['entry_slippage'] - parts['funding_provision'] - target*units*(c.target_fee_rate+c.target_spread_rate+c.target_slippage_rate)
         balances = self._balances()
         if (risk <= 0 or risk > balances['equity_quote']*D('.05')
             or reward/risk < D('1.3') or number(targets[0]['net_r']) < D('1.3')
@@ -548,9 +648,12 @@ class PortfolioSimulator:
             or wire_number(risk) != targets[0]['net_risk_quote']):
             raise ValueError('research_plan_net_r_invalid')
         if risk > daily_capacity(balances['equity_quote'], balances['realized_net_pnl_quote'],
-                                 balances['unrealized_net_pnl_quote'], balances['reserved_risk_quote']):
+                                 balances['unrealized_net_pnl_quote'], balances['reserved_risk_quote'],
+                                 profile.daily_loss_rate, profile.daily_loss_absolute_quote):
             raise ValueError('research_portfolio_daily_loss_exceeded')
-        if view['open_positions'] + view['pending_entries'] >= 4:
+        if profile.one_active_per_symbol and p['symbol'] in self._active_symbols():
+            raise ValueError('research_portfolio_symbol_active')
+        if view['open_positions'] + view['pending_entries'] >= profile.max_active:
             raise ValueError('research_portfolio_concurrency_exceeded')
         if notional+balances['open_notional_quote']+balances['pending_notional_quote'] > balances['equity_quote']:
             raise ValueError('research_portfolio_exposure_exceeded')
@@ -670,10 +773,13 @@ class PortfolioSimulator:
                  signals: tuple[Signal,...], boundary: int) -> None:
         old_keys = set(self.positions)
         outcomes: dict[str, tuple[Decimal,str,int,int,bool]] = {}
+        profile = self.assumptions.kernel_profile
         for key,plan in tuple(self.pending.items()):
-            expiry = plan['evaluated_ms']+90000
+            expiry = plan['evaluated_ms']+profile.entry_ttl_seconds*1000
             c = batch[plan['symbol']]
-            touched = c.low <= number(plan['entry_price'])  # resting buy can gap below limit
+            # A resting buy can gap below its limit, a resting sell above it.
+            touched = (c.low <= number(plan['entry_price']) if plan.get('side', 'long') == 'long'
+                       else c.high >= number(plan['entry_price']))
             if boundary > expiry:
                 if touched:
                     self._event('ttl_touch',expiry,plan,ambiguous=True)
@@ -688,7 +794,8 @@ class PortfolioSimulator:
         for key,p in self.positions.items():
             deadline = p.plan['holding_deadline_ms']
             if deadline <= boundary:
-                reason = 'midnight' if deadline//DAY > p.plan['evaluated_ms']//DAY else 'holding_deadline'
+                reason = ('midnight' if profile.daily_boundary and deadline//DAY > p.plan['evaluated_ms']//DAY
+                          else 'holding_deadline')
                 outcomes[key] = (self.marks[p.plan['symbol']],reason,deadline,self.now,False)
             else:
                 outcome = self._exit(p,batch[p.plan['symbol']],key not in old_keys)
@@ -712,9 +819,10 @@ class PortfolioSimulator:
                 ambiguous = event.timestamp_ms < boundary and (key not in old_keys or uncertain_exit)
                 if ambiguous:
                     self._event('funding_path',event.timestamp_ms,p.plan,ambiguous=True)
-                charged = not ambiguous or event.rate > 0
+                # A long pays a positive rate and a short receives it; an uncertain credit is dropped.
+                charged = not ambiguous or (event.rate > 0 if p.long else event.rate < 0)
                 proxy = event.mark_price if event.mark_price is not None else self.marks[p.plan['symbol']]
-                amount = -p.units*proxy*event.rate if charged else ZERO
+                amount = ((-p.units if p.long else p.units)*proxy*event.rate) if charged else ZERO
                 p.funding += amount
                 self._cash(p,'funding',amount,event.timestamp_ms,rate=event.rate,mark_price=proxy,
                     mark_source='verified_observation' if event.mark_price is not None else 'last_known_close.v1',
@@ -798,4 +906,7 @@ class PortfolioSimulator:
             'admitted_plans':self.admitted_plans,'maximum_drawdown_quote':self.maximum_drawdown,
             'peak_equity_quote':self.peak_equity,'maximum_reserved_risk_quote':self.maximum_risk,
             'maximum_exposure_quote':self.maximum_exposure,'rejection_counts':dict(self.rejection_counts),
-            'ambiguity_counts':dict(self.ambiguity_counts),'execution_authority':'none'}
+            'ambiguity_counts':dict(self.ambiguity_counts),
+            **({'kernel_profile':self.assumptions.kernel_profile.wire()}
+               if self.assumptions.kernel_profile.extended else {}),
+            'execution_authority':'none'}

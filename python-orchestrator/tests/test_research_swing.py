@@ -684,3 +684,60 @@ def test_cli_prepare_warms_up_from_november_2022(tmp_path, monkeypatch, capsys):
     assert sw.main(arguments) == 0
     assert calls[0][1] == {'candle_start': '2022-11-01T00:00:00Z'} and len(calls[0][0]) == 5
     assert json.loads(capsys.readouterr().out) == {'ok': True}
+
+
+# ---------------------------------------------------------------- canonical oracle
+def synthetic_market(days=5, symbols=('BTCUSDT', 'ETHUSDT')):
+    rng = random.Random(17)
+    candles, frames, events = {}, {}, {}
+    for offset, symbol in enumerate(symbols):
+        closes, price = [], 100.0 + 10 * offset
+        for _ in range(days * 1440 + 2):
+            price *= 1 + rng.uniform(-0.003, 0.003)
+            closes.append(round(price, 2))
+        candles[symbol] = series(symbol, START - ex.MINUTE, closes, spread=0.02)
+        columns = {name: [None] * (250 + 6 * days) for name in sw.COLUMNS}
+        frame = sw.Frame(symbol, sw.FOUR_HOURS, START - 250 * sw.FOUR_HOURS, columns)
+        for index in range(249, 250 + 6 * days):
+            position = candles[symbol].index(frame.close_ms(index)) - 1
+            if 0 <= position < candles[symbol].count:
+                columns['close'][index] = candles[symbol].close[position]
+                columns['atr'][index] = candles[symbol].close[position] * 0.01
+        frames[symbol] = frame
+        events[symbol] = [(START + h * 28_800_000 + (2_000 if h % 2 else 0), (-1) ** h * 0.0002,
+                           None if h % 3 else 100.0) for h in range(1, 3 * days)]
+    instruments = {s: {**CENT, 'symbol': s} for s in symbols}
+    return candles, frames, events, instruments
+
+
+@pytest.mark.parametrize('profile', [BASELINE, ADVERSE])
+def test_canonical_kernel_replays_two_sided_swing_plans_exactly(profile):
+    candles, frames, events, instruments = synthetic_market()
+    blocks = {s: sw.extremes(c) for s, c in candles.items()}
+    funding = {s: ex.FundingSeries.from_events(e) for s, e in events.items()}
+    policy = sw.SwingPolicy('alternate', 'test', lambda f, i: i % 2 == 0, lambda f, i: i % 2 == 1)
+    window = (START, START + 5 * ex.DAY)
+    geometry = sw.GEOMETRIES['S3.T5.H14d']
+    summary, outcomes = sw.run_swing(frames, candles, blocks, funding, policy, geometry, instruments, profile,
+                                     window, max_active=10)
+    canonical, rejections = sw.canonical_replay(frames, candles, events, policy, geometry, instruments, profile,
+                                                window)
+    assert set(summary['by_side']) == {'long', 'short'} and len(canonical) == summary['trades'] > 5
+    assert {trade['side'] for trade in canonical.values()} == {'long', 'short'}
+    assert sw.kernel_differences(outcomes, canonical, window[1]) == []
+    assert set(rejections) <= {'research_portfolio_symbol_active', 'research_minimum_net_r_not_met'}
+
+
+def test_canonical_replay_needs_the_kernel_profile_geometry_and_reports_side_changes():
+    candles, frames, events, instruments = synthetic_market(days=1)
+    policy = sw.SwingPolicy('long', 'test', lambda f, i: True)
+    with pytest.raises(ex.ExplorationError):
+        sw.canonical_replay(frames, candles, events, policy, sw.GEOMETRIES['S3.T5.H7d'], instruments, BASELINE,
+                            (START, START + ex.DAY))
+    outcome = ex.Outcome(day_plan(START, side='short'), filled=True, fill_ms=START + ex.MINUTE,
+                         exit_ms=START + 2 * ex.MINUTE, exit_price=99.0, reason='stop')
+    canonical = {('BTCUSDT', START): {'exit_reason': 'stop', 'fill_boundary_ms': START + ex.MINUTE,
+                                      'exit_boundary_ms': START + 2 * ex.MINUTE, 'ambiguous': False,
+                                      'exit_price': 99.0, 'net_pnl_quote': 0.0, 'funding_quote': 0.0,
+                                      'side': 'long'}}
+    assert sw.kernel_differences([outcome], canonical, START + ex.DAY) == [f"side:{('BTCUSDT', START)}"]

@@ -862,10 +862,33 @@ def canonical_replay(rows: Mapping[str, Sequence[Mapping[str, Any]]], candles: M
     Identities are placeholders: the kernel's own fill, exit, cost, funding and admission
     rules are what is compared. Candles must include the prephase minute before the window.
     """
-    from .portfolio_simulator import (IDENTITY_FIELDS, Candle, CostAssumptions, FundingCoverage, FundingEvent,
-                                      InstrumentAssumptions, PortfolioSimulator, RunAssumptions, Signal,
-                                      canonical_hash, number, wire_number)
+    start, end = window
+    selected = {(s, row['ms']): row for s in SYMBOLS if s in candles for row in rows.get(s, ())
+                if start <= row['ms'] < end and all(row['sec'][k] for k in policy.sections) and policy.predicate(row)}
 
+    def plan_for(symbol: str, decision: int) -> tuple[Plan | None, str | None]:
+        plan, reason = build_plan(selected[(symbol, decision)], symbol, geometry, instruments[symbol], profile)
+        if plan is not None and not holding_window_available(plan):  # never binds on 15m decisions
+            return None, 'research_holding_window_unavailable'
+        return plan, reason
+
+    return kernel_replay(selected, plan_for, candles, funding_events, instruments, profile, window)
+
+
+def kernel_replay(selected: Iterable[tuple[str, int]], plan_for: Callable[[str, int], tuple[Plan | None, str | None]],
+                  candles: Mapping[str, CandleSeries], funding_events: Mapping[str, Sequence[Sequence[Any]]],
+                  instruments: Mapping[str, Mapping[str, Any]], profile: Mapping[str, float], window: tuple[int, int],
+                  *, kernel_profile: Any = None, funding_intervals: int = 1) -> tuple[dict, Counter]:
+    """Drive the canonical PortfolioSimulator with signals at ``selected`` (symbol, decision)
+    keys and the plans ``plan_for`` returns, as research-plan.v1 documents.
+
+    ``kernel_profile`` defaults to day_trading; an extended profile adds the plan side.
+    """
+    from .portfolio_simulator import (DAY_TRADING_PROFILE, IDENTITY_FIELDS, Candle, CostAssumptions,
+                                      FundingCoverage, FundingEvent, InstrumentAssumptions, PortfolioSimulator,
+                                      RunAssumptions, Signal, canonical_hash, number, wire_number)
+
+    kernel_profile = DAY_TRADING_PROFILE if kernel_profile is None else kernel_profile
     start, end = window
     symbols = tuple(s for s in SYMBOLS if s in candles)
     phase = 'training' if end <= PHASES['training'][1] else 'validation'
@@ -882,31 +905,28 @@ def canonical_replay(rows: Mapping[str, Sequence[Mapping[str, Any]]], candles: M
     costs = CostAssumptions(Decimal('.0002'), Decimal('.0005'), Decimal('.0005'), d(profile['entry_spread_rate']),
                             d(profile['stop_spread_rate']), d(profile['target_spread_rate']),
                             d(profile['entry_slippage_rate']), d(profile['stop_slippage_rate']),
-                            d(profile['target_slippage_rate']), d(profile['funding_provision_rate']), 28800, 1)
+                            d(profile['target_slippage_rate']), d(profile['funding_provision_rate']), 28800,
+                            funding_intervals)
     events = {s: [e for e in funding_events.get(s, ()) if start <= e[0] < end] for s in symbols}
     assumptions = RunAssumptions(
         start, end, phase, symbols, tuple(kernel_instruments.items()), costs, tuple(identity.items()),
         tuple((s, tuple(sources[s].items())) for s in symbols),
         FundingCoverage('observed_only', 'd' * 64, tuple((s, len(events[s])) for s in symbols)),
-        'adverse_possible_credit_certain.v1', 'last_known_close.v1')
-    selected = {(s, row['ms']): row for s in symbols for row in rows.get(s, ())
-                if start <= row['ms'] < end and all(row['sec'][k] for k in policy.sections) and policy.predicate(row)}
+        'adverse_possible_credit_certain.v1', 'last_known_close.v1', kernel_profile=kernel_profile)
+    selected = {key for key in selected if key[0] in symbols and start <= key[1] < end}
     trades: list[Mapping[str, Any]] = []
     rejections: Counter[str] = Counter()
 
     def builder(signal: Any, view: Mapping[str, Any]) -> dict:
         payload = signal.payload
         symbol = payload['symbol']
-        plan, reason = build_plan(selected[(symbol, payload['evaluated_ms'])], symbol, geometry,
-                                  instruments[symbol], profile)
+        plan, reason = plan_for(symbol, payload['evaluated_ms'])
         if plan is None:
             return {'schema_version': 'research-plan-rejection.v1', 'reason_code': reason}
-        if not holding_window_available(plan):  # never binds on 15m decisions; the builder checks it last
-            return {'schema_version': 'research-plan-rejection.v1', 'reason_code': 'research_holding_window_unavailable'}
         instrument = kernel_instruments[symbol]
         entry, stop, target, quantity = (d(v) for v in (plan.entry, plan.stop, plan.target, plan.quantity))
         units = quantity * instrument.contract_size
-        parts = {'gross_stop_loss': (entry - stop) * units, 'entry_fee': entry * units * costs.entry_fee_rate,
+        parts = {'gross_stop_loss': abs(entry - stop) * units, 'entry_fee': entry * units * costs.entry_fee_rate,
                  'stop_exit_fee': stop * units * costs.stop_fee_rate,
                  'entry_spread': entry * units * costs.entry_spread_rate,
                  'stop_spread': stop * units * costs.stop_spread_rate,
@@ -915,7 +935,7 @@ def canonical_replay(rows: Mapping[str, Sequence[Mapping[str, Any]]], candles: M
                  'funding_provision': entry * units * costs.funding_provision_rate * costs.funding_intervals_provisioned}
         risk = sum(parts.values(), Decimal(0))
         parts['total_stop_loss'] = risk
-        reward = ((target - entry) * units - parts['entry_fee'] - parts['entry_spread'] - parts['entry_slippage']
+        reward = (abs(target - entry) * units - parts['entry_fee'] - parts['entry_spread'] - parts['entry_slippage']
                   - parts['funding_provision']
                   - target * units * (costs.target_fee_rate + costs.target_spread_rate + costs.target_slippage_rate))
         document = {
@@ -930,10 +950,13 @@ def canonical_replay(rows: Mapping[str, Sequence[Mapping[str, Any]]], candles: M
             'targets': [{'price': float(target),
                          'net_r': wire_number((reward / risk).quantize(Decimal('1e-18'), rounding=ROUND_DOWN)),
                          'net_reward_quote': wire_number(reward), 'net_risk_quote': wire_number(risk)}],
-            'entry_ttl_seconds': ENTRY_TTL_MS // 1000, 'cancel_after_seconds': PENDING_RELEASE_MS // 1000,
+            'entry_ttl_seconds': kernel_profile.entry_ttl_seconds,
+            'cancel_after_seconds': kernel_profile.cancel_after_seconds,
             'holding_deadline_exclusive': True, 'holding_deadline_ms': plan.deadline_ms,
             'risk_components_quote': {k: wire_number(v) for k, v in parts.items()},
             'risk_budget_quote': wire_number(number(view['equity_quote']) * Decimal('.05'))}
+        if kernel_profile.extended:
+            document['side'] = plan.side
         document['plan_hash'] = canonical_hash(document)
         return document
 
