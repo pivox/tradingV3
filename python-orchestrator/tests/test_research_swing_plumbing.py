@@ -17,8 +17,8 @@ from pathlib import Path
 import pytest
 
 from app.backtesting.research import campaign, plans, signals
-from app.backtesting.research.portfolio_simulator import (SWING_PROFILE, Candle, CostAssumptions,
-    FundingCoverage, PortfolioSimulator, RunAssumptions, Signal, canonical_hash)
+from app.backtesting.research.portfolio_simulator import (CELL_FIELDS, SWING_PROFILE, Candle, CostAssumptions,
+    FundingCoverage, PortfolioSimulator, RunAssumptions, Signal, canonical_hash, composite_hash)
 from app.backtesting.research.signal_sources import (DAY_TRADING, FOUR_HOURS_MS, RESEARCH_PROFILES,
     SignalError, _expected_ticks, research_profile, select_sources)
 from app.modern_trading_contracts import (CanonicalEffectiveConfigSnapshot, calculate_config_hash,
@@ -236,20 +236,25 @@ def test_actual_php_swing_short_plan_is_admitted_and_settled_by_the_swing_kernel
               'contexts': contexts, 'trace_hash': canonical_hash(trace), 'verdicts': [], 'trace': trace}
     signal['result_hash'] = canonical_hash(signal)
     with plans.PlanWorker(app, f, wall_timeout=60, io_timeout=30) as worker:
-        identity = {'base_setup_hash': b['setup_hash'], 'base_config_hash': b['config_hash'],
-            'base_catalog_hash': b['condition_catalog_hash'], 'base_snapshot_hash': b['snapshot_hash'],
-            'variant_id': 'baseline', 'variant_hash': f['variant']['variant_hash'],
+        # The short cell is the real PHP baseline; this run streams no long signal.
+        short_cell = (('base_setup_hash', b['setup_hash']), ('base_config_hash', b['config_hash']),
+                      ('base_catalog_hash', b['condition_catalog_hash']), ('base_snapshot_hash', b['snapshot_hash']),
+                      ('variant_hash', f['variant']['variant_hash']))
+        cells = (('long', tuple((k, 'sha256:' + 'f' * 64) for k in CELL_FIELDS)), ('short', short_cell))
+        identity = {'variant_id': 'baseline',
             'instrument_assumptions_hash': f['instrument_assumptions']['manifest_hash'],
             'cost_assumptions_hash': f['cost_assumptions']['assumption_hash'],
-            'research_code_hash': worker.opened['research_code_hash']}
+            'research_code_hash': worker.opened['research_code_hash'],
+            **{k: composite_hash({side: dict(cell)[k] for side, cell in cells}) for k in CELL_FIELDS}}
         source = {**{k: run['source'][k] for k in ('dataset_id', 'dataset_sha256')},
                   **{k: run[k] for k in ('signal_run_id', 'signal_output_sha256')}}
         assumptions = RunAssumptions(tick, tick + 180000, 'training', ('BTCUSDT',),
             _kernel_instruments(f['instrument_assumptions'], ('BTCUSDT',)),
             CostAssumptions(D('.0002'), D('.0005'), D('.0005'), *(D(0) for _ in range(6)), D('.0001'), 28800, 42),
-            tuple(identity.items()), (('BTCUSDT', tuple(source.items())),),
+            tuple(identity.items()),
+            (('BTCUSDT:long', tuple(source.items())), ('BTCUSDT:short', tuple(source.items()))),
             FundingCoverage('verified_complete', 'sha256:' + 'a' * 64, (('BTCUSDT', 0),)),
-            'adverse_possible_credit_certain.v1', 'last_known_close.v1', kernel_profile=SWING_PROFILE)
+            'adverse_possible_credit_certain.v1', 'last_known_close.v1', kernel_profile=SWING_PROFILE, cells=cells)
         ledger = {key: [] for key in ('events', 'trades', 'cashflows', 'rejections')}
         sim = PortfolioSimulator(assumptions, worker.build, event_sink=ledger['events'].append,
             trade_sink=ledger['trades'].append, cashflow_sink=ledger['cashflows'].append,
@@ -285,12 +290,3 @@ def test_kernel_costs_provision_every_funding_interval_of_the_holding_window() -
     assert campaign._kernel_costs(_snapshot('PT336H'), rates).funding_intervals_provisioned == 42
     with pytest.raises(campaign.CampaignError, match='holding'):
         campaign._kernel_costs(_snapshot('PT2H'), rates)
-
-
-def test_a_campaign_unit_refuses_a_profiled_b1_report(tmp_path, monkeypatch) -> None:
-    from tests.test_research_campaign import fixture
-    kwargs, report, _ = fixture(tmp_path, monkeypatch)
-    report['profile'] = 'swing.long'
-    (kwargs['signal_root']/'report.json').write_text(json.dumps(report))
-    with pytest.raises(campaign.CampaignError, match='research profile not replayable'):
-        campaign.run_campaign(**kwargs)

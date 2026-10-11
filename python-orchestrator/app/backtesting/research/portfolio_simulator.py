@@ -42,6 +42,8 @@ IDENTITY_FIELDS = ('base_setup_hash', 'base_config_hash', 'base_catalog_hash',
     'base_snapshot_hash', 'variant_id', 'variant_hash', 'instrument_assumptions_hash',
     'cost_assumptions_hash', 'research_code_hash')
 SOURCE_FIELDS = ('dataset_id', 'dataset_sha256', 'signal_run_id', 'signal_output_sha256')
+# Per-side cell hashes of a two-sided run; the run identity holds their composites.
+CELL_FIELDS = ('base_setup_hash', 'base_config_hash', 'base_catalog_hash', 'base_snapshot_hash', 'variant_hash')
 _B1_BASELINE_BINDINGS = (
     ('setup_hash', 'base_setup_hash'),
     ('config_hash', 'base_config_hash'),
@@ -76,6 +78,18 @@ def canonical_hash(value: Mapping[str, Any]) -> str:
 
 def digest(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r'(sha256:)?[a-f0-9]{64}', value) is not None
+
+
+def composite_hash(by_side: Mapping[str, str]) -> str:
+    """Run-level hash of per-side cell hashes; a single side keeps its own hash (day_trading)."""
+    if len(by_side) == 1:
+        return next(iter(by_side.values()))
+    return canonical_hash({side: by_side[side] for side in sorted(by_side)})
+
+
+def stream_key(symbol: str, side: str, sides: Sequence[str]) -> str:
+    """One signal stream per symbol for a single-side cell, one per (symbol, side) otherwise."""
+    return symbol if len(sides) == 1 else f'{symbol}:{side}'
 
 
 def identifier(value: Any) -> bool:
@@ -289,6 +303,8 @@ class RunAssumptions:
     funding_mark_policy: str
     authorization: HoldoutAuthorization | None = None
     kernel_profile: KernelProfile = DAY_TRADING_PROFILE
+    # Two-sided profiles only: ((side, ((CELL_FIELD, hash), ...)), ...) in profile side order.
+    cells: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
 
     def __post_init__(self) -> None:
         binding = None
@@ -326,7 +342,7 @@ class RunAssumptions:
         if (tuple(s for s,_ in self.instruments) != self.symbols
             or any(not isinstance(i, InstrumentAssumptions) for _,i in self.instruments)
             or not isinstance(self.costs, CostAssumptions)
-            or tuple(s for s,_ in self.sources) != self.symbols
+            or tuple(s for s,_ in self.sources) != self.stream_keys()
             or set(dict(self.identity)) != set(IDENTITY_FIELDS) or len(self.identity) != len(IDENTITY_FIELDS)
             or not identifier(dict(self.identity).get('variant_id'))
             or any(not digest(v) for k,v in self.identity if k != 'variant_id')):
@@ -352,6 +368,7 @@ class RunAssumptions:
             or self.costs.funding_intervals_provisioned
                 != (self.kernel_profile.holding_window_seconds-1)//self.costs.funding_interval_seconds+1):
             raise ValueError('research_baseline_cost_mismatch')
+        self._validate_cells()
         if binding is not None:
             from dataclasses import asdict
             from .campaign_evidence import encoded
@@ -363,8 +380,43 @@ class RunAssumptions:
                 or json.loads(encoded(asdict(self.funding))) != binding['funding_coverage']
                 or self.funding_path_policy != binding['funding_path_policy']
                 or self.funding_mark_policy != binding['funding_mark_policy']
-                or binding.get('kernel_profile', DAY_TRADING_PROFILE.wire()) != self.kernel_profile.wire()):
+                or binding.get('kernel_profile', DAY_TRADING_PROFILE.wire()) != self.kernel_profile.wire()
+                or binding.get('cells', {}) != {side: dict(cell) for side, cell in self.cells}):
                 raise ValueError('research_holdout_input_binding_conflict')
+
+    def _validate_cells(self) -> None:
+        sides = self.kernel_profile.sides
+        if type(self.cells) is not tuple:
+            raise ValueError('research_cells_invalid')
+        if len(sides) == 1:
+            if self.cells:
+                raise ValueError('research_cells_invalid')
+            return
+        if (tuple(side for side,_ in self.cells) != sides
+            or any(type(cell) is not tuple or any(type(p) is not tuple or len(p) != 2 for p in cell)
+                   or tuple(k for k,_ in cell) != CELL_FIELDS or any(not digest(v) for _,v in cell)
+                   for _,cell in self.cells)):
+            raise ValueError('research_cells_invalid')
+        identity = dict(self.identity)
+        for name in CELL_FIELDS:
+            if identity[name] != composite_hash({side: dict(cell)[name] for side, cell in self.cells}):
+                raise ValueError('research_cells_composite_conflict')
+
+    def stream_keys(self) -> tuple[str, ...]:
+        """Source keys in symbol priority, then profile side order."""
+        # A non-profile value is rejected by the cost check that follows.
+        sides = self.kernel_profile.sides if isinstance(self.kernel_profile, KernelProfile) else ('long',)
+        return tuple(stream_key(s, side, sides) for s in self.symbols for side in sides)
+
+    def cell_identity(self, side: str) -> dict[str, str]:
+        """The identity a plan of ``side`` carries: the run identity with its side's cell hashes."""
+        identity = dict(self.identity)
+        if self.cells:
+            identity.update(dict(dict(self.cells)[side]))
+        return identity
+
+    def source(self, symbol: str, side: str) -> dict[str, str]:
+        return dict(dict(dict(self.sources))[stream_key(symbol, side, self.kernel_profile.sides)])
 
 
 def merge_candles(streams: Mapping[str, Iterator[Candle]], symbols: tuple[str, ...]) -> Iterator[tuple[Candle, ...]]:
@@ -576,10 +628,24 @@ class PortfolioSimulator:
                 return target, 'target', False
         return None
 
+    def _signal_side(self, payload: Mapping[str, Any]) -> str:
+        sides = self.assumptions.kernel_profile.sides
+        if len(sides) == 1:
+            return sides[0]
+        execution = payload.get('execution')
+        side = execution.get('side') if isinstance(execution, Mapping) else None
+        if side not in sides:
+            raise ValueError('research_signal_invalid')
+        return side
+
+    def _stream(self, payload: Mapping[str, Any]) -> str:
+        return stream_key(payload['symbol'], self._signal_side(payload), self.assumptions.kernel_profile.sides)
+
     def _validate_signal(self, s: Signal, boundary: int) -> None:
         p = s.payload
         symbol = p.get('symbol')
-        source = dict(dict(self.assumptions.sources).get(symbol, ()))
+        side = self._signal_side(p)
+        source = (self.assumptions.source(symbol, side) if symbol in self.assumptions.symbols else {})
         if (type(s.index) is not int or s.index < 0 or symbol not in self.assumptions.symbols
             or p.get('schema_version') != 'research-signal-result.v1' or p.get('passed') is not True
             or p.get('evaluated_ms') != boundary or not digest(p.get('result_hash'))
@@ -589,17 +655,18 @@ class PortfolioSimulator:
             or canonical_hash({k:v for k,v in p.items() if k != 'result_hash'}) != p['result_hash']):
             raise ValueError('research_signal_invalid')
         baseline = p.get('baseline')
-        identity = dict(self.assumptions.identity)
+        identity = self.assumptions.cell_identity(side)
         if (not isinstance(baseline, Mapping)
             or any(baseline.get(signal_key) != identity[run_key]
                    for signal_key,run_key in _B1_BASELINE_BINDINGS)):
             raise ValueError('research_signal_baseline_invalid')
-        old = self.last_signals.get(symbol)
+        old = self.last_signals.get(self._stream(p))
         if old and (s.index <= old[0] or boundary <= old[1]):
             raise ValueError('research_signal_duplicate_or_out_of_order')
 
     def _validate_plan(self, p: Mapping[str, Any], s: Signal, view: Mapping[str, Any]) -> None:
-        identity, source = dict(self.assumptions.identity), dict(dict(self.assumptions.sources)[s.payload['symbol']])
+        side = self._signal_side(s.payload)
+        identity, source = self.assumptions.cell_identity(side), self.assumptions.source(s.payload['symbol'], side)
         if (p.get('schema_version') != 'research-plan.v1' or p.get('research_only') is not True
             or p.get('execution_authority') != 'none' or p.get('symbol') != s.payload['symbol']
             or p.get('signal_result_hash') != s.payload['result_hash'] or p.get('signal_index') != s.index
@@ -614,7 +681,7 @@ class PortfolioSimulator:
             raise ValueError('research_plan_assumption_mismatch')
         profile = self.assumptions.kernel_profile
         if profile.extended:
-            if p.get('side') not in profile.sides:
+            if p.get('side') not in profile.sides or p.get('side') != side:
                 raise ValueError('research_plan_side_invalid')
         elif 'side' in p:
             raise ValueError('research_plan_side_invalid')
@@ -730,12 +797,13 @@ class PortfolioSimulator:
             seen.add((event.symbol,event.timestamp_ms))
 
     def _validate_signals(self, signals: Sequence[Signal], boundary: int) -> None:
-        seen_symbols = set()
+        # One signal per stream and boundary: a pair's long and short streams may both decide.
+        seen_streams = set()
         for s in signals:
             self._validate_signal(s,boundary)
-            if s.payload['symbol'] in seen_symbols or boundary >= self.assumptions.end_ms:
+            if self._stream(s.payload) in seen_streams or boundary >= self.assumptions.end_ms:
                 raise ValueError('research_signal_duplicate_or_outside_window')
-            seen_symbols.add(s.payload['symbol'])
+            seen_streams.add(self._stream(s.payload))
 
     def prime(self, prephase_candles: Sequence[Candle], *,
               funding: Sequence[FundingEvent] = (), signals: Sequence[Signal] = ()) -> dict[str, Any]:
@@ -855,9 +923,11 @@ class PortfolioSimulator:
         self._admit_signals(signals)
 
     def _admit_signals(self, signals: tuple[Signal,...]) -> None:
-        for s in sorted(signals,key=lambda s:self.assumptions.symbols.index(s.payload['symbol'])):
+        sides = self.assumptions.kernel_profile.sides
+        for s in sorted(signals,key=lambda s:(self.assumptions.symbols.index(s.payload['symbol']),
+                                              sides.index(self._signal_side(s.payload)))):
             self.attempted_signals += 1
-            self.last_signals[s.payload['symbol']] = (s.index,self.now)
+            self.last_signals[self._stream(s.payload)] = (s.index,self.now)
             view = self.view()
             result = self.builder(s,FrozenJsonDict(view))
             # A callback contract/protocol failure invalidates the experiment;
@@ -873,7 +943,8 @@ class PortfolioSimulator:
                 reason = str(exc) if isinstance(exc,ValueError) else 'research_plan_shape_invalid'
                 self.rejection_counts[reason] += 1
                 self.rejection_sink({'schema_version':'research-simulation-rejection.v1',
-                    **dict(self.assumptions.identity), **dict(dict(self.assumptions.sources)[s.payload['symbol']]),
+                    **self.assumptions.cell_identity(self._signal_side(s.payload)),
+                    **self.assumptions.source(s.payload['symbol'], self._signal_side(s.payload)),
                     'symbol':s.payload['symbol'],'signal_result_hash':s.payload['result_hash'],
                     'signal_index':s.index,'evaluated_ms':self.now,'reason_code':reason})
                 continue

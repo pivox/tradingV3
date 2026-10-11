@@ -652,7 +652,8 @@ def canonical_replay(frames: Mapping[str, Frame], candles: Mapping[str, ex.Candl
         return build_swing_plan(frames[symbol], index, geometry, instruments[symbol], profile, end, side)
 
     return ex.kernel_replay(sides, plan_for, candles, funding_events, instruments, profile, window,
-                            kernel_profile=SWING_PROFILE, funding_intervals=geometry.funding_intervals)
+                            kernel_profile=SWING_PROFILE, funding_intervals=geometry.funding_intervals,
+                            side_for=lambda symbol, decision: sides[(symbol, decision)][1])
 
 
 def kernel_differences(outcomes: Sequence[ex.Outcome], canonical: Mapping[tuple, Any], end: int) -> list[str]:
