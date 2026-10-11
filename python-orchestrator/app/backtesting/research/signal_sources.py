@@ -201,15 +201,21 @@ def select_sources(root: Path, start: str, end: str, score_start: str,
     return _select_sources_validated(root, beginning, ending, score, symbol, step=step)
 
 
-def select_holdout_sources(root: Path, symbol: str, *, authorization) -> SourceSelection:
-    """Select the claimed fixed window; ordinary research remains pre-holdout."""
+def select_holdout_sources(root: Path, symbol: str, *, authorization, profile: str | None = None) -> SourceSelection:
+    """Select the claimed fixed window; ordinary research remains pre-holdout.
+
+    A swing claim names its B1 profiles; each selects at its own cadence.
+    """
     from .holdout_authority import require_claim
     contract = require_claim(authorization, operation='source')
     if Path(root) != Path(contract['paths']['dataset_root']) or symbol not in contract['symbols']:
         raise SignalError('claimed source root or symbol conflict')
+    if profile not in (contract.get('profiles') or (None,)):
+        raise SignalError('claimed research profile conflict')
     window = contract['window']
+    cadence = {} if profile is None else {'step': research_profile(profile).step_ms}
     selection = _select_sources_validated(root, _utc(window['source_start']),
-        _utc(window['end']), _utc(window['score_start']), symbol)
+        _utc(window['end']), _utc(window['score_start']), symbol, **cadence)
     if selection.manifest_sha256 != contract['identities']['source_manifest_sha256']:
         raise SignalError('claimed source manifest conflict')
     return selection

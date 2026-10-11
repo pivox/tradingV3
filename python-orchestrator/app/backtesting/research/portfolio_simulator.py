@@ -373,15 +373,17 @@ class RunAssumptions:
             from dataclasses import asdict
             from .campaign_evidence import encoded
             import json
-            if (dict(self.identity) != binding['identity']
+            # A two-sided unit binds each side's full identity (its cell inside the run identity).
+            sides = self.kernel_profile.sides
+            identity = {side:self.cell_identity(side) for side in sides} if len(sides) > 1 else dict(self.identity)
+            if (identity != binding['identity']
                 or {s:dict(rows) for s,rows in self.sources} != binding['sources']
                 or self.costs.wire() != binding['kernel_costs']
                 or json.loads(encoded({s:asdict(i) for s,i in self.instruments})) != binding['kernel_instruments']
                 or json.loads(encoded(asdict(self.funding))) != binding['funding_coverage']
                 or self.funding_path_policy != binding['funding_path_policy']
                 or self.funding_mark_policy != binding['funding_mark_policy']
-                or binding.get('kernel_profile', DAY_TRADING_PROFILE.wire()) != self.kernel_profile.wire()
-                or binding.get('cells', {}) != {side: dict(cell) for side, cell in self.cells}):
+                or binding.get('kernel_profile', DAY_TRADING_PROFILE.wire()) != self.kernel_profile.wire()):
                 raise ValueError('research_holdout_input_binding_conflict')
 
     def _validate_cells(self) -> None:

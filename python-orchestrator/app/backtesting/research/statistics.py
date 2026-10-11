@@ -518,7 +518,10 @@ def verify_holdout_campaign(root: Path, *, authorization, variant_id: str,
         for key,value in _holdout_metadata(authorization,binding,include_binding=True).items():
             if manifest.get(key) != value:
                 raise StatisticsError('holdout_manifest_authority_conflict_before_profit_read')
-        for field in ('baseline','variant','source_runs','signal_reports','instrument_assumptions',
+        # A swing unit binds its kernel profile and one cell per side instead of one baseline.
+        swing = bool(contract.get('profiles'))
+        cell_fields = ('kernel_profile','cells') if swing else ('baseline','variant','source_runs')
+        for field in (*cell_fields,'signal_reports','instrument_assumptions',
                       'instrument_file_sha256','cost_assumptions','cost_file_sha256','funding_inventory',
                       'funding_inventory_hash','php_code_inventory','runner_code_sha256',
                       'funding_diagnostic_policy','funding_path_policy','funding_mark_policy','b1_counters'):
@@ -532,7 +535,9 @@ def verify_holdout_campaign(root: Path, *, authorization, variant_id: str,
         identity = dict(contract['identities']['protocol_identity'])
         from .portfolio_simulator import canonical_hash
         identity['signal_code_hash'] = canonical_hash(binding['signal_reports'][0]['code_sha256'])
-        protocol = {'identity':identity,'variants':contract['variants'],'cutoff':w['end']}
+        protocol = {'identity':identity,'variants':contract['variants'],'cutoff':w['end'],
+            **({'research_family':'swing','kernel_profile':contract['kernel_profile'],'cells':contract['cells']}
+               if swing else {})}
         registration = {'phase':'holdout','variant_id':variant_id,'cost_profile':cost_profile}
         return _verify_bound_campaign(Path(root),protocol,registration,binding,'holdout',start,w['end_ms'],
             manifest,manifest_sha,authorization=authorization)
@@ -552,7 +557,7 @@ def _verify_bound_campaign(root, protocol, registration, binding, phase, start, 
     from .experiments import hash_bytes, canonical_bytes, WINDOWS, protocol_family
     from .portfolio_simulator import canonical_hash, SYMBOLS, KernelProfile, SWING_PROFILE, stream_key
     swing = protocol_family(protocol) == 'swing'
-    if swing != ('cells' in manifest) or (swing and authorization is not None):
+    if swing != ('cells' in manifest):
         raise StatisticsError('campaign_research_family_conflict')
     if swing and (manifest['kernel_profile'] != protocol['kernel_profile']
                   or KernelProfile.from_wire(manifest['kernel_profile']) != SWING_PROFILE
@@ -582,7 +587,10 @@ def _verify_bound_campaign(root, protocol, registration, binding, phase, start, 
         or manifest['initial_wallet_quote'] != '100000'):
         raise StatisticsError('campaign_protocol_scope_conflict')
     source_runs = {c['side']:c['source_runs'] for c in cells} if swing else manifest['source_runs']
-    if source_runs != binding['source_runs']:
+    # A holdout swing unit binds its runs inside its cells; a protocol phase binds them per side.
+    frozen_runs = ({c['side']:c['source_runs'] for c in binding['cells']} if swing and authorization is not None
+                   else binding['source_runs'])
+    if source_runs != frozen_runs:
         raise StatisticsError('campaign_frozen_source_or_code_conflict')
     for field in ('signal_reports','runner_code_sha256'):
         if manifest[field] != binding[field]:

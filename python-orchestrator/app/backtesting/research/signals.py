@@ -601,22 +601,41 @@ def run_signals(dataset_root: Path, output_root: Path, app_dir: Path, start: str
 
 
 def run_holdout_signals(output_root: Path, *, authorization) -> dict:
-    """Run the fixed claimed universe with the canonical worker and shared caps."""
-    from .holdout_authority import require_claim, remaining_limits
-    from .signal_sources import select_holdout_sources
+    """Run the fixed claimed universe with the canonical worker and shared caps.
+
+    A swing claim runs one B1 root per profile under the claimed signal root; the roots share
+    the claim's signal byte cap and clock. Its result maps each profile to its report.
+    """
+    from .holdout_authority import require_claim
     contract = require_claim(authorization, operation='signals', output_root=output_root)
-    paths, window = contract['paths'], contract['window']
+    paths = contract['paths']
     dataset_root, app_dir = Path(paths['dataset_root']), Path(paths['app_dir'])
-    selections = [select_holdout_sources(dataset_root, symbol, authorization=authorization)
+    if not contract.get('profiles'):
+        return _run_holdout_cell(contract, authorization, dataset_root, app_dir, Path(output_root), 0)
+    root = _private_output(Path(output_root), dataset_root)
+    reports = {}
+    for name in contract['profiles']:
+        used = sum(p.stat().st_size for cell in root.iterdir() if cell.is_dir() for p in cell.iterdir() if p.is_file())
+        reports[name] = _run_holdout_cell(contract, authorization, dataset_root, app_dir, root/name, used,
+                                          research_profile(name))
+    return reports
+
+
+def _run_holdout_cell(contract, authorization, dataset_root, app_dir, output_root, used, profile=DAY_TRADING):
+    from .holdout_authority import remaining_limits
+    from .signal_sources import select_holdout_sources
+    window, identities = contract['window'], contract['identities']
+    cadence = {} if profile.is_default else {'profile': profile.id}
+    selections = [select_holdout_sources(dataset_root, symbol, authorization=authorization, **cadence)
                   for symbol in contract['symbols']]
     limits = remaining_limits(authorization)
-    return _run_selected_signals(dataset_root, Path(output_root), app_dir,
+    return _run_selected_signals(dataset_root, output_root, app_dir,
         window['source_start'], window['end'], window['score_start'], selections,
         _worker_argv(app_dir, None), _code_hashes(app_dir, fake_worker=False),
         min(DEFAULT_WALL_SECONDS, limits['seconds']), DEFAULT_STDERR_BYTES,
-        min(contract['limits']['signal_bytes'], limits['bytes']), authorization=authorization,
-        expected_baseline=contract['identities']['baseline'],
-        report_reserve=contract['limits']['metadata_bytes'])
+        min(contract['limits']['signal_bytes']-used, limits['bytes']), authorization=authorization,
+        expected_baseline=identities['baseline'] if profile.is_default else identities['baselines'][profile.side],
+        report_reserve=contract['limits']['metadata_bytes'], **({} if profile.is_default else {'profile': profile}))
 
 
 def _run_selected_signals(dataset_root, output_root, app_dir, start, end, score_start,
