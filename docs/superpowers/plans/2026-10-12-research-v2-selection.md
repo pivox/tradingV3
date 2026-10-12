@@ -42,6 +42,35 @@ The 2026 window has been used once.
    branches are closed; next steps need the owner's decision (live public-data observation for
    execution edges, or a different research scope).
 
+## Morning of 2026-10-12: the objective is restated
+
+The owner's correction (~06:00Z): a negative screen is not a finished mission; the standing
+objective is a scalping / micro-scalping candidate, to be looked for on data that shows maker
+fills; items in order: (1) execution study on the OKX / Hyperliquid captures, (2) OKX demo
+checklist, (3) wider-universe data sizing, then scalping resumed on tick data; a candidate is
+due by 18:00 local (16:00Z).
+
+1. Pre-registration frozen at 06:18:05Z (`tradingV3-private/research/20261012T060000Z-execution-r1/PREREGISTRATION.md`,
+   sha256 `a8feedc4…`): part A (passive-order mark-outs) and part B (tick-data scalping screen,
+   six families, maker entries, exits X1–X4, controls, gates, selection, one validation).
+2. Part A done 06:18Z: no unconditional maker edge on either venue; a passive fill costs
+   about 3.1–3.5 bp (fee + adverse selection) against 5 bp for a taker entry
+   ([report](../../handbook/reports/research-execution-tick-2026-10-12.md)).
+3. Binance aggTrades tape acquired 06:14–06:33Z (10 pairs × 15 weekdays of 2025, 131 M prints,
+   every checksum verified) — [sizing note](../../handbook/reports/research-universe-sizing-2026-10-12.md).
+4. Part B: captures training screen 06:31–06:52Z (368 configurations): **0 pass**; Binance
+   tape r1 (304): **0 pass** (07:33–07:47Z); r2 (intraday holds, 152, pre-registered
+   06:54Z): **0 pass** (07:28–07:33Z); r3 (focused reversion families on four training
+   windows, 64, pre-registered 07:36Z): 2 training passes, both fail the November
+   validation (long band reversion, −1.8 / −5.3 bp while the control loses −22 bp); r4
+   (two-sided band reversion, 4, pre-registered 08:00Z): the 2 σ passive-exit version passes
+   seven gates of eight and fails the trade minimum (110 < 200); r5 (that single
+   configuration on nine training windows, pre-registered 08:05Z): **0 pass** (+2.5 bp on
+   260 trades; the four windows r3/r4 had seen were the four best of nine). **No candidate**;
+   November and December unread by r4/r5. Report in the handbook; PR #478.
+5. Item 2 (OKX demo checklist): runbook from the repository's gates and commands, no flag
+   changed.
+
 ## Boundaries
 
 No exchange mutation, no flag change, no Docker restart, no rerun of the consumed holdout claim.
