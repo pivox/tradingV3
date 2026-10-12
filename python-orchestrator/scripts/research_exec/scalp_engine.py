@@ -23,7 +23,12 @@ from .capture import Instrument
 from .tick import SECOND_US
 
 ENTRIES = ("E1", "E2")
-EXITS = ("X1", "X2", "X3", "X4")
+EXITS = ("X1", "X2", "X3", "X4", "Y1", "Y2", "Y3", "Y4")
+# Exit parameters: time exits (seconds), stop/target (sigma window, stop multiple, target multiple,
+# maximum hold), passive exits (post after, TTL, fallback at).
+TIME_EXITS = {"X1": 60, "X2": 300, "Y1": 900, "Y2": 3600}
+BRACKET_EXITS = {"X3": (60, 1.0, 1.5, 300), "Y3": (300, 1.5, 3.0, 3600)}
+PASSIVE_EXITS = {"X4": (60, 30, 90), "Y4": (900, 60, 960)}
 EXIT_REASONS = {"time": 0, "stop": 1, "target": 2, "passive": 3, "fallback": 4}
 
 TRADE_DTYPE = np.dtype(
@@ -161,19 +166,18 @@ def _market_exit(data: SeriesData, policy: Policy, side: int, moment: int, reaso
 
 
 def _exit(data: SeriesData, policy: Policy, side: int, s: int, entry: float, jf: int, fill_ts: int, tick: float, tol: float) -> tuple[int, float | None, int, float]:
-    if policy.exit == "X1":
-        return _market_exit(data, policy, side, fill_ts + 60 * SECOND_US, EXIT_REASONS["time"])
-    if policy.exit == "X2":
-        return _market_exit(data, policy, side, fill_ts + 300 * SECOND_US, EXIT_REASONS["time"])
-    if policy.exit == "X3":
-        sigma = float(data.features["sigma_60"][s])
+    if policy.exit in TIME_EXITS:
+        return _market_exit(data, policy, side, fill_ts + TIME_EXITS[policy.exit] * SECOND_US, EXIT_REASONS["time"])
+    if policy.exit in BRACKET_EXITS:
+        window_s, stop_k, target_k, max_hold = BRACKET_EXITS[policy.exit]
+        sigma = float(data.features[f"sigma_{window_s}"][s])
         if not np.isfinite(sigma):
             sigma = 2 * tick / entry
-        distance = max(sigma * entry, 2 * tick)
+        distance = max(stop_k * sigma * entry, 2 * tick)
         stop = entry - side * distance
-        target = entry + side * 1.5 * distance
+        target = entry + side * (target_k / stop_k) * distance
         target = (np.ceil(target / tick) if side > 0 else np.floor(target / tick)) * tick
-        deadline = fill_ts + 300 * SECOND_US
+        deadline = fill_ts + max_hold * SECOND_US
         k0 = jf + 1
         k1 = int(np.searchsorted(data.tts, deadline, side="right"))
         window = data.tpx[k0:k1]
@@ -186,15 +190,15 @@ def _exit(data: SeriesData, policy: Policy, side: int, s: int, entry: float, jf:
         if kt >= 0:
             return int(data.tts[k0 + kt]), float(target), EXIT_REASONS["target"], policy.maker_bp
         return _market_exit(data, policy, side, deadline, EXIT_REASONS["time"])
-    # X4: passive exit posted at the opposite touch after 60 s, 30 s TTL, taker fallback at 90 s.
-    post = fill_ts + 60 * SECOND_US + policy.latency_us
+    post_after, ttl_s, fallback_at = PASSIVE_EXITS[policy.exit]
+    post = fill_ts + post_after * SECOND_US + policy.latency_us
     price = _touch(data, post, want_bid=side < 0)  # a long posts its sell at the ask, a short its buy at the bid
     if price is None:
-        return _market_exit(data, policy, side, fill_ts + 90 * SECOND_US, EXIT_REASONS["fallback"])
+        return _market_exit(data, policy, side, fill_ts + fallback_at * SECOND_US, EXIT_REASONS["fallback"])
     k0 = int(np.searchsorted(data.tts, post, side="right"))
-    k1 = int(np.searchsorted(data.tts, fill_ts + 90 * SECOND_US, side="right"))
+    k1 = int(np.searchsorted(data.tts, post + ttl_s * SECOND_US, side="right"))
     window = data.tpx[k0:k1]
     hit = (window > price + tol) if side > 0 else (window < price - tol)
     if window.size and hit.any():
         return int(data.tts[k0 + int(np.argmax(hit))]), float(price), EXIT_REASONS["passive"], policy.maker_bp
-    return _market_exit(data, policy, side, fill_ts + 90 * SECOND_US, EXIT_REASONS["fallback"])
+    return _market_exit(data, policy, side, fill_ts + fallback_at * SECOND_US, EXIT_REASONS["fallback"])

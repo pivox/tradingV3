@@ -144,3 +144,16 @@ def test_short_side_mirrors_the_long_side():
     trades, _ = run_policy(data, -1, np.array([0]), Policy("E1", "X1"))
     assert trades.size == 1 and trades["entry"][0] == pytest.approx(100.1) and trades["exit"][0] == pytest.approx(100.1)  # buy back at the ask
     assert trades["side"][0] == -1 and trades["net_bp"][0] == pytest.approx(-7.0)
+
+
+def test_intraday_exits_y1_and_y3():
+    q_rows = [((T0 + s) * SECOND + 50_000, 100.0, 100.1, 1.0, 1.0) for s in range(4000)]
+    t_rows = [((T0 + s) * SECOND + 500_000, 100.05, 0.1, 1) for s in range(4000)]
+    t_rows.append(((T0 + 2) * SECOND + 600_000, 99.9, 1.0, 0))  # fills the bid at 100.0
+    data = _make(q_rows, t_rows, seconds=4000)
+    trades, _ = run_policy(data, 1, np.array([0]), Policy("E1", "Y1"))
+    assert trades.size == 1 and trades["exit_reason"][0] == EXIT_REASONS["time"] and trades["hold_s"][0] == pytest.approx(900.25)
+    t_rows.append(((T0 + 1000) * SECOND + 100_000, 100.65, 1.0, 1))  # above the passive target 100.6 (sigma floor: distance 1.5 × 0.2 = 0.3, target 2 × 0.3)
+    data = _make(q_rows, t_rows, seconds=4000)
+    trades, _ = run_policy(data, 1, np.array([0]), Policy("E1", "Y3"))
+    assert trades["exit_reason"][0] == EXIT_REASONS["target"] and trades["exit"][0] == pytest.approx(100.6) and trades["fees_bp"][0] == pytest.approx(4.0)

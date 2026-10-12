@@ -33,12 +33,25 @@ from .stats import block_bootstrap_lower_bound
 from .tick import SECOND_US, build_bars, compute_features, family_of, rule_catalogue, signal_mask
 
 CAPTURE_SPLIT_S = 12 * 3600
-BINANCE_WINDOWS = {"march": ("2025-03-10", "2025-03-14"), "july": ("2025-07-14", "2025-07-18"), "november": ("2025-11-10", "2025-11-14")}
-BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",)}
+BINANCE_WINDOWS = {"march": ("2025-03-10", "2025-03-14"), "july": ("2025-07-14", "2025-07-18"), "november": ("2025-11-10", "2025-11-14"), "december": ("2025-12-08", "2025-12-12")}
+BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",), "holdout": ("december",)}
+# r1: the 2026-10-12 pre-registration (PREREGISTRATION.md); r2: PREREGISTRATION-r2.md (intraday holds).
+PROTOCOLS = {
+    "r1": {"entries": ("E1", "E2"), "exits": ("X1", "X2", "X3", "X4"), "gates": {"min_trades": {"captures": 100, "binance": 300}, "min_mean_bp": 1.0, "min_pf": 1.15, "control_margin_bp": 2.0, "min_series_share": 0.75, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 50, "binance": 150}, "min_pf": 1.05, "min_series_share": 0.5}},
+    "r2": {"entries": ("E1",), "exits": ("Y1", "Y2", "Y3", "Y4"), "gates": {"min_trades": {"captures": 200, "binance": 200}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
+}
 BINANCE_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT", "ADAUSDT", "LTCUSDT", "LINKUSDT", "AVAXUSDT")
 SEEDS = {"captures": 20, "binance": 10}
-GATES = {"min_trades": {"captures": 100, "binance": 300}, "min_mean_bp": 1.0, "min_pf": 1.15, "control_margin_bp": 2.0, "min_series_share": 0.75, "fee_multiplier": 1.5, "min_fill_rate": 0.20}
-VALIDATION = {"min_trades": {"captures": 50, "binance": 150}, "min_pf": 1.05, "min_series_share": 0.5}
+GATES = dict(PROTOCOLS["r1"]["gates"])
+VALIDATION = dict(PROTOCOLS["r1"]["validation"])
+
+
+def use_protocol(name: str) -> None:
+    """Select the gates and validation thresholds of a pre-registration (r1 default)."""
+    GATES.clear()
+    GATES.update(PROTOCOLS[name]["gates"])
+    VALIDATION.clear()
+    VALIDATION.update(PROTOCOLS[name]["validation"])
 MAX_PER_FAMILY = 3
 BUDGETS = (500, 1000, 2000, 5000, 10000, 20000, 50000, 100000)
 REFERENCE_NOTIONAL = 250.0
@@ -84,8 +97,9 @@ def parse_configuration(identifier: str) -> tuple[str, int, str, str]:
     return rule, 1 if side == "long" else -1, entry, exit_
 
 
-def build_grid(book: bool) -> list[str]:
-    return [configuration_id(rule, side, entry, exit_) for rule in rule_catalogue(book) for side in (1, -1) for entry in ENTRIES for exit_ in EXITS]
+def build_grid(book: bool, protocol: str = "r1") -> list[str]:
+    spec = PROTOCOLS[protocol]
+    return [configuration_id(rule, side, entry, exit_) for rule in rule_catalogue(book) for side in (1, -1) for entry in spec["entries"] for exit_ in spec["exits"]]
 
 
 # ----------------------------------------------------------------------------- series
@@ -170,6 +184,8 @@ def _day_s(date: str) -> int:
 
 
 def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS) -> tuple[list[Series], list[str]]:
+    """`tape_dir` holds the training and validation windows; the holdout window is read from
+    the sibling holdout directory when `phase == "holdout"`."""
     instruments = load_binance_instruments(instruments_path)
     series, missing = [], []
     for symbol in symbols:
@@ -203,6 +219,9 @@ def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symb
 
 _DATA: list[SeriesData] = []
 _SEEDS = 0
+_SOURCE = ""
+_DAY_KEY = False
+_OUTCOMES: Path | None = None
 
 
 def _control_decisions(data: SeriesData, trades: np.ndarray, seed: int) -> np.ndarray:
@@ -287,9 +306,17 @@ def _summary(result: dict, source: str, day_key: bool) -> dict:
     return row
 
 
-def _init_worker(data: list[SeriesData], seeds: int) -> None:
-    global _DATA, _SEEDS
-    _DATA, _SEEDS = data, seeds
+def _init_worker(data: list[SeriesData], seeds: int, source: str, day_key: bool, outcomes_dir: Path) -> None:
+    global _DATA, _SEEDS, _SOURCE, _DAY_KEY, _OUTCOMES
+    _DATA, _SEEDS, _SOURCE, _DAY_KEY, _OUTCOMES = data, seeds, source, day_key, outcomes_dir
+
+
+def _replay_and_summarize(identifier: str) -> dict:
+    """Worker-side: replay, save the outcomes, return only the summary row (the parent never
+    holds the trades of every configuration — the first pooled runs showed why)."""
+    result = _replay(identifier)
+    np.savez_compressed(_OUTCOMES / (identifier.replace("|", "__") + ".npz"), trades=result["trades"])
+    return _summary(result, _SOURCE, _DAY_KEY)
 
 
 def run_screen(series: list[Series], source: str, phase: str, out_dir: Path, configurations: list[str], seeds: int, workers: int, extra: dict) -> dict:
@@ -300,18 +327,15 @@ def run_screen(series: list[Series], source: str, phase: str, out_dir: Path, con
     print(f"{len(data)} series prepared in {time.time() - started:.0f}s; {len(configurations)} configurations, {workers} workers", file=sys.stderr, flush=True)
     outcomes_dir = out_dir / f"screen-{phase}-outcomes"
     outcomes_dir.mkdir(exist_ok=True)
-    rows = []
-    _init_worker(data, seeds)
+    _init_worker(data, seeds, source, day_key, outcomes_dir)
     if workers > 1:
         context = multiprocessing.get_context("fork")
-        with context.Pool(workers, initializer=_init_worker, initargs=(data, seeds)) as pool:
-            iterator = pool.imap_unordered(_replay, configurations, chunksize=2)
-            results = list(_progress(iterator, len(configurations)))
+        with context.Pool(workers, initializer=_init_worker, initargs=(data, seeds, source, day_key, outcomes_dir)) as pool:
+            iterator = pool.imap_unordered(_replay_and_summarize, configurations, chunksize=2)
+            rows = list(_progress(iterator, len(configurations)))
     else:
-        results = list(_progress(map(_replay, configurations), len(configurations)))
-    for result in sorted(results, key=lambda item: item["id"]):
-        np.savez_compressed(outcomes_dir / (result["id"].replace("|", "__") + ".npz"), trades=result["trades"])
-        rows.append(_summary(result, source, day_key))
+        rows = list(_progress(map(_replay_and_summarize, configurations), len(configurations)))
+    rows.sort(key=lambda row: row["id"])
     document = {
         "source": source, "phase": phase, "generated_at": _now(), "elapsed_seconds": round(time.time() - started, 1), "seeds": seeds,
         "series": [{"id": index, "name": item.name, "start": datetime.fromtimestamp(item.start_s, tz=timezone.utc).isoformat(), "end": datetime.fromtimestamp(item.end_s, tz=timezone.utc).isoformat(), "seconds": item.end_s - item.start_s, "book": item.book, "min_notional": item.min_notional} for index, item in enumerate(series)],
@@ -392,7 +416,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     screen = sub.add_parser("screen")
     screen.add_argument("--source", choices=("captures", "binance"), required=True)
-    screen.add_argument("--phase", choices=("training", "validation"), required=True)
+    screen.add_argument("--phase", choices=("training", "validation", "holdout"), required=True)
+    screen.add_argument("--protocol", choices=tuple(PROTOCOLS), default="r1")
     screen.add_argument("--out", required=True)
     screen.add_argument("--extract-dir", default="")
     screen.add_argument("--tape-dir", default="")
@@ -409,14 +434,18 @@ def main(argv: list[str] | None = None) -> int:
     ver.add_argument("--training", required=True)
     ver.add_argument("--validation", required=True)
     ver.add_argument("--out", required=True)
+    ver.add_argument("--protocol", choices=tuple(PROTOCOLS), default="r1")
     bud = sub.add_parser("budgets")
     bud.add_argument("--screen", required=True)
     bud.add_argument("--configs", default="")
     bud.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     if args.command == "screen":
-        extra = {}
+        use_protocol(args.protocol)
+        extra = {"protocol": args.protocol}
         if args.source == "captures":
+            if args.phase == "holdout":
+                raise SystemExit("the captures have no holdout phase")
             series = load_capture_series(Path(args.extract_dir), args.phase)
             book = True
         else:
@@ -427,7 +456,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.configs_file:
             configurations = [line.strip() for line in Path(args.configs_file).read_text().splitlines() if line.strip()]
         else:
-            configurations = build_grid(book)
+            configurations = build_grid(book, args.protocol)
         seeds = SEEDS[args.source] if args.seeds < 0 else args.seeds
         if args.prereg:
             extra["prereg_sha256"] = hashlib.sha256(Path(args.prereg).read_bytes()).hexdigest()
@@ -441,6 +470,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"selected": len(chosen)}))
         return 0
     if args.command == "verdict":
+        use_protocol(args.protocol)
         result = verdict(json.loads(Path(args.training).read_text()), json.loads(Path(args.validation).read_text()))
         Path(args.out).write_text(json.dumps(result, indent=1, sort_keys=True) + "\n")
         print(json.dumps({"outcome": result["outcome"], "candidates": result["candidates"]}))
