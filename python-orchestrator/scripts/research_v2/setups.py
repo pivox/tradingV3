@@ -71,6 +71,7 @@ class SetupSignals:
     signal: np.ndarray
     regime: np.ndarray
     exit: np.ndarray | None
+    stop_level: np.ndarray | None = None  # structural stop price per bar (scalping S3), else None
 
 
 def _nan_false(mask: np.ndarray) -> np.ndarray:

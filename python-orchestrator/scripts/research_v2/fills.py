@@ -36,10 +36,16 @@ class PlanSpec:
     trailing_distance: float | None  # price units; None for no trailing stop
     horizon_ms: int
     ttl_ms: int
+    entry_mode: str = "limit"  # limit: fills on a touch; limit_through: price must trade through by ``through``; market: next open
+    through: float = 0.0  # price units the market must trade beyond the limit (limit_through)
 
     def __post_init__(self) -> None:
         if self.side not in (1, -1):
             raise ValueError("side must be +1 or -1")
+        if self.entry_mode not in ("limit", "limit_through", "market"):
+            raise ValueError(f"unknown entry mode {self.entry_mode!r}")
+        if self.entry_mode == "limit_through" and self.through <= 0:
+            raise ValueError("limit_through needs a positive through distance")
         if self.side * (self.entry_price - self.stop_price) <= 0:
             raise ValueError("the stop must sit on the losing side of the entry")
         if self.target_price is not None and self.side * (self.target_price - self.entry_price) <= 0:
@@ -76,13 +82,17 @@ def simulate(
     ttl_stop = min(ttl_stop, end)
     if start >= ttl_stop:
         return FillResult(False)
-    if plan.side == 1:
-        touched = candles.low[start:ttl_stop] <= plan.entry_price
+    if plan.entry_mode == "market":
+        fill_index = start  # at the open of the first candle after the decision, at ``entry_price``
     else:
-        touched = candles.high[start:ttl_stop] >= plan.entry_price
-    if not touched.any():
-        return FillResult(False)
-    fill_index = start + int(np.argmax(touched))
+        level = plan.entry_price - plan.side * plan.through if plan.entry_mode == "limit_through" else plan.entry_price
+        if plan.side == 1:
+            touched = candles.low[start:ttl_stop] <= level
+        else:
+            touched = candles.high[start:ttl_stop] >= level
+        if not touched.any():
+            return FillResult(False)
+        fill_index = start + int(np.argmax(touched))
     fill_ms = int(candles.open_ms[fill_index]) + MINUTE_MS
     if fill_index >= end:
         return FillResult(False)

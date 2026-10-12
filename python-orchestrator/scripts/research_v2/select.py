@@ -85,10 +85,11 @@ def merge_second_pass(survivors: dict, second_pass: dict) -> dict:
     }
 
 
-def verdict(validation: dict, training_screens: list[dict]) -> dict:
-    """Validation gates of section 6 for every validated configuration, against its training mean R."""
-    from .stats import validation_gates
+def verdict(validation: dict, training_screens: list[dict], family: str = "v2") -> dict:
+    """Validation gates (section 6, or the scalping pre-registration) against the training mean R."""
+    from .stats import scalping_validation_gates, validation_gates as v2_validation_gates
 
+    validation_gates = scalping_validation_gates if family == "scalping" else v2_validation_gates
     training_rows = {}
     for screen in training_screens:
         for row in screen["rows"]:
@@ -142,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     final.add_argument("--validation", required=True)
     final.add_argument("--training", nargs="+", required=True)
     final.add_argument("--out-dir", required=True)
+    final.add_argument("--family", choices=("v2", "scalping"), default="v2")
     args = parser.parse_args(argv)
     out = Path(args.out_dir)
     if args.command == "first":
@@ -155,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         (out / "validation-configs.txt").write_text("\n".join(document["validation_configurations"]) + "\n")
         print(json.dumps({"final": document["validation_configurations"]}))
     else:
-        document = verdict(json.loads(Path(args.validation).read_text()), [json.loads(Path(path).read_text()) for path in args.training])
+        document = verdict(json.loads(Path(args.validation).read_text()), [json.loads(Path(path).read_text()) for path in args.training], args.family)
         (out / "validation-verdict.json").write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
         print(json.dumps({"outcome": document["outcome"], "passing": document["passing"]}))
     return 0
