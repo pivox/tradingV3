@@ -41,7 +41,10 @@ def run_micro_screen(cache_root: Path, cost_path: Path, instrument_path: Path, p
     started = time.time()
     outcomes_by_configuration: dict[str, list[np.ndarray]] = {configuration.id: [] for configuration in configurations}
     counters_by_configuration: dict[str, dict] = {configuration.id: {"signals": 0, "admitted": 0, "unfilled": 0, "unsized": 0, "filled": 0} for configuration in configurations}
-    controls_by_configuration: dict[str, list[list[np.ndarray]]] = {configuration.id: [[] for _ in range(seeds)] for configuration in configurations}
+    # Control ledgers are not kept (ten seeds × ten pairs × tens of thousands of rows per
+    # configuration exhausted the memory of the first run); only the sums the control
+    # distribution needs are accumulated per seed.
+    controls_by_configuration: dict[str, list[_ControlSums]] = {configuration.id: [_ControlSums() for _ in range(seeds)] for configuration in configurations}
     for symbol in symbols:
         pair_started = time.time()
         candles, taker_buy = dataset.load_cached_candles(cache_root, symbol)
@@ -63,7 +66,8 @@ def run_micro_screen(cache_root: Path, cost_path: Path, instrument_path: Path, p
             if run.outcomes.size:
                 for seed in range(seeds):
                     control = controls.run_control(configuration, {symbol: inputs}, window, profiles, run.outcomes, seed)
-                    controls_by_configuration[configuration.id][seed].append(control)
+                    controls_by_configuration[configuration.id][seed].add(control)
+                    del control
         del inputs, one_minute, candles, funding
         gc.collect()
         print(f"[{symbol}] {len(configurations)} configurations in {time.time() - pair_started:.0f}s", file=sys.stderr, flush=True)
@@ -75,7 +79,7 @@ def run_micro_screen(cache_root: Path, cost_path: Path, instrument_path: Path, p
         outcomes = _concat(outcomes_by_configuration[configuration.id])
         control = None
         if seeds > 0 and outcomes.size:
-            control = _control_distribution([_concat(pieces) for pieces in controls_by_configuration[configuration.id]], seeds)
+            control = _control_distribution(controls_by_configuration[configuration.id], seeds)
         row = cli.build_row(configuration, outcomes, counters_by_configuration[configuration.id], control, "scalping", phase, instruments, row_started)
         rows.append(row)
         np.savez_compressed(cli._outcomes_path(outcomes_dir, configuration.id), outcomes=outcomes)
@@ -85,16 +89,36 @@ def run_micro_screen(cache_root: Path, cost_path: Path, instrument_path: Path, p
     return document
 
 
-def _control_distribution(per_seed: list[np.ndarray], seeds: int) -> dict:
+class _ControlSums:
+    """Running sums of one control seed across pairs: enough for the mean net R and the PF."""
+
+    def __init__(self) -> None:
+        self.trades = 0
+        self.sum_r_base = 0.0
+        self.sum_r_adverse = 0.0
+        self.gains = 0.0
+        self.losses = 0.0
+
+    def add(self, outcomes: np.ndarray) -> None:
+        if outcomes.size == 0:
+            return
+        net = outcomes["net_base"]
+        self.trades += int(outcomes.size)
+        self.sum_r_base += float(np.sum(net / outcomes["risk_base"]))
+        self.sum_r_adverse += float(np.sum(outcomes["net_adverse"] / outcomes["risk_adverse"]))
+        self.gains += float(net[net > 0].sum())
+        self.losses += float(-net[net < 0].sum())
+
+
+def _control_distribution(per_seed: list[_ControlSums], seeds: int) -> dict:
     mean_r, mean_r_adverse, profit_factors, trades = [], [], [], []
-    for outcomes in per_seed:
-        base = stats.summarize(outcomes, "base")
-        trades.append(base["trades"])
-        if base["trades"] == 0:
+    for sums in per_seed:
+        trades.append(sums.trades)
+        if sums.trades == 0:
             continue
-        mean_r.append(base["mean_r"])
-        mean_r_adverse.append(stats.summarize(outcomes, "adverse")["mean_r"])
-        profit_factors.append(base["profit_factor"])
+        mean_r.append(sums.sum_r_base / sums.trades)
+        mean_r_adverse.append(sums.sum_r_adverse / sums.trades)
+        profit_factors.append(sums.gains / sums.losses if sums.losses else None)
     values = np.asarray(mean_r)
     return {
         "seeds": seeds,
