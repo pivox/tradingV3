@@ -56,6 +56,8 @@ Every PR keeps day_trading bit-identical and its tests green. Every PR gets one 
 
 Status 2026-10-11 evening: PRs 1, 2, P1 and P2 are merged (#464–#467). PRs 3, 4, 5 and 5b are open as a stack (#468–#471). The rehearsal ([report](../../handbook/reports/research-swing-rehearsal-2026-10-11.md)) found one defect, now in the pin procedure: the swing frozen-verifier inventory must be written as canonical JSON.
 
+Status 2026-10-12: every PR is merged (#464–#473, rehearsal #472). The campaign ran from frozen commit `6dfb43b3` and froze `selected` on 2026-10-11 23:48 (all four units pass the gates; closest gate: training baseline PF 1.21). The pin (#473) merged at 00:03; the holdout ran once (claim 00:06:53, `complete` at 02:12, `--verify-retained` exit 0 at 02:21). Holdout: 267 trades, +31.36 USDT, net PF 1.01 (baseline); 262 trades, −64.38 USDT, PF 0.97 (adverse). **The candidate fails the holdout and is closed.** Report: [campaign and holdout results](../../handbook/reports/research-swing-campaign-2026-10-12.md). The 2026 claim is consumed (one use).
+
 ## Stop rules
 
 - If the canonical training/validation result fails the protocol gates, the campaign ends with `no_eligible_candidate` and the holdout is not opened.
