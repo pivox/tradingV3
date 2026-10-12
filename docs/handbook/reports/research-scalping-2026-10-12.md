@@ -2,7 +2,25 @@
 
 ## Result
 
-SCALP_RESULT_PLACEHOLDER
+**No eligible candidate; the cycle ends at the training screen.** Of 40 pre-registered
+configurations on 2023–2024, none passes the gates: every one of the 36 five-minute
+configurations and the four 1-minute configurations has a negative mean net R under the
+baseline costs (medians −0.30 R at 5m, −0.62 R at 1m), and their regime-matched random
+controls lose as much. Costs explain the whole picture: across the 5-minute screen the gross
+PnL sums to −30,000 USDT against 97,000 USDT of fees and 71,000 USDT of spread and slippage;
+at 1 minute the gross is −3,600 USDT against 97,000 and 114,000. The only setups with some
+timing content, the US and Asia opening drives, beat their controls by about 0.1 R and still
+lose −0.14 to −0.29 R per trade. Doubling the spreads (gate G8) fails all 40.
+
+Per the pre-registered stop rule no validation pass was run and 2025 stays unread by this
+screen (`scalping/validation-verdict.json`). What the screen does establish: on these ten
+pairs, with candle-visible setups, taker exits and a 7–27 bp round trip, scalping has no edge
+to find, and a historical screen cannot see the order-book edge the project's scalping
+contracts are built on. The next step for scalping, if any, is live public-data observation
+(Paper replay on the OKX / Hyperliquid captures or a shadow run), not more history.
+
+With this branch, the mandate of 2026-10-12 is exhausted: swing holdout failed, v2 selection
+failed, scalping failed. The honest state of the research is in the closing section.
 
 ## Why and what the candles cannot show
 
@@ -60,15 +78,96 @@ doubled-spread extensions ([runbook](../runbooks/research-v2-screen.md)).
 
 ## Training screen
 
-SCALP_TRAINING_PLACEHOLDER
+Execution note: the first run (three forked workers holding the 1-minute features of ten
+pairs) exhausted the host's memory and was stopped before any configuration finished; nothing
+was read from it. The screen then ran in two parts with the same frozen grid and gates: the 36
+five-minute configurations through the pooled screen (975 s, two workers,
+`scalping/screen-training-5m.json`) and the four 1-minute configurations through a sequential
+per-pair driver (`scalping/screen-training-1m.json`).
+
+### Five-minute configurations: 0 of 36 pass
+
+Every configuration loses under the baseline costs, and its regime-matched random control
+loses as much:
+
+| Setup | Configurations | Median trades | Median mean R (baseline / adverse) | Control median | Net positive with doubled spreads |
+|---|---:|---:|---|---:|---:|
+| S1 momentum burst | 8 | 30,142 | −0.296 / −0.336 | −0.292 | 0 |
+| S2 VWAP pullback | 8 | 29,678 | −0.294 / −0.340 | −0.285 | 0 |
+| S3.US opening drive | 4 | 1,941 | −0.225 / −0.279 | −0.312 | 0 |
+| S3.ASIA opening drive | 4 | 1,883 | −0.285 / −0.329 | −0.378 | 0 |
+| S4 band fade | 4 | 7,109 | −0.328 / −0.415 | −0.335 | 0 |
+| S5 taker-flow proxy | 8 | 4,866 | −0.391 / −0.416 | −0.304 | 0 |
+
+Longs and shorts are alike (median −0.32 and −0.30 R). The costs decide: over the 36
+configurations the gross PnL sums to −30,000 USDT while fees take 97,000 and spread plus
+slippage 71,000 (250 USDT per trade, 1.5 to 30 thousand trades per configuration). The least
+bad configuration, the US opening drive short with a 1.5 R target (2,090 trades), earns
+306 USDT gross and pays 359 USDT of fees and 238 USDT of friction: net −292 USDT, −0.14 R per
+trade, profit factor 0.83. The opening drives are the only setups that beat their random
+controls (by about 0.1 R), which says that the timing has some content at the session open,
+not enough to pay a 14 bp round trip on a 0.4 % stop. The gates fail in bulk: G2 (a losing
+year) 144 times, G8 (doubled spreads) on all 36.
+
+### One-minute configurations: 0 of 4 pass
+
+| Configuration | Trades | Win rate | Gross | Fees | Spread + slippage | Net | Mean R (baseline / adverse) | PF | Control median |
+|---|---:|---:|---:|---:|---:|---:|---|---:|---:|
+| `S5\|1m\|long\|S1.T1.5` | 163,560 | 9 % | −1,890 | 40,064 | 45,799 | −87,776 | −0.621 / −0.630 | 0.03 | −0.574 |
+| `S5\|1m\|short\|S1.T1.5` | 180,049 | 11 % | −2,115 | 44,187 | 50,377 | −96,659 | −0.608 / −0.621 | 0.04 | −0.564 |
+| `S6\|1m\|long\|S1.X` | 25,725 | 14 % | +430 | 6,300 | 8,820 | −14,693 | −0.616 / −0.688 | 0.14 | −0.635 |
+| `S6\|1m\|short\|S1.X` | 25,755 | 13 % | −39 | 6,316 | 8,842 | −15,195 | −0.632 / −0.700 | 0.11 | −0.628 |
+
+Micro-scalping on candles fails by arithmetic: a 1 × ATR14(1m) stop is 0.06 % of the price
+while a market entry and a market exit cost about 24 bp with the stop leg's spread and
+slippage, so a stop loses −0.6 R net and even the median winner does not cover the round trip.
+The gross PnL is flat (the taker-flow proxy and the three-down-close reversal have no
+directional content), and the controls land on the same −0.6 R. Nothing here can be rescued by
+a parameter; only a maker-only execution with a visible order book would change the cost side,
+and that is exactly what candles cannot simulate.
 
 ## Validation
 
-SCALP_VALIDATION_PLACEHOLDER
+Not run: the pre-registered selection (`select first` over both training screens, at most
+three per cadence) found no configuration passing the training gates, and the stop rule ends
+the cycle there. 2025 was not read by the scalping screen; 2026 remains untouched since the
+swing holdout (one use).
+
+## Closing the mandate of 2026-10-12
+
+Three branches, three negative results, each under a rule fixed before the result:
+
+| Branch | Period tested | Result |
+|---|---|---|
+| Swing candidate `B30_2s × S3.T5.H14d` (canonical) | 2026 holdout, one claim | PF 1.01 / 0.97, closed |
+| Candidate selection v2, 436 configurations | 2023–24 screen, 2025 once | 8 training passes, all 4h long trend; all four selected variants lose in 2025 |
+| Scalping and micro-scalping, 40 configurations | 2023–24 screen | 0 passes, costs dominate |
+
+What the three results have in common: whenever a setup looked good in 2023–2024, a
+regime-matched random entry looked as good, and the following period removed the surplus. On
+ten major pairs with candle-based execution, the project has not found a timing edge that
+survives costs and a change of regime, at any horizon from one minute to fourteen days.
+
+What this does not say: that no edge exists in execution (order-book, maker fills, funding
+capture), in portfolio construction (cross-sectional momentum, volatility targeting across
+assets), or in horizons longer than two weeks; those were out of the mandate's scope and need
+different data or a different engine.
 
 ## Budgets
 
-SCALP_BUDGETS_PLACEHOLDER
+The budget study (1 % of equity risked per trade, open notional ≤ 2 × equity, exchange
+minimums) says something independent of the verdict: **the sizing rule itself does not fit
+scalping.** A 1 % risk on a 0.2–0.4 % stop asks for 2.5 to 5 times the equity in notional per
+position; under a 2 × leverage cap the first position fills the cap and the rest is skipped.
+Across the 36 five-minute configurations the median tradable share is 28 % at 500 USDT and
+still 43 % at 100,000 USDT, with the leverage cap the reason in both cases, so the result does
+not improve with the account size. A scalper on these pairs would have to risk 0.2 % or less
+per trade, or run one pair, or accept more leverage; none of that changes the sign of the
+edge, which is set by the costs above. No pair is untradable at 500 USDT on its own (the
+minimum notionals of 5–50 USDT are met), the constraint is the aggregate cap.
+
+At 1 minute the same arithmetic is extreme: with 0.06 % stops the 1 % risk asks for 16 times
+the equity per position; 3 % of the trades are tradable at 500 USDT and 6 % at 100,000 USDT.
 
 ## Limits
 
