@@ -99,8 +99,8 @@ def summarize(outcomes: np.ndarray, profile: str) -> dict:
         "win_rate": float((net > 0).mean()),
         "net": float(net.sum()),
         "gross": float(outcomes["gross"].sum()),
-        "fees": float(outcomes[f"fees_{profile}"].sum()),
-        "friction": float(outcomes[f"friction_{profile}"].sum()),
+        "fees": float(outcomes[f"fees_{profile}"].sum()) if f"fees_{profile}" in outcomes.dtype.names else None,
+        "friction": float(outcomes[f"friction_{profile}"].sum()) if f"friction_{profile}" in outcomes.dtype.names else None,
         "funding_paid": float(outcomes["funding_paid"].sum()),
         "mean_r": float(r.mean()),
         "std_r": float(r.std(ddof=1)) if n > 1 else None,
@@ -162,6 +162,75 @@ def training_gates(base: dict, adverse: dict, cadence: str, years: tuple[int, ..
                 reasons.append("G5:mean_r<=control_p95")
             if base["mean_r"] - control["median"] < MIN_CONTROL_EDGE:
                 reasons.append(f"G5:edge<{MIN_CONTROL_EDGE}")
+    return reasons
+
+
+SCALP_MIN_TRADES = {"5m": (1_000, 300), "1m": (2_000, 600)}
+SCALP_MIN_MEAN_R = 0.05
+SCALP_MIN_PF = {"baseline": 1.20, "adverse": 1.00}
+SCALP_MIN_CONTROL_EDGE = 0.05
+SCALP_VALIDATION_MIN_TRADES = {"5m": 300, "1m": 600}
+
+
+def scalping_training_gates(base: dict, adverse: dict, doubled: dict, cadence: str, years: tuple[int, ...] = (2023, 2024), control: dict | None = None) -> list[str]:
+    """Training gates of the scalping pre-registration (section 4)."""
+    reasons: list[str] = []
+    minimum_total, minimum_year = SCALP_MIN_TRADES[cadence]
+    for name, summary in (("baseline", base), ("adverse", adverse)):
+        if summary.get("trades", 0) < minimum_total:
+            reasons.append(f"G1:{name}:trades<{minimum_total}")
+            continue
+        for year in years:
+            year_row = summary["by_year_decision"].get(str(year))
+            if year_row is None or year_row["trades"] < minimum_year:
+                reasons.append(f"G1:{name}:trades_{year}<{minimum_year}")
+            if year_row is None or year_row["net"] <= 0:
+                reasons.append(f"G2:{name}:net_{year}<=0")
+        if name == "baseline":
+            if summary["mean_r"] < SCALP_MIN_MEAN_R:
+                reasons.append(f"G3:baseline:mean_r<{SCALP_MIN_MEAN_R}")
+            if summary["lower_bound_r"] is None or summary["lower_bound_r"] <= 0:
+                reasons.append("G3:baseline:lower_bound<=0")
+        elif summary["mean_r"] <= 0:
+            reasons.append("G3:adverse:mean_r<=0")
+        pf = summary["profit_factor"]
+        if pf is None or pf < SCALP_MIN_PF[name]:
+            reasons.append(f"G4:{name}:pf<{SCALP_MIN_PF[name]}")
+        if summary["net_without_best_month"] <= 0:
+            reasons.append(f"G6:{name}:net_without_best_month<=0")
+        if summary["realized_drawdown"] > MAX_DRAWDOWN_QUOTE:
+            reasons.append(f"G7:{name}:drawdown>{MAX_DRAWDOWN_QUOTE:g}")
+    if base.get("trades", 0) >= minimum_total:
+        if base["pairs_positive"] < MIN_POSITIVE_PAIRS:
+            reasons.append(f"G6:baseline:pairs_positive<{MIN_POSITIVE_PAIRS}")
+        if doubled.get("trades", 0) == 0 or doubled["net"] <= 0:
+            reasons.append("G8:doubled_spread:net<=0")
+        if control is not None:
+            if control.get("p95") is None:
+                reasons.append("G5:control_missing")
+            else:
+                if base["mean_r"] <= control["p95"]:
+                    reasons.append("G5:mean_r<=control_p95")
+                if base["mean_r"] - control["median"] < SCALP_MIN_CONTROL_EDGE:
+                    reasons.append(f"G5:edge<{SCALP_MIN_CONTROL_EDGE}")
+    return reasons
+
+
+def scalping_validation_gates(base: dict, adverse: dict, cadence: str, training_mean_r_base: float) -> list[str]:
+    reasons: list[str] = []
+    for name, summary in (("baseline", base), ("adverse", adverse)):
+        if summary.get("trades", 0) < SCALP_VALIDATION_MIN_TRADES[cadence]:
+            reasons.append(f"V:{name}:trades<{SCALP_VALIDATION_MIN_TRADES[cadence]}")
+            continue
+        if summary["net"] <= 0:
+            reasons.append(f"V:{name}:net<=0")
+        pf = summary["profit_factor"]
+        if pf is None or pf < VALIDATION_MIN_PF[name]:
+            reasons.append(f"V:{name}:pf<{VALIDATION_MIN_PF[name]}")
+        if summary["mean_r"] <= 0:
+            reasons.append(f"V:{name}:mean_r<=0")
+    if base.get("trades", 0) >= SCALP_VALIDATION_MIN_TRADES[cadence] and base["mean_r"] < VALIDATION_RETENTION * training_mean_r_base:
+        reasons.append("V:baseline:mean_r<50%_of_training")
     return reasons
 
 

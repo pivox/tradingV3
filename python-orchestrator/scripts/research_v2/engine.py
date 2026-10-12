@@ -56,6 +56,8 @@ OUTCOME_DTYPE = np.dtype(
         ("risk_adverse", "f8"),
         ("fees_adverse", "f8"),
         ("friction_adverse", "f8"),
+        ("net_doubled", "f8"),  # baseline with the spreads doubled (scalping sensitivity); NaN when not computed
+        ("risk_doubled", "f8"),
     ]
 )
 
@@ -117,13 +119,37 @@ def plan_prices(side: int, close: float, atr: float, stop_atr: float, target_r: 
     return entry, stop, target
 
 
-def configuration_signals(configuration: Configuration, features: Features) -> SetupSignals:
+def configuration_signals(configuration, features: Features) -> SetupSignals:
     """The setup's signals, restricted by the configuration's second-pass filter when it has one."""
-    signals = compute(configuration.setup, features, configuration.side)
+    if getattr(configuration, "kind", "v2") == "scalp":
+        from .scalping import compute_scalp_signals
+
+        signals = compute_scalp_signals(configuration.setup, features, configuration.side)
+    else:
+        signals = compute(configuration.setup, features, configuration.side)
     if configuration.filter_id is None:
         return signals
     mask = filter_mask(configuration.filter_id, features, configuration.side)
     return SetupSignals(signals.signal & mask, signals.regime & mask, signals.exit)
+
+
+def plan_prices_from_distance(side: int, reference: float, distance: float, target_r: float | None, tick: float, entry_mode: str) -> tuple[float, float, float | None]:
+    """Stop ``distance`` away from the entry, target ``target_r`` times the distance.
+
+    A resting limit entry rounds toward the market like ``plan_prices``; a market entry keeps the
+    open price it will fill at. Stop and target round away from the entry.
+    """
+    if entry_mode == "market":
+        entry = float(reference)
+    else:
+        entry = _round_to_tick(reference, tick, "up" if side == 1 else "down")
+    stop = _round_to_tick(entry - side * distance, tick, "down" if side == 1 else "up")
+    if side * (entry - stop) <= 0:
+        stop = entry - side * tick
+    target = None
+    if target_r is not None:
+        target = _round_to_tick(entry + side * target_r * abs(entry - stop), tick, "up" if side == 1 else "down")
+    return entry, stop, target
 
 
 def decision_indices(features: Features, signals: SetupSignals, window: Window) -> np.ndarray:
@@ -153,9 +179,16 @@ def run_pair(
     candles = inputs.candles
     instrument = inputs.instrument
     base, adverse = profiles["baseline"], profiles["adverse"]
+    doubled = profiles.get("doubled")
     exit_flags = signals.exit if variant.indicator_exit else None
     side = configuration.side
     funding_intervals = (variant.horizon_ms // 1000 - 1) // (FUNDING_INTERVAL_MS // 1000) + 1
+    entry_mode = getattr(variant, "entry_mode", "limit")
+    entry_role = "taker" if entry_mode == "market" else "maker"
+    min_stop = getattr(variant, "min_stop_ticks", 0) * instrument.tick_size
+    stop_levels = signals.stop_level if variant.stop_atr is None else None
+    if variant.stop_atr is None and stop_levels is None:
+        raise ValueError(f"{configuration.id}: a structural stop needs stop levels from the setup")
     rows = []
     busy_until = -1
     admitted = unfilled = unsized = 0
@@ -165,14 +198,39 @@ def run_pair(
         if close_ms < busy_until:
             continue
         atr = float(atr_column[index])
-        entry, stop, target = plan_prices(side, float(bars.close[index]), atr, variant.stop_atr, variant.target_r, instrument.tick_size)
+        if entry_mode == "market":
+            start = int(bars.last_minute[index])
+            if start >= candles.size:
+                continue
+            reference = float(candles.open[start])
+        else:
+            reference = float(bars.close[index])
+        if stop_levels is not None:
+            distance = side * (reference - float(stop_levels[index]))
+            if not distance > 0:
+                continue
+            entry, stop, target = plan_prices_from_distance(side, reference, max(distance, min_stop), variant.target_r, instrument.tick_size, entry_mode)
+        else:
+            entry, stop, target = plan_prices_from_distance(side, reference, max(variant.stop_atr * atr, min_stop), variant.target_r, instrument.tick_size, entry_mode)
         quantity = costs.round_quantity(REFERENCE_NOTIONAL, entry, instrument)
         if quantity <= 0:
             unsized += 1
             continue
         admitted += 1
         trailing = variant.trailing_atr * atr if variant.trailing_atr is not None else None
-        plan = PlanSpec(inputs.candles.symbol, side, int(index), entry, stop, target, trailing, variant.horizon_ms, variant.ttl_ms)
+        plan = PlanSpec(
+            inputs.candles.symbol,
+            side,
+            int(index),
+            entry,
+            stop,
+            target,
+            trailing,
+            variant.horizon_ms,
+            variant.ttl_ms,
+            entry_mode=entry_mode,
+            through=instrument.tick_size if entry_mode == "limit_through" else 0.0,
+        )
         result = simulate(candles, bars, plan, window.end_ms, exit_flags)
         if not result.filled:
             unfilled += 1
@@ -180,8 +238,14 @@ def run_pair(
             continue
         busy_until = result.exit_ms
         paid = costs.funding_paid(side, quantity, result.fill_ms, result.exit_ms, inputs.funding.time_ms, inputs.funding.rate, inputs.marks)
-        settlement_base = costs.settle(side, entry, result.exit_price, quantity, result.exit_reason, base, paid)
-        settlement_adverse = costs.settle(side, entry, result.exit_price, quantity, result.exit_reason, adverse, paid)
+        settlement_base = costs.settle(side, entry, result.exit_price, quantity, result.exit_reason, base, paid, entry_role)
+        settlement_adverse = costs.settle(side, entry, result.exit_price, quantity, result.exit_reason, adverse, paid, entry_role)
+        if doubled is not None:
+            settlement_doubled = costs.settle(side, entry, result.exit_price, quantity, result.exit_reason, doubled, paid, entry_role)
+            net_doubled = settlement_doubled.net_quote
+            risk_doubled = costs.stop_risk_quote(side, entry, stop, quantity, funding_intervals, doubled, entry_role)
+        else:
+            net_doubled = risk_doubled = float("nan")
         rows.append(
             (
                 candles.symbol,
@@ -205,11 +269,13 @@ def run_pair(
                 settlement_base.fees_quote,
                 settlement_base.spread_quote + settlement_base.slippage_quote,
                 settlement_base.net_quote,
-                costs.stop_risk_quote(side, entry, stop, quantity, funding_intervals, base),
+                costs.stop_risk_quote(side, entry, stop, quantity, funding_intervals, base, entry_role),
                 settlement_adverse.net_quote,
-                costs.stop_risk_quote(side, entry, stop, quantity, funding_intervals, adverse),
+                costs.stop_risk_quote(side, entry, stop, quantity, funding_intervals, adverse, entry_role),
                 settlement_adverse.fees_quote,
                 settlement_adverse.spread_quote + settlement_adverse.slippage_quote,
+                net_doubled,
+                risk_doubled,
             )
         )
     outcomes = np.array(rows, dtype=OUTCOME_DTYPE) if rows else np.zeros(0, dtype=OUTCOME_DTYPE)

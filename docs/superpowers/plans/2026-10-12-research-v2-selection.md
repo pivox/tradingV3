@@ -35,8 +35,12 @@ The 2026 window has been used once.
    campaign (15m cadence, trailing and indicator exits are not in the swing kernel profile),
    and any holdout on 2026 would be its second use. **No survivor: nothing to transfer.**
 5. If nothing survives: scalping and micro-scalping on 1-minute data under their own
-   pre-registration, with explicit fill and queue caveats. **Opened 2026-10-12** (draft
-   `PREREGISTRATION-scalping.draft.md` next to the v2 artifacts, frozen before any computation).
+   pre-registration, with explicit fill and queue caveats. **Done 2026-10-12 04:10:**
+   pre-registration frozen (`PREREGISTRATION-scalping.md`), 40 configurations screened on
+   2023–2024, 0 pass, costs dominate, no validation run per the stop rule
+   ([report](../../handbook/reports/research-scalping-2026-10-12.md)). The mandate's three
+   branches are closed; next steps need the owner's decision (live public-data observation for
+   execution edges, or a different research scope).
 
 ## Boundaries
 

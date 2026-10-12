@@ -20,7 +20,7 @@ OVERSAMPLE = 2
 
 
 def _regime_signals(signals: SetupSignals) -> SetupSignals:
-    return SetupSignals(signals.regime.copy(), signals.regime, signals.exit)
+    return SetupSignals(signals.regime.copy(), signals.regime, signals.exit, signals.stop_level)
 
 
 def sample_decisions(regime_indices: np.ndarray, regime_years: np.ndarray, counts_by_year: dict[int, int], rng: np.random.Generator) -> np.ndarray:

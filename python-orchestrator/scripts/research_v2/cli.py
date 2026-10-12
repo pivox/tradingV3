@@ -23,9 +23,11 @@ import numpy as np
 
 from . import budgets as budgets_module
 from . import controls as controls_module
-from . import costs, dataset, grid as grid_module, stats
+from . import costs, dataset, grid as grid_module, scalping, stats
 from .engine import OUTCOME_DTYPE, PairInputs, Window, run_configuration
 from .features import compute_features
+
+FAMILIES = ("v2", "scalping")
 
 PHASES = {
     "training": Window(1_672_531_200_000, 1_735_689_600_000),  # 2023-01-01 -> 2025-01-01
@@ -45,16 +47,31 @@ def code_identity() -> dict:
     return {"files": hashes, "package_sha256": combined}
 
 
-def load_pairs(cache_root: Path, instrument_path: Path, symbols: tuple[str, ...]) -> dict[str, PairInputs]:
+def load_pairs(cache_root: Path, instrument_path: Path, symbols: tuple[str, ...], family: str = "v2", cadences: tuple[str, ...] | None = None) -> dict[str, PairInputs]:
+    """Candles, funding and the features of the requested cadences (all of the family's when None).
+
+    The 1-minute features of ten pairs weigh about 2.5 GB; a screen that only needs the 5-minute
+    configurations must not load them (the first scalping run exhausted the host's memory).
+    """
     instruments = costs.load_instruments(instrument_path)
     pairs = {}
     for symbol in symbols:
-        candles, _ = dataset.load_cached_candles(cache_root, symbol)
+        candles, taker_buy = dataset.load_cached_candles(cache_root, symbol)
         funding = dataset.load_cached_funding(cache_root, symbol)
         four_hour = compute_features(candles, "4h", funding)
         fifteen = compute_features(candles, "15m", funding, context=four_hour)
-        pairs[symbol] = PairInputs.build(candles, funding, {"4h": four_hour, "15m": fifteen}, instruments[symbol])
+        if family == "scalping":
+            wanted = cadences or ("5m", "1m")
+            features = {cadence: scalping.compute_scalping_features(candles, taker_buy, cadence, funding, fifteen) for cadence in wanted}
+        else:
+            wanted = cadences or ("4h", "15m")
+            features = {cadence: {"4h": four_hour, "15m": fifteen}[cadence] for cadence in wanted}
+        pairs[symbol] = PairInputs.build(candles, funding, features, instruments[symbol])
     return pairs
+
+
+def parse_for_family(identifier: str, family: str):
+    return scalping.parse_scalp_configuration(identifier) if family == "scalping" else grid_module.parse_configuration(identifier)
 
 
 def _outcomes_path(out_dir: Path, configuration_id: str) -> Path:
@@ -63,7 +80,8 @@ def _outcomes_path(out_dir: Path, configuration_id: str) -> Path:
 
 
 def evaluate(configuration_json: dict) -> dict:
-    configuration = grid_module.parse_configuration(configuration_json["id"])
+    family = _STATE.get("family", "v2")
+    configuration = parse_for_family(configuration_json["id"], family)
     pairs, profiles, window, seeds, instruments, out_dir, phase = (
         _STATE["pairs"],
         _STATE["profiles"],
@@ -75,11 +93,19 @@ def evaluate(configuration_json: dict) -> dict:
     )
     started = time.time()
     outcomes, counters = run_configuration(configuration, pairs, window, profiles)
-    base = stats.summarize(outcomes, "base")
-    adverse = stats.summarize(outcomes, "adverse")
     control = None
     if seeds > 0 and outcomes.size > 0:
         control = controls_module.control_distribution(configuration, pairs, window, profiles, outcomes, seeds)
+    row = build_row(configuration, outcomes, counters, control, family, phase, instruments, started)
+    if out_dir is not None:
+        np.savez_compressed(_outcomes_path(out_dir, configuration.id), outcomes=outcomes)
+    return row
+
+
+def build_row(configuration, outcomes: np.ndarray, counters: dict, control: dict | None, family: str, phase: str, instruments: dict, started: float) -> dict:
+    """One screen row: summaries per cost profile, control, budgets and, in training, the gates."""
+    base = stats.summarize(outcomes, "base")
+    adverse = stats.summarize(outcomes, "adverse")
     row = {
         "id": configuration.id,
         "setup_id": configuration.setup_id,
@@ -94,12 +120,36 @@ def evaluate(configuration_json: dict) -> dict:
         "budgets": budgets_module.budget_study(outcomes, instruments, "base") if outcomes.size else None,
         "seconds": round(time.time() - started, 2),
     }
-    if phase == "training":
+    if family == "scalping":
+        row["doubled"] = stats.summarize(outcomes, "doubled")
+        if phase == "training":
+            row["gate_reasons"] = stats.scalping_training_gates(base, adverse, row["doubled"], configuration.cadence, TRAINING_YEARS, control)
+            row["passes"] = not row["gate_reasons"]
+    elif phase == "training":
         row["gate_reasons"] = stats.training_gates(base, adverse, configuration.cadence, TRAINING_YEARS, control)
         row["passes"] = not row["gate_reasons"]
-    if out_dir is not None:
-        np.savez_compressed(_outcomes_path(out_dir, configuration.id), outcomes=outcomes)
     return row
+
+
+def screen_document(family: str, phase: str, window: Window, rows: list[dict], cost_path: Path, instrument_path: Path, cache_root: Path, seeds: int, symbols: tuple[str, ...], started: float, driver: str = "pool") -> dict:
+    rows = sorted(rows, key=lambda row: row["id"])
+    return {
+        "schema": "research-v2-screen.v1",
+        "family": family,
+        "phase": phase,
+        "driver": driver,
+        "window": {"start_ms": window.start_ms, "end_ms": window.end_ms},
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "code": code_identity(),
+        "cost_assumptions_sha256": dataset.sha256_file(cost_path),
+        "instrument_assumptions_sha256": dataset.sha256_file(instrument_path),
+        "prepare_receipt_sha256": dataset.sha256_file(cache_root / "prepare-receipt.json"),
+        "seeds": seeds,
+        "symbols": list(symbols),
+        "configurations": len(rows),
+        "elapsed_seconds": round(time.time() - started, 1),
+        "rows": rows,
+    }
 
 
 def _init_worker(state: dict) -> None:
@@ -123,24 +173,28 @@ def command_screen(args: argparse.Namespace) -> int:
     window = PHASES[phase]
     cache_root = Path(args.cache_root)
     profiles = costs.load_cost_profiles(Path(args.cost_path))
+    family = args.family
+    if family == "scalping":
+        profiles["doubled"] = costs.doubled_spread(profiles["baseline"])
     instruments = costs.load_instruments(Path(args.instrument_path))
     symbols = tuple(args.symbols.split(",")) if args.symbols else dataset.SYMBOLS
-    configurations = grid_module.build_grid()
+    configurations = scalping.build_scalping_grid() if family == "scalping" else grid_module.build_grid()
     if args.configs or args.configs_file:
         wanted = [item for item in args.configs.split(",") if item] if args.configs else []
         if args.configs_file:
             wanted += [line.strip() for line in Path(args.configs_file).read_text().splitlines() if line.strip()]
         try:
-            configurations = tuple(grid_module.parse_configuration(identifier) for identifier in dict.fromkeys(wanted))
+            configurations = tuple(parse_for_family(identifier, family) for identifier in dict.fromkeys(wanted))
         except KeyError as error:
             raise SystemExit(f"unknown configuration: {error}") from error
     out = Path(args.out)
     outcomes_dir = out.parent / f"{out.stem}-outcomes"
     outcomes_dir.mkdir(parents=True, exist_ok=True)
     started = time.time()
-    print(f"loading {len(symbols)} pairs…", file=sys.stderr, flush=True)
-    pairs = load_pairs(cache_root, Path(args.instrument_path), symbols)
-    state = {"pairs": pairs, "profiles": profiles, "window": window, "seeds": args.seeds, "instruments": instruments, "outcomes_dir": outcomes_dir, "phase": phase}
+    cadences = tuple(sorted({configuration.cadence for configuration in configurations}))
+    print(f"loading {len(symbols)} pairs ({', '.join(cadences)})…", file=sys.stderr, flush=True)
+    pairs = load_pairs(cache_root, Path(args.instrument_path), symbols, family, cadences)
+    state = {"pairs": pairs, "profiles": profiles, "window": window, "seeds": args.seeds, "instruments": instruments, "outcomes_dir": outcomes_dir, "phase": phase, "family": family}
     print(f"loaded in {time.time() - started:.0f}s; {len(configurations)} configurations, {args.workers} workers", file=sys.stderr, flush=True)
     jobs = [configuration.to_json() for configuration in configurations]
     rows = []
@@ -156,22 +210,7 @@ def command_screen(args: argparse.Namespace) -> int:
             row = evaluate(job)
             rows.append(row)
             print(f"[{index}/{len(jobs)}] {row['id']} trades={row['baseline'].get('trades', 0)} {row['seconds']}s", file=sys.stderr, flush=True)
-    rows.sort(key=lambda row: row["id"])
-    document = {
-        "schema": "research-v2-screen.v1",
-        "phase": phase,
-        "window": {"start_ms": window.start_ms, "end_ms": window.end_ms},
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "code": code_identity(),
-        "cost_assumptions_sha256": dataset.sha256_file(Path(args.cost_path)),
-        "instrument_assumptions_sha256": dataset.sha256_file(Path(args.instrument_path)),
-        "prepare_receipt_sha256": dataset.sha256_file(cache_root / "prepare-receipt.json"),
-        "seeds": args.seeds,
-        "symbols": list(symbols),
-        "configurations": len(rows),
-        "elapsed_seconds": round(time.time() - started, 1),
-        "rows": rows,
-    }
+    document = screen_document(family, phase, window, rows, Path(args.cost_path), Path(args.instrument_path), cache_root, args.seeds, symbols, started)
     out.write_text(json.dumps(document, indent=1, sort_keys=True, default=_json_default) + "\n")
     passes = sum(1 for row in rows if row.get("passes"))
     print(json.dumps({"configurations": len(rows), "passes": passes, "elapsed_seconds": document["elapsed_seconds"]}))
@@ -218,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     screen.add_argument("--configs", default="")
     screen.add_argument("--configs-file", default="")
     screen.add_argument("--symbols", default="")
+    screen.add_argument("--family", choices=FAMILIES, default="v2")
     screen.set_defaults(func=command_screen)
     report = sub.add_parser("report")
     report.add_argument("--screen", required=True)

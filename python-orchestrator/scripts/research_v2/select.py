@@ -27,11 +27,12 @@ def _rank_key(row: dict) -> tuple[float, float]:
     return (row["baseline"]["lower_bound_r"], row["baseline"]["mean_r"])
 
 
-def select(screen: dict, max_per_group: int = MAX_PER_GROUP) -> dict:
+def select(screen: dict, max_per_group: int = MAX_PER_GROUP, group_by: str = "family_cadence") -> dict:
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in screen["rows"]:
         if row.get("passes"):
-            groups[(row["family"], row["cadence"])].append(row)
+            key = (row["family"], row["cadence"]) if group_by == "family_cadence" else ("", row["cadence"])
+            groups[key].append(row)
     survivors = []
     for key in sorted(groups):
         ranked = sorted(groups[key], key=_rank_key, reverse=True)
@@ -85,10 +86,11 @@ def merge_second_pass(survivors: dict, second_pass: dict) -> dict:
     }
 
 
-def verdict(validation: dict, training_screens: list[dict]) -> dict:
-    """Validation gates of section 6 for every validated configuration, against its training mean R."""
-    from .stats import validation_gates
+def verdict(validation: dict, training_screens: list[dict], family: str = "v2") -> dict:
+    """Validation gates (section 6, or the scalping pre-registration) against the training mean R."""
+    from .stats import scalping_validation_gates, validation_gates as v2_validation_gates
 
+    validation_gates = scalping_validation_gates if family == "scalping" else v2_validation_gates
     training_rows = {}
     for screen in training_screens:
         for row in screen["rows"]:
@@ -132,8 +134,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="research_v2.select")
     sub = parser.add_subparsers(dest="command", required=True)
     first = sub.add_parser("first")
-    first.add_argument("--screen", required=True)
+    first.add_argument("--screen", nargs="+", required=True, help="one or more screen documents of the same phase (rows are pooled)")
     first.add_argument("--out-dir", required=True)
+    first.add_argument("--max-per-group", type=int, default=MAX_PER_GROUP)
+    first.add_argument("--group-by", choices=("family_cadence", "cadence"), default="family_cadence")
     second = sub.add_parser("second")
     second.add_argument("--survivors", required=True)
     second.add_argument("--screen", required=True)
@@ -142,10 +146,13 @@ def main(argv: list[str] | None = None) -> int:
     final.add_argument("--validation", required=True)
     final.add_argument("--training", nargs="+", required=True)
     final.add_argument("--out-dir", required=True)
+    final.add_argument("--family", choices=("v2", "scalping"), default="v2")
     args = parser.parse_args(argv)
     out = Path(args.out_dir)
     if args.command == "first":
-        document = select(json.loads(Path(args.screen).read_text()))
+        screens = [json.loads(Path(path).read_text()) for path in args.screen]
+        pooled = dict(screens[0], rows=[row for screen in screens for row in screen["rows"]])
+        document = select(pooled, args.max_per_group, args.group_by)
         (out / "survivors.json").write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
         (out / "second-pass-configs.txt").write_text("\n".join(document["second_pass_configurations"]) + "\n")
         print(json.dumps({"passing": document["passing"], "survivors": len(document["survivors"]), "second_pass": len(document["second_pass_configurations"])}))
@@ -155,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         (out / "validation-configs.txt").write_text("\n".join(document["validation_configurations"]) + "\n")
         print(json.dumps({"final": document["validation_configurations"]}))
     else:
-        document = verdict(json.loads(Path(args.validation).read_text()), [json.loads(Path(path).read_text()) for path in args.training])
+        document = verdict(json.loads(Path(args.validation).read_text()), [json.loads(Path(path).read_text()) for path in args.training], args.family)
         (out / "validation-verdict.json").write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
         print(json.dumps({"outcome": document["outcome"], "passing": document["passing"]}))
     return 0

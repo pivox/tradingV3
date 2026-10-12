@@ -45,7 +45,24 @@ $PY -m scripts.research_v2.cli report --screen screen-training.json --out screen
 
 A configuration id reads `setup|cadence|side|exit`, for example `A1.N20|4h|long|S3.T5`
 (Donchian 20 breakout, 4h bars, long, stop 3 × ATR14, target 5 R). Exit ids: `T3`/`T5`/`T2`
-fixed R targets, `TR3` Chandelier trailing stop of 3 ATR, `X` indicator exit at the mean.
+fixed R targets, `TR3` Chandelier trailing stop of 3 ATR, `X` indicator exit at the mean. A
+fifth part names a second-pass filter (`|E1` funding, `|E2.US` / `|E2.ASIA` session, `|E3`
+weekday, `|E4` volume).
+
+Selection and verdict (`python -m scripts.research_v2.select`): `first --screen
+screen-training.json --out-dir DIR` (survivors and the second-pass list), `second --survivors
+… --screen screen-second-pass.json --out-dir DIR` (validation list), `verdict --validation
+screen-validation.json --training screen-second-pass.json screen-training.json --out-dir DIR`.
+
+### Scalping family
+
+`--family scalping` switches to the scalping catalogue (`scalping.py`: S1 momentum burst, S2
+VWAP pullback, S3 opening drive, S4 band fade, S5 taker-flow proxy, S6 micro reversal; 5m and
+1m decisions with a 15m context; 40 configurations), the stricter fill rules (limit filled only
+when traded through by one tick; 1m setups enter at market on the next open with taker costs),
+a third cost column with the spreads doubled (`net_doubled`, gate G8) and the scalping gates.
+Memory: the 1-minute features of ten pairs take about 4 GB in the parent process, shared by the
+forked workers. `select verdict --family scalping` applies the scalping validation gates.
 
 ## Outputs
 

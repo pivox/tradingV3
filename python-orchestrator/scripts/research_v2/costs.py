@@ -101,6 +101,32 @@ def round_quantity(notional_quote: float, price: float, instrument: Instrument) 
     return float(round(quantity, 12))
 
 
+def _entry_rates(profile: CostProfile, entry_role: str) -> tuple[float, float, float]:
+    """(fee, spread, slippage) rates of the entry: maker rests at the limit; a taker (market) entry
+    pays the taker fee and the stop leg's spread and slippage."""
+    if entry_role == "maker":
+        return profile.entry_fee_rate, profile.entry_spread_rate, profile.entry_slippage_rate
+    if entry_role == "taker":
+        return profile.exit_fee_rate, profile.stop_spread_rate, profile.stop_slippage_rate
+    raise ValueError(f"unknown entry role {entry_role!r}")
+
+
+def doubled_spread(profile: CostProfile) -> CostProfile:
+    """The same profile with every spread rate doubled (scalping sensitivity)."""
+    return CostProfile(
+        name=f"{profile.name}_spread_x2",
+        entry_spread_rate=2 * profile.entry_spread_rate,
+        stop_spread_rate=2 * profile.stop_spread_rate,
+        target_spread_rate=2 * profile.target_spread_rate,
+        entry_slippage_rate=profile.entry_slippage_rate,
+        stop_slippage_rate=profile.stop_slippage_rate,
+        target_slippage_rate=profile.target_slippage_rate,
+        funding_provision_rate=profile.funding_provision_rate,
+        entry_fee_rate=profile.entry_fee_rate,
+        exit_fee_rate=profile.exit_fee_rate,
+    )
+
+
 def stop_risk_quote(
     side: int,
     entry_price: float,
@@ -108,17 +134,19 @@ def stop_risk_quote(
     quantity: float,
     funding_intervals: int,
     profile: CostProfile,
+    entry_role: str = "maker",
 ) -> float:
     """Total loss if the stop is hit: gross distance plus every cost charged on that path."""
     gross = abs(entry_price - stop_price) * quantity
     notional = entry_price * quantity
-    entry_fee = profile.entry_fee_rate * notional
+    entry_fee_rate, entry_spread_rate, entry_slippage_rate = _entry_rates(profile, entry_role)
+    entry_fee = entry_fee_rate * notional
     stop_notional = stop_price * quantity
     stop_fee = profile.exit_fee_rate * stop_notional
     stop_spread = profile.stop_spread_rate * stop_notional
     stop_slippage = profile.stop_slippage_rate * stop_notional
-    entry_spread = profile.entry_spread_rate * notional
-    entry_slippage = profile.entry_slippage_rate * notional
+    entry_spread = entry_spread_rate * notional
+    entry_slippage = entry_slippage_rate * notional
     funding_provision = profile.funding_provision_rate * notional * funding_intervals
     return gross + entry_fee + stop_fee + stop_spread + stop_slippage + entry_spread + entry_slippage + funding_provision
 
@@ -141,18 +169,20 @@ def settle(
     exit_reason: str,
     profile: CostProfile,
     funding_paid_quote: float = 0.0,
+    entry_role: str = "maker",
 ) -> Settlement:
     """Net PnL of a closed trade. ``funding_paid_quote`` is the sum of rate × mark × quantity × side."""
     gross = side * (exit_price - entry_price) * quantity
     entry_notional = entry_price * quantity
     exit_notional = exit_price * quantity
-    fees = profile.entry_fee_rate * entry_notional + profile.exit_fee_rate * exit_notional
+    entry_fee_rate, entry_spread_rate, entry_slippage_rate = _entry_rates(profile, entry_role)
+    fees = entry_fee_rate * entry_notional + profile.exit_fee_rate * exit_notional
     if exit_reason in MARKET_LIKE_EXITS:
-        spread = profile.entry_spread_rate * entry_notional + profile.stop_spread_rate * exit_notional
-        slippage = profile.entry_slippage_rate * entry_notional + profile.stop_slippage_rate * exit_notional
+        spread = entry_spread_rate * entry_notional + profile.stop_spread_rate * exit_notional
+        slippage = entry_slippage_rate * entry_notional + profile.stop_slippage_rate * exit_notional
     elif exit_reason == "target":
-        spread = profile.entry_spread_rate * entry_notional + profile.target_spread_rate * exit_notional
-        slippage = profile.entry_slippage_rate * entry_notional + profile.target_slippage_rate * exit_notional
+        spread = entry_spread_rate * entry_notional + profile.target_spread_rate * exit_notional
+        slippage = entry_slippage_rate * entry_notional + profile.target_slippage_rate * exit_notional
     else:
         raise ValueError(f"unknown exit reason {exit_reason!r}")
     funding = -funding_paid_quote
