@@ -67,6 +67,7 @@ nav:
       - Recette orchestrateur R1-R16: runbooks/orchestrator-runtime-recipe-r1-r16.md
       - "Campagne swing canonique": runbooks/research-swing-campaign.md
       - "Criblage de recherche v2": runbooks/research-v2-screen.md
+      - "Étude exécution et criblage tick": runbooks/research-execution-study.md
   - Rapports:
       - "Audit final Fake / Paper #196": reports/fake-paper-final-audit-196.md
       - "Recette runtime orchestrateur #188": reports/orchestrator-runtime-final-report.md
@@ -82,6 +83,7 @@ nav:
       - "Campagne swing canonique et holdout 2026-10-12": reports/research-swing-campaign-2026-10-12.md
       - "Cycle de sélection v2 2026-10-12": reports/research-v2-selection-2026-10-12.md
       - "Criblage scalping et micro-scalping 2026-10-12": reports/research-scalping-2026-10-12.md
+      - "Exécution et criblage tick 2026-10-12": reports/research-execution-tick-2026-10-12.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 
