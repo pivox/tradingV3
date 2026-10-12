@@ -55,7 +55,50 @@ execution edge these books offer to a participant without queue priority.
 
 ## Part B — tick-data scalping screen
 
-<!-- PART-B -->
+Method (frozen before any result): 1-second bars on the exchange clock; features `r_W`
+(mid return), `σ_W` (realized volatility), `FI_W` (signed taker volume share), `A_W`
+(activity vs the trailing hour), `QI_5` (book imbalance, captures only), the session VWAP
+deviation, an EMA band and a print-count burst flag. Six families, 23 long rules mirrored for
+the shorts: S1 flow momentum, S2 flow exhaustion fade, S3 book imbalance, S4 micro breakout,
+S5 VWAP / band reversion, S6 bursts (continuation and fade). Entries are maker-only (E1 at the
+touch, E2 one tick inside when the spread allows), live after 250 ms, cancelled if they would
+cross, filled under the through rule, 30 s TTL, one position per series. Exits: X1 taker at
+60 s, X2 taker at 300 s, X3 stop 1 σ_60 / passive target 1.5 σ_60 / 300 s, X4 passive exit at
+60 s then taker at 90 s. 368 configurations on the captures (304 on the Binance tape, which
+has no book). Controls: random decision seconds matched to each configuration's trades per
+hour of the day, same policy (20 seeds on the captures, 10 on the tape). Training gates G1–G8
+(trades, mean net ≥ +1 bp with a positive block-bootstrap lower bound, PF ≥ 1.15, above the
+control's 95th percentile and 2 bp above its median, 75 % of series positive, positive
+without the best hour / day, positive with fees × 1.5, fill rate ≥ 20 %), at most three
+survivors per family, one validation pass (last 12 h of each capture; November 2025 on the
+tape).
+
+### Captures (OKX + Hyperliquid, first 12 h training): 0 of 368 pass
+
+| Family | Configurations | Median trades | Median mean net bp | Best configuration (mean net, trades) | Control median at the best |
+|---|---:|---:|---:|---|---:|
+| S1 flow momentum | 96 | 160 | −7.8 | `S1-W60-T0.5\|short\|E1\|X2` −6.2 bp (n = 236) | −6.1 |
+| S2 flow exhaustion fade | 64 | 63 | −7.7 | `S2-W300-K2.5\|short\|E1\|X2` +0.8 bp (n = 16, LB −2.2) | −8.6 |
+| S3 book imbalance | 64 | 976 | −7.9 | `S3-Q0.3-F\|short\|E2\|X2` −5.8 bp (n = 1,090) | −6.2 |
+| S4 micro breakout | 64 | 10 | −9.5 | `S4-W60-K3\|long\|E1\|X2` +6.7 bp (n = 2) | +2.7 |
+| S5 VWAP / band reversion | 48 | 31 | −8.4 | `S5-K3\|short\|E1\|X3` −6.4 bp (n = 29) | −8.4 |
+| S6 bursts | 32 | 17 | −10.3 | `S6-C\|long\|E1\|X4` −3.4 bp (n = 25) | −6.7 |
+
+The picture is the one part A predicted: with round trips of 4–7 bp and holds of 1 to
+5 minutes, the gross per trade sits near zero and the net at −6 to −10 bp, for the signals
+and for their random-timing controls alike. The dense families (S1, S3) trade hundreds of
+times and lose the fees; the rare ones (S4, S6) have too few trades in 12 hours for any
+statement. No configuration passes G2 (348 fail), G3 (350) or G4 (342); 185 fail the trade
+minimum. Per the stop rule no validation was run on the captures
+(`part-b/captures/verdict.json`: `no_eligible_candidate`).
+
+### Binance tape (ten pairs, March + July 2025 training, November validation)
+
+<!-- PART-B-BINANCE -->
+
+### r2 — intraday holds (15–60 min) with the same tick signals
+
+<!-- PART-B-R2 -->
 
 ## Budgets
 

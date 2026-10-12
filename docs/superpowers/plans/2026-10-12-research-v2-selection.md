@@ -42,6 +42,27 @@ The 2026 window has been used once.
    branches are closed; next steps need the owner's decision (live public-data observation for
    execution edges, or a different research scope).
 
+## Morning of 2026-10-12: the objective is restated
+
+The owner's correction (~06:00Z): a negative screen is not a finished mission; the standing
+objective is a scalping / micro-scalping candidate, to be looked for on data that shows maker
+fills; items in order: (1) execution study on the OKX / Hyperliquid captures, (2) OKX demo
+checklist, (3) wider-universe data sizing, then scalping resumed on tick data; a candidate is
+due by 18:00 local (16:00Z).
+
+1. Pre-registration frozen at 06:18:05Z (`tradingV3-private/research/20261012T060000Z-execution-r1/PREREGISTRATION.md`,
+   sha256 `a8feedc4…`): part A (passive-order mark-outs) and part B (tick-data scalping screen,
+   six families, maker entries, exits X1–X4, controls, gates, selection, one validation).
+2. Part A done 06:18Z: no unconditional maker edge on either venue; a passive fill costs
+   about 3.1–3.5 bp (fee + adverse selection) against 5 bp for a taker entry
+   ([report](../../handbook/reports/research-execution-tick-2026-10-12.md)).
+3. Binance aggTrades tape acquired 06:14–06:33Z (10 pairs × 15 weekdays of 2025, 131 M prints,
+   every checksum verified) — [sizing note](../../handbook/reports/research-universe-sizing-2026-10-12.md).
+4. Part B: captures training screen started 06:31Z (368 configurations), then the Binance
+   tape (304); selection, validation once, verdict, budgets; report; PR.
+5. Item 2 (OKX demo checklist): runbook from the repository's gates and commands, no flag
+   changed.
+
 ## Boundaries
 
 No exchange mutation, no flag change, no Docker restart, no rerun of the consumed holdout claim.
