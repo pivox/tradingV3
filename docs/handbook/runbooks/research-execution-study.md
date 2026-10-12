@@ -50,7 +50,19 @@ python -m scripts.research_exec.screen budgets --screen …/screen-validation.js
 # Part B — Binance tape (March + July 2025 training, November 2025 validation)
 python -m scripts.research_exec.screen screen --source binance --phase training --tape-dir <tape dir> \
     --instruments <instrument-assumptions.json> --out $X/part-b/binance --workers 3
+
+# r2 protocol (PREREGISTRATION-r2.md: entry E1, exits Y1-Y4 = 15-60 min holds, its own gates),
+# then the December 2025 holdout, read once for the validated configurations only
+python -m scripts.research_exec.screen screen --source binance --phase training --protocol r2 --tape-dir <tape dir> \
+    --instruments <instrument-assumptions.json> --out $X/part-b/binance-r2 --workers 3
+python -m scripts.research_exec.screen screen --source binance --phase holdout --protocol r2 --tape-dir <holdout tape dir> \
+    --instruments <instrument-assumptions.json> --out $X/part-b/binance-r2 --configs-file $X/part-b/binance-r2/holdout-list.txt
+python -m scripts.research_exec.screen verdict --protocol r2 --training …/screen-training.json --validation …/screen-holdout.json --out …/verdict-holdout.json
 ```
+
+Chains used on 2026-10-12 (artifact directory): `run-part-a.sh`, `run-part-b-training.sh`
+(captures), `run-part-b-validate.sh <source>`, `run-binance-chain.sh` (r1 training →
+validation → `run-r2.sh`).
 
 Every document records the sha256 of each package file (`code`) and, when `--prereg` is given,
 of the pre-registration. Outcomes per configuration are saved as `screen-<phase>-outcomes/*.npz`
@@ -69,8 +81,13 @@ gross / fees / net in bp, hold).
   policy; the gate compares the mean net bp with the control's 95th percentile and median.
 - Binance quotes are proxies (last sell print = bid, last buy print = ask, forced one tick
   apart); book-imbalance rules (S3) do not run there.
-- Memory: the captures fit in a few hundred MB; the Binance training set (20 series) needs
-  about 1.5 GB in the parent, shared with the forked workers.
+- Memory: the captures fit in a few hundred MB; the Binance training set (20 series of five
+  days) needs about 5 GB in the parent, shared with the forked workers; workers save their
+  own outcomes and return only summary rows (the first pooled run held every configuration's
+  trades in the parent and would have exhausted the host).
+- Protocols: `--protocol r1` (default) or `r2` selects the entries, exits, gates and
+  validation thresholds of the corresponding pre-registration; `--phase holdout` reads the
+  December window from the holdout tape directory given as `--tape-dir`.
 
 ## Outputs
 
