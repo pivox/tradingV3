@@ -38,6 +38,9 @@ BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",), "h
 # r1: the 2026-10-12 pre-registration (PREREGISTRATION.md); r2: PREREGISTRATION-r2.md (intraday holds).
 PROTOCOLS = {
     "r1": {"entries": ("E1", "E2"), "exits": ("X1", "X2", "X3", "X4"), "gates": {"min_trades": {"captures": 100, "binance": 300}, "min_mean_bp": 1.0, "min_pf": 1.15, "control_margin_bp": 2.0, "min_series_share": 0.75, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 50, "binance": 150}, "min_pf": 1.05, "min_series_share": 0.5}},
+    "r4": {"entries": ("E1",), "exits": ("Z1", "Z3"), "sides": (0,), "training_windows": ("march", "july", "may", "september"),
+           "rules": ("S7-W900-K1.5", "S7-W900-K2.0"),
+           "gates": {"min_trades": {"captures": 200, "binance": 200}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
     "r3": {"entries": ("E1",), "exits": ("Z1", "Z2", "Z3", "Z4"), "training_windows": ("march", "july", "may", "september"),
            "rules": ("S7-W300-K1.5", "S7-W300-K2.0", "S7-W900-K1.5", "S7-W900-K2.0", "S2-W60-K2.5", "S2-W60-K3.5", "S2-W300-K2.5", "S2-W300-K3.5"),
            "gates": {"min_trades": {"captures": 200, "binance": 200}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
@@ -89,21 +92,26 @@ def _f(value) -> float | None:
 # ----------------------------------------------------------------------------- configurations
 
 
+SIDE_NAMES = {1: "long", -1: "short", 0: "both"}
+
+
 def configuration_id(rule: str, side: int, entry: str, exit_: str) -> str:
-    return f"{rule}|{'long' if side > 0 else 'short'}|{entry}|{exit_}"
+    return f"{rule}|{SIDE_NAMES[side]}|{entry}|{exit_}"
 
 
 def parse_configuration(identifier: str) -> tuple[str, int, str, str]:
+    """`side` is +1 (long), -1 (short) or 0 (both: the long and the short streams pooled)."""
     rule, side, entry, exit_ = identifier.split("|")
-    if side not in ("long", "short") or entry not in ENTRIES or exit_ not in EXITS:
+    if side not in ("long", "short", "both") or entry not in ENTRIES or exit_ not in EXITS:
         raise ValueError(f"bad configuration {identifier}")
-    return rule, 1 if side == "long" else -1, entry, exit_
+    return rule, {"long": 1, "short": -1, "both": 0}[side], entry, exit_
 
 
 def build_grid(book: bool, protocol: str = "r1") -> list[str]:
     spec = PROTOCOLS[protocol]
     rules = spec.get("rules") or rule_catalogue(book)
-    return [configuration_id(rule, side, entry, exit_) for rule in rules for side in (1, -1) for entry in spec["entries"] for exit_ in spec["exits"]]
+    sides = spec.get("sides", (1, -1))
+    return [configuration_id(rule, side, entry, exit_) for rule in rules for side in sides for entry in spec["entries"] for exit_ in spec["exits"]]
 
 
 # ----------------------------------------------------------------------------- series
@@ -250,21 +258,27 @@ def _replay(identifier: str) -> dict:
     rule, side, entry, exit_ = parse_configuration(identifier)
     policy = Policy(entry, exit_)
     pieces, counters, per_series, control_sums = [], {"decisions": 0, "orders": 0, "crossed": 0, "unfilled": 0, "filled": 0}, {}, [[0.0, 0] for _ in range(_SEEDS)]
+    streams = (1, -1) if side == 0 else (side,)
     for data in _DATA:
         if rule.startswith("S3") and not np.isfinite(data.bars["bid_size"]).any():
             continue
-        decisions = np.flatnonzero(signal_mask(rule, data.features, side))
-        trades, count = run_policy(data, side, decisions, policy)
+        series_trades, signals = [], 0
+        for stream in streams:
+            decisions = np.flatnonzero(signal_mask(rule, data.features, stream))
+            trades, count = run_policy(data, stream, decisions, policy)
+            series_trades.append(trades)
+            signals += int(decisions.size)
+            for key in counters:
+                counters[key] += getattr(count, key)
+            if trades.size:
+                for seed in range(_SEEDS):
+                    control, _ = run_policy(data, stream, _control_decisions(data, trades, seed), policy)
+                    if control.size:
+                        control_sums[seed][0] += float(control["net_bp"].sum())
+                        control_sums[seed][1] += int(control.size)
+        trades = np.concatenate(series_trades)
         pieces.append(trades)
-        for key in counters:
-            counters[key] += getattr(count, key)
-        per_series[data.series_id] = {"signals": int(decisions.size), "trades": int(trades.size), "net_bp_sum": _f(trades["net_bp"].sum()) if trades.size else 0.0}
-        if trades.size:
-            for seed in range(_SEEDS):
-                control, _ = run_policy(data, side, _control_decisions(data, trades, seed), policy)
-                if control.size:
-                    control_sums[seed][0] += float(control["net_bp"].sum())
-                    control_sums[seed][1] += int(control.size)
+        per_series[data.series_id] = {"signals": signals, "trades": int(trades.size), "net_bp_sum": _f(trades["net_bp"].sum()) if trades.size else 0.0}
     trades = np.concatenate(pieces) if pieces else np.zeros(0, dtype=ROW_DTYPE)
     control_means = [s / n for s, n in control_sums if n > 0]
     return {"id": identifier, "trades": trades, "counters": counters, "per_series": per_series, "control_means": control_means, "elapsed": time.time() - started}

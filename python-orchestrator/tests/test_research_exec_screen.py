@@ -180,3 +180,11 @@ def test_r3_band_reversion_rule_and_z_exits():
     assert trades["exit_reason"][0] == EXIT_REASONS["time"] and trades["hold_s"][0] == pytest.approx(3600.25)
     trades, _ = run_policy(data, 1, np.array([0]), Policy("E1", "Z4"))
     assert trades["exit_reason"][0] == EXIT_REASONS["time"] and trades["hold_s"][0] == pytest.approx(7200.25)  # no stop (floor 0.4 → 99.6) and no target (100.8) hit
+
+
+def test_both_sides_configuration_id_round_trip():
+    from scripts.research_exec.screen import build_grid, configuration_id, parse_configuration
+    assert parse_configuration("S7-W900-K1.5|both|E1|Z3") == ("S7-W900-K1.5", 0, "E1", "Z3")
+    assert configuration_id("S7-W900-K1.5", 0, "E1", "Z3") == "S7-W900-K1.5|both|E1|Z3"
+    grid = build_grid(False, "r4")
+    assert len(grid) == 4 and all("|both|" in item for item in grid)
