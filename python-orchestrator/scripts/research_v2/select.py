@@ -85,6 +85,49 @@ def merge_second_pass(survivors: dict, second_pass: dict) -> dict:
     }
 
 
+def verdict(validation: dict, training_screens: list[dict]) -> dict:
+    """Validation gates of section 6 for every validated configuration, against its training mean R."""
+    from .stats import validation_gates
+
+    training_rows = {}
+    for screen in training_screens:
+        for row in screen["rows"]:
+            training_rows.setdefault(row["id"], row)
+    results = []
+    for row in validation["rows"]:
+        training = training_rows.get(row["id"])
+        if training is None:
+            raise KeyError(f"no training row for {row['id']}")
+        reasons = validation_gates(row["baseline"], row["adverse"], row["cadence"], training["baseline"]["mean_r"])
+        results.append(
+            {
+                "id": row["id"],
+                "training": {"trades": training["baseline"]["trades"], "mean_r": training["baseline"]["mean_r"], "profit_factor": training["baseline"]["profit_factor"]},
+                "validation": {
+                    "trades": row["baseline"].get("trades", 0),
+                    "net": row["baseline"].get("net"),
+                    "net_adverse": row["adverse"].get("net"),
+                    "mean_r": row["baseline"].get("mean_r"),
+                    "mean_r_adverse": row["adverse"].get("mean_r"),
+                    "profit_factor": row["baseline"].get("profit_factor"),
+                    "profit_factor_adverse": row["adverse"].get("profit_factor"),
+                    "control_median": (row.get("control") or {}).get("median"),
+                    "control_p95": (row.get("control") or {}).get("p95"),
+                },
+                "gate_reasons": reasons,
+                "passes": not reasons,
+            }
+        )
+    passing = [result["id"] for result in results if result["passes"]]
+    return {
+        "schema": "research-v2-validation-verdict.v1",
+        "validation_code_sha256": validation["code"]["package_sha256"],
+        "results": results,
+        "passing": passing,
+        "outcome": "eligible_candidates" if passing else "no_eligible_candidate",
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="research_v2.select")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -95,6 +138,10 @@ def main(argv: list[str] | None = None) -> int:
     second.add_argument("--survivors", required=True)
     second.add_argument("--screen", required=True)
     second.add_argument("--out-dir", required=True)
+    final = sub.add_parser("verdict")
+    final.add_argument("--validation", required=True)
+    final.add_argument("--training", nargs="+", required=True)
+    final.add_argument("--out-dir", required=True)
     args = parser.parse_args(argv)
     out = Path(args.out_dir)
     if args.command == "first":
@@ -102,11 +149,15 @@ def main(argv: list[str] | None = None) -> int:
         (out / "survivors.json").write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
         (out / "second-pass-configs.txt").write_text("\n".join(document["second_pass_configurations"]) + "\n")
         print(json.dumps({"passing": document["passing"], "survivors": len(document["survivors"]), "second_pass": len(document["second_pass_configurations"])}))
-    else:
+    elif args.command == "second":
         document = merge_second_pass(json.loads(Path(args.survivors).read_text()), json.loads(Path(args.screen).read_text()))
         (out / "validation-list.json").write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
         (out / "validation-configs.txt").write_text("\n".join(document["validation_configurations"]) + "\n")
         print(json.dumps({"final": document["validation_configurations"]}))
+    else:
+        document = verdict(json.loads(Path(args.validation).read_text()), [json.loads(Path(path).read_text()) for path in args.training])
+        (out / "validation-verdict.json").write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+        print(json.dumps({"outcome": document["outcome"], "passing": document["passing"]}))
     return 0
 
 

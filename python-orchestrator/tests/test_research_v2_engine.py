@@ -232,3 +232,26 @@ def test_second_pass_filters_and_selection(pairs) -> None:
     second = {"code": {"package_sha256": "y"}, "rows": [row("A3|4h|long|S2.T3|E3", 0.45), row("A3|4h|long|S2.T3|E1", 0.6, passes=False), row("D3|4h|long|S2.T5|E4", 0.05)]}
     merged = select.merge_second_pass(survivors, second)
     assert merged["validation_configurations"] == ["A3|4h|long|S2.T3|E3", "A1.N55|4h|long|S3.T5", "A2.N20.K1|4h|long|S2.T3", "D3|4h|long|S2.T5"]
+
+
+def test_validation_verdict_applies_the_retention_rule() -> None:
+    from scripts.research_v2 import select
+
+    def summary(trades: int, net: float, mean_r: float, pf: float) -> dict:
+        return {"trades": trades, "net": net, "mean_r": mean_r, "profit_factor": pf}
+
+    training = {"rows": [{"id": "A1.N20|4h|long|S3.T5", "baseline": {"trades": 300, "mean_r": 0.3, "profit_factor": 1.5}}]}
+    validation = {
+        "code": {"package_sha256": "v"},
+        "rows": [
+            {"id": "A1.N20|4h|long|S3.T5", "cadence": "4h", "baseline": summary(80, 100.0, 0.2, 1.3), "adverse": summary(80, 50.0, 0.1, 1.1), "control": {"median": 0.0, "p95": 0.1}},
+        ],
+    }
+    document = select.verdict(validation, [training])
+    assert document["outcome"] == "eligible_candidates" and document["passing"] == ["A1.N20|4h|long|S3.T5"]
+    validation["rows"][0]["baseline"] = summary(80, 100.0, 0.1, 1.3)  # below half the training mean
+    document = select.verdict(validation, [training])
+    assert document["outcome"] == "no_eligible_candidate"
+    assert document["results"][0]["gate_reasons"] == ["V:baseline:mean_r<50%_of_training"]
+    with pytest.raises(KeyError):
+        select.verdict({"code": {"package_sha256": "v"}, "rows": [{"id": "D3|4h|long|S2.T5", "cadence": "4h", "baseline": {}, "adverse": {}}]}, [training])

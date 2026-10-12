@@ -28,11 +28,15 @@ The 2026 window has been used once.
    family and cadence, one validation pass on 2025, budgets 500 → 100,000 USDT.
 2. Tooling: `python-orchestrator/scripts/research_v2/` ([runbook](../../handbook/runbooks/research-v2-screen.md)).
 3. Training screen, then the second pass (E filters on the survivors), then validation once.
+   **Done 2026-10-12 03:30:** 8 of 436 pass training (all 4h long trend-following); the four
+   selected variants all lose on 2025; outcome `no_eligible_candidate`
+   ([report](../../handbook/reports/research-v2-selection-2026-10-12.md)).
 4. Report in the handbook. Survivors, if any, need kernel and contract work before a canonical
    campaign (15m cadence, trailing and indicator exits are not in the swing kernel profile),
-   and any holdout on 2026 would be its second use.
+   and any holdout on 2026 would be its second use. **No survivor: nothing to transfer.**
 5. If nothing survives: scalping and micro-scalping on 1-minute data under their own
-   pre-registration, with explicit fill and queue caveats.
+   pre-registration, with explicit fill and queue caveats. **Opened 2026-10-12** (draft
+   `PREREGISTRATION-scalping.draft.md` next to the v2 artifacts, frozen before any computation).
 
 ## Boundaries
 
