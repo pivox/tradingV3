@@ -69,8 +69,10 @@ class SeriesData:
         self.series_id = series_id
         self.bars = bars
         self.features = features
-        self.qts, self.bid, self.ask = quotes["ts"], quotes["bid"], quotes["ask"]
-        self.tts, self.tpx = trades["ts"], trades["price"]
+        # Contiguous copies: a field view of a structured array is strided, and searchsorted
+        # copies the whole array on every call (0.17 s per call on 12 M prints).
+        self.qts, self.bid, self.ask = (np.ascontiguousarray(quotes[name]) for name in ("ts", "bid", "ask"))
+        self.tts, self.tpx = np.ascontiguousarray(trades["ts"]), np.ascontiguousarray(trades["price"])
         self.instrument = instrument
         self.start_s = int(start_s)
         self.n = bars["mid"].size

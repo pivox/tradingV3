@@ -113,7 +113,9 @@ class Series:
     def data(self, series_id: int) -> SeriesData:
         bars = build_bars(self.quotes, self.trades, self.start_s, self.end_s)
         features = compute_features(bars, self.instrument)
-        return SeriesData(series_id, bars, features, self.quotes, self.trades, self.instrument, self.start_s)
+        data = SeriesData(series_id, bars, features, self.quotes, self.trades, self.instrument, self.start_s)
+        self.quotes = self.trades = None  # the engine keeps contiguous copies; free the structured arrays
+        return data
 
 
 def load_capture_series(extract_dir: Path, phase: str) -> list[Series]:
