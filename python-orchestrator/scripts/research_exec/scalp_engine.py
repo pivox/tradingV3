@@ -23,12 +23,12 @@ from .capture import Instrument
 from .tick import SECOND_US
 
 ENTRIES = ("E1", "E2")
-EXITS = ("X1", "X2", "X3", "X4", "Y1", "Y2", "Y3", "Y4")
+EXITS = ("X1", "X2", "X3", "X4", "Y1", "Y2", "Y3", "Y4", "Z1", "Z2", "Z3", "Z4")
 # Exit parameters: time exits (seconds), stop/target (sigma window, stop multiple, target multiple,
 # maximum hold), passive exits (post after, TTL, fallback at).
-TIME_EXITS = {"X1": 60, "X2": 300, "Y1": 900, "Y2": 3600}
-BRACKET_EXITS = {"X3": (60, 1.0, 1.5, 300), "Y3": (300, 1.5, 3.0, 3600)}
-PASSIVE_EXITS = {"X4": (60, 30, 90), "Y4": (900, 60, 960)}
+TIME_EXITS = {"X1": 60, "X2": 300, "Y1": 900, "Y2": 3600, "Z1": 3600}
+BRACKET_EXITS = {"X3": (60, 1.0, 1.5, 300), "Y3": (300, 1.5, 3.0, 3600), "Z4": (300, 2.0, 4.0, 7200)}
+PASSIVE_EXITS = {"X4": (60, 30, 90), "Y4": (900, 60, 960), "Z2": (1800, 300, 3600), "Z3": (3600, 300, 3900)}
 EXIT_REASONS = {"time": 0, "stop": 1, "target": 2, "passive": 3, "fallback": 4}
 
 TRADE_DTYPE = np.dtype(

@@ -33,11 +33,14 @@ from .stats import block_bootstrap_lower_bound
 from .tick import SECOND_US, build_bars, compute_features, family_of, rule_catalogue, signal_mask
 
 CAPTURE_SPLIT_S = 12 * 3600
-BINANCE_WINDOWS = {"march": ("2025-03-10", "2025-03-14"), "july": ("2025-07-14", "2025-07-18"), "november": ("2025-11-10", "2025-11-14"), "december": ("2025-12-08", "2025-12-12")}
+BINANCE_WINDOWS = {"march": ("2025-03-10", "2025-03-14"), "may": ("2025-05-12", "2025-05-16"), "july": ("2025-07-14", "2025-07-18"), "september": ("2025-09-15", "2025-09-19"), "november": ("2025-11-10", "2025-11-14"), "december": ("2025-12-08", "2025-12-12")}
 BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",), "holdout": ("december",)}
 # r1: the 2026-10-12 pre-registration (PREREGISTRATION.md); r2: PREREGISTRATION-r2.md (intraday holds).
 PROTOCOLS = {
     "r1": {"entries": ("E1", "E2"), "exits": ("X1", "X2", "X3", "X4"), "gates": {"min_trades": {"captures": 100, "binance": 300}, "min_mean_bp": 1.0, "min_pf": 1.15, "control_margin_bp": 2.0, "min_series_share": 0.75, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 50, "binance": 150}, "min_pf": 1.05, "min_series_share": 0.5}},
+    "r3": {"entries": ("E1",), "exits": ("Z1", "Z2", "Z3", "Z4"), "training_windows": ("march", "july", "may", "september"),
+           "rules": ("S7-W300-K1.5", "S7-W300-K2.0", "S7-W900-K1.5", "S7-W900-K2.0", "S2-W60-K2.5", "S2-W60-K3.5", "S2-W300-K2.5", "S2-W300-K3.5"),
+           "gates": {"min_trades": {"captures": 200, "binance": 200}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
     "r2": {"entries": ("E1",), "exits": ("Y1", "Y2", "Y3", "Y4"), "gates": {"min_trades": {"captures": 200, "binance": 200}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
 }
 BINANCE_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT", "ADAUSDT", "LTCUSDT", "LINKUSDT", "AVAXUSDT")
@@ -99,7 +102,8 @@ def parse_configuration(identifier: str) -> tuple[str, int, str, str]:
 
 def build_grid(book: bool, protocol: str = "r1") -> list[str]:
     spec = PROTOCOLS[protocol]
-    return [configuration_id(rule, side, entry, exit_) for rule in rule_catalogue(book) for side in (1, -1) for entry in spec["entries"] for exit_ in spec["exits"]]
+    rules = spec.get("rules") or rule_catalogue(book)
+    return [configuration_id(rule, side, entry, exit_) for rule in rules for side in (1, -1) for entry in spec["entries"] for exit_ in spec["exits"]]
 
 
 # ----------------------------------------------------------------------------- series
@@ -185,13 +189,13 @@ def _day_s(date: str) -> int:
     return int(datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
 
-def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS) -> tuple[list[Series], list[str]]:
+def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None) -> tuple[list[Series], list[str]]:
     """`tape_dir` holds the training and validation windows; the holdout window is read from
     the sibling holdout directory when `phase == "holdout"`."""
     instruments = load_binance_instruments(instruments_path)
     series, missing = [], []
     for symbol in symbols:
-        for window in BINANCE_PHASES[phase]:
+        for window in windows or BINANCE_PHASES[phase]:
             first, last = BINANCE_WINDOWS[window]
             start_s, end_s = _day_s(first), _day_s(last) + 86400
             pieces = []
@@ -452,7 +456,8 @@ def main(argv: list[str] | None = None) -> int:
             book = True
         else:
             symbols = tuple(args.symbols.split(",")) if args.symbols else BINANCE_SYMBOLS
-            series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols)
+            windows = PROTOCOLS[args.protocol].get("training_windows") if args.phase == "training" else None
+            series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols, windows)
             extra["missing_days"] = missing
             book = False
         if args.configs_file:

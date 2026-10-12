@@ -19,7 +19,7 @@ HOUR_S = 3600
 FEATURE_WINDOWS = (10, 60, 300)
 SIGMA_WINDOWS = (60, 300)
 FAMILIES = ("S1", "S2", "S3", "S4", "S5", "S6")
-_RULE = re.compile(r"^(S[1-6])(?:-W(\d+))?(?:-T([0-9.]+))?(?:-K([0-9.]+))?(?:-Q([0-9.]+))?(-F)?(-C)?(-B)?$")
+_RULE = re.compile(r"^(S[1-7])(?:-W(\d+))?(?:-T([0-9.]+))?(?:-K([0-9.]+))?(?:-Q([0-9.]+))?(-F)?(-C)?(-B)?$")
 
 
 def build_bars(quotes: np.ndarray, trades: np.ndarray, start_s: int, end_s: int) -> dict[str, np.ndarray]:
@@ -138,6 +138,9 @@ def compute_features(bars: dict[str, np.ndarray], instrument: Instrument) -> dic
         features["dev"] = (mid - vwap) / mid
         ema = _ema(mid, 300)
         features["band_dev"] = (mid - ema) / mid
+        features["band_dev_300"] = features["band_dev"]
+        features["band_dev_900"] = (mid - _ema(mid, 900)) / mid
+        features["sigma_900"] = np.maximum(np.sqrt(_rolling_sum(cum2, 900)), tick_floor)
         count = _rolling_sum(np.cumsum(bars["n"]), 60)
         count_hour = _rolling_sum(np.cumsum(np.where(np.isfinite(count), count, 0.0)), HOUR_S) / HOUR_S
         features["burst"] = (count > 3.0 * count_hour) & (count_hour > 0)
@@ -189,4 +192,6 @@ def signal_mask(rule: str, f: dict[str, np.ndarray], side: int) -> np.ndarray:
             if cont:
                 return f["burst"] & (sgn * f["fi_60"] > 0.5)
             return f["burst"] & (sgn * f["fi_60"] < -0.5) & (sgn * f["r_60"] < -2.0 * f["sigma_60"])
+        if family == "S7":
+            return (sgn * f[f"band_dev_{w}"] < -float(k) * f[f"sigma_{w}"]) & (sgn * f["fi_60"] > 0.0)
     raise ValueError(f"unknown family {family}")

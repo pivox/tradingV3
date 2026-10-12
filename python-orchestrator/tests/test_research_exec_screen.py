@@ -157,3 +157,26 @@ def test_intraday_exits_y1_and_y3():
     data = _make(q_rows, t_rows, seconds=4000)
     trades, _ = run_policy(data, 1, np.array([0]), Policy("E1", "Y3"))
     assert trades["exit_reason"][0] == EXIT_REASONS["target"] and trades["exit"][0] == pytest.approx(100.6) and trades["fees_bp"][0] == pytest.approx(4.0)
+
+
+def test_r3_band_reversion_rule_and_z_exits():
+    quotes, trades = _synthetic_series(seconds=3000)
+    bars = build_bars(quotes, trades, T0, T0 + 3000)
+    f = compute_features(bars, INSTRUMENT)
+    assert np.isfinite(f["band_dev_900"][5:]).all() and np.isnan(f["sigma_900"][:898]).all() and np.isfinite(f["sigma_900"][900:]).all()
+    assert f["band_dev_300"] is f["band_dev"]
+    long_mask = signal_mask("S7-W300-K1.5", f, 1)
+    short_mask = signal_mask("S7-W300-K1.5", f, -1)
+    assert long_mask.shape == (3000,) and not (long_mask & short_mask).any()
+    assert signal_mask("S7-W900-K2.0", f, 1).dtype == bool
+    q_rows = [((T0 + s) * SECOND + 50_000, 100.0, 100.1, 1.0, 1.0) for s in range(8000)]
+    t_rows = [((T0 + s) * SECOND + 500_000, 100.05, 0.1, 1) for s in range(8000)]
+    t_rows.append(((T0 + 2) * SECOND + 600_000, 99.9, 1.0, 0))  # fills the bid at 100.0
+    t_rows.append(((T0 + 1900) * SECOND + 100_000, 100.15, 1.0, 1))  # above the ask 100.1 posted at fill + 30 min (Z2)
+    data = _make(q_rows, t_rows, seconds=8000)
+    trades, _ = run_policy(data, 1, np.array([0]), Policy("E1", "Z2"))
+    assert trades["exit_reason"][0] == EXIT_REASONS["passive"] and trades["exit"][0] == pytest.approx(100.1) and trades["fees_bp"][0] == pytest.approx(4.0)
+    trades, _ = run_policy(data, 1, np.array([0]), Policy("E1", "Z1"))
+    assert trades["exit_reason"][0] == EXIT_REASONS["time"] and trades["hold_s"][0] == pytest.approx(3600.25)
+    trades, _ = run_policy(data, 1, np.array([0]), Policy("E1", "Z4"))
+    assert trades["exit_reason"][0] == EXIT_REASONS["time"] and trades["hold_s"][0] == pytest.approx(7200.25)  # no stop (floor 0.4 → 99.6) and no target (100.8) hit
