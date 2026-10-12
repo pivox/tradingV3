@@ -151,6 +151,71 @@ gates for reasons that are exactly the ones the gates exist for:
 Nothing was sent to validation; the November window and the December holdout stay unread by
 r2 (`part-b/binance-r2/verdict.json`: `no_eligible_candidate`, validation not run).
 
+### r3 — focused reversion families on four training windows: one training pass, no validation pass
+
+Third pre-registration (`PREREGISTRATION-r3.md`, frozen 07:36:02Z, sha256 `2dd51c44…`, after
+the r2 training numbers and before any r3 computation): the band reversion generalised
+(`S7`: mid below its EMA of 300 or 900 s by 1.5 or 2 volatilities, with buying flow) and the
+exhaustion fade with larger moves (`S2`, k 2.5 / 3.5), both sides, entry at the touch, exits
+Z1 taker at 60 min, Z2 passive at 30 min, Z3 passive at 60 min, Z4 2–4 σ bracket with a
+120 min cap; 64 configurations; training on **four** windows (March, May, July, September
+2025, forty series, the two new windows acquired and checksum-verified before the freeze was
+read by anything), validation November, holdout December.
+
+| Family | Configurations | Median trades | Median mean net bp | Best configuration (mean net, trades, LB90) | Control median at the best | Passes |
+|---|---:|---:|---:|---|---:|---:|
+| S2 exhaustion fade | 32 | 312 | −6.1 | `S2-W300-K3.5\|long\|E1\|Z2` +1.3 bp (n = 269, LB −4.3) | −10.0 | 0 |
+| S7 band reversion | 32 | 173 | +3.2 | `S7-W900-K2.0\|short\|E1\|Z3` +30.7 bp (n = 66, LB +14.6) | −16.1 | 2 |
+
+Two configurations pass all eight training gates, the first of the day: the long reversion
+to the 15-minute EMA at 1.5 volatilities, held one hour, with a passive exit
+(`S7-W900-K1.5|long|E1|Z3`: 361 trades, +12.7 bp, lower bound +5.6, PF 1.43, 28 of 40 series
+positive, control median −10.7 bp, still +38 bp per trade without the best day and positive at
+fees × 1.5) and the same with a taker exit (`…|Z1`: +11.8 bp). Their short mirror is negative
+in training (−6.4 bp on 408 trades) against a control at −17.4 bp; the stricter `K2.0` versions
+earn +19 to +31 bp per trade but on 44–66 trades.
+
+Validation (November 2025, once):
+
+| Configuration | Training mean / LB90 | Validation trades | Mean net bp | Gross bp | PF | Series positive | Control median | Passes |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| `S7-W900-K1.5\|long\|E1\|Z1` | +11.8 / +4.8 | 94 | −5.3 | +1.7 | 0.87 | 3 of 10 | −24.6 | no |
+| `S7-W900-K1.5\|long\|E1\|Z3` | +12.7 / +5.6 | 94 | −1.8 | +2.4 | 0.95 | 3 of 10 | −22.4 | no |
+
+Outcome `no_eligible_candidate`; the December holdout stays unread by r3. The reading is
+precise: in a falling week the long entries break even before fees while random long entries
+at the same hours lose 22–25 bp — the rule beats random timing by about 20 bp per trade in
+training and in validation, on both sides, and its absolute result follows the market's
+hourly drift. That is the first signal of the day with content; it is not a candidate,
+because a one-sided one-hour hold is a bet on the hour's direction.
+
+### r4 — the same rule two-sided: the 2 σ version passes seven gates of eight
+
+Fourth pre-registration (`PREREGISTRATION-r4.md`, frozen 08:00:42Z, sha256 `f19f152e…`,
+disclosing that the November numbers of the long 1.5 σ configurations were known): the long and
+the short streams of `S7-W900` run independently on each series and their trades are pooled,
+so that the hour's market drift largely cancels; thresholds 1.5 σ and 2 σ, exits Z1 and Z3,
+four configurations, same gates, same forty training series:
+
+| Configuration | Trades | Mean net bp | LB90 | Median | PF | Win | Control median / p95 | Series positive | Without best day | Fees × 1.5 | Gates failed |
+|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---|
+| `S7-W900-K1.5\|both\|E1\|Z1` | 769 | +0.8 | −3.5 | −3.2 | 1.03 | 48 % | −15.2 / −12.4 | 48 % | −258 | −2,052 | G2 G3 G5 G6 G7 |
+| `S7-W900-K1.5\|both\|E1\|Z3` | 769 | +2.6 | −1.8 | −1.6 | 1.08 | 49 % | −13.3 / −10.7 | 48 % | +1,055 | +350 | G2 G3 G5 |
+| `S7-W900-K2.0\|both\|E1\|Z1` | 110 | +22.9 | +10.7 | +16.1 | 2.05 | 58 % | −16.8 / −9.5 | 70 % | +1,957 | +2,137 | G1 G5 |
+| `S7-W900-K2.0\|both\|E1\|Z3` | 110 | +25.9 | +13.7 | +19.7 | 2.24 | 59 % | −15.7 / −7.8 | 76 % | +2,277 | +2,619 | G1 |
+
+The 1.5 σ pooled version is what its halves predicted: +2.6 bp, half the series positive,
+nothing to trade. The 2 σ pooled version with the passive exit has every property the gates
+ask for — mean, lower bound, profit factor, 31 of 40 series positive (the forty series are
+ten pairs × four windows), robust to the best day and to a fee tier change, 40 bp above its
+regime-matched control — except the sample: 110 trades, one signal every two symbol-days,
+against a minimum of 200 set before anything was run. Nothing was selected; November and
+December stay unread by r4.
+
+### r5 — the 2 σ two-sided configuration on nine training windows
+
+<!-- PART-B-R5 -->
+
 <!-- PART-B-R2 -->
 
 ## Budgets
