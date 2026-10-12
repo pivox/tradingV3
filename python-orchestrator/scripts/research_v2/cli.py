@@ -127,13 +127,13 @@ def command_screen(args: argparse.Namespace) -> int:
     symbols = tuple(args.symbols.split(",")) if args.symbols else dataset.SYMBOLS
     configurations = grid_module.build_grid()
     if args.configs or args.configs_file:
-        wanted = set(args.configs.split(",")) if args.configs else set()
+        wanted = [item for item in args.configs.split(",") if item] if args.configs else []
         if args.configs_file:
-            wanted |= {line.strip() for line in Path(args.configs_file).read_text().splitlines() if line.strip()}
-        configurations = tuple(configuration for configuration in configurations if configuration.id in wanted)
-        missing = wanted - {configuration.id for configuration in configurations}
-        if missing:
-            raise SystemExit(f"unknown configurations: {sorted(missing)}")
+            wanted += [line.strip() for line in Path(args.configs_file).read_text().splitlines() if line.strip()]
+        try:
+            configurations = tuple(grid_module.parse_configuration(identifier) for identifier in dict.fromkeys(wanted))
+        except KeyError as error:
+            raise SystemExit(f"unknown configuration: {error}") from error
     out = Path(args.out)
     outcomes_dir = out.parent / f"{out.stem}-outcomes"
     outcomes_dir.mkdir(parents=True, exist_ok=True)
