@@ -11,9 +11,9 @@ from __future__ import annotations
 import numpy as np
 
 from . import costs
-from .engine import OUTCOME_DTYPE, PairInputs, Window, decision_indices, run_pair
+from .engine import OUTCOME_DTYPE, PairInputs, Window, configuration_signals, decision_indices, run_pair
 from .grid import Configuration
-from .setups import SetupSignals, compute
+from .setups import SetupSignals
 from .stats import summarize, years_of
 
 OVERSAMPLE = 2
@@ -54,7 +54,7 @@ def run_control(
         years, counts = np.unique(candidate_years[mask], return_counts=True)
         counts_by_year = {int(year): int(count) for year, count in zip(years, counts)}
         features = inputs.features[configuration.cadence]
-        signals = compute(configuration.setup, features, configuration.side)
+        signals = configuration_signals(configuration, features)
         regime = _regime_signals(signals)
         regime_indices = decision_indices(features, regime, window)
         regime_years = years_of(features.bars.close_ms[regime_indices])

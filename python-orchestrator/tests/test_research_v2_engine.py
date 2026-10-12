@@ -193,3 +193,42 @@ def test_budget_study_scales_linearly_and_respects_minimums(pairs) -> None:
     tight = {symbol: costs.Instrument(symbol, 0.01, 1.0, 1.0, 5_000.0, 1e9, 2.0) for symbol in pairs}
     blocked = budgets.budget_study(outcomes, tight, "base", budgets=(500.0,))["500"]
     assert blocked["taken"] == 0 and blocked["pairs_never_tradable"] == sorted(pairs)
+
+
+def test_second_pass_filters_and_selection(pairs) -> None:
+    from scripts.research_v2 import select
+    from scripts.research_v2.filters import FILTER_IDS, filter_mask
+
+    inputs = pairs["SYNUSDT"]
+    features = inputs.features["4h"]
+    for filter_id in FILTER_IDS:
+        mask = filter_mask(filter_id, features, 1)
+        assert mask.shape == (features.size,) and mask.dtype == bool
+    us = filter_mask("E2.US", features, 1)
+    hours = (features.bars.close_ms // HOUR) % 24
+    assert np.all(hours[us] >= 12) and np.all(hours[us] <= 20)
+    weekdays = ((features.bars.close_ms // DAY) + 3) % 7
+    assert np.all(weekdays[filter_mask("E3", features, 1)] < 5)
+    with pytest.raises(KeyError):
+        filter_mask("E9", features, 1)
+    filtered = parse_configuration("A1.N20|4h|long|S3.T5|E3")
+    assert filtered.filter_id == "E3" and filtered.base_id == "A1.N20|4h|long|S3.T5"
+    with pytest.raises(KeyError):
+        parse_configuration("A1.N20|4h|long|S3.T5|E9")
+    window = Window(START_MS + 60 * DAY, START_MS + 400 * DAY)
+    plain = run_pair(parse_configuration("A1.N20|4h|long|S3.T5"), inputs, window, _profiles())
+    weekdays_only = run_pair(filtered, inputs, window, _profiles())
+    assert weekdays_only.signals <= plain.signals
+    assert np.all((((weekdays_only.outcomes["decision_ms"] // DAY) + 3) % 7) < 5)
+
+    def row(identifier: str, lower: float, passes: bool = True) -> dict:
+        family, cadence = identifier.split(".")[0][0], identifier.split("|")[1]
+        return {"id": identifier, "family": family, "cadence": cadence, "passes": passes, "baseline": {"lower_bound_r": lower, "mean_r": lower + 0.1, "trades": 300}}
+
+    screen = {"code": {"package_sha256": "x"}, "rows": [row("A1.N20|4h|long|S3.T5", 0.2), row("A1.N55|4h|long|S3.T5", 0.3), row("A2.N20.K1|4h|long|S2.T3", 0.25), row("A3|4h|long|S2.T3", 0.4), row("D3|4h|long|S2.T5", 0.1), row("B2|4h|long|S2.X", 0.5, passes=False)]}
+    survivors = select.select(screen)
+    assert [entry["id"] for entry in survivors["survivors"]] == ["A3|4h|long|S2.T3", "A1.N55|4h|long|S3.T5", "A2.N20.K1|4h|long|S2.T3", "D3|4h|long|S2.T5"]
+    assert survivors["passing"] == 5 and len(survivors["second_pass_configurations"]) == 4 * len(FILTER_IDS)
+    second = {"code": {"package_sha256": "y"}, "rows": [row("A3|4h|long|S2.T3|E3", 0.45), row("A3|4h|long|S2.T3|E1", 0.6, passes=False), row("D3|4h|long|S2.T5|E4", 0.05)]}
+    merged = select.merge_second_pass(survivors, second)
+    assert merged["validation_configurations"] == ["A3|4h|long|S2.T3|E3", "A1.N55|4h|long|S3.T5", "A2.N20.K1|4h|long|S2.T3", "D3|4h|long|S2.T5"]

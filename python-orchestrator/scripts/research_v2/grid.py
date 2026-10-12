@@ -53,6 +53,7 @@ class Configuration:
     cadence: str
     side: int
     variant: ExitVariant
+    filter_id: str | None = None  # second-pass filter (E1, E2.US, E2.ASIA, E3, E4) or None
 
     @property
     def setup(self) -> SetupSpec:
@@ -66,12 +67,17 @@ class Configuration:
     def side_name(self) -> str:
         return "long" if self.side == 1 else "short"
 
+    @property
+    def base_id(self) -> str:
+        return configuration_id(self.setup_id, self.cadence, self.side, self.variant.id)
+
     def to_json(self) -> dict:
-        return {"id": self.id, "setup_id": self.setup_id, "family": self.family, "cadence": self.cadence, "side": self.side_name, "variant": asdict(self.variant)}
+        return {"id": self.id, "setup_id": self.setup_id, "family": self.family, "cadence": self.cadence, "side": self.side_name, "variant": asdict(self.variant), "filter": self.filter_id}
 
 
-def configuration_id(setup_id: str, cadence: str, side: int, variant_id: str) -> str:
-    return f"{setup_id}|{cadence}|{'long' if side == 1 else 'short'}|{variant_id}"
+def configuration_id(setup_id: str, cadence: str, side: int, variant_id: str, filter_id: str | None = None) -> str:
+    base = f"{setup_id}|{cadence}|{'long' if side == 1 else 'short'}|{variant_id}"
+    return f"{base}|{filter_id}" if filter_id else base
 
 
 def build_grid(setups: tuple[SetupSpec, ...] = CATALOGUE) -> tuple[Configuration, ...]:
@@ -85,12 +91,25 @@ def build_grid(setups: tuple[SetupSpec, ...] = CATALOGUE) -> tuple[Configuration
 
 
 def parse_configuration(identifier: str) -> Configuration:
-    setup_id, cadence, side_name, variant_id = identifier.split("|")
+    parts = identifier.split("|")
+    if len(parts) == 4:
+        setup_id, cadence, side_name, variant_id = parts
+        filter_id = None
+    elif len(parts) == 5:
+        setup_id, cadence, side_name, variant_id, filter_id = parts
+        from .filters import FILTER_IDS
+
+        if filter_id not in FILTER_IDS:
+            raise KeyError(identifier)
+    else:
+        raise KeyError(identifier)
     spec = CATALOGUE_BY_ID[setup_id]
+    if side_name not in ("long", "short"):
+        raise KeyError(identifier)
     side = 1 if side_name == "long" else -1
     for variant in exit_variants(spec.exit_family, cadence):
         if variant.id == variant_id:
-            return Configuration(identifier, setup_id, cadence, side, variant)
+            return Configuration(identifier, setup_id, cadence, side, variant, filter_id)
     raise KeyError(identifier)
 
 

@@ -21,6 +21,7 @@ from .bars import Candles
 from .dataset import Funding, funding_marks
 from .features import Features
 from .fills import PlanSpec, simulate
+from .filters import filter_mask
 from .grid import Configuration
 from .setups import SetupSignals, compute
 
@@ -116,6 +117,15 @@ def plan_prices(side: int, close: float, atr: float, stop_atr: float, target_r: 
     return entry, stop, target
 
 
+def configuration_signals(configuration: Configuration, features: Features) -> SetupSignals:
+    """The setup's signals, restricted by the configuration's second-pass filter when it has one."""
+    signals = compute(configuration.setup, features, configuration.side)
+    if configuration.filter_id is None:
+        return signals
+    mask = filter_mask(configuration.filter_id, features, configuration.side)
+    return SetupSignals(signals.signal & mask, signals.regime & mask, signals.exit)
+
+
 def decision_indices(features: Features, signals: SetupSignals, window: Window) -> np.ndarray:
     bars = features.bars
     usable = signals.signal & bars.complete & (bars.close_ms > window.start_ms) & (bars.close_ms < window.end_ms)
@@ -135,7 +145,7 @@ def run_pair(
     """Replay one configuration on one pair; ``decisions`` overrides the setup's signal bars (controls)."""
     features = inputs.features[configuration.cadence]
     if signals is None:
-        signals = compute(configuration.setup, features, configuration.side)
+        signals = configuration_signals(configuration, features)
     if decisions is None:
         decisions = decision_indices(features, signals, window)
     variant = configuration.variant
