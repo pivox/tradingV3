@@ -189,3 +189,15 @@ def test_scalping_gates() -> None:
     assert scalping_validation_gates(validation, dict(validation, profit_factor=1.0), "5m", 0.05) == []
     assert "V:baseline:mean_r<50%_of_training" in scalping_validation_gates(validation, validation, "5m", 0.2)
     assert scalping_validation_gates({"trades": 100}, {"trades": 100}, "1m", 0.1) == ["V:baseline:trades<600", "V:adverse:trades<600"]
+
+
+def test_controls_keep_structural_stops(pairs) -> None:
+    from scripts.research_v2 import controls
+
+    configuration = scalping.parse_scalp_configuration("S3.US|5m|long|SB.T1.5")
+    window = Window(START_MS + 5 * DAY, START_MS + 40 * DAY)
+    outcomes, _ = run_configuration(configuration, pairs, window, _profiles())
+    control = controls.run_control(configuration, pairs, window, _profiles(), outcomes, seed=1)
+    assert control.dtype == outcomes.dtype
+    if control.size:
+        assert np.all(control["entry"] > control["stop"])
