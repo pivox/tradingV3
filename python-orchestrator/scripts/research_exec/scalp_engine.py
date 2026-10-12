@@ -69,6 +69,20 @@ class SeriesData:
         self.instrument = instrument
         self.start_s = int(start_s)
         self.n = bars["mid"].size
+        self.ticks = instrument.tick_array(np.where(np.isfinite(bars["bid"]), bars["bid"], 1.0))
+        self._index_cache: dict[tuple[int, int], tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+
+    def indices(self, latency_us: int, ttl_us: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Per decision second: quote index at activation, first print index after activation,
+        print index bound at the TTL (searchsorted once for the whole series)."""
+        key = (latency_us, ttl_us)
+        if key not in self._index_cache:
+            end_us = (self.start_s + np.arange(self.n, dtype=np.int64) + 1) * SECOND_US
+            quote_at_activation = np.searchsorted(self.qts, end_us + latency_us, side="right") - 1
+            first_after_activation = np.searchsorted(self.tts, end_us + latency_us, side="right")
+            bound_at_ttl = np.searchsorted(self.tts, end_us + ttl_us, side="right")
+            self._index_cache[key] = (quote_at_activation, first_after_activation, bound_at_ttl)
+        return self._index_cache[key]
 
 
 def _quote_at(data: SeriesData, moment: int) -> int:
@@ -85,30 +99,31 @@ def _touch(data: SeriesData, moment: int, want_bid: bool) -> float | None:
 
 def run_policy(data: SeriesData, side: int, decisions: np.ndarray, policy: Policy) -> tuple[np.ndarray, Counters]:
     """Replay the policy on the given decision seconds (bar indices, sorted)."""
-    bars, f = data.bars, data.features
+    bars = data.bars
     counters = Counters()
     rows: list[tuple] = []
     busy_until = -1
     tol_scale = 1e-6
     ttl_s = policy.ttl_us // SECOND_US
+    quote_at_activation, first_after_activation, bound_at_ttl = data.indices(policy.latency_us, policy.ttl_us)
+    mids, ages, bids, asks, ticks = bars["mid"], bars["quote_age"], bars["bid"], bars["ask"], data.ticks
+    inside = policy.entry == "E2"
     for s in decisions.tolist():
         if s < busy_until or s >= data.n:
             continue
         counters.decisions += 1
-        mid = bars["mid"][s]
-        if not np.isfinite(mid) or bars["quote_age"][s] > policy.stale_s:
+        mid = mids[s]
+        if not mid == mid or ages[s] > policy.stale_s:  # NaN check without a numpy call
             continue
-        b, a = float(bars["bid"][s]), float(bars["ask"][s])
-        tick = data.instrument.tick(b)
+        b, a = float(bids[s]), float(asks[s])
+        tick = float(ticks[s])
         tol = tick * tol_scale
-        if policy.entry == "E2" and (a - b) >= 2 * tick - tol:
+        if inside and (a - b) >= 2 * tick - tol:
             price = b + tick if side > 0 else a - tick
         else:
             price = b if side > 0 else a
         price = round(price / tick) * tick
-        t_dec = (data.start_s + s + 1) * SECOND_US
-        t_act = t_dec + policy.latency_us
-        iq = _quote_at(data, t_act)
+        iq = int(quote_at_activation[s])
         if iq < 0:
             continue
         counters.orders += 1
@@ -116,8 +131,8 @@ def run_policy(data: SeriesData, side: int, decisions: np.ndarray, policy: Polic
             counters.crossed += 1
             busy_until = s + 1 + policy.cancel_block_s
             continue
-        j0 = int(np.searchsorted(data.tts, t_act, side="right"))
-        j1 = int(np.searchsorted(data.tts, t_dec + policy.ttl_us, side="right"))
+        j0 = int(first_after_activation[s])
+        j1 = int(bound_at_ttl[s])
         window = data.tpx[j0:j1]
         hit = (window < price - tol) if side > 0 else (window > price + tol)
         if window.size == 0 or not hit.any():
