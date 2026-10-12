@@ -2,7 +2,34 @@
 
 ## Result
 
-<!-- RESULT -->
+**No candidate.** Five pre-registered protocols on fill-capable data, all frozen before their
+results, all negative under their own rules:
+
+| Protocol | Data | Configurations | Training passes | Validation | Outcome |
+|---|---|---:|---:|---|---|
+| A — passive-order mark-outs | OKX + Hyperliquid captures, 24 h each | — | — | — | no unconditional maker edge; a passive fill costs 3.1–3.5 bp vs 5 bp taker |
+| r1 — tick signals, 1–5 min holds | captures, first / last 12 h | 368 | 0 | not run | `no_eligible_candidate` |
+| r1 — same | Binance tape, 10 pairs, March + July 2025 / November | 304 | 0 | not run | `no_eligible_candidate` |
+| r2 — same signals, 15–60 min holds | Binance tape | 152 | 0 | not run | `no_eligible_candidate` |
+| r3 — reversion families, 4 windows | Binance tape, + May + September | 64 | 2 | 2 run once, 0 pass | `no_eligible_candidate` |
+| r4 — two-sided band reversion | Binance tape, 4 windows | 4 | 0 (one fails only the trade minimum) | not run | `no_eligible_candidate` |
+| r5 — that configuration, 9 windows | Binance tape, + February, April, June, August, October | 2 | 0 | not run | `no_eligible_candidate` |
+
+What the day establishes, with numbers in the sections below:
+
+- At holds of one to five minutes every family loses the fees: medians −6 to −11 bp per trade
+  on four venues-days of order-book data and on 100 symbol-days of tape, signals and
+  random-timing controls alike. No parameter changes that; the gross per trade is near zero.
+- At holds of 15 to 60 minutes one rule has content: the reversion to the 15-minute EMA at
+  two volatilities with confirming flow beats regime-matched random timing by about 20 bp per
+  trade on both sides and in every phase it was run on. Its absolute expectancy is +26 bp on
+  the four windows that found it and **+2.5 bp on nine windows** (260 trades, half the series
+  negative): the sample, not the rule.
+- Passive entries are the cheaper way in (about 2 bp), with one fill in two within 45 s;
+  there is no maker edge for a participant without queue priority.
+
+The November and December 2025 windows remain unread by r4 and r5; the December holdout has
+never been read. The 2026 candle holdout is untouched since the swing campaign.
 
 ## Why
 
@@ -113,8 +140,6 @@ controls at the same level. The only positive rows are six trades of the band re
 G2, 267 fail G4 (no signal beats its control by 2 bp), 108 fail the trade minimum. No
 validation was run (`part-b/binance/verdict.json`: `no_eligible_candidate`).
 
-<!-- PART-B-BINANCE -->
-
 ### r2 — intraday holds (15–60 min) with the same tick signals: 0 of 152 pass
 
 Second pre-registration of the day (`PREREGISTRATION-r2.md`, frozen 06:54:38Z, sha256
@@ -214,13 +239,41 @@ December stay unread by r4.
 
 ### r5 — the 2 σ two-sided configuration on nine training windows
 
-<!-- PART-B-R5 -->
+Fifth pre-registration (`PREREGISTRATION-r5.md`, frozen 08:05:10Z, sha256 `4f633afb…`, before
+the five new windows were read by anything): the single configuration that r4 had left short of
+the trade minimum, `S7-W900-K2.0|both|E1|Z3` (primary) and its taker-exit twin `…|Z1`
+(secondary), on **nine** five-weekday training windows of 2025 (February, March, April, May,
+June, July, August, September, October; ninety series, 366 million prints, every archive
+checksum-verified), validation November with a trade minimum of 50, holdout December. The
+run needed a series-by-series driver (one series in memory per worker), which reproduces the
+pooled driver exactly on synthetic data.
 
-<!-- PART-B-R2 -->
+| Configuration | Trades | Mean net bp | LB90 | Median | PF | Win | Control median / p95 | Series positive | Without best day | Fees × 1.5 | Gates failed |
+|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---|
+| `S7-W900-K2.0\|both\|E1\|Z3` | 260 | +2.5 | −5.1 | +6.4 | 1.08 | 56 % | −17.4 / −9.0 | 55 % | +64 | +93 | G2 G3 G5 |
+| `S7-W900-K2.0\|both\|E1\|Z1` | 260 | +0.1 | −7.2 | +4.2 | 1.00 | 54 % | −19.2 / −11.2 | 53 % | −534 | −879 | G2 G3 G5 G6 G7 |
+
+Per window, mean net bp of the primary (trades): March +66 (25), April +48 (20), May +32 (20),
+September +9 (42), July +7 (23), October −8 (13), June −20 (45), August −28 (28), February
+−31 (44). The four windows r3 and r4 had seen are the four best of the nine; the five windows
+added afterwards average about −20 bp. With 260 trades the configuration keeps a positive
+median and still beats random timing by 20 bp per trade, and it has no expectancy a trader
+could use: +2.5 bp on average, half the series negative, a lower bound at −5 bp. Nothing was
+selected; November and December stay unread by r5.
+
+This closes the band-reversion lead: what looked like +26 bp on four windows was the sample,
+not the rule.
 
 ## Budgets
 
-<!-- BUDGETS -->
+Every screen restates its best three configurations (by lower bound) for budgets of 500 to
+100,000 USDT at 1× and 2× (`part-b/<source>/budgets.json`): all are tradable at 500 USDT on
+every venue (OKX contracts of 0.01 BTC ≈ 870 USDT need the 2× leverage at 500 USDT; ETH
+contracts, Hyperliquid's 10 USDT minimum and Binance steps are met at 1×), and none projects
+a net worth sizing: the r5 primary at +2.5 bp and 1.3 trades per day per budget of 500 USDT at
+2× makes about +0.03 USDT per day; the r3 long reversion at its validation numbers loses
+0.2–1 USDT per day at 500 USDT and 69–200 USDT per day at 100,000 USDT. Fees per round trip
+are 0.35–0.70 USDT at 500 USDT (1× / 2×) for taker exits and 0.20–0.40 USDT for passive ones.
 
 ## Limits
 
@@ -231,6 +284,11 @@ December stay unread by r4.
 - Fills follow the tape (through rule), not a queue model; the touch rule bounds the other
   side. Market exits take the touch after 250 ms with no depth consumption.
 - Fees are the project's policy (2 / 5 bp); exchange tiers differ, hence gate G7 at fees × 1.5.
-- No funding (holds under five minutes). No position sizing beyond the budget table.
+- No funding (holds under five minutes in r1; up to two hours in r3–r5, where funding at
+  ±0.01 % per 8 h would move the results by less than 0.3 bp per trade). No position sizing
+  beyond the budget table.
+- Five pre-registrations in one day form a lineage (r3 → r4 → r5 on one family); each was
+  frozen before its own result, the thresholds never moved, and r5's nine windows are the
+  answer to the multiplicity that lineage creates.
 - The 2026 candle holdout stays untouched (one use by the swing campaign); nothing of 2026 is
   read from the Binance archives.

@@ -93,7 +93,8 @@ gross / fees / net in bp, hold).
   the May and September 2025 training windows; r4 adds two-sided configurations
   (`…|both|…`: the long and the short streams run independently on each series and their
   trades are pooled); r5 runs the 2 σ two-sided configuration on nine training windows in a
-  memory-light mode that keeps only the arrays the rule and the engine read.
+  memory-light, series-by-series mode (each worker loads one series, replays every
+  configuration on it and frees it; the pooled and by-series drivers give identical rows).
 
 ## Outputs
 
