@@ -296,7 +296,7 @@ trading-app/scripts/mtf_condition_report.py --log var/log/mtf-YYYY-MM-DD.log \
 
 ## Important known constraints
 
-- **`php-trader` extension**: ATR computation falls back to a pure-PHP implementation when `trader_atr()` returns 0. This generates ~30k warnings/day in `var/log/indicators-*.log` — expected behavior until the extension is fixed.
+- **`php-trader` precision**: the extension rounds every result to `trader.real_precision` decimals (default 3). `trading-app/php/conf.d/30-trader.ini` (bind-mounted into the PHP containers) sets it to 12 since 2026-10-12: before that, the ATR of pairs priced under 0.01 USDT rounded to 0, `AtrCalculator` logged one `[ATR] trader_atr returned invalid value` warning per evaluation (~30k/day in `var/log/indicators-*.log`) and fell back to pure PHP, while mid-priced pairs kept only one or two significant digits. A container restart applies it. The research and Paper paths (`CanonicalPhpIndicatorCalculator`, `php_fallback_v1`) never use `trader`.
 - **ATR required for `stop_from: atr`**: orders are silently rejected (`atr_required_but_invalid`) if ATR is absent. Check the `order-journey` log for this key.
 - **EntityManager closed guard**: `BaseTimeframeService::persistAudit()` and `MtfResultProjector::project()` test `EntityManager::isOpen()` and degrade gracefully. Root cause was a DBAL error during kline upserts (see `trading-app/codex.md`).
 - **Messenger restart after config changes**: after any change to `config/packages/messenger.yaml`, restart `trading-app-messenger-trading` and `trading-app-messenger-order-timeout` containers to pick up new Redis queues.
