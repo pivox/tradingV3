@@ -33,11 +33,19 @@ from .stats import block_bootstrap_lower_bound
 from .tick import SECOND_US, build_bars, compute_features, family_of, rule_catalogue, signal_mask
 
 CAPTURE_SPLIT_S = 12 * 3600
-BINANCE_WINDOWS = {"march": ("2025-03-10", "2025-03-14"), "may": ("2025-05-12", "2025-05-16"), "july": ("2025-07-14", "2025-07-18"), "september": ("2025-09-15", "2025-09-19"), "november": ("2025-11-10", "2025-11-14"), "december": ("2025-12-08", "2025-12-12")}
+BINANCE_WINDOWS = {
+    "february": ("2025-02-10", "2025-02-14"), "march": ("2025-03-10", "2025-03-14"), "april": ("2025-04-14", "2025-04-18"), "may": ("2025-05-12", "2025-05-16"),
+    "june": ("2025-06-16", "2025-06-20"), "july": ("2025-07-14", "2025-07-18"), "august": ("2025-08-11", "2025-08-15"), "september": ("2025-09-15", "2025-09-19"),
+    "october": ("2025-10-13", "2025-10-17"), "november": ("2025-11-10", "2025-11-14"), "december": ("2025-12-08", "2025-12-12"),
+}
+R5_FEATURES = ("mid", "quote_age", "band_dev_900", "sigma_900", "fi_60", "sigma_60")
 BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",), "holdout": ("december",)}
 # r1: the 2026-10-12 pre-registration (PREREGISTRATION.md); r2: PREREGISTRATION-r2.md (intraday holds).
 PROTOCOLS = {
     "r1": {"entries": ("E1", "E2"), "exits": ("X1", "X2", "X3", "X4"), "gates": {"min_trades": {"captures": 100, "binance": 300}, "min_mean_bp": 1.0, "min_pf": 1.15, "control_margin_bp": 2.0, "min_series_share": 0.75, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 50, "binance": 150}, "min_pf": 1.05, "min_series_share": 0.5}},
+    "r5": {"entries": ("E1",), "exits": ("Z3", "Z1"), "sides": (0,), "training_windows": ("march", "july", "may", "september", "february", "april", "june", "august", "october"),
+           "rules": ("S7-W900-K2.0",), "features": R5_FEATURES,
+           "gates": {"min_trades": {"captures": 200, "binance": 200}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 50, "binance": 50}, "min_pf": 1.05, "min_series_share": 0.5}},
     "r4": {"entries": ("E1",), "exits": ("Z1", "Z3"), "sides": (0,), "training_windows": ("march", "july", "may", "september"),
            "rules": ("S7-W900-K1.5", "S7-W900-K2.0"),
            "gates": {"min_trades": {"captures": 200, "binance": 200}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
@@ -122,9 +130,13 @@ class Series:
         self.name, self.quotes, self.trades, self.instrument = name, quotes, trades, instrument
         self.start_s, self.end_s, self.book, self.min_notional, self.day_key = int(start_s), int(end_s), book, min_notional, day_key
 
-    def data(self, series_id: int) -> SeriesData:
+    def data(self, series_id: int, keep_features: tuple[str, ...] | None = None) -> SeriesData:
         bars = build_bars(self.quotes, self.trades, self.start_s, self.end_s)
         features = compute_features(bars, self.instrument)
+        if keep_features is not None:
+            # Memory-light mode (r5): only the arrays the rule and the engine read are kept.
+            features = {name: features[name] for name in keep_features}
+            bars = {name: bars[name] for name in ("ts", "mid", "bid", "ask", "quote_age", "bid_size")}
         data = SeriesData(series_id, bars, features, self.quotes, self.trades, self.instrument, self.start_s)
         self.quotes = self.trades = None  # the engine keeps contiguous copies; free the structured arrays
         return data
@@ -342,7 +354,8 @@ def _replay_and_summarize(identifier: str) -> dict:
 def run_screen(series: list[Series], source: str, phase: str, out_dir: Path, configurations: list[str], seeds: int, workers: int, extra: dict) -> dict:
     started = time.time()
     out_dir.mkdir(parents=True, exist_ok=True)
-    data = [item.data(index) for index, item in enumerate(series)]
+    keep = extra.get("features")
+    data = [item.data(index, keep) for index, item in enumerate(series)]
     day_key = any(item.day_key for item in series)
     print(f"{len(data)} series prepared in {time.time() - started:.0f}s; {len(configurations)} configurations, {workers} workers", file=sys.stderr, flush=True)
     outcomes_dir = out_dir / f"screen-{phase}-outcomes"
@@ -463,6 +476,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "screen":
         use_protocol(args.protocol)
         extra = {"protocol": args.protocol}
+        if PROTOCOLS[args.protocol].get("features"):
+            extra["features"] = tuple(PROTOCOLS[args.protocol]["features"])
         if args.source == "captures":
             if args.phase == "holdout":
                 raise SystemExit("the captures have no holdout phase")

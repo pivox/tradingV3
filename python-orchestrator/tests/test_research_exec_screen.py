@@ -188,3 +188,13 @@ def test_both_sides_configuration_id_round_trip():
     assert configuration_id("S7-W900-K1.5", 0, "E1", "Z3") == "S7-W900-K1.5|both|E1|Z3"
     grid = build_grid(False, "r4")
     assert len(grid) == 4 and all("|both|" in item for item in grid)
+
+
+def test_memory_light_series_keeps_only_requested_features():
+    from scripts.research_exec.screen import R5_FEATURES, Series, build_grid
+    quotes, trades = _synthetic_series(seconds=2000)
+    series = Series("t", quotes, trades, INSTRUMENT, T0, T0 + 2000, False, 10.0, True)
+    data = series.data(0, R5_FEATURES)
+    assert set(data.features) == set(R5_FEATURES) and set(data.bars) == {"ts", "mid", "bid", "ask", "quote_age", "bid_size"}
+    assert series.quotes is None and data.tts.flags["C_CONTIGUOUS"]
+    assert build_grid(False, "r5") == ["S7-W900-K2.0|both|E1|Z3", "S7-W900-K2.0|both|E1|Z1"]
