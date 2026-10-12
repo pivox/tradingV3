@@ -198,3 +198,17 @@ def test_memory_light_series_keeps_only_requested_features():
     assert set(data.features) == set(R5_FEATURES) and set(data.bars) == {"ts", "mid", "bid", "ask", "quote_age", "bid_size"}
     assert series.quotes is None and data.tts.flags["C_CONTIGUOUS"]
     assert build_grid(False, "r5") == ["S7-W900-K2.0|both|E1|Z3", "S7-W900-K2.0|both|E1|Z1"]
+
+
+def test_by_series_mode_matches_pooled_mode(tmp_path):
+    from scripts.research_exec.screen import Series, run_screen
+    rows_by_mode = {}
+    for mode in ("pooled", "by_series"):
+        series = []
+        for k, seed in enumerate((3, 4)):
+            quotes, trades = _synthetic_series(seconds=5000, seed=seed)
+            series.append(Series(f"s{k}", quotes, trades, INSTRUMENT, T0, T0 + 5000, True, 10.0, True))
+        extra = {"by_series": True} if mode == "by_series" else {}
+        document = run_screen(series, "binance", "training", tmp_path / mode, ["S1-W10-T0.5|both|E1|X1", "S4-W60-K2|long|E1|X2"], 2, 1, extra)
+        rows_by_mode[mode] = {row["id"]: (row["trades"], row["mean_net_bp"], row["control"]["median"]) for row in document["rows"]}
+    assert rows_by_mode["pooled"] == rows_by_mode["by_series"]

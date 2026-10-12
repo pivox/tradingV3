@@ -44,7 +44,7 @@ BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",), "h
 PROTOCOLS = {
     "r1": {"entries": ("E1", "E2"), "exits": ("X1", "X2", "X3", "X4"), "gates": {"min_trades": {"captures": 100, "binance": 300}, "min_mean_bp": 1.0, "min_pf": 1.15, "control_margin_bp": 2.0, "min_series_share": 0.75, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 50, "binance": 150}, "min_pf": 1.05, "min_series_share": 0.5}},
     "r5": {"entries": ("E1",), "exits": ("Z3", "Z1"), "sides": (0,), "training_windows": ("march", "july", "may", "september", "february", "april", "june", "august", "october"),
-           "rules": ("S7-W900-K2.0",), "features": R5_FEATURES,
+           "rules": ("S7-W900-K2.0",), "features": R5_FEATURES, "by_series": True,
            "gates": {"min_trades": {"captures": 200, "binance": 200}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 50, "binance": 50}, "min_pf": 1.05, "min_series_share": 0.5}},
     "r4": {"entries": ("E1",), "exits": ("Z1", "Z3"), "sides": (0,), "training_windows": ("march", "july", "may", "september"),
            "rules": ("S7-W900-K1.5", "S7-W900-K2.0"),
@@ -282,35 +282,75 @@ def _control_decisions(data: SeriesData, trades: np.ndarray, seed: int) -> np.nd
     return np.unique(np.concatenate(picks))
 
 
-def _replay(identifier: str) -> dict:
-    started = time.time()
+def _replay_series(data: SeriesData, identifier: str, seeds: int) -> dict | None:
+    """One configuration on one series: trades, counters, control sums per seed."""
     rule, side, entry, exit_ = parse_configuration(identifier)
     policy = Policy(entry, exit_)
-    pieces, counters, per_series, control_sums = [], {"decisions": 0, "orders": 0, "crossed": 0, "unfilled": 0, "filled": 0}, {}, [[0.0, 0] for _ in range(_SEEDS)]
-    streams = (1, -1) if side == 0 else (side,)
-    for data in _DATA:
-        if rule.startswith("S3") and not np.isfinite(data.bars["bid_size"]).any():
+    if rule.startswith("S3") and not np.isfinite(data.bars["bid_size"]).any():
+        return None
+    counters = {"decisions": 0, "orders": 0, "crossed": 0, "unfilled": 0, "filled": 0}
+    control_sums = [[0.0, 0] for _ in range(seeds)]
+    series_trades, signals = [], 0
+    for stream in ((1, -1) if side == 0 else (side,)):
+        decisions = np.flatnonzero(signal_mask(rule, data.features, stream))
+        trades, count = run_policy(data, stream, decisions, policy)
+        series_trades.append(trades)
+        signals += int(decisions.size)
+        for key in counters:
+            counters[key] += getattr(count, key)
+        if trades.size:
+            for seed in range(seeds):
+                control, _ = run_policy(data, stream, _control_decisions(data, trades, seed), policy)
+                if control.size:
+                    control_sums[seed][0] += float(control["net_bp"].sum())
+                    control_sums[seed][1] += int(control.size)
+    trades = np.concatenate(series_trades)
+    return {"trades": trades, "counters": counters, "signals": signals, "control_sums": control_sums}
+
+
+def _merge(identifier: str, parts: list[dict], seeds: int, started: float) -> dict:
+    """Assemble one configuration's result from its per-series parts (ordered by series id)."""
+    pieces, counters, per_series = [], {"decisions": 0, "orders": 0, "crossed": 0, "unfilled": 0, "filled": 0}, {}
+    control_sums = [[0.0, 0] for _ in range(seeds)]
+    for series_id, part in parts:
+        if part is None:
             continue
-        series_trades, signals = [], 0
-        for stream in streams:
-            decisions = np.flatnonzero(signal_mask(rule, data.features, stream))
-            trades, count = run_policy(data, stream, decisions, policy)
-            series_trades.append(trades)
-            signals += int(decisions.size)
-            for key in counters:
-                counters[key] += getattr(count, key)
-            if trades.size:
-                for seed in range(_SEEDS):
-                    control, _ = run_policy(data, stream, _control_decisions(data, trades, seed), policy)
-                    if control.size:
-                        control_sums[seed][0] += float(control["net_bp"].sum())
-                        control_sums[seed][1] += int(control.size)
-        trades = np.concatenate(series_trades)
-        pieces.append(trades)
-        per_series[data.series_id] = {"signals": signals, "trades": int(trades.size), "net_bp_sum": _f(trades["net_bp"].sum()) if trades.size else 0.0}
+        pieces.append(part["trades"])
+        for key in counters:
+            counters[key] += part["counters"][key]
+        for seed in range(seeds):
+            control_sums[seed][0] += part["control_sums"][seed][0]
+            control_sums[seed][1] += part["control_sums"][seed][1]
+        trades = part["trades"]
+        per_series[series_id] = {"signals": part["signals"], "trades": int(trades.size), "net_bp_sum": _f(trades["net_bp"].sum()) if trades.size else 0.0}
     trades = np.concatenate(pieces) if pieces else np.zeros(0, dtype=ROW_DTYPE)
     control_means = [s / n for s, n in control_sums if n > 0]
     return {"id": identifier, "trades": trades, "counters": counters, "per_series": per_series, "control_means": control_means, "elapsed": time.time() - started}
+
+
+def _replay(identifier: str) -> dict:
+    started = time.time()
+    parts = [(data.series_id, _replay_series(data, identifier, _SEEDS)) for data in _DATA]
+    return _merge(identifier, parts, _SEEDS, started)
+
+
+_SERIES: list = []
+_CONFIGS: list[str] = []
+_KEEP: tuple | None = None
+
+
+def _init_series_worker(series: list, configurations: list[str], seeds: int, keep) -> None:
+    global _SERIES, _CONFIGS, _SEEDS, _KEEP
+    _SERIES, _CONFIGS, _SEEDS, _KEEP = series, configurations, seeds, keep
+
+
+def _replay_one_series(index: int) -> tuple[int, dict, float]:
+    """Worker-side, by-series mode: load one series, replay every configuration on it, free it."""
+    started = time.time()
+    data = _SERIES[index].data(index, _KEEP)
+    parts = {identifier: _replay_series(data, identifier, _SEEDS) for identifier in _CONFIGS}
+    del data
+    return index, parts, time.time() - started
 
 
 def _summary(result: dict, source: str, day_key: bool) -> dict:
@@ -372,19 +412,36 @@ def run_screen(series: list[Series], source: str, phase: str, out_dir: Path, con
     started = time.time()
     out_dir.mkdir(parents=True, exist_ok=True)
     keep = extra.get("features")
-    data = [item.data(index, keep) for index, item in enumerate(series)]
     day_key = any(item.day_key for item in series)
-    print(f"{len(data)} series prepared in {time.time() - started:.0f}s; {len(configurations)} configurations, {workers} workers", file=sys.stderr, flush=True)
     outcomes_dir = out_dir / f"screen-{phase}-outcomes"
     outcomes_dir.mkdir(exist_ok=True)
-    _init_worker(data, seeds, source, day_key, outcomes_dir)
-    if workers > 1:
+    if extra.get("by_series"):
+        # Series-outer mode: each worker loads one series at a time, replays every configuration
+        # on it and frees it; only the small per-series parts travel back to the parent.
+        print(f"{len(series)} series, {len(configurations)} configurations, by-series mode, {workers} workers", file=sys.stderr, flush=True)
+        _init_series_worker(series, configurations, seeds, keep)
+        parts_by_configuration: dict[str, list] = {identifier: [] for identifier in configurations}
         context = multiprocessing.get_context("fork")
-        with context.Pool(workers, initializer=_init_worker, initargs=(data, seeds, source, day_key, outcomes_dir)) as pool:
-            iterator = pool.imap_unordered(_replay_and_summarize, configurations, chunksize=2)
-            rows = list(_progress(iterator, len(configurations)))
+        with context.Pool(max(workers, 1), initializer=_init_series_worker, initargs=(series, configurations, seeds, keep)) as pool:
+            for index, parts, elapsed in _progress(pool.imap_unordered(_replay_one_series, range(len(series))), len(series)):
+                for identifier, part in parts.items():
+                    parts_by_configuration[identifier].append((index, part))
+        rows = []
+        for identifier in configurations:
+            result = _merge(identifier, sorted(parts_by_configuration[identifier], key=lambda item: item[0]), seeds, started)
+            np.savez_compressed(outcomes_dir / (identifier.replace("|", "__") + ".npz"), trades=result["trades"])
+            rows.append(_summary(result, source, day_key))
     else:
-        rows = list(_progress(map(_replay_and_summarize, configurations), len(configurations)))
+        data = [item.data(index, keep) for index, item in enumerate(series)]
+        print(f"{len(data)} series prepared in {time.time() - started:.0f}s; {len(configurations)} configurations, {workers} workers", file=sys.stderr, flush=True)
+        _init_worker(data, seeds, source, day_key, outcomes_dir)
+        if workers > 1:
+            context = multiprocessing.get_context("fork")
+            with context.Pool(workers, initializer=_init_worker, initargs=(data, seeds, source, day_key, outcomes_dir)) as pool:
+                iterator = pool.imap_unordered(_replay_and_summarize, configurations, chunksize=2)
+                rows = list(_progress(iterator, len(configurations)))
+        else:
+            rows = list(_progress(map(_replay_and_summarize, configurations), len(configurations)))
     rows.sort(key=lambda row: row["id"])
     document = {
         "source": source, "phase": phase, "generated_at": _now(), "elapsed_seconds": round(time.time() - started, 1), "seeds": seeds,
@@ -495,6 +552,8 @@ def main(argv: list[str] | None = None) -> int:
         extra = {"protocol": args.protocol}
         if PROTOCOLS[args.protocol].get("features"):
             extra["features"] = tuple(PROTOCOLS[args.protocol]["features"])
+        if PROTOCOLS[args.protocol].get("by_series"):
+            extra["by_series"] = True
         if args.source == "captures":
             if args.phase == "holdout":
                 raise SystemExit("the captures have no holdout phase")
