@@ -126,11 +126,17 @@ def build_grid(book: bool, protocol: str = "r1") -> list[str]:
 
 
 class Series:
-    def __init__(self, name: str, quotes: np.ndarray, trades: np.ndarray, instrument: Instrument, start_s: int, end_s: int, book: bool, min_notional: float, day_key: bool) -> None:
+    """One series: arrays given eagerly (captures) or produced by `loader` when `data()` runs
+    (Binance tape: ninety series of structured prints do not fit the host at once)."""
+
+    def __init__(self, name: str, quotes: np.ndarray | None, trades: np.ndarray | None, instrument: Instrument, start_s: int, end_s: int, book: bool, min_notional: float, day_key: bool, loader=None) -> None:
         self.name, self.quotes, self.trades, self.instrument = name, quotes, trades, instrument
         self.start_s, self.end_s, self.book, self.min_notional, self.day_key = int(start_s), int(end_s), book, min_notional, day_key
+        self.loader = loader
 
     def data(self, series_id: int, keep_features: tuple[str, ...] | None = None) -> SeriesData:
+        if self.quotes is None and self.loader is not None:
+            self.quotes, self.trades = self.loader()
         bars = build_bars(self.quotes, self.trades, self.start_s, self.end_s)
         features = compute_features(bars, self.instrument)
         if keep_features is not None:
@@ -218,26 +224,37 @@ def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symb
         for window in windows or BINANCE_PHASES[phase]:
             first, last = BINANCE_WINDOWS[window]
             start_s, end_s = _day_s(first), _day_s(last) + 86400
-            pieces = []
+            paths = []
             for day in range((end_s - start_s) // 86400):
                 date = datetime.fromtimestamp(start_s + day * 86400, tz=timezone.utc).strftime("%Y-%m-%d")
                 path = tape_dir / "npz" / symbol / f"{symbol}-{date}.npz"
                 if not path.exists():
                     missing.append(f"{symbol}:{date}")
                     continue
-                with np.load(path) as data:
-                    rows = np.zeros(data["ts_us"].size, dtype=TRADE_DTYPE)
-                    rows["ts"], rows["recv"] = data["ts_us"], data["ts_us"]
-                    rows["price"], rows["size"], rows["taker_buy"], rows["live"] = data["price"], data["size"], data["taker_buy"], 1
-                pieces.append(rows)
-            if not pieces:
+                paths.append(path)
+            if not paths:
                 continue
-            trades = np.concatenate(pieces)
-            trades = trades[np.argsort(trades["ts"], kind="stable")]
             instrument, min_notional = instruments[symbol]
-            quotes = proxy_quotes(trades, instrument.fixed_tick, start_s, end_s)
-            series.append(Series(f"binance:{symbol}:{window}", quotes, trades, instrument, start_s, end_s, False, min_notional, True))
+            series.append(Series(f"binance:{symbol}:{window}", None, None, instrument, start_s, end_s, False, min_notional, True, loader=_tape_loader(tuple(paths), instrument.fixed_tick, start_s, end_s)))
     return series, missing
+
+
+def _tape_loader(paths: tuple[Path, ...], tick: float, start_s: int, end_s: int):
+    """Deferred loading of one series' days: prints concatenated and sorted, quotes proxied."""
+
+    def load() -> tuple[np.ndarray, np.ndarray]:
+        pieces = []
+        for path in paths:
+            with np.load(path) as data:
+                rows = np.zeros(data["ts_us"].size, dtype=TRADE_DTYPE)
+                rows["ts"], rows["recv"] = data["ts_us"], data["ts_us"]
+                rows["price"], rows["size"], rows["taker_buy"], rows["live"] = data["price"], data["size"], data["taker_buy"], 1
+            pieces.append(rows)
+        trades = np.concatenate(pieces)
+        trades = trades[np.argsort(trades["ts"], kind="stable")]
+        return proxy_quotes(trades, tick, start_s, end_s), trades
+
+    return load
 
 
 # ----------------------------------------------------------------------------- replay
