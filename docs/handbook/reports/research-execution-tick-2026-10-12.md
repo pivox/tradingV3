@@ -92,11 +92,64 @@ statement. No configuration passes G2 (348 fail), G3 (350) or G4 (342); 185 fail
 minimum. Per the stop rule no validation was run on the captures
 (`part-b/captures/verdict.json`: `no_eligible_candidate`).
 
-### Binance tape (ten pairs, March + July 2025 training, November validation)
+### Binance tape (ten pairs, March + July 2025 training, November validation): 0 of 304 pass
+
+Same r1 protocol on the twenty training series (ten pairs × two five-weekday windows,
+85 million prints, quotes proxied from the prints, no book family), 817 s:
+
+| Family | Configurations | Median trades | Median mean net bp | Best configuration (mean net, trades, LB90) | Control median at the best |
+|---|---:|---:|---:|---|---:|
+| S1 flow momentum | 96 | 4,047 | −7.5 | `S1-W300-T0.7\|long\|E1\|X2` +5.7 bp (n = 21, LB −4.7) | −4.9 |
+| S2 flow exhaustion fade | 64 | 1,058 | −7.4 | `S2-W300-K2.5\|long\|E1\|X2` −3.4 bp (n = 139) | −6.2 |
+| S4 micro breakout | 64 | 584 | −7.9 | `S4-W300-K3\|long\|E2\|X4` −3.0 bp (n = 95) | −7.2 |
+| S5 VWAP / band reversion | 48 | 14,837 | −7.4 | `S5-B\|long\|E1\|X2` +27.1 bp (n = 6, LB +12.3) | −13.5 |
+| S6 bursts | 32 | 220 | −7.3 | `S6-F\|long\|E2\|X3` −0.8 bp (n = 159) | −7.2 |
+
+Fifteen weekdays of 2025 on ten pairs say the same as one day on OKX and Hyperliquid: at
+1–5 minute holds every family sits at −7 to −8 bp per trade, the fees, with the random-timing
+controls at the same level. The only positive rows are six trades of the band reversion
+(`S5-B`, the mid two volatilities under its 5-minute EMA with buying flow): +27 bp each with a
+5-minute hold, the same six signals that r2 holds for an hour below. Gates: 302 of 304 fail
+G2, 267 fail G4 (no signal beats its control by 2 bp), 108 fail the trade minimum. No
+validation was run (`part-b/binance/verdict.json`: `no_eligible_candidate`).
 
 <!-- PART-B-BINANCE -->
 
-### r2 — intraday holds (15–60 min) with the same tick signals
+### r2 — intraday holds (15–60 min) with the same tick signals: 0 of 152 pass
+
+Second pre-registration of the day (`PREREGISTRATION-r2.md`, frozen 06:54:38Z, sha256
+`fb747d61…`, before any Binance result): the r1 rules without the book family, entry at the
+touch, exits Y1 taker at 15 min, Y2 taker at 60 min, Y3 stop 1.5 σ_300 / passive target
+3 σ_300 / 60 min, Y4 passive exit at 15 min; gates G1 ≥ 200 trades, G2 mean ≥ +2 bp with a
+positive lower bound, G4 ≥ 3 bp above the control median; validation November once, then a
+**December 2025 holdout** (2025-12-08..12, acquired today, read once for validated
+configurations only). Training on the twenty March + July series (269 s):
+
+| Family | Configurations | Median trades | Median mean net bp | Best configuration (mean net, trades, LB90) | Control median at the best |
+|---|---:|---:|---:|---|---:|
+| S1 flow momentum | 48 | 1,668 | −7.7 | `S1-W300-T0.7\|long\|E1\|Y3` +20.4 bp (n = 21, LB −2.7) | +9.7 |
+| S2 flow exhaustion fade | 32 | 568 | −6.5 | `S2-W60-K2.5\|long\|E1\|Y2` +2.0 bp (n = 1,008, LB −1.7, PF 1.06) | −4.4 |
+| S4 micro breakout | 32 | 460 | −11.1 | `S4-W60-K2\|long\|E1\|Y2` −4.8 bp (n = 1,222) | −4.0 |
+| S5 VWAP / band reversion | 24 | 1,738 | −7.4 | `S5-B\|long\|E1\|Y2` +133.9 bp (n = 6, LB +67.3) | −34.3 |
+| S6 bursts | 16 | 190 | −7.6 | `S6-F\|long\|E1\|Y2` +10.1 bp (n = 118, LB −3.7) | +3.0 |
+
+Longer holds change the arithmetic but not the verdict. The dense families still lose the
+fees (medians −6 to −11 bp). Three leads carry positive means and fail the pre-registered
+gates for reasons that are exactly the ones the gates exist for:
+
+- the band reversion `S5-B` (mid below the 300-s EMA by two volatilities with buying flow,
+  held 60 minutes) earns +134 bp on 6 long trades and +45 bp on 19 short trades in 100
+  symbol-days — a signal that fires once every two weeks per pair cannot be told from luck,
+  and its short side sits inside its control's 95th percentile;
+- the 60-second sell-exhaustion fade held 60 minutes (`S2-W60-K2.5|long|E1|Y2`) earns
+  +2.0 bp on 1,008 trades (PF 1.06) against a control median of −4.4 bp: real content, far
+  too small to pay a fee tier change (fees × 1.5 turns it negative) and positive on half of
+  the series only;
+- the burst fade `S6-F` held 60 minutes earns +10 bp on 118 trades with a control median at
+  +3 bp and a negative lower bound.
+
+Nothing was sent to validation; the November window and the December holdout stay unread by
+r2 (`part-b/binance-r2/verdict.json`: `no_eligible_candidate`, validation not run).
 
 <!-- PART-B-R2 -->
 

@@ -58,8 +58,11 @@ due by 18:00 local (16:00Z).
    ([report](../../handbook/reports/research-execution-tick-2026-10-12.md)).
 3. Binance aggTrades tape acquired 06:14–06:33Z (10 pairs × 15 weekdays of 2025, 131 M prints,
    every checksum verified) — [sizing note](../../handbook/reports/research-universe-sizing-2026-10-12.md).
-4. Part B: captures training screen started 06:31Z (368 configurations), then the Binance
-   tape (304); selection, validation once, verdict, budgets; report; PR.
+4. Part B: captures training screen 06:31–06:52Z (368 configurations): **0 pass**; Binance
+   tape r1 (304): **0 pass** (07:33–07:47Z); r2 (intraday holds, 152, pre-registered
+   06:54Z): **0 pass** (07:28–07:33Z); r3 (focused reversion families on four training
+   windows, 64, pre-registered 07:36Z): running, validation November once, holdout December
+   once. Report in the handbook; PR #478.
 5. Item 2 (OKX demo checklist): runbook from the repository's gates and commands, no flag
    changed.
 

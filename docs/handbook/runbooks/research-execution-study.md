@@ -61,8 +61,8 @@ python -m scripts.research_exec.screen verdict --protocol r2 --training …/scre
 ```
 
 Chains used on 2026-10-12 (artifact directory): `run-part-a.sh`, `run-part-b-training.sh`
-(captures), `run-part-b-validate.sh <source>`, `run-binance-chain.sh` (r1 training →
-validation → `run-r2.sh`).
+(captures), `run-part-b-validate.sh <source>`, `run-binance-chain2.sh` (r2, then r1 training
+and validation), `run-r2.sh`, `run-r3.sh` (training → validation → holdout).
 
 Every document records the sha256 of each package file (`code`) and, when `--prereg` is given,
 of the pre-registration. Outcomes per configuration are saved as `screen-<phase>-outcomes/*.npz`
@@ -85,9 +85,12 @@ gross / fees / net in bp, hold).
   days) needs about 5 GB in the parent, shared with the forked workers; workers save their
   own outcomes and return only summary rows (the first pooled run held every configuration's
   trades in the parent and would have exhausted the host).
-- Protocols: `--protocol r1` (default) or `r2` selects the entries, exits, gates and
-  validation thresholds of the corresponding pre-registration; `--phase holdout` reads the
-  December window from the holdout tape directory given as `--tape-dir`.
+- Protocols: `--protocol r1` (default), `r2` or `r3` selects the entries, exits, rules, gates,
+  validation thresholds and training windows of the corresponding pre-registration
+  (`PREREGISTRATION.md`, `-r2.md`, `-r3.md`); `--phase holdout` reads the December window from
+  the holdout tape directory given as `--tape-dir`. r3 adds the S7 band-reversion family
+  (EMA 300 / 900 s), the exits Z1–Z4 (60–120 min holds, passive exits with a 5-minute TTL) and
+  the May and September 2025 training windows.
 
 ## Outputs
 
