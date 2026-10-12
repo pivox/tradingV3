@@ -4,3 +4,5 @@
 pytest==8.4.2
 # Mesure de couverture unitaire (QA-001). Dev-only : jamais en runtime.
 pytest-cov==7.1.0
+# Exploration v2 screen (scripts/research_v2) and its tests. Dev-only: never in runtime.
+numpy==2.3.3
