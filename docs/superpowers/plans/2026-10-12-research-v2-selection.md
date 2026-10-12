@@ -61,8 +61,12 @@ due by 18:00 local (16:00Z).
 4. Part B: captures training screen 06:31–06:52Z (368 configurations): **0 pass**; Binance
    tape r1 (304): **0 pass** (07:33–07:47Z); r2 (intraday holds, 152, pre-registered
    06:54Z): **0 pass** (07:28–07:33Z); r3 (focused reversion families on four training
-   windows, 64, pre-registered 07:36Z): running, validation November once, holdout December
-   once. Report in the handbook; PR #478.
+   windows, 64, pre-registered 07:36Z): 2 training passes, both fail the November
+   validation (long band reversion, −1.8 / −5.3 bp while the control loses −22 bp); r4
+   (two-sided band reversion, 4, pre-registered 08:00Z): the 2 σ passive-exit version passes
+   seven gates of eight and fails the trade minimum (110 < 200); r5 (that single
+   configuration on nine training windows, pre-registered 08:05Z): running — validation
+   November once, holdout December once. Report in the handbook; PR #478.
 5. Item 2 (OKX demo checklist): runbook from the repository's gates and commands, no flag
    changed.
 
