@@ -21,6 +21,7 @@ def _row(stamp: str, oi: float) -> str:
 
 
 def test_metrics_converter_sorts_floors_to_the_grid_and_keeps_the_last_duplicate():
+    pytest.importorskip("pandas")  # the converters parse with pandas; the research runtime has it, CI may not
     rows = [_row("2024-04-15 00:10:00", 103), _row("2024-04-15 00:00:00", 100), _row("2024-04-15 00:05:01", 101),
             _row("2024-04-15 00:05:00", 102), _row("2024-04-15 00:20:00", 104)]
     arrays, diag = convert_metrics(("\n".join([HEADER] + rows) + "\n").encode())
