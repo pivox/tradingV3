@@ -34,9 +34,10 @@ import numpy as np
 import pandas as pd
 
 BASE = "https://data.binance.vision/data/futures/um/daily"
-KINDS = {"aggtrades": ("aggTrades", "npz"), "bookdepth": ("bookDepth", "depth")}
+KINDS = {"aggtrades": ("aggTrades", "npz"), "bookdepth": ("bookDepth", "depth"), "bookticker": ("bookTicker", "book")}
 LEVELS = (1, 2, 3, 4, 5)
 AGG_COLUMNS = ("agg_trade_id", "price", "quantity", "first_trade_id", "last_trade_id", "transact_time", "is_buyer_maker")
+BOOK_COLUMNS = ("update_id", "best_bid_price", "best_bid_qty", "best_ask_price", "best_ask_qty", "transaction_time", "event_time")
 
 
 def _now() -> str:
@@ -115,10 +116,13 @@ def _falsy(values: np.ndarray) -> np.ndarray:
     return (text == "false") | (text == "0")
 
 
-def _read_csv(raw: bytes, columns: tuple[str, ...], dtypes: dict) -> pd.DataFrame:
-    head = raw[:200].split(b"\n", 1)[0].decode("ascii", errors="replace")
+def _read_csv(source, columns: tuple[str, ...], dtypes: dict, usecols: tuple[str, ...] | None = None) -> pd.DataFrame:
+    """`source` is the CSV as bytes or a binary stream (a zip member read lazily: the bookTicker
+    day of a major is over a gigabyte of text, never held whole)."""
+    stream = io.BytesIO(source) if isinstance(source, (bytes, bytearray)) else source
+    head = stream.peek(200)[:200].split(b"\n", 1)[0].decode("ascii", errors="replace") if hasattr(stream, "peek") else stream.getvalue()[:200].split(b"\n", 1)[0].decode("ascii", errors="replace")
     has_header = head.split(",")[0].strip() == columns[0]
-    return pd.read_csv(io.BytesIO(raw), header=0 if has_header else None, names=None if has_header else list(columns), dtype=dtypes, engine="c")
+    return pd.read_csv(stream, header=0 if has_header else None, names=None if has_header else list(columns), dtype=dtypes, usecols=list(usecols) if usecols else None, engine="c")
 
 
 def convert_bookdepth(raw: bytes) -> tuple[dict[str, np.ndarray], dict]:
@@ -141,7 +145,39 @@ def convert_bookdepth(raw: bytes) -> tuple[dict[str, np.ndarray], dict]:
     return {"ts_s": ts_s, "bid": bid, "ask": ask}, diag
 
 
-CONVERTERS = {"aggtrades": convert_aggtrades, "bookdepth": convert_bookdepth}
+def convert_bookticker(raw: bytes) -> tuple[dict[str, np.ndarray], dict]:
+    """bookTicker (every best bid/ask update with quantities) → one record per second with at
+    least one update: the last update at or before the end of the second (`bid`, `ask`,
+    `bid_qty`, `ask_qty`), the number of updates and the mean queue imbalance of the second's
+    updates (r9 §1). Rows are ordered by transaction time (file order for ties)."""
+    used = ("best_bid_price", "best_bid_qty", "best_ask_price", "best_ask_qty", "transaction_time")
+    frame = _read_csv(raw, BOOK_COLUMNS, {name: "float64" if name != "transaction_time" else "int64" for name in used}, usecols=used)
+    t_ms = frame["transaction_time"].to_numpy()
+    order = np.argsort(t_ms, kind="stable")
+    sec = (t_ms[order] // 1000).astype(np.int64)
+    bid, bq, ask, aq = (frame[column].to_numpy()[order] for column in ("best_bid_price", "best_bid_qty", "best_ask_price", "best_ask_qty"))
+    del frame
+    if sec.size == 0:
+        empty = {"ts_s": np.zeros(0, dtype=np.int64), "bid": np.zeros(0), "ask": np.zeros(0), "bid_qty": np.zeros(0), "ask_qty": np.zeros(0), "updates": np.zeros(0, dtype=np.int32), "qi_mean": np.zeros(0)}
+        return empty, {"updates_total": 0, "seconds_with_updates": 0}
+    last = np.flatnonzero(np.diff(sec, append=sec[-1] + 1))  # index of the last update of each second
+    counts = np.diff(np.concatenate(([0], last + 1)))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        total = bq + aq
+        qi = np.where(total > 0, (bq - aq) / total, np.nan)
+        ok = np.isfinite(qi)
+        qi_sum = np.cumsum(np.where(ok, qi, 0.0))[last]
+        qi_cnt = np.cumsum(ok.astype(np.int64))[last]
+        qi_sum[1:] -= qi_sum[:-1].copy()
+        qi_cnt[1:] -= qi_cnt[:-1].copy()
+        qi_mean = np.where(qi_cnt > 0, qi_sum / np.maximum(qi_cnt, 1), np.nan)
+        spread_bp = (ask[last] - bid[last]) / ((ask[last] + bid[last]) / 2.0) * 1e4
+    arrays = {"ts_s": sec[last], "bid": bid[last], "ask": ask[last], "bid_qty": bq[last], "ask_qty": aq[last], "updates": counts.astype(np.int32), "qi_mean": qi_mean}
+    diag = {"updates_total": int(sec.size), "seconds_with_updates": int(last.size), "input_already_sorted": bool(np.all(order == np.arange(order.size))), "spread_bp_median": float(np.median(spread_bp)), "locked_or_crossed_seconds": int(np.sum(ask[last] <= bid[last])), "bid_qty_median": float(np.median(bq[last])), "ask_qty_median": float(np.median(aq[last]))}
+    return arrays, diag
+
+
+CONVERTERS = {"aggtrades": convert_aggtrades, "bookdepth": convert_bookdepth, "bookticker": convert_bookticker}
 
 
 def acquire_one(kind: str, out_dir: Path, symbol: str, date: str) -> dict:
@@ -159,12 +195,17 @@ def acquire_one(kind: str, out_dir: Path, symbol: str, date: str) -> dict:
         staging.unlink(missing_ok=True)
         raise RuntimeError(f"checksum mismatch for {url}: expected {expected}, got {actual}")
     downloaded = time.time()
+    zip_bytes = staging.stat().st_size
     with zipfile.ZipFile(staging) as archive:
         inner = archive.namelist()[0]
-        raw = archive.read(inner)
-    zip_bytes = staging.stat().st_size
+        if kind == "bookticker":
+            with archive.open(inner) as stream:  # streamed: the CSV of a major's day exceeds a gigabyte
+                arrays, diag = CONVERTERS[kind](io.BufferedReader(stream, buffer_size=1 << 20))
+        else:
+            raw = archive.read(inner)
+            arrays, diag = CONVERTERS[kind](raw)
+            del raw
     staging.unlink()
-    arrays, diag = CONVERTERS[kind](raw)
     np.savez_compressed(target, **arrays)
     first_key = "ts_us" if kind == "aggtrades" else "ts_s"
     rows = int(arrays[first_key].size)

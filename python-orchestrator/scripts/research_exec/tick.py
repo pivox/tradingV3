@@ -19,7 +19,8 @@ HOUR_S = 3600
 FEATURE_WINDOWS = (10, 60, 300)
 SIGMA_WINDOWS = (60, 300)
 FAMILIES = ("S1", "S2", "S3", "S4", "S5", "S6")
-_FAMILY = re.compile(r"^(S[1-7]|Q[1-4])$")
+_FAMILY = re.compile(r"^(S[1-7]|Q[1-4]|M[1-3])$")
+MICROPRICE_WINDOWS = (5, 30)  # r9: microprice momentum horizons in seconds
 DEPTH_STALE_S = 120  # a bookDepth snapshot older than this gives no depth feature (r8 §2)
 DEPTH_REF_S = 300  # `ddi` compares with the last snapshot at least this much earlier …
 DEPTH_REF_MAX_S = 900  # … and none within this horizon gives NaN
@@ -38,7 +39,7 @@ def parse_rule(rule: str) -> tuple[str, dict]:
             params["band"] = True
         elif token in ("F", "C"):
             params[token] = True
-        elif len(token) > 1 and token[0] in "WBTKDQ":
+        elif len(token) > 1 and token[0] in "WBTKDQN":
             params[token[0]] = token[1:]
         else:
             raise ValueError(f"unknown rule {rule}")
@@ -183,6 +184,17 @@ def compute_features(bars: dict[str, np.ndarray], instrument: Instrument, depth:
         qi_sum = _rolling_sum(np.cumsum(np.where(qi_ok, qi, 0.0)), 5)
         qi_cnt = _rolling_sum(np.cumsum(qi_ok.astype(np.float64)), 5)
         features["qi_5"] = np.where(qi_cnt > 0, qi_sum / qi_cnt, np.nan)
+        # r9 (PREREGISTRATION-r9.md §2): queue imbalance of the bar's quote, microprice offset and momentum.
+        features["qi"] = qi
+        mp = np.where(sizes > 0, (bars["ask"] * bars["bid_size"] + bars["bid"] * bars["ask_size"]) / sizes, np.nan)
+        spread = bars["ask"] - bars["bid"]
+        features["mpo"] = np.where(spread > 0, (mp - mid) / spread, np.nan)
+        logmp = np.log(mp)
+        for w in MICROPRICE_WINDOWS:
+            lagged = np.full(n, np.nan)
+            if n > w:
+                lagged[w:] = logmp[:-w]
+            features[f"dmp_{w}"] = logmp - lagged
         day = bars["ts"] // 86400
         volume = bars["buy_vol"] + bars["sell_vol"]
         price = np.where(np.isfinite(bars["last"]), bars["last"], 0.0)
@@ -216,6 +228,16 @@ def depth_rule_catalogue() -> tuple[list[str], list[str]]:
     return q1 + q4 + q2 + q3, q3
 
 
+def book_rule_catalogue() -> list[str]:
+    """r9 (PREREGISTRATION-r9.md §3): queue imbalance, microprice offset, microprice momentum
+    and queue persistence; sixteen rules."""
+    s3 = [f"S3-Q{q}{flow}" for q in ("0.3", "0.6") for flow in ("", "-F")]
+    m1 = [f"M1-T{t}{flow}" for t in ("0.2", "0.35") for flow in ("", "-F")]
+    m2 = [f"M2-W{w}-K{k}" for w in MICROPRICE_WINDOWS for k in ("1.0", "2.0")]
+    m3 = [f"M3-Q{q}-N{n}" for q in ("0.3", "0.5") for n in (3, 10)]
+    return s3 + m1 + m2 + m3
+
+
 def rule_catalogue(book: bool) -> list[str]:
     rules = [f"S1-W{w}-T{t}" for w in FEATURE_WINDOWS for t in (0.5, 0.7)]
     rules += [f"S2-W{w}-K{k}" for w in SIGMA_WINDOWS for k in (1.5, 2.5)]
@@ -236,6 +258,7 @@ def signal_mask(rule: str, f: dict[str, np.ndarray], side: int) -> np.ndarray:
     w = int(p["W"]) if "W" in p else None
     b = int(p["B"]) if "B" in p else None
     theta, k, q, d = (float(p[key]) if key in p else None for key in ("T", "K", "Q", "D"))
+    run_n = int(p["N"]) if "N" in p else None
     flow, cont, band = p.get("F", False), p.get("C", False), p.get("band", False)
     sgn = float(side)
     with np.errstate(invalid="ignore"):
@@ -276,4 +299,15 @@ def signal_mask(rule: str, f: dict[str, np.ndarray], side: int) -> np.ndarray:
             return sgn * f[f"ddi_{b}"] > d
         if family == "Q3":
             return (sgn * f[f"band_dev_{w}"] < -k * f[f"sigma_{w}"]) & (sgn * f["fi_60"] > 0.0) & (sgn * f["di_1"] > theta)
+        # r9 microprice and queue families (PREREGISTRATION-r9.md §3).
+        if family == "M1":
+            mask = sgn * f["mpo"] > theta
+            if flow:
+                mask &= sgn * f["fi_10"] >= 0.0
+            return mask
+        if family == "M2":
+            return (sgn * f[f"dmp_{w}"] > k * f["sigma_60"] * np.sqrt(w / 60.0)) & (f["a_60"] >= 1.0)
+        if family == "M3":
+            persistent = (sgn * f["qi"] > q).astype(np.float64)
+            return _rolling_sum(np.cumsum(persistent), run_n) >= run_n
     raise ValueError(f"unknown family {family}")

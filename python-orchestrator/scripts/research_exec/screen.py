@@ -30,7 +30,7 @@ from .capture import QUOTE_DTYPE, TRADE_DTYPE, Instrument
 from .scalp_engine import ENTRIES, EXITS, Policy, SeriesData, run_policy
 from .scalp_engine import TRADE_DTYPE as ROW_DTYPE
 from .stats import block_bootstrap_lower_bound
-from .tick import SECOND_US, build_bars, compute_features, depth_rule_catalogue, family_of, rule_catalogue, signal_mask
+from .tick import SECOND_US, book_rule_catalogue, build_bars, compute_features, depth_rule_catalogue, family_of, rule_catalogue, signal_mask
 
 CAPTURE_SPLIT_S = 12 * 3600
 BINANCE_WINDOWS = {
@@ -38,6 +38,9 @@ BINANCE_WINDOWS = {
     "june": ("2025-06-16", "2025-06-20"), "july": ("2025-07-14", "2025-07-18"), "august": ("2025-08-11", "2025-08-15"), "september": ("2025-09-15", "2025-09-19"),
     "october": ("2025-10-13", "2025-10-17"), "november": ("2025-11-10", "2025-11-14"), "december": ("2025-12-08", "2025-12-12"),
     "january": ("2025-01-13", "2025-01-17"), "december-2024": ("2024-12-09", "2024-12-13"),  # r8 validation and holdout, never read before r8
+    # r9 (bookTicker archive, 2023-05-16 .. 2024-03-30): four training windows, validation, holdout (the last full week).
+    "w2307": ("2023-07-10", "2023-07-14"), "w2309": ("2023-09-11", "2023-09-15"), "w2311": ("2023-11-13", "2023-11-17"), "w2401": ("2024-01-15", "2024-01-19"),
+    "w2402": ("2024-02-12", "2024-02-16"), "w2403": ("2024-03-25", "2024-03-29"),
 }
 R5_FEATURES = ("mid", "quote_age", "band_dev_900", "sigma_900", "fi_60", "sigma_60")
 BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",), "holdout": ("december",)}
@@ -46,7 +49,13 @@ R8_RULES, R8_BOTH_RULES = depth_rule_catalogue()
 # r8: majors and mid-caps interleaved so that the by-series workers do not load three dense majors at once.
 R8_SYMBOLS = ("BTCUSDT", "ARBUSDT", "ETHUSDT", "OPUSDT", "SOLUSDT", "APTUSDT", "XRPUSDT", "SUIUSDT", "DOGEUSDT", "NEARUSDT",
               "BNBUSDT", "TIAUSDT", "ADAUSDT", "SEIUSDT", "LTCUSDT", "INJUSDT", "LINKUSDT", "ATOMUSDT", "AVAXUSDT", "FILUSDT")
+# r9: the eighteen pairs with bookTicker from 2023-07 (TIA and SEI listed later), majors and mid-caps interleaved.
+R9_SYMBOLS = ("BTCUSDT", "ARBUSDT", "ETHUSDT", "OPUSDT", "SOLUSDT", "APTUSDT", "XRPUSDT", "SUIUSDT", "DOGEUSDT", "NEARUSDT",
+              "BNBUSDT", "INJUSDT", "ADAUSDT", "ATOMUSDT", "LTCUSDT", "FILUSDT", "LINKUSDT", "AVAXUSDT")
 PROTOCOLS = {
+    "r9": {"entries": ("E1", "E3"), "exits": ("X1", "X3", "X4", "Y1"), "sides": (1, -1), "training_windows": ("w2307", "w2309", "w2311", "w2401"),
+           "phases": {"validation": ("w2402",), "holdout": ("w2403",)}, "rules": tuple(book_rule_catalogue()), "by_series": True, "book": True, "symbols": R9_SYMBOLS,
+           "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
     "r8": {"entries": ("E1",), "exits": ("Y1", "Y3", "Z3"), "sides": (1, -1), "training_windows": ("february", "march", "april", "may", "june", "july", "august", "september", "october"),
            "phases": {"validation": ("january",), "holdout": ("december-2024",)}, "rules": tuple(R8_RULES), "both_rules": tuple(R8_BOTH_RULES), "by_series": True, "depth": True, "symbols": R8_SYMBOLS,
            "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
@@ -238,17 +247,19 @@ def _day_s(date: str) -> int:
     return int(datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
 
-def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None, depth: bool = False) -> tuple[list[Series], list[str]]:
+def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None, depth: bool = False, book: bool = False) -> tuple[list[Series], list[str]]:
     """`tape_dir` holds the training and validation windows; the holdout window is read from
     the sibling holdout directory when `phase == "holdout"`. With `depth`, the bookDepth npz of
-    each day (`depth/<symbol>/<symbol>-<date>.npz`) is loaded with the prints (r8)."""
+    each day (`depth/<symbol>/<symbol>-<date>.npz`) is loaded with the prints (r8); with `book`,
+    the quotes come from the per-second bookTicker records (`book/<symbol>/<symbol>-<date>.npz`)
+    instead of the print proxies (r9)."""
     instruments = load_binance_instruments(instruments_path)
     series, missing = [], []
     for symbol in symbols:
         for window in windows or BINANCE_PHASES[phase]:
             first, last = BINANCE_WINDOWS[window]
             start_s, end_s = _day_s(first), _day_s(last) + 86400
-            paths, depth_paths = [], []
+            paths, depth_paths, book_paths = [], [], []
             for day in range((end_s - start_s) // 86400):
                 date = datetime.fromtimestamp(start_s + day * 86400, tz=timezone.utc).strftime("%Y-%m-%d")
                 path = tape_dir / "npz" / symbol / f"{symbol}-{date}.npz"
@@ -256,23 +267,41 @@ def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symb
                     missing.append(f"{symbol}:{date}")
                     continue
                 paths.append(path)
-                if depth:
-                    depth_path = tape_dir / "depth" / symbol / f"{symbol}-{date}.npz"
-                    if depth_path.exists():
-                        depth_paths.append(depth_path)
+                for wanted, folder, bucket in ((depth, "depth", depth_paths), (book, "book", book_paths)):
+                    if not wanted:
+                        continue
+                    extra = tape_dir / folder / symbol / f"{symbol}-{date}.npz"
+                    if extra.exists():
+                        bucket.append(extra)
                     else:
-                        missing.append(f"depth:{symbol}:{date}")
+                        missing.append(f"{folder}:{symbol}:{date}")
             if not paths:
                 continue
             instrument, min_notional = instruments[symbol]
-            loader = _tape_loader(tuple(paths), instrument.fixed_tick, start_s, end_s, tuple(depth_paths) if depth else None)
-            series.append(Series(f"binance:{symbol}:{window}", None, None, instrument, start_s, end_s, False, min_notional, True, loader=loader))
+            loader = _tape_loader(tuple(paths), instrument.fixed_tick, start_s, end_s, tuple(depth_paths) if depth else None, tuple(book_paths) if book else None)
+            series.append(Series(f"binance:{symbol}:{window}", None, None, instrument, start_s, end_s, book, min_notional, True, loader=loader))
     return series, missing
 
 
-def _tape_loader(paths: tuple[Path, ...], tick: float, start_s: int, end_s: int, depth_paths: tuple[Path, ...] | None = None):
-    """Deferred loading of one series' days: prints concatenated and sorted, quotes proxied; with
-    `depth_paths` (r8), the bookDepth snapshots concatenated and sorted as a third item."""
+def book_quotes(book_paths: tuple[Path, ...]) -> np.ndarray:
+    """Quotes from the per-second bookTicker records (r9): one quote per second with an update,
+    stamped at the end of its second, with the displayed quantities as sizes."""
+    pieces = []
+    for path in book_paths:
+        with np.load(path) as data:
+            rows = np.zeros(data["ts_s"].size, dtype=QUOTE_DTYPE)
+            end_us = (data["ts_s"].astype(np.int64) + 1) * SECOND_US - 1
+            rows["ts"], rows["recv"] = end_us, end_us
+            rows["bid"], rows["ask"], rows["bid_size"], rows["ask_size"] = data["bid"], data["ask"], data["bid_qty"], data["ask_qty"]
+        pieces.append(rows)
+    quotes = np.concatenate(pieces) if pieces else np.zeros(0, dtype=QUOTE_DTYPE)
+    return quotes[np.argsort(quotes["ts"], kind="stable")]
+
+
+def _tape_loader(paths: tuple[Path, ...], tick: float, start_s: int, end_s: int, depth_paths: tuple[Path, ...] | None = None, book_paths: tuple[Path, ...] | None = None):
+    """Deferred loading of one series' days: prints concatenated and sorted, quotes proxied (or
+    read from the bookTicker records when `book_paths` is given, r9); with `depth_paths` (r8),
+    the bookDepth snapshots concatenated and sorted as a third item."""
 
     def load() -> tuple:
         pieces = []
@@ -284,7 +313,7 @@ def _tape_loader(paths: tuple[Path, ...], tick: float, start_s: int, end_s: int,
             pieces.append(rows)
         trades = np.concatenate(pieces)
         trades = trades[np.argsort(trades["ts"], kind="stable")]
-        quotes = proxy_quotes(trades, tick, start_s, end_s)
+        quotes = book_quotes(book_paths) if book_paths is not None else proxy_quotes(trades, tick, start_s, end_s)
         if depth_paths is None:
             return quotes, trades
         snaps, bids, asks = [], [], []
@@ -612,9 +641,9 @@ def main(argv: list[str] | None = None) -> int:
             spec = PROTOCOLS[args.protocol]
             symbols = tuple(args.symbols.split(",")) if args.symbols else tuple(spec.get("symbols", BINANCE_SYMBOLS))
             windows = spec.get("training_windows") if args.phase == "training" else spec.get("phases", {}).get(args.phase)
-            series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols, windows, depth=bool(spec.get("depth")))
+            series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols, windows, depth=bool(spec.get("depth")), book=bool(spec.get("book")))
             extra["missing_days"] = missing
-            book = False
+            book = bool(spec.get("book"))
         if args.configs_file:
             configurations = [line.strip() for line in Path(args.configs_file).read_text().splitlines() if line.strip()]
         else:

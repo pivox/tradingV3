@@ -22,7 +22,8 @@ import numpy as np
 from .capture import Instrument
 from .tick import SECOND_US
 
-ENTRIES = ("E1", "E2")
+ENTRIES = ("E1", "E2", "E3")  # E3 (r9): at the touch with the queue fill rule
+QUEUE_ORDER_NOTIONAL = 250.0  # own size of an E3 order, in USDT (r9 §3)
 EXITS = ("X1", "X2", "X3", "X4", "Y1", "Y2", "Y3", "Y4", "Z1", "Z2", "Z3", "Z4")
 # Exit parameters: time exits (seconds), stop/target (sigma window, stop multiple, target multiple,
 # maximum hold), passive exits (post after, TTL, fallback at).
@@ -73,6 +74,7 @@ class SeriesData:
         # copies the whole array on every call (0.17 s per call on 12 M prints).
         self.qts, self.bid, self.ask = (np.ascontiguousarray(quotes[name]) for name in ("ts", "bid", "ask"))
         self.tts, self.tpx = np.ascontiguousarray(trades["ts"]), np.ascontiguousarray(trades["price"])
+        self.tsz, self.tbuy = np.ascontiguousarray(trades["size"]), np.ascontiguousarray(trades["taker_buy"])  # E3 queue rule
         self.instrument = instrument
         self.start_s = int(start_s)
         self.n = bars["mid"].size
@@ -115,6 +117,9 @@ def run_policy(data: SeriesData, side: int, decisions: np.ndarray, policy: Polic
     quote_at_activation, first_after_activation, bound_at_ttl = data.indices(policy.latency_us, policy.ttl_us)
     mids, ages, bids, asks, ticks = bars["mid"], bars["quote_age"], bars["bid"], bars["ask"], data.ticks
     inside = policy.entry == "E2"
+    queue = policy.entry == "E3"
+    displayed = (bars.get("bid_size") if side > 0 else bars.get("ask_size")) if queue else None
+    opposite_taker = 0 if side > 0 else 1  # a resting bid is hit by taker sells, a resting ask by taker buys
     for s in decisions.tolist():
         if s < busy_until or s >= data.n:
             continue
@@ -142,6 +147,12 @@ def run_policy(data: SeriesData, side: int, decisions: np.ndarray, policy: Polic
         j1 = int(bound_at_ttl[s])
         window = data.tpx[j0:j1]
         hit = (window < price - tol) if side > 0 else (window > price + tol)
+        if queue and displayed is not None and window.size:
+            ahead = float(displayed[s])
+            if ahead == ahead:  # a finite displayed quantity: the queue rule applies alongside the through rule
+                at_price = (np.abs(window - price) <= tol) & (data.tbuy[j0:j1] == opposite_taker)
+                taken = np.cumsum(np.where(at_price, data.tsz[j0:j1], 0.0))
+                hit = hit | (taken >= ahead + QUEUE_ORDER_NOTIONAL / price)
         if window.size == 0 or not hit.any():
             counters.unfilled += 1
             busy_until = s + 1 + ttl_s
