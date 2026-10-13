@@ -279,6 +279,7 @@ def test_r8_grid_has_192_configurations_and_depth_rules_need_depth_features():
 
 
 def test_acquire_converters_on_synthetic_archives():
+    pytest.importorskip("pandas")  # the converters parse with pandas; the research runtime has it, CI may not
     from scripts.research_exec.acquire import convert_aggtrades, convert_bookdepth, parse_dates
     assert parse_dates("2025-01-13..2025-01-15,2024-12-09") == ["2025-01-13", "2025-01-14", "2025-01-15", "2024-12-09"]
     csv = b"agg_trade_id,price,quantity,first_trade_id,last_trade_id,transact_time,is_buyer_maker\n2,100.5,1.5,1,1,1700000000001,false\n1,100.4,2.0,0,0,1700000000000,true\n"
@@ -335,6 +336,7 @@ def test_queue_entry_fills_when_prints_at_the_price_exhaust_the_displayed_quanti
 
 
 def test_bookticker_converter_keeps_the_last_update_per_second_and_counts():
+    pytest.importorskip("pandas")
     from scripts.research_exec.acquire import convert_bookticker
     csv = (b"update_id,best_bid_price,best_bid_qty,best_ask_price,best_ask_qty,transaction_time,event_time\n"
            b"1,100.0,3.0,100.1,1.0,1700000000100,1700000000101\n"

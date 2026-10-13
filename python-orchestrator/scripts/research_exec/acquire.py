@@ -31,7 +31,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
+
+try:  # pandas parses a 30-million-row day in seconds; the module stays importable without it (CI)
+    import pandas as pd
+except ImportError:  # pragma: no cover - exercised only where pandas is absent
+    pd = None
 
 BASE = "https://data.binance.vision/data/futures/um/daily"
 KINDS = {"aggtrades": ("aggTrades", "npz"), "bookdepth": ("bookDepth", "depth"), "bookticker": ("bookTicker", "book")}
@@ -119,6 +123,8 @@ def _falsy(values: np.ndarray) -> np.ndarray:
 def _read_csv(source, columns: tuple[str, ...], dtypes: dict, usecols: tuple[str, ...] | None = None) -> pd.DataFrame:
     """`source` is the CSV as bytes or a binary stream (a zip member read lazily: the bookTicker
     day of a major is over a gigabyte of text, never held whole)."""
+    if pd is None:
+        raise RuntimeError("the acquisition converters need pandas (pip install pandas)")
     stream = io.BytesIO(source) if isinstance(source, (bytes, bytearray)) else source
     head = stream.peek(200)[:200].split(b"\n", 1)[0].decode("ascii", errors="replace") if hasattr(stream, "peek") else stream.getvalue()[:200].split(b"\n", 1)[0].decode("ascii", errors="replace")
     has_header = head.split(",")[0].strip() == columns[0]
