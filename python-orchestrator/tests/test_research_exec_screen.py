@@ -219,3 +219,77 @@ def test_r6_grid_has_two_hundred_configurations_with_both_sided_band_rules():
     grid = build_grid(False, "r6")
     assert len(grid) == 200 and sum(1 for g in grid if "|both|" in g) == 16 and "S7-W900-K2.0|both|E1|Z3" in grid
     assert all(g.split("|")[3] in ("X2", "Y1", "Y3", "Z3") for g in grid) and len(PROTOCOLS["r6"]["symbols"]) == 10
+
+
+def test_rule_parser_keeps_s_rule_semantics_and_reads_depth_rules():
+    from scripts.research_exec.tick import parse_rule
+    assert parse_rule("S5-B") == ("S5", {"band": True})
+    assert parse_rule("S3-Q0.3-F") == ("S3", {"Q": "0.3", "F": True})
+    assert parse_rule("Q3-W900-K1.5-T0.25") == ("Q3", {"W": "900", "K": "1.5", "T": "0.25"})
+    assert parse_rule("Q1-B2-T0.4-F") == ("Q1", {"B": "2", "T": "0.4", "F": True})
+    for bad in ("S9-W10", "Q1-X1", "Q1-T"):
+        with pytest.raises(ValueError):
+            parse_rule(bad)
+
+
+def test_depth_features_forward_fill_staleness_and_reference_change():
+    from scripts.research_exec.tick import depth_features
+    ts = T0 + np.arange(1000)
+    snaps = np.array([T0 + 10, T0 + 40, T0 + 400, T0 + 700])
+    bid = np.array([[300.0, 600, 900, 1200, 1500], [100, 200, 300, 400, 500], [100, 300, 600, 900, 1200], [50, 100, 150, 200, 250]])
+    ask = np.array([[100.0, 200, 300, 400, 500], [300, 600, 900, 1200, 1500], [100, 100, 100, 100, 100], [50, 100, 150, 200, 250]])
+    f = depth_features(ts, {"ts_s": snaps, "bid": bid, "ask": ask})
+    assert np.isnan(f["di_1"][9]) and f["di_1"][10] == pytest.approx(0.5)  # a snapshot stamped at second t is usable from the end of t
+    assert f["di_1"][39] == pytest.approx(0.5) and f["di_1"][40] == pytest.approx(-0.5) and f["di_2"][40] == pytest.approx(-0.5)
+    assert f["di_1"][160] == pytest.approx(-0.5) and np.isnan(f["di_1"][161])  # stale after 120 s
+    assert f["di_1"][400] == pytest.approx(0.0) and f["ddi_1"][400] == pytest.approx(0.5)  # reference = the snapshot at +40 (≥ 300 s earlier)
+    assert np.isnan(f["ddi_1"][10]) and np.isnan(f["ddi_1"][40])  # no snapshot 300 s earlier
+    assert f["di_1"][700] == pytest.approx(0.0) and f["ddi_1"][700] == pytest.approx(0.0)
+    empty = depth_features(ts, {"ts_s": np.zeros(0, dtype=np.int64), "bid": np.zeros((0, 5)), "ask": np.zeros((0, 5))})
+    assert np.isnan(empty["di_1"]).all() and np.isnan(empty["ddi_2"]).all()
+
+
+def test_depth_rules_fire_on_the_imbalance_sign_and_combine_with_the_band():
+    n = 5
+    f = {"di_1": np.array([0.5, -0.5, 0.1, np.nan, 0.3]), "di_2": np.array([0.3, 0.3, -0.3, 0.3, 0.3]), "ddi_1": np.array([0.2, -0.2, 0.0, np.nan, 0.4]), "ddi_2": np.zeros(n),
+         "fi_60": np.array([1.0, 1.0, -1.0, 1.0, -1.0]), "band_dev_900": np.full(n, -0.01), "sigma_900": np.full(n, 0.002)}
+    assert signal_mask("Q1-B1-T0.25", f, 1).tolist() == [True, False, False, False, True]
+    assert signal_mask("Q1-B1-T0.25", f, -1).tolist() == [False, True, False, False, False]
+    assert signal_mask("Q1-B1-T0.25-F", f, 1).tolist() == [True, False, False, False, False]  # flow against the signal at index 4
+    assert signal_mask("Q4-B1-T0.25", f, 1).tolist() == [False, True, False, False, False]  # contrarian: long against the heavy ask side
+    assert signal_mask("Q4-B2-T0.25-F", f, -1).tolist() == [False, False, False, False, True]
+    assert signal_mask("Q2-B1-D0.15", f, 1).tolist() == [True, False, False, False, True]
+    assert signal_mask("Q2-B1-D0.15", f, -1).tolist() == [False, True, False, False, False]
+    assert signal_mask("Q3-W900-K2.0-T0.25", f, 1).tolist() == [True, False, False, False, False]
+    assert signal_mask("Q3-W900-K2.0-T0.25", f, -1).tolist() == [False] * n
+
+
+def test_r8_grid_has_192_configurations_and_depth_rules_need_depth_features():
+    from scripts.research_exec.screen import PROTOCOLS, Series, build_grid
+    grid = build_grid(False, "r8")
+    assert len(grid) == 192 and sum("|both|" in g for g in grid) == 24 and all(g.split("|")[3] in ("Y1", "Y3", "Z3") for g in grid)
+    assert sum(g.startswith("Q3") for g in grid) == 8 * 2 * 3 + 24 and len(PROTOCOLS["r8"]["symbols"]) == 20 and len(set(PROTOCOLS["r8"]["symbols"])) == 20
+    quotes, trades = _synthetic_series(seconds=2000)
+    depth = {"ts_s": T0 + np.arange(0, 2000, 30), "bid": np.full((67, 5), 2.0), "ask": np.full((67, 5), 1.0)}
+    series = Series("t", None, None, INSTRUMENT, T0, T0 + 2000, False, 10.0, True, loader=lambda: (quotes, trades, depth))
+    data = series.data(0)
+    assert data.features["di_1"][-1] == pytest.approx(1.0 / 3.0) and bool(signal_mask("Q1-B1-T0.25", data.features, 1)[-1])
+    plain = Series("p", quotes, trades, INSTRUMENT, T0, T0 + 2000, False, 10.0, True).data(1)
+    assert "di_1" not in plain.features
+
+
+def test_acquire_converters_on_synthetic_archives():
+    from scripts.research_exec.acquire import convert_aggtrades, convert_bookdepth, parse_dates
+    assert parse_dates("2025-01-13..2025-01-15,2024-12-09") == ["2025-01-13", "2025-01-14", "2025-01-15", "2024-12-09"]
+    csv = b"agg_trade_id,price,quantity,first_trade_id,last_trade_id,transact_time,is_buyer_maker\n2,100.5,1.5,1,1,1700000000001,false\n1,100.4,2.0,0,0,1700000000000,true\n"
+    arrays, diag = convert_aggtrades(csv)
+    assert arrays["ts_us"].tolist() == [1700000000000000, 1700000000001000] and arrays["taker_buy"].tolist() == [0, 1]
+    assert arrays["agg_trade_id"].tolist() == [1, 2] and diag["input_already_sorted"] is False and str(arrays["taker_buy"].dtype) == "int8"
+    headerless = b"1,100.4,2.0,0,0,1700000000000,True\n2,100.5,1.5,1,1,1700000000001,False\n"
+    arrays2, _ = convert_aggtrades(headerless)
+    assert arrays2["taker_buy"].tolist() == [0, 1] and arrays2["price"].tolist() == [100.4, 100.5]
+    levels = (-5, -4, -3, -2, -1, 1, 2, 3, 4, 5)
+    depth_csv = b"timestamp,percentage,depth,notional\n" + b"".join(f"2025-03-10 00:00:08,{p},{abs(p) * 10.0},{abs(p) * 100.0}\n".encode() for p in levels) + b"2025-03-10 00:00:53,-1,1,1\n"
+    arrays3, diag3 = convert_bookdepth(depth_csv)
+    assert arrays3["ts_s"].tolist() == [1741564808] and arrays3["bid"][0].tolist() == [100.0, 200.0, 300.0, 400.0, 500.0]
+    assert arrays3["ask"][0].tolist() == [100.0, 200.0, 300.0, 400.0, 500.0] and diag3["snapshots_incomplete_dropped"] == 1

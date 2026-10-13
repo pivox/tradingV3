@@ -19,7 +19,30 @@ HOUR_S = 3600
 FEATURE_WINDOWS = (10, 60, 300)
 SIGMA_WINDOWS = (60, 300)
 FAMILIES = ("S1", "S2", "S3", "S4", "S5", "S6")
-_RULE = re.compile(r"^(S[1-7])(?:-W(\d+))?(?:-T([0-9.]+))?(?:-K([0-9.]+))?(?:-Q([0-9.]+))?(-F)?(-C)?(-B)?$")
+_FAMILY = re.compile(r"^(S[1-7]|Q[1-4])$")
+DEPTH_STALE_S = 120  # a bookDepth snapshot older than this gives no depth feature (r8 §2)
+DEPTH_REF_S = 300  # `ddi` compares with the last snapshot at least this much earlier …
+DEPTH_REF_MAX_S = 900  # … and none within this horizon gives NaN
+
+
+def parse_rule(rule: str) -> tuple[str, dict]:
+    """`S7-W900-K1.5` → ("S7", {"W": "900", "K": "1.5"}). Tokens: W window, B depth band (a
+    digit), T threshold, K sigma multiple, D delta, Q queue threshold; flags F (flow), C
+    (continuation) and a bare B (the VWAP band of S5-B, key `band`)."""
+    family, *tokens = rule.split("-")
+    if _FAMILY.match(family) is None:
+        raise ValueError(f"unknown rule {rule}")
+    params: dict = {}
+    for token in tokens:
+        if token == "B":
+            params["band"] = True
+        elif token in ("F", "C"):
+            params[token] = True
+        elif len(token) > 1 and token[0] in "WBTKDQ":
+            params[token[0]] = token[1:]
+        else:
+            raise ValueError(f"unknown rule {rule}")
+    return family, params
 
 
 def build_bars(quotes: np.ndarray, trades: np.ndarray, start_s: int, end_s: int) -> dict[str, np.ndarray]:
@@ -99,7 +122,38 @@ def _ema(values: np.ndarray, span: int) -> np.ndarray:
     return out
 
 
-def compute_features(bars: dict[str, np.ndarray], instrument: Instrument) -> dict[str, np.ndarray]:
+def depth_features(ts: np.ndarray, depth: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Depth imbalance per bar from bookDepth snapshots (`ts_s`, `bid` and `ask` of shape n × 5:
+    cumulative notional within 1 … 5 % of the mid). A bar at second `s` reads the last snapshot
+    stamped at or before `s` (NaN when older than `DEPTH_STALE_S`); `di_b` is the bid-minus-ask
+    share within `b` %, `ddi_b` its change since the last snapshot at least `DEPTH_REF_S` earlier
+    (NaN when none lies within `DEPTH_REF_MAX_S`)."""
+    n = ts.size
+    snap = np.asarray(depth["ts_s"], dtype=np.int64)
+    out: dict[str, np.ndarray] = {}
+    if snap.size == 0:
+        for b in (1, 2):
+            out[f"di_{b}"], out[f"ddi_{b}"] = np.full(n, np.nan), np.full(n, np.nan)
+        return out
+    order = np.argsort(snap, kind="stable")
+    snap, bid, ask = snap[order], np.asarray(depth["bid"], dtype=np.float64)[order], np.asarray(depth["ask"], dtype=np.float64)[order]
+    idx = np.searchsorted(snap, ts, side="right") - 1
+    safe = np.maximum(idx, 0)
+    fresh = (idx >= 0) & (ts - snap[safe] <= DEPTH_STALE_S)
+    ref = np.searchsorted(snap, snap - DEPTH_REF_S, side="right") - 1
+    ref_safe = np.maximum(ref, 0)
+    ref_ok = (ref >= 0) & (snap - snap[ref_safe] <= DEPTH_REF_MAX_S)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        for b in (1, 2):
+            total = bid[:, b - 1] + ask[:, b - 1]
+            di = np.where(total > 0, (bid[:, b - 1] - ask[:, b - 1]) / total, np.nan)
+            ddi = np.where(ref_ok, di - di[ref_safe], np.nan)
+            out[f"di_{b}"] = np.where(fresh, di[safe], np.nan)
+            out[f"ddi_{b}"] = np.where(fresh, ddi[safe], np.nan)
+    return out
+
+
+def compute_features(bars: dict[str, np.ndarray], instrument: Instrument, depth: dict[str, np.ndarray] | None = None) -> dict[str, np.ndarray]:
     mid = bars["mid"]
     n = mid.size
     features: dict[str, np.ndarray] = {}
@@ -146,8 +200,20 @@ def compute_features(bars: dict[str, np.ndarray], instrument: Instrument) -> dic
         features["burst"] = (count > 3.0 * count_hour) & (count_hour > 0)
         features["mid"] = mid
         features["quote_age"] = bars["quote_age"]
+    if depth is not None:
+        features.update(depth_features(bars["ts"], depth))
     assert all(value.shape == (n,) for value in features.values())
     return features
+
+
+def depth_rule_catalogue() -> tuple[list[str], list[str]]:
+    """r8 (PREREGISTRATION-r8.md §3): the 28 depth rules, and the eight Q3 rules that also run
+    two-sided."""
+    q1 = [f"Q1-B{b}-T{t}{flow}" for b in (1, 2) for t in ("0.25", "0.4") for flow in ("", "-F")]
+    q4 = [f"Q4-B{b}-T{t}{flow}" for b in (1, 2) for t in ("0.25", "0.4") for flow in ("", "-F")]
+    q2 = [f"Q2-B{b}-D{d}" for b in (1, 2) for d in ("0.15", "0.3")]
+    q3 = [f"Q3-W{w}-K{k}-T{t}" for w in (300, 900) for k in ("1.5", "2.0") for t in ("0.1", "0.25")]
+    return q1 + q4 + q2 + q3, q3
 
 
 def rule_catalogue(book: bool) -> list[str]:
@@ -166,32 +232,48 @@ def family_of(rule: str) -> str:
 
 def signal_mask(rule: str, f: dict[str, np.ndarray], side: int) -> np.ndarray:
     """Boolean array of the decision seconds where the rule fires for `side` (+1 long, −1 short)."""
-    match = _RULE.match(rule)
-    if match is None:
-        raise ValueError(f"unknown rule {rule}")
-    family, w, theta, k, q, flow, cont, band = match.groups()
-    w = int(w) if w else None
+    family, p = parse_rule(rule)
+    w = int(p["W"]) if "W" in p else None
+    b = int(p["B"]) if "B" in p else None
+    theta, k, q, d = (float(p[key]) if key in p else None for key in ("T", "K", "Q", "D"))
+    flow, cont, band = p.get("F", False), p.get("C", False), p.get("band", False)
     sgn = float(side)
     with np.errstate(invalid="ignore"):
         if family == "S1":
-            return (sgn * f[f"fi_{w}"] > float(theta)) & (f[f"a_{w}"] >= 1.0)
+            return (sgn * f[f"fi_{w}"] > theta) & (f[f"a_{w}"] >= 1.0)
         if family == "S2":
-            return (sgn * f[f"fi_{w}"] < -0.6) & (sgn * f[f"r_{w}"] < -float(k) * f[f"sigma_{w}"])
+            return (sgn * f[f"fi_{w}"] < -0.6) & (sgn * f[f"r_{w}"] < -k * f[f"sigma_{w}"])
         if family == "S3":
-            mask = sgn * f["qi_5"] > float(q)
+            mask = sgn * f["qi_5"] > q
             if flow:
                 mask &= sgn * f["fi_10"] >= 0.0
             return mask
         if family == "S4":
-            return (sgn * f[f"r_{w}"] > float(k) * f[f"sigma_{w}"]) & (f[f"a_{w}"] >= 2.0)
+            return (sgn * f[f"r_{w}"] > k * f[f"sigma_{w}"]) & (f[f"a_{w}"] >= 2.0)
         if family == "S5":
             if band:
                 return (sgn * f["band_dev"] < -2.0 * f["sigma_300"]) & (sgn * f["fi_60"] > 0.0)
-            return (sgn * f["dev"] < -float(k) * f["sigma_300"]) & (sgn * f["fi_60"] > 0.0)
+            return (sgn * f["dev"] < -k * f["sigma_300"]) & (sgn * f["fi_60"] > 0.0)
         if family == "S6":
             if cont:
                 return f["burst"] & (sgn * f["fi_60"] > 0.5)
             return f["burst"] & (sgn * f["fi_60"] < -0.5) & (sgn * f["r_60"] < -2.0 * f["sigma_60"])
         if family == "S7":
-            return (sgn * f[f"band_dev_{w}"] < -float(k) * f[f"sigma_{w}"]) & (sgn * f["fi_60"] > 0.0)
+            return (sgn * f[f"band_dev_{w}"] < -k * f[f"sigma_{w}"]) & (sgn * f["fi_60"] > 0.0)
+        # r8 depth families (PREREGISTRATION-r8.md §3): `di_b` bid-minus-ask share of the notional
+        # within b % of the mid, `ddi_b` its change over the last five minutes.
+        if family == "Q1":
+            mask = sgn * f[f"di_{b}"] > theta
+            if flow:
+                mask &= sgn * f["fi_60"] > 0.0
+            return mask
+        if family == "Q4":
+            mask = sgn * f[f"di_{b}"] < -theta
+            if flow:
+                mask &= sgn * f["fi_60"] > 0.0
+            return mask
+        if family == "Q2":
+            return sgn * f[f"ddi_{b}"] > d
+        if family == "Q3":
+            return (sgn * f[f"band_dev_{w}"] < -k * f[f"sigma_{w}"]) & (sgn * f["fi_60"] > 0.0) & (sgn * f["di_1"] > theta)
     raise ValueError(f"unknown family {family}")
