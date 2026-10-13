@@ -333,3 +333,42 @@ def test_r11_grid_phases_and_control_only_selection(tmp_path):
     out = tmp_path / "validation-list.json"
     assert screen_main(["select", "--protocol", "r11", "--screen", str(doc), "--out", str(out)]) == 0
     assert out.with_suffix(".txt").read_text().split() == ["P3-A3-K0-Z1|short|E1|B4"]
+
+
+# r12 (PREREGISTRATION-r12.md): the zone alone (family R1), the 5-minute cadence feature, the fee × 1.5 verdict check.
+
+
+def test_zone_only_family_r1_fires_at_the_cadence_inside_the_zone_for_both_streams():
+    assert parse_rule("R1") == ("R1", {})
+    n = 6
+    features = {"mid": np.full(n, 100.0), "atr5": np.full(n, 0.5), "cadence5": np.array([True, True, True, False, True, True]),
+                "zone_lo": np.array([99.9, 100.1, 99.9, 99.9, 99.9, 99.9]), "zone_hi": np.array([100.1, 100.2, 100.1, 100.1, 100.1, 100.1])}
+    features["atr5"][5] = np.nan
+    expected = [True, False, True, False, True, False]  # in zone at the cadence with an ATR; index 1 outside, 3 off-cadence, 5 no ATR
+    assert signal_mask("R1", features, 1).tolist() == expected and signal_mask("R1", features, -1).tolist() == expected
+    c = _candles(3 * 1440, seed=5, drift=2e-4)
+    start_s, end_s = DAY + 86400 + 3600, DAY + 86400 + 7200 + 17
+    f = ps.setup_features(c, start_s, end_s)
+    fired = np.flatnonzero(f["cadence5"])
+    assert fired.size == 12 and all((start_s + s + 1) % 300 == 0 for s in fired)  # one hour and 17 s: twelve 5-minute closes
+    assert "cadence5" in ps.SETUP_FEATURES and not (np.logical_or.reduce([f[name] for name in ps.STACK_NAMES]) & ~f["cadence5"]).any()
+
+
+def test_r12_grid_sides_and_fee_robustness_verdict():
+    from scripts.research_exec import screen as sc
+    assert build_grid(False, "r12") == ["R1|long|E1|B4", "R1|short|E1|B4", "R1|both|E1|B4"]
+    spec = sc.PROTOCOLS["r12"]
+    assert spec["selection"] == "control" and not spec.get("zone_control") and spec["phases"] == {"validation": ("m2409",), "holdout": ("m2411",)}
+    assert spec["validation"]["fee_x_net_positive"] and spec["gates"] == sc.PROTOCOLS["r10"]["gates"] and spec["phase_symbols"]["holdout"] == sc.R10_MIDCAPS
+    row = {"id": "R1|both|E1|B4", "trades": 150, "mean_net_bp": 3.0, "profit_factor": 1.2, "control": {"median": 0.5}, "series_positive_share": 0.6, "fee_x_net_bp": -10.0, "lb90_bp": 0.1, "net_usdt": 1.0}
+    sc.use_protocol("r12")
+    try:
+        out = sc.verdict({"passes": 0}, {"source": "binance", "rows": [row]})
+        assert out["results"][row["id"]]["checks"]["fees_x1_5"] is False and out["candidates"] == []
+        out = sc.verdict({"passes": 0}, {"source": "binance", "rows": [dict(row, fee_x_net_bp=5.0)]})
+        assert out["results"][row["id"]]["passes"] and out["candidates"] == [row["id"]]
+        sc.use_protocol("r11")
+        out = sc.verdict({"passes": 0}, {"source": "binance", "rows": [row]})
+        assert "fees_x1_5" not in out["results"][row["id"]]["checks"] and out["candidates"] == [row["id"]]  # r11 keeps its frozen r8 checks
+    finally:
+        sc.use_protocol("r10")

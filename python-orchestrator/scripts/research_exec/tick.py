@@ -20,7 +20,7 @@ HOUR_S = 3600
 FEATURE_WINDOWS = (10, 60, 300)
 SIGMA_WINDOWS = (60, 300)
 FAMILIES = ("S1", "S2", "S3", "S4", "S5", "S6")
-_FAMILY = re.compile(r"^(S[1-7]|Q[1-4]|M[1-3]|P[0-3])$")  # P0 (r11): the pool of the three platform setups
+_FAMILY = re.compile(r"^(S[1-7]|Q[1-4]|M[1-3]|P[0-3]|R1)$")  # P0 (r11): the pool of the three platform setups; R1 (r12): the zone alone
 MICROPRICE_WINDOWS = (5, 30)  # r9: microprice momentum horizons in seconds
 SETUP_FEE_BP = 7.0  # r10 cost gate: maker entry 2 bp + taker exit 5 bp, plus the quoted spread (PREREGISTRATION-r10.md §3)
 DEPTH_STALE_S = 120  # a bookDepth snapshot older than this gives no depth feature (r8 §2)
@@ -315,6 +315,10 @@ def signal_mask(rule: str, f: dict[str, np.ndarray], side: int) -> np.ndarray:
         if family == "M3":
             persistent = (sgn * f["qi"] > q).astype(np.float64)
             return _rolling_sum(np.cumsum(persistent), run_n) >= run_n
+        # r12 (PREREGISTRATION-r12.md §2): the zone alone — at the last second of each 5-minute candle, the mid inside
+        # the 1.1.0 entry zone with a usable ATR; no stack, no regime, no side rule (each stream takes the same seconds).
+        if family == "R1":
+            return f["cadence5"] & np.isfinite(f["atr5"]) & (f["mid"] >= f["zone_lo"]) & (f["mid"] <= f["zone_hi"])
         # r10 platform setups (PREREGISTRATION-r10.md §3): the stack of the decision second (klines-derived,
         # `platform_setups.setup_features`) and the cost gate ATR14(5m) ≥ k × (7 bp + spread).
         if family in ("P0", "P1", "P2", "P3"):

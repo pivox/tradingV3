@@ -69,6 +69,17 @@ PROTOCOLS = {
             "training_windows": ("w2404", "w2405", "w2406", "w2408"), "phases": {"validation": ("w2409a", "w2409b"), "holdout": ("w2411a", "w2411b")},
             "phase_symbols": {"validation": R10_MIDCAPS, "holdout": R10_MIDCAPS}, "rules": tuple(setup_rule_catalogue()), "by_series": True, "setups": True, "symbols": R8_SYMBOLS,
             "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
+    # r12 (PREREGISTRATION-r12.md, owner's go of 2026-10-13 on the r11 observation): the zone alone — a passive entry at
+    # the last second of each 5-minute candle when the mid lies inside the 1.1.0 entry zone, no stack; three pre-declared
+    # configurations (long, short, both streams), time exit B4; training on the r10 windows (already read,
+    # informational), selection against the UNRESTRICTED random control (same hours, same count: it removes the zone
+    # conditioning only); validation and holdout on the ten mid-caps over September and November 2024, one series per
+    # pair and month, with the r8 checks plus net > 0 at fees × 1.5.
+    "r12": {"entries": ("E1",), "exits": ("B4",), "rule_sides": {"R1": (1, -1, 0)},
+            "training_windows": ("w2404", "w2405", "w2406", "w2408"), "phases": {"validation": ("m2409",), "holdout": ("m2411",)},
+            "phase_symbols": {"validation": R10_MIDCAPS, "holdout": R10_MIDCAPS}, "rules": ("R1",), "by_series": True, "setups": True, "selection": "control", "symbols": R8_SYMBOLS,
+            "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20},
+            "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5, "fee_x_net_positive": True}},
     # r11 (PREREGISTRATION-r11.md, owner's go of 2026-10-13 on the r10x proposal): "zone + time exit" — the core stacks
     # inside the 1.1.0 entry zone, the three setups and their pool (P0, a "both" configuration: long stream P1 ∪ P2,
     # short stream P3), exits B4 / B2 / B3, twelve configurations pre-declared. Training = the r10 windows, already
@@ -433,14 +444,14 @@ def _zone_candidates(rule: str, features: dict[str, np.ndarray]) -> np.ndarray |
 def _replay_series(data: SeriesData, identifier: str, seeds: int) -> dict | None:
     """One configuration on one series: trades, counters, control sums per seed."""
     rule, side, entry, exit_ = parse_configuration(identifier)
-    setup = rule.startswith("P")
+    setup = rule.startswith(("P", "R"))  # the platform setups (r10, r11) and the zone alone (r12) share the klines features
     policy = Policy(entry, exit_, ttl_us=SETUP_TTL_US) if setup else Policy(entry, exit_)  # r10: the contract's 45 s order TTL
     if rule.startswith("S3") and not np.isfinite(data.bars["bid_size"]).any():
         return None
     if rule.startswith("Q") and "di_1" not in data.features:
         return None  # depth rules need the bookDepth snapshots (r8)
-    if setup and "p1_a4" not in data.features:
-        return None  # platform setups need the klines-derived stacks (r10)
+    if setup and "zone_lo" not in data.features:
+        return None  # platform setups and the zone need the klines-derived stacks and zone (r10)
     counters = {"decisions": 0, "orders": 0, "crossed": 0, "unfilled": 0, "filled": 0}
     control_sums = [[0.0, 0] for _ in range(seeds)]
     series_trades, signals, zone_inside = [], 0, []
@@ -656,6 +667,8 @@ def verdict(training: dict, validation: dict) -> dict:
             "beats_control_median": control_median is not None and (row["mean_net_bp"] or 0) > control_median,
             "series": (row["series_positive_share"] or 0) >= VALIDATION["min_series_share"],
         }
+        if VALIDATION.get("fee_x_net_positive"):  # r12 (owner's addition): still net positive at fees × 1.5
+            checks["fees_x1_5"] = (row.get("fee_x_net_bp") or 0) > 0
         results[row["id"]] = {"checks": checks, "passes": all(checks.values()), "trades": row["trades"], "mean_net_bp": row["mean_net_bp"], "profit_factor": row["profit_factor"], "lb90_bp": row["lb90_bp"], "control_median": control_median, "net_usdt": row["net_usdt"]}
     candidates = sorted(identifier for identifier, item in results.items() if item["passes"])
     return {"source": source, "training_passes": training["passes"], "validated": len(validation["rows"]), "candidates": candidates, "outcome": "candidate" if candidates else "no_eligible_candidate", "results": results, "generated_at": _now()}
