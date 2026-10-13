@@ -46,6 +46,32 @@ pair-consistency check once (9 of 20 pairs in December 2024).
    per-pair position, depth feed) for the OKX demo; owner's go on the flags remains separate.
    **If not:** resume items 1 and 3 above on the owner's explicit no-go.
 
+## 2026-10-13 ~12:00Z: item 1 launched in parallel (owner's order)
+
+The owner lifted the "only after a no-go" condition for item 1 and ordered it in parallel with
+the forward test, under five conditions: the forward test untouched (capture, `forward_okx.py`,
+protocol, evaluation, W1/W2 unread before their planned reading); a separate branch and
+worktree; a frozen pre-registration before any validation or holdout data is read, with the
+programme's gates, controls and budgets from 500 USDT; validation and holdout on windows never
+read for the pairs concerned, or the forward weeks with the rule frozen first; at most 2–3
+workers with the capture kept first. Item 3 (vocabulary) stays pending.
+
+Done as protocol **r10** (`tradingV3-private/research/20261013T121000Z-scalping-120-r10/PREREGISTRATION-r10.md`,
+frozen 2026-10-13T12:15:50Z, sha256 `fa24489d…`; worktree `.worktrees/research-r10`, branch
+`claude/research-scalping-120`): the three scalping setups 1.1.0 ported to the tick screen and
+replayed at the 5-minute cadence on 2024 Binance prints and klines with the 1.2.0 geometries
+(cost gate, 1.8 R / 3 R maker target, time exit); training on twenty pairs (April, May, June,
+August 2024), validation and holdout on the ten mid-caps (September, November 2024: the only
+pairs whose 2024 months are unread at every level); the majors' out-of-sample check is track F
+on the forward weeks W1 and W2, after their planned readings, and conditions any 1.2.0 contract
+publication ([report](../../handbook/reports/research-scalping-120-2026-10-13.md)).
+
+**Outcome (2026-10-13, 12:36Z): 0 of 96 pass training.** The full 1.1.0 stacks decide 17–208
+times in 400 pair-days (12–166 trades, −13 to −37 bp); the core stacks equal random timing
+(gross +1 to −5 bp before fees); the maker take-profit saves about 3 bp, the time exit 2–4 bp,
+the cost gate nothing. No validation, no holdout, no track F, no 1.2.0 contract. Item 1 closes
+negative; item 3 (vocabulary) stays pending; the forward test continues.
+
 ## Constraints
 
 - The research tape is a research artifact (≈ 50 MB/day), deletable after the report; the
