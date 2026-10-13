@@ -102,6 +102,13 @@ Recommendation given and accepted by the owner ("fais le 1", "puis le 2 puis le 
    result: a positive r9 is not executable by the minute loop; a negative one closes the
    owner's list of families on fill-capable data.
 
+Outcome (2026-10-13, 09:42Z): r8 0 of 192, r9 0 of 256 (every configuration negative before
+fees, equal to its random control); r8b, the depth-supported long reversion out of sample,
+passes January 2025 and keeps a positive mean in December 2024 on nine pairs of twenty — no
+candidate by the rule. The list of families is closed on fill-capable data; the demo stack was
+brought to `main` by the owner the same morning (migrations, images, contracts, private WS
+connected, dry-run reaching the context validation; flags at 0).
+
 ## Boundaries
 
 No exchange mutation, no flag change, no Docker restart, no rerun of the consumed holdout claim.

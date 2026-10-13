@@ -162,3 +162,22 @@ today. Migrations `Version20260712120000` and `Version20260712230000` are requir
   exact commands, are in `tradingV3-private/research/20261013T080000Z-okx-demo-golive-r1/HANDOFF.md`
   (steps 1–7 with the flags at 0, then the owner's decision on the flags). Until step 3 runs, the
   stack mixes `main`'s code (bind mount) with the old vendor and image and must not be used.
+
+### 6b. Steps 1–7 run by the owner (via another session) on 2026-10-13 ~07:30Z
+
+- Deviations from the HANDOFF: `composer install` **without** `--no-dev` (the stack runs with
+  `APP_ENV=dev`, whose kernel needs MakerBundle; the image's own `CMD` still installs `--no-dev`
+  when vendor is missing — a pre-existing inconsistency to settle); `Dockerfile.mtf` of `main`
+  did not build (`pdo_sqlite` without `libsqlite3-dev`), patched locally then fixed in the
+  repository (PR `claude/docker-pdo-sqlite`).
+- Results: the 24 migrations applied; four images rebuilt; containers recreated with the demo
+  environment and both demo flags at 0; `provider:fetch-contracts` → 485 OKX contracts; the
+  private WebSocket worker connected and authenticated without error (OKX-010 is therefore no
+  longer blocked at login); `app:exchange:runtime-check okx perpetual --json` →
+  `write_ready=false` with `okx_demo_trading_disabled`, `demo_trading_disabled`,
+  `kill_switch_enabled` (the expected state before the flags); `mtf:run --dry-run=1
+  --symbols=BTCUSDT` → `INVALID pragmatic_context_has_invalid_timeframes`, no order.
+- The flags stay at 0 (owner's decision). Before a `--dry-run=0`, the dry-run has to reach a
+  decision: the context validation found no valid timeframes for BTCUSDT, i.e. no fresh klines
+  on the profile's context timeframes — `provider:fetch-klines BTCUSDT --timeframe=<tf>` for the
+  `scalper_micro` timeframes, then the dry-run again.

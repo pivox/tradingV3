@@ -2,9 +2,34 @@
 
 ## Result
 
-_Pending: r8 (depth families, bookDepth 2025) and r9 (queue and microprice families, bookTicker
-2023-24) were pre-registered and launched on 2026-10-13; this section is written from their
-outputs once the chains end._
+**No candidate, and the owner's list of families is now closed on fill-capable data.**
+
+- **r8, depth families at the platform's cadence** (Binance `bookDepth`, twenty pairs, nine 2025
+  training windows, 192 configurations): 0 pass. The pure depth families (momentum, contrarian,
+  build-up of the bid/ask notional within 1–2 % of the mid) lose 7–9 bp per trade on thousands
+  of trades at the control's level. The band reversion with depth support (Q3) is the r6
+  signal with one more filter: +14 bp on 1,462 trades, 60 % of series positive against 70 %.
+- **r8b, that configuration out of sample** (January 2025 then December 2024, never read
+  before): the two-sided stream fails January (−3.6 bp); the **long** stream passes January
+  (+18.6 bp on 151 trades, 14 pairs of 20) and keeps a positive mean in December (+6.5 bp on
+  155 trades, 33 bp above random timing) but on 9 pairs of 20 against the 10 required: **no
+  candidate** by the pre-registered check. It is the first rule of the programme whose mean
+  stays positive on three independent sets of windows, and it is carried by a changing handful
+  of pairs.
+- **r9, queue and microprice families on event-level top of book** (Binance `bookTicker`,
+  eighteen pairs, four 2023-24 windows, 256 configurations with the queue fill rule): 0 pass.
+  Every configuration loses before fees (median gross −2.1 bp, best −0.5), equals its random
+  control, and has no positive series; the queue fill rule adds one point of fill rate and
+  0.1 bp. February and March 2024 stay unread.
+
+Programme total since 2026-10-12: ten pre-registered protocols (A, r1 twice, r2–r9, r8b),
+1,750 configurations, twenty pairs, four venue-days of order book, 1,100 symbol-days of 2025
+prints, 1,100 symbol-days of depth snapshots and 540 symbol-days of 2023-24 top-of-book
+updates. At holds of fifteen minutes or less, no price, flow, depth, queue or microprice family
+has content after fees on these venues; at hourly holds, one family (reversion to a short EMA
+with confirming flow, better with bid-depth support, long side) beats random timing on every
+window seen and keeps a positive sign out of sample, with a dispersion across pairs that fails
+the consistency gate each time. What remains is a scope decision, not a screen.
 
 ## Why
 
@@ -22,11 +47,13 @@ Two public archives make the test possible without new captures:
 | `bookDepth` | cumulative notional within ±1, 2, 3, 4, 5 % of the mid, one snapshot every 30 s on average | 2023 → today | 0.5 MB |
 | `bookTicker` | every change of the best bid or ask, with the displayed quantities | 2023-05-16 → 2024-03-30 | 25–200 MB |
 
-Pre-registrations: `PREREGISTRATION-r8.md` (frozen 2026-10-13T06:18:52Z, sha256 `16fc120a…`) and
-`PREREGISTRATION-r9.md` (frozen 2026-10-13T06:30:51Z, sha256 `807bc3a6…`), both in
-`tradingV3-private/research/20261012T060000Z-execution-r1/`, both before any archive was read
-for its content (one file of each kind had been opened to read the column layout; disclosed in
-the texts).
+Pre-registrations: `PREREGISTRATION-r8.md` (frozen 2026-10-13T06:18:52Z, sha256 `16fc120a…`),
+`PREREGISTRATION-r9.md` (frozen 2026-10-13T06:30:51Z, sha256 `807bc3a6…`) and
+`PREREGISTRATION-r8b.md` (frozen 2026-10-13T07:15:29Z, sha256 `9d080133…`, after the r8 training
+result and before its two windows were read), all in
+`tradingV3-private/research/20261012T060000Z-execution-r1/`; r8 and r9 were frozen before any
+archive was read for its content (one file of each kind had been opened to read the column
+layout; disclosed in the texts).
 
 ## r8 — depth families at the platform's cadence (bookDepth, 2025)
 
@@ -150,17 +177,51 @@ notional and needs twenty positions' worth of margin to be realised.
   a positive r9 calls for a dedicated execution path, a negative r9 closes the owner's list of
   families on fill-capable data.
 
-### r9 training
+### r9 training: 0 of 256 pass; the queue and microprice families equal random timing, before fees
 
-_Pending._
+72 series (eighteen pairs × four windows), 6,006 s, no missing day; every configuration has
+between 25,000 and 240,000 trades (median 107,000), so again the gates judge content:
+
+| Family | Configurations | Median trades | Median fill | Median mean net bp | Median mean gross bp | Best configuration (mean net, trades, PF) |
+|---|---:|---:|---:|---:|---:|---|
+| S3 queue imbalance | 64 | 146,706 | 56 % | −8.3 | −2.1 | `S3-Q0.3\|short\|E3\|X3` −6.8 bp (n = 200,567, PF 0.39) |
+| M1 microprice offset | 64 | 208,551 | 57 % | −8.2 | −2.1 | `M1-T0.35-F\|short\|E3\|X3` −6.7 bp (n = 168,001, PF 0.42) |
+| M2 microprice momentum | 64 | 60,561 | 68 % | −8.1 | −2.1 | `M2-W30-K2.0\|short\|E3\|X3` −6.6 bp (n = 29,336, PF 0.46) |
+| M3 queue persistence | 64 | 61,775 | 47 % | −8.5 | −2.3 | `M3-Q0.3-N3\|short\|E3\|X3` −6.9 bp (n = 188,240, PF 0.38) |
+
+All 256 configurations fail G2 to G7 and pass G1 and G8. No configuration has a positive
+**gross** mean: the best is −0.5 bp before fees, and the regime-matched random controls of the
+best rows sit at −6.5 to −6.8 bp net, exactly where the rows sit. In other words the queue
+imbalance, the microprice offset, its momentum and the persistence of the imbalance predict
+nothing at 60 s to 15 min that a passive order at the touch can capture: the fill itself
+selects the adverse moments (the −1 to −2 bp mark-out measured in Part A on the OKX and
+Hyperliquid books reappears here as a −2 bp gross on the Binance book), and the fees (4.8 to
+7.0 bp per round trip) do the rest. By exit: X1 −9.2 bp net (gross −2.2, hold 60 s), X3 −6.9
+(gross −0.8, the bracket cuts the losers), X4 −7.8 (gross −2.9, the passive exit saves 2 bp of
+fees and loses 2 bp of selection), Y1 −9.1 (gross −2.1 at 15 min). Long −8.1, short −8.6. Zero of
+the 72 series is positive for any of the ten best rows.
+
+The queue fill rule (E3) against the through rule (E1), on the 128 matched pairs of
+configurations: fill rate +1.1 points (58 % against 57 %), mean net +0.12 bp. On one-tick
+spreads with displayed queues of a few thousand USDT and an own size of 250 USDT, the prints
+needed to exhaust the queue ahead almost always come with a print through the price, so the two
+rules fill at the same moments. The pessimism of the through rule was not what hid the edge.
+
+Under the pre-registered rule nothing was selected; February and March 2024 stay unread
+(`part-b/binance-r9/`).
 
 ### r9 validation and holdout
 
-_Pending._
+Not run: the stop rule of the pre-registration (nothing passes training) kept the February
+2024 validation window and the March 2024 holdout unread.
 
 ## Budgets
 
-_Pending._
+No configuration of r8 or r9 reached a budget table as a candidate. For r8b's long stream (the
+closest row of the programme, not a candidate) the arithmetic is above: +0.3 USDT per trade at
+500 USDT 1× at the December mean, 1.6 trades per pair-day, one position per pair. For r9 the
+arithmetic needs no table: with a gross of −0.5 to −3 bp per trade before 5 to 7 bp of fees, the
+net is negative at every budget and every leverage, and grows with the notional.
 
 ## Limits
 
@@ -171,3 +232,7 @@ _Pending._
   ignores cancellations ahead of the order (pessimistic) and queue priority inside the second
   (optimistic); 2026 tick sizes and the 2026 fee policy applied to 2023–24 data.
 - Exit fills keep the through rule in both protocols.
+- Lineage: r8 selected nothing; r8b chose two configurations after the training result, so its
+  January pass is a selected configuration's pass and its December result is the only
+  untouched test. The bookDepth windows January 2025 and December 2024 were read once each
+  (r8b); the bookTicker windows February and March 2024 were never read.
