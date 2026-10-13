@@ -62,7 +62,7 @@ python -m scripts.research_exec.screen verdict --protocol r2 --training …/scre
 
 Chains used on 2026-10-12 (artifact directory): `run-part-a.sh`, `run-part-b-training.sh`
 (captures), `run-part-b-validate.sh <source>`, `run-binance-chain2.sh` (r2, then r1 training
-and validation), `run-r2.sh`, `run-r3.sh`, `run-r4.sh`, `run-r5.sh` (training → validation → holdout).
+and validation), `run-r2.sh`, `run-r3.sh`, `run-r4.sh`, `run-r5.sh`, `run-r6.sh`, `run-r7.sh` (training → validation → holdout).
 
 Every document records the sha256 of each package file (`code`) and, when `--prereg` is given,
 of the pre-registration. Outcomes per configuration are saved as `screen-<phase>-outcomes/*.npz`
@@ -85,7 +85,7 @@ gross / fees / net in bp, hold).
   days) needs about 5 GB in the parent, shared with the forked workers; workers save their
   own outcomes and return only summary rows (the first pooled run held every configuration's
   trades in the parent and would have exhausted the host).
-- Protocols: `--protocol r1` (default), `r2`, `r3`, `r4` or `r5` selects the entries, exits, rules, sides, gates,
+- Protocols: `--protocol r1` (default), `r2`, `r3`, `r4`, `r5` or `r6` selects the entries, exits, rules, sides, gates,
   validation thresholds and training windows of the corresponding pre-registration
   (`PREREGISTRATION.md`, `-r2.md`, `-r3.md`); `--phase holdout` reads the December window from
   the holdout tape directory given as `--tape-dir`. r3 adds the S7 band-reversion family
@@ -94,7 +94,10 @@ gross / fees / net in bp, hold).
   (`…|both|…`: the long and the short streams run independently on each series and their
   trades are pooled); r5 runs the 2 σ two-sided configuration on nine training windows in a
   memory-light, series-by-series mode (each worker loads one series, replays every
-  configuration on it and frees it; the pooled and by-series drivers give identical rows).
+  configuration on it and frees it; the pooled and by-series drivers give identical rows);
+  r6 carries its own symbol list (ten mid-cap perpetuals, instrument file from the exchange
+  metadata) and the full catalogue plus the two-sided band rules; r7 reuses `--protocol r6`
+  with an explicit `--configs-file` for an out-of-sample validation and holdout.
 
 ## Outputs
 
