@@ -41,7 +41,7 @@ of fees per round trip plus the spread against targets of a few tens of basis po
 owner's 1.2.0 proposal attacks the costs without touching the indicator thresholds: a
 volatility-to-cost gate, a wider target or a time-only exit, a maker take-profit. On 2026-10-13
 ~12:00Z the owner ordered the test in parallel with the forward OKX test
-([plan](../../superpowers/plans/2026-10-13-research-forward-okx.md)), which stays untouched.
+(plan `docs/superpowers/plans/2026-10-13-research-forward-okx.md`), which stays untouched.
 
 Pre-registration `tradingV3-private/research/20261013T121000Z-scalping-120-r10/PREREGISTRATION-r10.md`,
 frozen 2026-10-13T12:15:50Z (sha256 `fa24489d…`) before any 2024 archive of April–November or
