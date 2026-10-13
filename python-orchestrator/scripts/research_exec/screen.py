@@ -41,6 +41,8 @@ BINANCE_WINDOWS = {
     # r9 (bookTicker archive, 2023-05-16 .. 2024-03-30): four training windows, validation, holdout (the last full week).
     "w2307": ("2023-07-10", "2023-07-14"), "w2309": ("2023-09-11", "2023-09-15"), "w2311": ("2023-11-13", "2023-11-17"), "w2401": ("2024-01-15", "2024-01-19"),
     "w2402": ("2024-02-12", "2024-02-16"), "w2403": ("2024-03-25", "2024-03-29"),
+    # fwd-okx-r1 (PREREGISTRATION-forward-okx-r1.md): forward OKX tape; w0 is the pipeline shakedown, w1 and w2 the judged weeks.
+    "fwd-okx-w0": ("2026-10-14", "2026-10-16"), "fwd-okx-w1": ("2026-10-19", "2026-10-23"), "fwd-okx-w2": ("2026-10-26", "2026-10-30"),
 }
 R5_FEATURES = ("mid", "quote_age", "band_dev_900", "sigma_900", "fi_60", "sigma_60")
 BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",), "holdout": ("december",)}
@@ -53,6 +55,12 @@ R8_SYMBOLS = ("BTCUSDT", "ARBUSDT", "ETHUSDT", "OPUSDT", "SOLUSDT", "APTUSDT", "
 R9_SYMBOLS = ("BTCUSDT", "ARBUSDT", "ETHUSDT", "OPUSDT", "SOLUSDT", "APTUSDT", "XRPUSDT", "SUIUSDT", "DOGEUSDT", "NEARUSDT",
               "BNBUSDT", "INJUSDT", "ADAUSDT", "ATOMUSDT", "LTCUSDT", "FILUSDT", "LINKUSDT", "AVAXUSDT")
 PROTOCOLS = {
+    # fwd-okx-r1: the r8b long stream, frozen, replayed forward on the OKX tape of `forward_okx.py` (real quotes with
+    # sizes, prints, depth every 30 s); one configuration, judged week by week with the r8 validation checks.
+    "fwd-okx-r1": {"entries": ("E1",), "exits": ("Z3",), "sides": (1,), "training_windows": ("fwd-okx-w0",),
+                   "phases": {"validation": ("fwd-okx-w1",), "holdout": ("fwd-okx-w2",)}, "rules": ("Q3-W900-K1.5-T0.1",), "by_series": True, "depth": True, "book": True,
+                   "venue": "okx", "symbols": R8_SYMBOLS,
+                   "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
     "r9": {"entries": ("E1", "E3"), "exits": ("X1", "X3", "X4", "Y1"), "sides": (1, -1), "training_windows": ("w2307", "w2309", "w2311", "w2401"),
            "phases": {"validation": ("w2402",), "holdout": ("w2403",)}, "rules": tuple(book_rule_catalogue()), "by_series": True, "book": True, "symbols": R9_SYMBOLS,
            "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
@@ -247,12 +255,13 @@ def _day_s(date: str) -> int:
     return int(datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
 
-def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None, depth: bool = False, book: bool = False) -> tuple[list[Series], list[str]]:
+def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None, depth: bool = False, book: bool = False, venue: str = "binance") -> tuple[list[Series], list[str]]:
     """`tape_dir` holds the training and validation windows; the holdout window is read from
     the sibling holdout directory when `phase == "holdout"`. With `depth`, the bookDepth npz of
     each day (`depth/<symbol>/<symbol>-<date>.npz`) is loaded with the prints (r8); with `book`,
     the quotes come from the per-second bookTicker records (`book/<symbol>/<symbol>-<date>.npz`)
-    instead of the print proxies (r9)."""
+    instead of the print proxies (r9). `venue` only labels the series (the forward OKX tape of
+    `forward_okx.py` uses the same layout)."""
     instruments = load_binance_instruments(instruments_path)
     series, missing = [], []
     for symbol in symbols:
@@ -279,7 +288,7 @@ def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symb
                 continue
             instrument, min_notional = instruments[symbol]
             loader = _tape_loader(tuple(paths), instrument.fixed_tick, start_s, end_s, tuple(depth_paths) if depth else None, tuple(book_paths) if book else None)
-            series.append(Series(f"binance:{symbol}:{window}", None, None, instrument, start_s, end_s, book, min_notional, True, loader=loader))
+            series.append(Series(f"{venue}:{symbol}:{window}", None, None, instrument, start_s, end_s, book, min_notional, True, loader=loader))
     return series, missing
 
 
@@ -641,8 +650,9 @@ def main(argv: list[str] | None = None) -> int:
             spec = PROTOCOLS[args.protocol]
             symbols = tuple(args.symbols.split(",")) if args.symbols else tuple(spec.get("symbols", BINANCE_SYMBOLS))
             windows = spec.get("training_windows") if args.phase == "training" else spec.get("phases", {}).get(args.phase)
-            series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols, windows, depth=bool(spec.get("depth")), book=bool(spec.get("book")))
+            series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols, windows, depth=bool(spec.get("depth")), book=bool(spec.get("book")), venue=spec.get("venue", "binance"))
             extra["missing_days"] = missing
+            extra["venue"] = spec.get("venue", "binance")
             book = bool(spec.get("book"))
         if args.configs_file:
             configurations = [line.strip() for line in Path(args.configs_file).read_text().splitlines() if line.strip()]
