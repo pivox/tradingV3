@@ -26,10 +26,20 @@ holdout and track F are not run; no 1.2.0 contract version is published.**
   decisions (0–9 % of the full-stack ones) have the price inside VWAP ± 0.22 ATR at the
   5-minute close; the research entry at the touch is the generous case.
 
+- **Exploratory re-read of the same windows (owner's request, same day; not pre-registered, no
+  selection — see "Exploratory analyses").** No volume-confirmation threshold between 1.1 and 1.4
+  rescues the full stacks. The 1.1.0 entry zone does isolate better trades: inside VWAP ± 0.22 ATR
+  the core decisions (2–5 % of them) are gross-positive for the three setups and the time exit
+  makes them +30, +23 and +9 bp net on 36, 64 and 223 trades, against −8, −8 and −11 bp outside.
+  The one row with 200 trades or more is positive but not clearly (median −42 bp, LB90 −2 bp, below
+  the control p95, one window carrying it). A frozen pre-registration is proposed to the owner,
+  not launched.
+
 Programme total since 2026-10-12: eleven pre-registered protocols (A, r1 twice, r2–r10, r8b),
-1,846 configurations, twenty pairs. The cost-attacking geometry closes negative: a geometry can
-save a few basis points of fees, not create expectancy where the signal has none. The
-September and November 2024 mid-cap windows stay unread; the forward OKX test is unaffected.
+1,846 configurations, twenty pairs, plus the exploratory r10x (180 rows). The cost-attacking
+geometry closes negative: a geometry can save a few basis points of fees, not create expectancy
+where the signal has none. The September and November 2024 mid-cap windows stay unread; the
+forward OKX test is unaffected.
 
 ## Why
 
@@ -126,14 +136,100 @@ there is no survivor. fwd-okx-r1 continues untouched.
 0.30 USDT (6.1 bp). No budget from 500 to 100,000 USDT turns these rows positive: the sign is
 in the expectancy, not in the size.
 
+## Exploratory analyses (owner's request, 2026-10-13 ~13:25Z; not pre-registered, no selection)
+
+After the r10 result the owner asked two exploratory questions on the training windows already
+read: what the full stacks do with the volume-ratio confirmation at 1.1, 1.2 and 1.3 instead of
+1.4, and whether the 1.1.0 entry zone isolates better trades. Both are answered on the same 400
+pair-days, with the r10 engine, exits and controls, as protocol `r10x`
+(`tradingV3-private/research/20261013T121000Z-scalping-120-r10/EXPLORATORY-r10x.md`, frozen
+2026-10-13T14:55:07Z, sha256 `a402cd10…`, before the run; `part-b/binance-r10x/`, 180
+configurations, 423 s, code `1290c232` — the twelve package hashes recorded in the document are
+those of the commit; the tree carried the runbook edit at the end). Nothing is selected, no
+validation or holdout exists for `r10x` (the CLI refuses the phases), September and November
+2024 stay unread, the forward test is untouched. The six k = 0 rules of r10 re-run in the same
+pass reproduce the r10 rows exactly (24 rows, Δ = 0.000 bp). With the 96 rows of r10, 276 rows
+have now been read on these windows: a positive row here is a hypothesis, not a result.
+
+### 1. Volume confirmation threshold: no threshold rescues the full stacks
+
+`P{n}-A4-K{k}-V{t}`: the full 1.1.0 stack whose 5m and 1m `volume_ratio_ok` use `t` instead of
+1.4; k ∈ {0, 2, 4}. Rows at k = 0 (B1 = 1.1.0 geometry; `gross` before fees at B1; `control` the
+median / p95 of the ten random controls of the B1 row; PF and series+ the best exit):
+
+| Setup | Confirmation | Decisions / trades | gross | B1 | B2 | B3 | B4 | control | PF | series+ |
+|---|---|---|---|---|---|---|---|---|---|---|
+| P1 | none (A3, r10) | 1,783 / 317 | +1.0 | −6.0 | −3.0 | −4.9 | −6.1 | −6.5 / −3.1 | 0.92 | 36 % |
+| P1 | volume ≥ 1.1 | 38 / 30 | −12.9 | −19.9 | −15.9 | −14.4 | −15.4 | −6.1 / 17.9 | 0.70 | 33 % |
+| P1 | volume ≥ 1.2 | 27 / 20 | −22.5 | −29.5 | −25.8 | −34.4 | −18.5 | −8.1 / 22.2 | 0.67 | 27 % |
+| P1 | volume ≥ 1.3 | 21 / 15 | −31.2 | −38.2 | −37.1 | −25.8 | −4.6 | −8.1 / 34.0 | 0.92 | 17 % |
+| P1 | volume ≥ 1.4 (1.1.0, r10) | 17 / 12 | −30.5 | −37.5 | −36.0 | −21.6 | +0.8 | −5.7 / 64.2 | 1.01 | 22 % |
+| P2 | none (A3, r10) | 8,857 / 1,230 | −5.5 | −12.5 | −9.9 | −11.2 | −8.0 | −7.3 / −4.9 | 0.82 | 27 % |
+| P2 | volume ≥ 1.1 | 201 / 141 | +1.2 | −5.8 | −1.4 | −4.2 | −1.7 | −8.0 / 6.8 | 0.96 | 44 % |
+| P2 | volume ≥ 1.2 | 151 / 111 | −0.3 | −7.3 | −3.6 | −9.6 | −8.7 | −6.4 / 6.5 | 0.90 | 42 % |
+| P2 | volume ≥ 1.3 | 112 / 88 | −3.7 | −10.7 | −7.1 | −10.0 | −9.5 | −5.9 / 12.6 | 0.80 | 32 % |
+| P2 | volume ≥ 1.4 (1.1.0, r10) | 92 / 73 | −5.6 | −12.6 | −8.9 | −5.9 | −5.9 | −4.7 / 11.8 | 0.85 | 33 % |
+| P3 | none (A3, r10) | 21,887 / 3,080 | −4.2 | −11.2 | −8.4 | −9.5 | −10.3 | −3.8 / −0.3 | 0.80 | 25 % |
+| P3 | volume ≥ 1.1 | 344 / 259 | −13.6 | −20.6 | −17.6 | −18.5 | −17.6 | −2.1 / 4.3 | 0.66 | 26 % |
+| P3 | volume ≥ 1.2 | 292 / 226 | −16.3 | −23.3 | −20.4 | −20.6 | −22.0 | −4.1 / 6.5 | 0.60 | 26 % |
+| P3 | volume ≥ 1.3 | 244 / 193 | −14.8 | −21.8 | −18.8 | −20.7 | −21.1 | −3.9 / 7.7 | 0.61 | 26 % |
+| P3 | volume ≥ 1.4 (1.1.0, r10) | 208 / 166 | −11.5 | −18.5 | −15.6 | −17.6 | −18.3 | −3.4 / 10.9 | 0.67 | 31 % |
+
+At k = 2 and 4 the picture is the same (108 rows in all); the only net-positive row is
+`P2-A4-K4-V1.1|B4`, +1.9 bp on 78 trades (PF 1.04), below the control p95. The confirmation
+layer removes 95–99 % of the core decisions at every threshold and the survivors are not
+better: on P3 they are worse than the core (−14 to −17 bp gross against −4), on P1 worse at
+every threshold, on P2 the 1.1 threshold lifts the gross to +1.2 bp with a net still negative on
+141 trades. The threshold is not the lever.
+
+### 2. The entry zone isolates better trades — on a small, fragile subset
+
+`P{n}-A{3,4}-K0-Z{1,0}`: `Z1` keeps a decision only if the mid of the decision second lies inside
+VWAP(5m) ± clamp(0.22 × ATR14(5m) / close, 4 bp, 65 bp) × VWAP (the 1.1.0 zone as the port
+computes it from the candle closed at the decision), `Z0` only if outside; `Z1 ∪ Z0` is the r10
+row (verified). Core stacks (A3), k = 0; the full stacks inside the zone decide 1, 2 and 1 times.
+
+| Setup | Decisions | Decisions / trades | gross | B1 | B2 | B3 | B4 | control | PF | series+ |
+|---|---|---|---|---|---|---|---|---|---|---|
+| P1 | inside the zone (Z1) | 83 / 36 | +7.3 | +0.3 | +2.9 | +8.1 | +30.4 | −4.8 / 22.8 | 1.75 | 44 % |
+| P1 | outside (Z0) | 1,700 / 318 | −0.9 | −7.9 | −4.9 | −6.3 | −8.0 | −5.8 / −2.8 | 0.87 | 33 % |
+| P2 | inside the zone (Z1) | 176 / 68 | +1.2 | −5.8 | −3.9 | −1.6 | +22.8 | −8.3 / −0.8 | 1.56 | 56 % |
+| P2 | outside (Z0) | 8,681 / 1,232 | −5.6 | −12.6 | −10.0 | −11.2 | −7.7 | −7.8 / −3.9 | 0.83 | 29 % |
+| P3 | inside the zone (Z1) | 601 / 234 | +3.3 | −3.7 | −0.7 | −0.1 | +9.4 | −1.4 / 11.9 | 1.21 | 52 % |
+| P3 | outside (Z0) | 21,286 / 3,062 | −4.3 | −11.3 | −8.4 | −9.6 | −10.7 | −2.7 / −0.2 | 0.80 | 26 % |
+
+- **What the zone does.** In the three setups and in the same direction, the decisions taken with
+  the price at the 5-minute VWAP are gross-positive at the 1.1.0 geometry and the others are
+  not; the time exit (B4) is the best exit inside the zone; the losing bulk of r10 is the
+  out-of-zone 95–98 %. The in-zone fill rate is lower (70–80 %) and the in-zone short of P3 is,
+  in effect, a short at the VWAP under a bearish 1h/15m regime.
+- **Why it is not a candidate.** The one row with 200 trades or more, `P3-A3-K0-Z1|short|E1|B4`:
+  +9.4 bp on 223 trades, PF 1.21, 52 % of 69 series positive, positive without its best day and
+  at fees × 1.5 — but median −41.8 bp, win rate 32 %, LB90 −2.1 bp, above the control median
+  (+0.8) and below its p95 (12.1; max 15.0); June carries it (+35.5 bp on 66 trades; April +1.0,
+  May −29.8, August +11.7); majors +17.4 bp on 110 trades against mid-caps +1.7 on 113; 61 % of
+  the exits at the 2-hour time stop, 39 % at the stop. `P1` and `P2` inside the zone with the
+  time exit (+30.4 on 36 trades, +22.8 on 64) beat their control p95 but rest on 36 and 64
+  trades, carried by August (P1) and May/August (P2). Pooled, the three in-zone time-exit rows
+  make +14.4 bp on 323 trades (an exploratory pool, not a configuration).
+- **Proposal to the owner (not launched).** If the "zone + time exit" hypothesis is worth a
+  test, it goes through a frozen pre-registration: family `P-A3-K0-Z1` (the three setups; exits
+  B4 and B2/B3; the pool of the three pre-declared as a row, the only one that can reach the
+  300-trade gate on four weeks), the r8 gates unchanged, a random control restricted to the
+  zone (the current control ignores it and is therefore too easy — to implement before the
+  freeze), validation on the mid-caps in September 2024, holdout on the mid-caps in November
+  2024, budgets from 500 USDT. On the training windows the mid-caps carry less than the majors,
+  so that validation is a real test. Nothing starts without the owner's explicit go.
+
 ## Limits
 
 - The stacks are a research port, not the PHP evaluation: indicators are seeded a month back
   instead of 250 candles back; candles are Binance's, prints are Binance's; the hysteresis gaps of
   the MACD cross conditions are in price units as in the platform (a sign flip on BTC, nearly
   unreachable on sub-dollar pairs).
-- The entry zone of 1.1.0 is not enforced (diagnostic only); the platform's zone and deviation
-  guards would reject part of these entries.
+- The entry zone of 1.1.0 is not enforced in the pre-registered screen (diagnostic only); the
+  platform's zone and deviation guards would reject part of these entries. The exploratory
+  re-read above imposes it after the fact, on the mid of the decision second.
 - Fills follow the through rule on prints; the book is not seen (no bookTicker after 2024-03-30).
 - The training windows overlap the earlier candle studies' training years for the majors
   (other families); the mid-cap validation and holdout windows, unread, remain available to a

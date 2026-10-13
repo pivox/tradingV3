@@ -72,6 +72,14 @@ times in 400 pair-days (12–166 trades, −13 to −37 bp); the core stacks equ
 the cost gate nothing. No validation, no holdout, no track F, no 1.2.0 contract. Item 1 closes
 negative; item 3 (vocabulary) stays pending; the forward test continues.
 
+**Exploratory re-read r10x (owner's request, 2026-10-13 ~13:25Z; same windows, no selection):**
+the volume-confirmation threshold (1.1 to 1.4) rescues nothing; the 1.1.0 entry zone isolates
+gross-positive decisions in the three setups (2–5 % of them), +30, +23 and +9 bp net with the
+time exit on 36, 64 and 223 trades, positive but not clearly (median −42 bp, LB90 below zero,
+below the control p95 for the one row with 200 trades or more). A frozen pre-registration
+"zone + time exit" (zone-restricted control, mid-cap validation September 2024, holdout November
+2024) is proposed to the owner, not launched. The forward test is untouched.
+
 ## Constraints
 
 - The research tape is a research artifact (≈ 50 MB/day), deletable after the report; the

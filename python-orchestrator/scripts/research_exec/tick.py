@@ -13,7 +13,7 @@ import re
 import numpy as np
 
 from .capture import Instrument
-from .platform_setups import SETUP_SIDES
+from .platform_setups import SETUP_SIDES, volume_key
 
 SECOND_US = 1_000_000
 HOUR_S = 3600
@@ -31,8 +31,9 @@ DEPTH_REF_MAX_S = 900  # … and none within this horizon gives NaN
 def parse_rule(rule: str) -> tuple[str, dict]:
     """`S7-W900-K1.5` → ("S7", {"W": "900", "K": "1.5"}). Tokens: W window, B depth band (a
     digit), T threshold, K sigma multiple (cost multiple for the P rules), D delta, Q queue
-    threshold, N run length, A stack layers (r10); flags F (flow), C (continuation) and a bare B
-    (the VWAP band of S5-B, key `band`)."""
+    threshold, N run length, A stack layers (r10), V volume-ratio threshold and Z entry zone
+    (r10x exploration); flags F (flow), C (continuation) and a bare B (the VWAP band of S5-B,
+    key `band`)."""
     family, *tokens = rule.split("-")
     if _FAMILY.match(family) is None:
         raise ValueError(f"unknown rule {rule}")
@@ -42,7 +43,7 @@ def parse_rule(rule: str) -> tuple[str, dict]:
             params["band"] = True
         elif token in ("F", "C"):
             params[token] = True
-        elif len(token) > 1 and token[0] in "WBTKDQNA":
+        elif len(token) > 1 and token[0] in "WBTKDQNAVZ":
             params[token[0]] = token[1:]
         else:
             raise ValueError(f"unknown rule {rule}")
@@ -319,8 +320,18 @@ def signal_mask(rule: str, f: dict[str, np.ndarray], side: int) -> np.ndarray:
         if family in ("P1", "P2", "P3"):
             if side != SETUP_SIDES[int(family[1])]:
                 return np.zeros(f["mid"].shape, dtype=bool)
-            mask = f[f"p{family[1]}_a{int(p['A'])}"] & np.isfinite(f["atr5"])
+            stack = f"p{family[1]}_a{int(p['A'])}"
+            if "V" in p:  # r10x exploration: the confirmation layers at another volume-ratio threshold (full stack only)
+                if int(p["A"]) != 4:
+                    raise ValueError(f"{rule}: the volume threshold needs the confirmation layers (A4)")
+                stack += "_" + volume_key(float(p["V"]))
+            mask = f[stack] & np.isfinite(f["atr5"])
             if k:
                 mask &= f["atr5_bp"] >= k * (SETUP_FEE_BP + f["spread_bp"])
+            if "Z" in p:  # r10x exploration: the 1.1.0 entry zone imposed (Z1) or excluded (Z0) on the mid of the decision second
+                if p["Z"] not in ("0", "1"):
+                    raise ValueError(f"{rule}: Z takes 0 (outside the zone) or 1 (inside)")
+                inside = (f["mid"] >= f["zone_lo"]) & (f["mid"] <= f["zone_hi"])
+                mask &= inside if p["Z"] == "1" else ~inside
             return mask
     raise ValueError(f"unknown family {family}")

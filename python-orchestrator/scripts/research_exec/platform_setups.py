@@ -36,11 +36,30 @@ SETUP_SIDES = {1: 1, 2: 1, 3: -1}  # P1 pullback long, P2 trend continuation lon
 STACK_NAMES = tuple(f"p{n}_a{layers}" for n in (1, 2, 3) for layers in (3, 4))
 SETUP_FEATURES = STACK_NAMES + ("atr5", "atr5_bp", "vwap5", "zone_lo", "zone_hi")
 KLINE_FIELDS = ("ts_s", "open", "high", "low", "close", "volume")
+# r10x (EXPLORATORY-r10x.md, owner's request of 2026-10-13): the full stacks re-evaluated with the 5m and 1m
+# volume-ratio confirmation at these thresholds instead of the catalog's 1.4 (`VOLUME_RATIO_THRESHOLD`).
+EXPLORATION_VOLUME_THRESHOLDS = (1.1, 1.2, 1.3)
 
 
 def setup_rule_catalogue() -> list[str]:
     """r10 §3: `P{n}-A{layers}-K{k}`, twenty-four rules."""
     return [f"P{n}-A{layers}-K{k}" for n in (1, 2, 3) for layers in (3, 4) for k in (0, 2, 4, 6)]
+
+
+def volume_key(threshold: float) -> str:
+    """Suffix of the stack computed with another volume-ratio threshold: 1.2 → `v12`."""
+    return f"v{int(round(float(threshold) * 10))}"
+
+
+def setup_exploration_catalogue() -> list[str]:
+    """r10x (exploratory, no selection): the full stacks at the volume-ratio thresholds 1.1, 1.2 and
+    1.3 with the cost gate at k ∈ {0, 2, 4} (`P{n}-A4-K{k}-V{t}`, 27 rules); the core and full
+    stacks with the 1.1.0 entry zone imposed (`Z1`) or excluded (`Z0`) at k = 0 (12 rules); and the
+    six k = 0 rules of r10 again, as the in-run reference (45 rules)."""
+    rules = [f"P{n}-A4-K{k}-V{t}" for n in (1, 2, 3) for k in (0, 2, 4) for t in EXPLORATION_VOLUME_THRESHOLDS]
+    rules += [f"P{n}-A{layers}-K0-Z{zone}" for n in (1, 2, 3) for layers in (3, 4) for zone in (1, 0)]
+    rules += [f"P{n}-A{layers}-K0" for n in (1, 2, 3) for layers in (3, 4)]
+    return rules
 
 
 # ----------------------------------------------------------------------------- candles
@@ -298,9 +317,10 @@ def _hist_cross(hist: np.ndarray, gap: float, cool_down_bars: int, up: bool) -> 
     return out
 
 
-def conditions(ind: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+def conditions(ind: dict[str, np.ndarray], volume_threshold: float = VOLUME_RATIO_THRESHOLD) -> dict[str, np.ndarray]:
     """Boolean series of the catalog 1.1.0 conditions used by the three contracts (NaN inputs
-    give False, as `missing_data` rejects)."""
+    give False, as `missing_data` rejects); `volume_threshold` replaces the catalog's 1.4 of
+    `volume_ratio_ok` for the r10x exploration only."""
     close, ema9, ema20, ema50, ema200 = ind["close"], ind["ema9"], ind["ema20"], ind["ema50"], ind["ema200"]
     hist, line, signal, rsi_v, atr_v, adx_v, vwap = ind["macd_hist"], ind["macd"], ind["macd_signal"], ind["rsi"], ind["atr"], ind["adx"], ind["vwap"]
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -344,7 +364,7 @@ def conditions(ind: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
             c[f"rsi_gt_{threshold}"] = rsi_v > threshold
         c["adx_ge_15"] = adx_v >= 15.0
         c["adx_ge_18"] = adx_v >= 18.0
-        c["volume_ratio_ok"] = (ind["volume_ratio"] + 1.0e-9) >= VOLUME_RATIO_THRESHOLD
+        c["volume_ratio_ok"] = (ind["volume_ratio"] + 1.0e-9) >= volume_threshold
         c["pullback_confirmed"] = ind["pullback_age"] <= PULLBACK_VALIDITY_BARS
     return {name: np.where(np.isfinite(values.astype(np.float64)), values, False).astype(bool) if values.dtype != bool else values for name, values in c.items()}
 
@@ -392,25 +412,32 @@ def _pick(values: np.ndarray, index: np.ndarray, fill):
     return out
 
 
-def stacks_at_cadence(k1m: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+def stacks_at_cadence(k1m: dict[str, np.ndarray], volume_thresholds: tuple[float, ...] = ()) -> dict[str, np.ndarray]:
     """The six stacks (P1–P3 × A3/A4) at every 5-minute close `T` present in the candles, with the
-    5m ATR14, the 5m VWAP and the 1.1.0 entry zone, keyed by `T` (`close_s`)."""
+    5m ATR14, the 5m VWAP and the 1.1.0 entry zone, keyed by `T` (`close_s`). Each extra
+    `volume_thresholds` value adds the full stacks `p{n}_a4_v{t}` whose 5m and 1m confirmation
+    layers use that volume-ratio threshold (r10x exploration)."""
     k5, k15, k1h = aggregate(k1m, 300), aggregate(k1m, 900), aggregate(k1m, 3600)
     i1, i5, i15, i1h = indicators(k1m), indicators(k5), indicators(k15), indicators(k1h)
-    c = layers(conditions(i1h), conditions(i15), conditions(i5), conditions(i1))
+    c1h, c15 = conditions(i1h), conditions(i15)
+    c = layers(c1h, c15, conditions(i5), conditions(i1))
     closes = k5["ts_s"] + 300
     j1 = _closed_index(k1m["ts_s"], 60, closes, exact=True)
     j15 = _closed_index(k15["ts_s"], 900, closes, exact=False)
     j1h = _closed_index(k1h["ts_s"], 3600, closes, exact=False)
     long_regime, short_regime = _pick(c["1h"]["long"], j1h, False), _pick(c["1h"]["short"], j1h, False)
-    long_1m, short_1m = _pick(c["1m"]["long"], j1, False), _pick(c["1m"]["short"], j1, False)
     out: dict[str, np.ndarray] = {"close_s": closes}
+    variants = [("", c)] + [(f"_{volume_key(t)}", layers(c1h, c15, conditions(i5, t), conditions(i1, t))) for t in volume_thresholds]
     for n in (1, 2, 3):
         trigger = _pick(c["15m"][f"p{n}"], j15, False)
         regime = long_regime if SETUP_SIDES[n] > 0 else short_regime
-        confirm = (c["5m"]["long"] & long_1m) if SETUP_SIDES[n] > 0 else (c["5m"]["short"] & short_1m)
         out[f"p{n}_a3"] = regime & trigger
-        out[f"p{n}_a4"] = regime & trigger & confirm
+        for suffix, variant in variants:
+            if SETUP_SIDES[n] > 0:
+                confirm = variant["5m"]["long"] & _pick(variant["1m"]["long"], j1, False)
+            else:
+                confirm = variant["5m"]["short"] & _pick(variant["1m"]["short"], j1, False)
+            out[f"p{n}_a4{suffix}"] = regime & trigger & confirm
     out["atr5"] = i5["atr"]
     out["close5"] = i5["close"]
     out["vwap5"] = i5["vwap"]
@@ -420,19 +447,21 @@ def stacks_at_cadence(k1m: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return out
 
 
-def setup_features(k1m: dict[str, np.ndarray], start_s: int, end_s: int) -> dict[str, np.ndarray]:
+def setup_features(k1m: dict[str, np.ndarray], start_s: int, end_s: int, volume_thresholds: tuple[float, ...] = ()) -> dict[str, np.ndarray]:
     """Per-second arrays over `start_s ≤ s < end_s`: the stacks are True at the decision second
     `T − 1` of each 5-minute close `T` in `(start_s, end_s]`; `atr5` (price units), `atr5_bp`
     (ATR / close × 1e4), `vwap5`, `zone_lo`, `zone_hi` are forward-filled from that second."""
     n = int(end_s - start_s)
-    at = stacks_at_cadence(k1m)
+    at = stacks_at_cadence(k1m, volume_thresholds)
     seconds = at["close_s"] - 1 - int(start_s)
     inside = (seconds >= 0) & (seconds < n)
     seconds = seconds[inside]
     out: dict[str, np.ndarray] = {}
-    for name in STACK_NAMES:
+    for name, values in at.items():
+        if values.dtype != bool:
+            continue
         mask = np.zeros(n, dtype=bool)
-        mask[seconds] = at[name][inside]
+        mask[seconds] = values[inside]
         out[name] = mask
     marker = np.full(n, -1, dtype=np.int64)
     marker[seconds] = np.flatnonzero(inside)
@@ -446,13 +475,13 @@ def setup_features(k1m: dict[str, np.ndarray], start_s: int, end_s: int) -> dict
     return out
 
 
-def klines_loader(klines_dir: Path, symbol: str, start_s: int, end_s: int):
+def klines_loader(klines_dir: Path, symbol: str, start_s: int, end_s: int, volume_thresholds: tuple[float, ...] = ()):
     """Deferred computation of the setup features of one series from the monthly klines."""
 
     def load() -> dict[str, np.ndarray]:
         candles, missing = load_klines(klines_dir, symbol, months_covering(start_s, end_s))
         if missing or candles["ts_s"].size == 0:
             raise FileNotFoundError(f"{symbol}: klines missing for {missing or 'every month'} under {klines_dir}")
-        return setup_features(candles, start_s, end_s)
+        return setup_features(candles, start_s, end_s, tuple(volume_thresholds))
 
     return load
