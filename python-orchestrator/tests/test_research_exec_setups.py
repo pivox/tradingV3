@@ -4,6 +4,7 @@ the per-second features, the B exits and the r10 grid (PREREGISTRATION-r10.md)."
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 
 import numpy as np
@@ -256,3 +257,79 @@ def test_r10x_exploration_grid_has_180_configurations_and_no_validation_phase(tm
     assert spec["setup_volume_thresholds"] == (1.1, 1.2, 1.3) and spec["gates"] == PROTOCOLS["r10"]["gates"]
     with pytest.raises(SystemExit):  # the exploratory protocol never reads a validation or holdout window
         screen_main(["screen", "--source", "binance", "--phase", "validation", "--protocol", "r10x", "--out", str(tmp_path), "--tape-dir", str(tmp_path), "--instruments", str(tmp_path / "none.json")])
+
+
+# r11 (PREREGISTRATION-r11.md): the pooled family P0, the zone-restricted random control, the selection policy, the grid.
+
+
+def test_pool_family_p0_unions_the_long_setups_and_takes_the_short_one():
+    assert parse_rule("P0-A3-K0-Z1") == ("P0", {"A": "3", "K": "0", "Z": "1"})
+    n = 5
+    features = {"mid": np.full(n, 100.0), "spread_bp": np.full(n, 1.0), "atr5": np.full(n, 0.5), "atr5_bp": np.full(n, 50.0),
+                "zone_lo": np.full(n, 99.9), "zone_hi": np.full(n, 100.1),
+                "p1_a3": np.array([True, False, False, False, True]), "p2_a3": np.array([False, True, False, False, True]), "p3_a3": np.array([False, False, True, False, True])}
+    features["zone_lo"][3] = 100.2  # outside the zone
+    assert signal_mask("P0-A3-K0-Z1", features, 1).tolist() == [True, True, False, False, True]
+    assert signal_mask("P0-A3-K0-Z1", features, -1).tolist() == [False, False, True, False, True]
+    assert signal_mask("P0-A3-K0", features, -1).tolist() == [False, False, True, False, True]
+    with pytest.raises(ValueError):
+        signal_mask("P0-A4-K0-V1.2", features, 1)
+
+
+def test_zone_restricted_control_draws_only_seconds_with_the_rule_zone_status():
+    from types import SimpleNamespace
+    from scripts.research_exec import screen as sc
+    from scripts.research_exec.scalp_engine import TRADE_DTYPE
+    n = 7200
+    ts = T0 + np.arange(n, dtype=np.int64)
+    inside = np.zeros(n, dtype=bool)
+    inside[1000:1500] = True
+    inside[4000:4100] = True
+    features = {"mid": np.full(n, 100.0), "atr5": np.full(n, 0.5), "zone_lo": np.where(inside, 99.9, 100.2), "zone_hi": np.where(inside, 100.1, 100.4)}
+    features["atr5"][4050:4100] = np.nan  # no ATR: never a candidate, in or out of the zone
+    data = SimpleNamespace(bars={"ts": ts}, series_id=3)
+    trades = np.zeros(4, dtype=TRADE_DTYPE)
+    trades["decision_s"] = [T0 + 10, T0 + 20, T0 + 4000, T0 + 7000]
+    sc.use_protocol("r11")
+    try:
+        assert sc.ZONE_CONTROL["enabled"]
+        candidates = sc._zone_candidates("P3-A3-K0-Z1", features)
+        assert candidates is not None and candidates.sum() == 550 and candidates[1000] and not candidates[4050] and not candidates[999]
+        outside = sc._zone_candidates("P3-A3-K0-Z0", features)
+        assert outside is not None and outside.sum() == n - 550 - 50 and not outside[1000] and outside[999] and not outside[4050]
+        assert sc._zone_candidates("P3-A3-K0", features) is None  # no zone token: unrestricted
+        for seed in range(5):
+            picks = sc._control_decisions(data, trades, seed, candidates)
+            assert picks.size and candidates[picks].all()
+            hours = (ts[picks] // 3600) % 24
+            assert set(hours.tolist()) <= set(((trades["decision_s"] // 3600) % 24).tolist())
+        free = sc._control_decisions(data, trades, 0)
+        assert free.size == 4 and not candidates[free].all()
+    finally:
+        sc.use_protocol("r10")
+    assert not sc.ZONE_CONTROL["enabled"] and sc._zone_candidates("P3-A3-K0-Z1", features) is None
+
+
+def test_r11_grid_phases_and_control_only_selection(tmp_path):
+    from scripts.research_exec.screen import BINANCE_WINDOWS, select
+    grid = build_grid(False, "r11")
+    assert len(grid) == 12 and len(set(grid)) == 12
+    assert sorted({item.split("|")[0] for item in grid}) == ["P0-A3-K0-Z1", "P1-A3-K0-Z1", "P2-A3-K0-Z1", "P3-A3-K0-Z1"]
+    assert all(parse_configuration(item)[1] == {"P0": 0, "P1": 1, "P2": 1, "P3": -1}[item[:2]] for item in grid)
+    assert all(parse_configuration(item)[3] in ("B4", "B2", "B3") for item in grid)
+    spec = PROTOCOLS["r11"]
+    assert spec["zone_control"] and spec["selection"] == "control" and spec["gates"] == PROTOCOLS["r10"]["gates"] and spec["validation"] == PROTOCOLS["r10"]["validation"]
+    assert spec["phases"] == {"validation": ("m2409",), "holdout": ("m2411",)} and spec["phase_symbols"]["validation"] == spec["phase_symbols"]["holdout"]
+    assert BINANCE_WINDOWS["m2409"] == ("2024-09-01", "2024-09-30") and BINANCE_WINDOWS["m2411"] == ("2024-11-01", "2024-11-30")
+    rows = [
+        {"id": "P3-A3-K0-Z1|short|E1|B4", "family": "P3", "trades": 223, "passes": False, "lb90_bp": -2.1, "mean_net_bp": 9.4, "gates": {"G1_trades": False, "G4_control": True}},
+        {"id": "P3-A3-K0-Z1|short|E1|B2", "family": "P3", "trades": 234, "passes": False, "lb90_bp": -8.6, "mean_net_bp": -0.7, "gates": {"G1_trades": False, "G4_control": False}},
+        {"id": "P0-A3-K0-Z1|both|E1|B4", "family": "P0", "trades": 0, "passes": False, "lb90_bp": None, "mean_net_bp": None, "gates": {"G1_trades": False, "G4_control": False}},
+    ]
+    assert [item["id"] for item in select({"rows": rows}, policy="control")] == ["P3-A3-K0-Z1|short|E1|B4"]
+    assert select({"rows": rows}) == []  # the default policy still needs every gate
+    doc = tmp_path / "screen-training.json"
+    doc.write_text(json.dumps({"rows": rows}))
+    out = tmp_path / "validation-list.json"
+    assert screen_main(["select", "--protocol", "r11", "--screen", str(doc), "--out", str(out)]) == 0
+    assert out.with_suffix(".txt").read_text().split() == ["P3-A3-K0-Z1|short|E1|B4"]

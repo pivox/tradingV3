@@ -20,7 +20,7 @@ HOUR_S = 3600
 FEATURE_WINDOWS = (10, 60, 300)
 SIGMA_WINDOWS = (60, 300)
 FAMILIES = ("S1", "S2", "S3", "S4", "S5", "S6")
-_FAMILY = re.compile(r"^(S[1-7]|Q[1-4]|M[1-3]|P[1-3])$")
+_FAMILY = re.compile(r"^(S[1-7]|Q[1-4]|M[1-3]|P[0-3])$")  # P0 (r11): the pool of the three platform setups
 MICROPRICE_WINDOWS = (5, 30)  # r9: microprice momentum horizons in seconds
 SETUP_FEE_BP = 7.0  # r10 cost gate: maker entry 2 bp + taker exit 5 bp, plus the quoted spread (PREREGISTRATION-r10.md §3)
 DEPTH_STALE_S = 120  # a bookDepth snapshot older than this gives no depth feature (r8 §2)
@@ -317,15 +317,24 @@ def signal_mask(rule: str, f: dict[str, np.ndarray], side: int) -> np.ndarray:
             return _rolling_sum(np.cumsum(persistent), run_n) >= run_n
         # r10 platform setups (PREREGISTRATION-r10.md §3): the stack of the decision second (klines-derived,
         # `platform_setups.setup_features`) and the cost gate ATR14(5m) ≥ k × (7 bp + spread).
-        if family in ("P1", "P2", "P3"):
-            if side != SETUP_SIDES[int(family[1])]:
-                return np.zeros(f["mid"].shape, dtype=bool)
-            stack = f"p{family[1]}_a{int(p['A'])}"
-            if "V" in p:  # r10x exploration: the confirmation layers at another volume-ratio threshold (full stack only)
-                if int(p["A"]) != 4:
-                    raise ValueError(f"{rule}: the volume threshold needs the confirmation layers (A4)")
-                stack += "_" + volume_key(float(p["V"]))
-            mask = f[stack] & np.isfinite(f["atr5"])
+        if family in ("P0", "P1", "P2", "P3"):
+            layers = int(p["A"])
+            if family == "P0":
+                # r11 (PREREGISTRATION-r11.md §3): the pool of the three setups, replayed as a "both" configuration —
+                # the long stream is P1 ∪ P2, the short stream P3 (each stream one position at a time).
+                if "V" in p:
+                    raise ValueError(f"{rule}: the pool has no volume-threshold variant")
+                stack = (f[f"p1_a{layers}"] | f[f"p2_a{layers}"]) if side > 0 else f[f"p3_a{layers}"]
+            else:
+                if side != SETUP_SIDES[int(family[1])]:
+                    return np.zeros(f["mid"].shape, dtype=bool)
+                name = f"p{family[1]}_a{layers}"
+                if "V" in p:  # r10x exploration: the confirmation layers at another volume-ratio threshold (full stack only)
+                    if layers != 4:
+                        raise ValueError(f"{rule}: the volume threshold needs the confirmation layers (A4)")
+                    name += "_" + volume_key(float(p["V"]))
+                stack = f[name]
+            mask = stack & np.isfinite(f["atr5"])
             if k:
                 mask &= f["atr5_bp"] >= k * (SETUP_FEE_BP + f["spread_bp"])
             if "Z" in p:  # r10x exploration: the 1.1.0 entry zone imposed (Z1) or excluded (Z0) on the mid of the decision second
