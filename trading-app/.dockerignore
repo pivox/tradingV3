@@ -1,0 +1,8 @@
+.git
+.env.local
+.env.*.local
+.env.dev
+.env.native
+.env.test
+var/cache
+var/log
