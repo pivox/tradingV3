@@ -93,7 +93,9 @@ r11 (`tradingV3-private/research/20261013T153000Z-zone-time-r11/`, `PREREGISTRAT
 (only with a non-empty selection: `acquire-r11-validation.sh` — the ten mid-caps over the whole of September 2024
 and the klines August–September into their own tape — the validation screen with 2 workers, the verdict, then,
 only for validated configurations, `acquire-r11-holdout.sh` (November 2024) and the holdout screen into its own
-tape), `disk-guard.sh` with the same 15 GB floor.
+tape), `disk-guard.sh` with the same 15 GB floor. r12 (`tradingV3-private/research/20261013T160000Z-zone-only-r12/`,
+`PREREGISTRATION-r12.md`) reuses the r11 chain with its own scripts (`run-r12-training.sh`, `run-r12-validate.sh`,
+`acquire-r12-validation.sh`, `acquire-r12-holdout.sh`, `disk-guard.sh`) and tapes.
 
 ```bash
 # r10 (PREREGISTRATION-r10.md): the platform's scalping setups 1.1.0 with the 1.2.0 geometries; `setups: True` loads
@@ -114,6 +116,8 @@ python -m scripts.research_exec.screen screen --source binance --phase training 
 python -m scripts.research_exec.screen select --protocol r11 --screen $X/part-b/binance-r11/screen-training.json --out $X/part-b/binance-r11/validation-list.json
 python -m scripts.research_exec.screen screen --source binance --phase validation --protocol r11 --tape-dir <validation tape dir> \
     --instruments … --out $X/part-b/binance-r11 --workers 2 --prereg … --configs-file $X/part-b/binance-r11/validation-list.txt
+# r12 (PREREGISTRATION-r12.md): the zone alone (rule R1, no stack), same chain as r11 with the unrestricted control and
+# the `fees_x1_5` validation check; protocol r12 in place of r11 in the three commands above
 ```
 
 Every document records the sha256 of each package file (`code`) and, when `--prereg` is given,
@@ -188,6 +192,13 @@ gross / fees / net in bp, hold).
   the rows that beat that control (G4) — the training windows were already read by r10x, so only
   the new information selects — and the validation checks are the r8 ones. Its validation and
   holdout windows are full months (`m2409`, `m2411`), one series per pair, on the mid-caps.
+  **r12** tests the zone alone: the rule **R1** fires at every decision second of the 5-minute
+  cadence (`cadence5`, a per-second flag of `setup_features`) when the mid lies inside the 1.1.0
+  zone with a usable ATR — no stack, no side rule: the long and short streams take the same
+  seconds, as three configurations (`R1|long`, `R1|short`, `R1|both`), exit B4 only, the setup
+  policy (45 s TTL). Its selector is the unrestricted random control (no `zone_control`), its
+  validation block adds `fee_x_net_positive` and `verdict` then checks `fees_x1_5` (the sum of
+  gross minus 1.5 × fees over the trades is positive) beside the r8 checks.
 
 ## Outputs
 

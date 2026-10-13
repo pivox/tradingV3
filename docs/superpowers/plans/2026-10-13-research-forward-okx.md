@@ -88,6 +88,13 @@ candidate ([report](../../handbook/reports/research-zone-time-2026-10-13.md)). W
 the stacks' contribution is the zone's; the zone alone is a different hypothesis, not tested.
 The forward test is untouched.
 
+**r12 "zone alone" (owner's go, frozen 2026-10-13T16:10:04Z, sha256 `a04f0358…`):** the passive
+entry inside the zone with the time exit, no stack, beats random timing at the same hours on the
+training windows (+5 to +9 bp) but loses after fees; on the ten mid-caps over the whole of
+September 2024, read once, the two selected rules are below zero and below the random control
+(−10.4 and −5.2 bp net on 1,840 and 896 trades); the holdout (November 2024) is not read; closed
+([report](../../handbook/reports/research-zone-only-2026-10-13.md)). The forward test is untouched.
+
 ## Constraints
 
 - The research tape is a research artifact (≈ 50 MB/day), deletable after the report; the
