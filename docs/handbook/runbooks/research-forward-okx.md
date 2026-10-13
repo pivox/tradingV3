@@ -24,6 +24,12 @@ finalized 90 s after midnight UTC with the sha256 of each file. Disconnects and 
 recorded in the manifest; after a reconnect the last 500 prints of each symbol are merged over
 REST.
 
+A capture process that restarts during a day (the restart loop after a crash, or a manual
+relaunch after a reboot) reloads the files already written for that day before adding to them,
+so the hours recorded before the restart are kept (since 2026-10-13 19:53Z; before that fix a
+restart overwrote them at its next checkpoint). The manifest entry of a resumed day records
+`resumed_rows`; the time the process was down is a gap in the files, reported as missing seconds.
+
 Known limit: the REST book is truncated at 5,000 levels per side. On 2026-10-13 that reaches
 ±0.8 % on BTC and ±2.1 % on ETH (full coverage on the other eighteen pairs). The ±1 % band of
 BTC is therefore the share within about 0.8 %. The per-file minimum coverage is in the manifest.
@@ -48,6 +54,9 @@ python -m scripts.research_exec.screen budgets --screen <out>/screen-validation.
 The research directory holds two detached loops: `run-capture.sh` (restarts the capture on exit;
 `touch STOP` ends it) and `evaluate.sh` (every hour, replays a window once all its symbol-days
 are final; stops after W2; `touch STOP-EVAL` ends it). Logs under `logs/`.
+Neither loop survives a reboot of the host: after one, relaunch both from the research directory
+(`setsid nohup ./run-capture.sh >/dev/null 2>&1 < /dev/null &`, the same for `./evaluate.sh`); a day
+that misses its rollover stays `partial: true` and keeps its window from being judged.
 
 ## Health checks
 
