@@ -28,10 +28,11 @@ import numpy as np
 from . import capture
 from .capture import QUOTE_DTYPE, TRADE_DTYPE, Instrument
 from .platform_setups import EXPLORATION_VOLUME_THRESHOLDS, SETUP_SIDES, klines_loader, setup_exploration_catalogue, setup_rule_catalogue
+from .positioning import metrics_loader, oi_rule_catalogue
 from .scalp_engine import ENTRIES, EXITS, SETUP_TTL_US, Policy, SeriesData, run_policy
 from .scalp_engine import TRADE_DTYPE as ROW_DTYPE
 from .stats import block_bootstrap_lower_bound
-from .tick import SECOND_US, book_rule_catalogue, build_bars, compute_features, depth_rule_catalogue, family_of, rule_catalogue, signal_mask, parse_rule
+from .tick import SECOND_US, book_rule_catalogue, build_bars, compute_features, depth_rule_catalogue, family_of, oi_price_condition, rule_catalogue, signal_mask, parse_rule
 
 CAPTURE_SPLIT_S = 12 * 3600
 BINANCE_WINDOWS = {
@@ -49,6 +50,8 @@ BINANCE_WINDOWS = {
     "w2409a": ("2024-09-09", "2024-09-13"), "w2409b": ("2024-09-16", "2024-09-20"), "w2411a": ("2024-11-11", "2024-11-15"), "w2411b": ("2024-11-18", "2024-11-22"),
     # r11 (PREREGISTRATION-r11.md §1, owner's adjustment): full months, one series per pair and month, for the mid-caps only.
     "m2409": ("2024-09-01", "2024-09-30"), "m2411": ("2024-11-01", "2024-11-30"),
+    # r13 (PREREGISTRATION-r13.md §1): October 2024, never read for the mid-caps at any level (validation; November is the holdout).
+    "m2410": ("2024-10-01", "2024-10-31"),
 }
 R5_FEATURES = ("mid", "quote_age", "band_dev_900", "sigma_900", "fi_60", "sigma_60")
 BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",), "holdout": ("december",)}
@@ -69,6 +72,17 @@ PROTOCOLS = {
             "training_windows": ("w2404", "w2405", "w2406", "w2408"), "phases": {"validation": ("w2409a", "w2409b"), "holdout": ("w2411a", "w2411b")},
             "phase_symbols": {"validation": R10_MIDCAPS, "holdout": R10_MIDCAPS}, "rules": tuple(setup_rule_catalogue()), "by_series": True, "setups": True, "symbols": R8_SYMBOLS,
             "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
+    # r13 (PREREGISTRATION-r13.md, owner's go of 2026-10-13 for a family of another nature): open-interest positioning
+    # from the daily metrics archives — O1 flush reversal, O2 build-up continuation, at the 5-minute metrics cadence;
+    # eight configurations ("both" streams, exits Z3 and Y3); the r8 training gates with the series check on pairs and
+    # the random control matched on the price move (it removes the open-interest information only); validation on the
+    # ten mid-caps over October 2024, holdout over November 2024, one series per pair and month, r8 checks + fees × 1.5.
+    "r13": {"entries": ("E1",), "exits": ("Z3", "Y3"), "sides": (0,),
+            "training_windows": ("w2404", "w2405", "w2406", "w2408"), "phases": {"validation": ("m2410",), "holdout": ("m2411",)},
+            "phase_symbols": {"validation": R10_MIDCAPS, "holdout": R10_MIDCAPS}, "rules": tuple(oi_rule_catalogue()), "by_series": True, "metrics": True,
+            "price_control": True, "series_group": "symbol", "symbols": R8_SYMBOLS,
+            "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20},
+            "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5, "fee_x_net_positive": True}},
     # r12 (PREREGISTRATION-r12.md, owner's go of 2026-10-13 on the r11 observation): the zone alone — a passive entry at
     # the last second of each 5-minute candle when the mid lies inside the 1.1.0 entry zone, no stack; three pre-declared
     # configurations (long, short, both streams), time exit B4; training on the r10 windows (already read,
@@ -135,6 +149,9 @@ VALIDATION = dict(PROTOCOLS["r1"]["validation"])
 
 
 ZONE_CONTROL = {"enabled": False}  # r11: random controls restricted to the rule's zone status (`zone_control` protocols)
+PRICE_CONTROL = {"enabled": False}  # r13: random controls of the O rules drawn among the seconds with the same price move
+SERIES_GROUP = {"mode": None}  # r13: "symbol" — the series checks pool each pair's windows (one series per pair)
+SERIES_NAMES: dict[int, str] = {}  # series id → series name of the running screen (set by run_screen)
 
 
 def use_protocol(name: str) -> None:
@@ -145,6 +162,8 @@ def use_protocol(name: str) -> None:
     VALIDATION.clear()
     VALIDATION.update(PROTOCOLS[name]["validation"])
     ZONE_CONTROL["enabled"] = bool(PROTOCOLS[name].get("zone_control"))
+    PRICE_CONTROL["enabled"] = bool(PROTOCOLS[name].get("price_control"))
+    SERIES_GROUP["mode"] = PROTOCOLS[name].get("series_group")
 MAX_PER_FAMILY = 3
 BUDGETS = (500, 1000, 2000, 5000, 10000, 20000, 50000, 100000)
 REFERENCE_NOTIONAL = 250.0
@@ -309,7 +328,7 @@ def _day_s(date: str) -> int:
     return int(datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
 
-def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None, depth: bool = False, book: bool = False, venue: str = "binance", setups: bool = False, klines_dir: Path | None = None, setup_volume_thresholds: tuple[float, ...] = ()) -> tuple[list[Series], list[str]]:
+def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None, depth: bool = False, book: bool = False, venue: str = "binance", setups: bool = False, klines_dir: Path | None = None, setup_volume_thresholds: tuple[float, ...] = (), metrics: bool = False, metrics_dir: Path | None = None) -> tuple[list[Series], list[str]]:
     """`tape_dir` holds the training and validation windows; the holdout window is read from
     the sibling holdout directory when `phase == "holdout"`. With `depth`, the bookDepth npz of
     each day (`depth/<symbol>/<symbol>-<date>.npz`) is loaded with the prints (r8); with `book`,
@@ -320,12 +339,13 @@ def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symb
     uses the same layout)."""
     instruments = load_binance_instruments(instruments_path)
     klines_dir = klines_dir or tape_dir / "klines"
+    metrics_dir = metrics_dir or tape_dir / "metrics"  # r13: daily open-interest snapshots
     series, missing = [], []
     for symbol in symbols:
         for window in windows or BINANCE_PHASES[phase]:
             first, last = BINANCE_WINDOWS[window]
             start_s, end_s = _day_s(first), _day_s(last) + 86400
-            paths, depth_paths, book_paths = [], [], []
+            paths, depth_paths, book_paths, metrics_paths = [], [], [], []
             for day in range((end_s - start_s) // 86400):
                 date = datetime.fromtimestamp(start_s + day * 86400, tz=timezone.utc).strftime("%Y-%m-%d")
                 path = tape_dir / "npz" / symbol / f"{symbol}-{date}.npz"
@@ -333,6 +353,12 @@ def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symb
                     missing.append(f"{symbol}:{date}")
                     continue
                 paths.append(path)
+                if metrics:
+                    snapshot = metrics_dir / symbol / f"{symbol}-{date}.npz"
+                    if snapshot.exists():
+                        metrics_paths.append(snapshot)
+                    else:
+                        missing.append(f"metrics:{symbol}:{date}")
                 for wanted, folder, bucket in ((depth, "depth", depth_paths), (book, "book", book_paths)):
                     if not wanted:
                         continue
@@ -346,6 +372,8 @@ def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symb
             instrument, min_notional = instruments[symbol]
             loader = _tape_loader(tuple(paths), instrument.fixed_tick, start_s, end_s, tuple(depth_paths) if depth else None, tuple(book_paths) if book else None)
             setup_loader = klines_loader(klines_dir, symbol, start_s, end_s, tuple(setup_volume_thresholds)) if setups else None
+            if metrics:
+                setup_loader = metrics_loader(tuple(metrics_paths), start_s, end_s)
             series.append(Series(f"{venue}:{symbol}:{window}", None, None, instrument, start_s, end_s, book, min_notional, True, loader=loader, setup_loader=setup_loader))
     return series, missing
 
@@ -441,6 +469,16 @@ def _zone_candidates(rule: str, features: dict[str, np.ndarray]) -> np.ndarray |
     return inside if params["Z"] == "1" else (usable & ~inside)
 
 
+def _control_candidates(rule: str, features: dict[str, np.ndarray], stream: int) -> np.ndarray | None:
+    """The seconds the random controls of `rule` may be drawn from for `stream`: the price-matched set
+    of the O rules under a `price_control` protocol (r13), the zone set of the Z rules under a
+    `zone_control` protocol (r11), every second otherwise (None)."""
+    family, params = parse_rule(rule)
+    if PRICE_CONTROL["enabled"] and family in ("O1", "O2"):
+        return oi_price_condition(family, features, stream, float(params["K"]))
+    return _zone_candidates(rule, features)
+
+
 def _replay_series(data: SeriesData, identifier: str, seeds: int) -> dict | None:
     """One configuration on one series: trades, counters, control sums per seed."""
     rule, side, entry, exit_ = parse_configuration(identifier)
@@ -452,11 +490,13 @@ def _replay_series(data: SeriesData, identifier: str, seeds: int) -> dict | None
         return None  # depth rules need the bookDepth snapshots (r8)
     if setup and "zone_lo" not in data.features:
         return None  # platform setups and the zone need the klines-derived stacks and zone (r10)
+    if rule.startswith("O") and "oi_chg_15" not in data.features:
+        return None  # open-interest rules need the metrics snapshots (r13)
     counters = {"decisions": 0, "orders": 0, "crossed": 0, "unfilled": 0, "filled": 0}
     control_sums = [[0.0, 0] for _ in range(seeds)]
     series_trades, signals, zone_inside = [], 0, []
-    candidates = _zone_candidates(rule, data.features) if setup else None
     for stream in ((1, -1) if side == 0 else (side,)):
+        candidates = _control_candidates(rule, data.features, stream)
         decisions = np.flatnonzero(signal_mask(rule, data.features, stream))
         trades, count = run_policy(data, stream, decisions, policy)
         series_trades.append(trades)
@@ -542,14 +582,18 @@ def _summary(result: dict, source: str, day_key: bool) -> dict:
     moments = (trades["decision_s"] + trades["series"].astype(np.int64) * 10**9) * SECOND_US
     group = (trades["decision_s"] // (86400 if day_key else 3600)) + trades["series"].astype(np.int64) * 10**6
     group_sums = {int(g): float(net[group == g].sum()) for g in np.unique(group)}
-    series_sums = {int(s): float(net[trades["series"] == s].sum()) for s in np.unique(trades["series"])}
+    if SERIES_GROUP["mode"] == "symbol" and SERIES_NAMES:  # r13: one series per pair (its windows pooled)
+        keys = np.array([SERIES_NAMES[int(s)].split(":")[1] for s in trades["series"]])
+        series_sums = {str(key): float(net[keys == key].sum()) for key in np.unique(keys)}
+    else:
+        series_sums = {int(s): float(net[trades["series"] == s].sum()) for s in np.unique(trades["series"])}
     row.update({
         "mean_net_bp": _f(net.mean()), "median_net_bp": _f(np.median(net)), "win_rate": _f((net > 0).mean()),
         "profit_factor": _f(gains / losses) if losses > 0 else None, "lb90_bp": block_bootstrap_lower_bound(net, moments),
         "net_usdt": _f(net.sum() / 1e4 * REFERENCE_NOTIONAL), "mean_gross_bp": _f(trades["gross_bp"].mean()), "mean_fees_bp": _f(trades["fees_bp"].mean()),
         "hold_s_p50": _f(np.median(trades["hold_s"])), "without_best_group_bp": _f(net.sum() - max(group_sums.values())),
         "fee_x_net_bp": _f((trades["gross_bp"] - GATES["fee_multiplier"] * trades["fees_bp"]).sum()),
-        "series_positive_share": _f(np.mean([value > 0 for value in series_sums.values()])), "series_count": len(series_sums),
+        "series_positive_share": _f(np.mean([value > 0 for value in series_sums.values()])), "series_count": len(series_sums), "series_unit": "symbol" if SERIES_GROUP["mode"] == "symbol" and SERIES_NAMES else "series",
         "exit_reasons": {int(k): int(v) for k, v in zip(*np.unique(trades["exit_reason"], return_counts=True))},
     })
     control_ok = row["control"]["p95"] is not None and row["mean_net_bp"] > row["control"]["p95"] and row["mean_net_bp"] >= row["control"]["median"] + GATES["control_margin_bp"]
@@ -588,6 +632,8 @@ def run_screen(series: list[Series], source: str, phase: str, out_dir: Path, con
     day_key = any(item.day_key for item in series)
     outcomes_dir = out_dir / f"screen-{phase}-outcomes"
     outcomes_dir.mkdir(exist_ok=True)
+    SERIES_NAMES.clear()
+    SERIES_NAMES.update({index: item.name for index, item in enumerate(series)})
     if extra.get("by_series"):
         # Series-outer mode: each worker loads one series at a time, replays every configuration
         # on it and frees it; only the small per-series parts travel back to the parent.
@@ -714,6 +760,7 @@ def main(argv: list[str] | None = None) -> int:
     screen.add_argument("--tape-dir", default="")
     screen.add_argument("--instruments", default="")
     screen.add_argument("--klines-dir", default="")
+    screen.add_argument("--metrics-dir", default="")  # r13: daily metrics snapshots (default <tape dir>/metrics)
     screen.add_argument("--configs-file", default="")
     screen.add_argument("--symbols", default="")
     screen.add_argument("--workers", type=int, default=3)
@@ -752,7 +799,8 @@ def main(argv: list[str] | None = None) -> int:
             symbols = tuple(args.symbols.split(",")) if args.symbols else tuple(spec.get("phase_symbols", {}).get(args.phase) or spec.get("symbols", BINANCE_SYMBOLS))
             windows = spec.get("training_windows") if args.phase == "training" else spec.get("phases", {}).get(args.phase)
             series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols, windows, depth=bool(spec.get("depth")), book=bool(spec.get("book")), venue=spec.get("venue", "binance"),
-                                                  setups=bool(spec.get("setups")), klines_dir=Path(args.klines_dir) if args.klines_dir else None, setup_volume_thresholds=tuple(spec.get("setup_volume_thresholds", ())))
+                                                  setups=bool(spec.get("setups")), klines_dir=Path(args.klines_dir) if args.klines_dir else None, setup_volume_thresholds=tuple(spec.get("setup_volume_thresholds", ())),
+                                                  metrics=bool(spec.get("metrics")), metrics_dir=Path(args.metrics_dir) if args.metrics_dir else None)
             if spec.get("exploratory"):
                 extra["exploratory"] = True
             extra["missing_days"] = missing

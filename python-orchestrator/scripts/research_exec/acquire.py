@@ -17,6 +17,9 @@ Layouts (one npz per symbol-day, `numpy.savez_compressed`):
 - klines (r10, monthly 1-minute candles, `--dates 2024-03..2024-08`) → `klines/<SYMBOL>/<SYMBOL>-1m-<YYYY-MM>.npz`
   with `ts_s` (candle open, seconds UTC), `open`, `high`, `low`, `close`, `volume`, `quote_volume`,
   `count`, `taker_buy_volume`, sorted by open time.
+- metrics (r13, daily positioning snapshots every five minutes) → `metrics/<SYMBOL>/<SYMBOL>-<date>.npz` with
+  `ts_s` (snapshot time on the 5-minute grid, seconds UTC), `oi` (open interest, base units), `oi_value`
+  (USDT), `top_count_ratio`, `top_sum_ratio`, `ls_count_ratio`, `taker_ratio`, sorted, one record per grid point.
 """
 
 from __future__ import annotations
@@ -42,7 +45,7 @@ except ImportError:  # pragma: no cover - exercised only where pandas is absent
 
 BASE = "https://data.binance.vision/data/futures/um/daily"
 BASE_MONTHLY = "https://data.binance.vision/data/futures/um/monthly"
-KINDS = {"aggtrades": ("aggTrades", "npz"), "bookdepth": ("bookDepth", "depth"), "bookticker": ("bookTicker", "book"), "klines": ("klines", "klines")}
+KINDS = {"aggtrades": ("aggTrades", "npz"), "bookdepth": ("bookDepth", "depth"), "bookticker": ("bookTicker", "book"), "klines": ("klines", "klines"), "metrics": ("metrics", "metrics")}
 LEVELS = (1, 2, 3, 4, 5)
 AGG_COLUMNS = ("agg_trade_id", "price", "quantity", "first_trade_id", "last_trade_id", "transact_time", "is_buyer_maker")
 BOOK_COLUMNS = ("update_id", "best_bid_price", "best_bid_qty", "best_ask_price", "best_ask_qty", "transaction_time", "event_time")
@@ -229,7 +232,37 @@ def convert_klines(raw: bytes) -> tuple[dict[str, np.ndarray], dict]:
     return arrays, diag
 
 
-CONVERTERS = {"aggtrades": convert_aggtrades, "bookdepth": convert_bookdepth, "bookticker": convert_bookticker, "klines": convert_klines}
+METRICS_COLUMNS = ("create_time", "symbol", "sum_open_interest", "sum_open_interest_value", "count_toptrader_long_short_ratio",
+                   "sum_toptrader_long_short_ratio", "count_long_short_ratio", "sum_taker_long_short_vol_ratio")
+METRICS_STEP_S = 300
+_METRICS_FIELDS = {"sum_open_interest": "oi", "sum_open_interest_value": "oi_value", "count_toptrader_long_short_ratio": "top_count_ratio",
+                   "sum_toptrader_long_short_ratio": "top_sum_ratio", "count_long_short_ratio": "ls_count_ratio", "sum_taker_long_short_vol_ratio": "taker_ratio"}
+
+
+def convert_metrics(raw: bytes) -> tuple[dict[str, np.ndarray], dict]:
+    """Daily positioning snapshots (r13): the rows come unsorted; each snapshot time is floored to the
+    5-minute grid, the records sorted, duplicates of a grid point dropped (the last wins); the
+    diagnostic counts the off-grid times, the duplicates and the grid points missing in the day."""
+    dtypes = {name: "float64" for name in _METRICS_FIELDS}
+    dtypes["create_time"] = "str"
+    frame = _read_csv(raw, METRICS_COLUMNS, dtypes, usecols=("create_time",) + tuple(_METRICS_FIELDS))
+    stamps = pd.to_datetime(frame["create_time"], format="%Y-%m-%d %H:%M:%S", utc=True).astype("int64").to_numpy() // 10**9
+    grid = (stamps // METRICS_STEP_S) * METRICS_STEP_S
+    order = np.argsort(grid, kind="stable")
+    ts_s = grid[order].astype(np.int64)
+    keep = np.ones(ts_s.size, dtype=bool)
+    keep[:-1] = ts_s[1:] != ts_s[:-1]
+    arrays = {"ts_s": ts_s[keep]}
+    for column, name in _METRICS_FIELDS.items():
+        arrays[name] = frame[column].to_numpy(dtype=np.float64)[order][keep]
+    rows = int(arrays["ts_s"].size)
+    expected = int((arrays["ts_s"][-1] - arrays["ts_s"][0]) // METRICS_STEP_S + 1) if rows else 0
+    diag = {"input_already_sorted": bool(np.all(order == np.arange(order.size))), "off_grid": int(np.sum(stamps != grid)), "duplicates": int((~keep).sum()),
+            "missing_steps": expected - rows, "oi_nan": int(np.sum(~np.isfinite(arrays["oi"]))) if rows else 0}
+    return arrays, diag
+
+
+CONVERTERS = {"aggtrades": convert_aggtrades, "bookdepth": convert_bookdepth, "bookticker": convert_bookticker, "klines": convert_klines, "metrics": convert_metrics}
 
 
 def acquire_one(kind: str, out_dir: Path, symbol: str, date: str) -> dict:
