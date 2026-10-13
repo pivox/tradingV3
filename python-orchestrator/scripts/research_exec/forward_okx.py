@@ -142,9 +142,16 @@ class SecondReducer:
         self.qi_mean.append(self._qi_sum / self._qi_cnt if self._qi_cnt else float("nan"))
         self._last, self._count, self._qi_sum, self._qi_cnt = None, 0, 0.0, 0
 
+    def seed(self, data) -> None:
+        """Resume a day already written by an earlier process (its flushed seconds, including the
+        second that was open at its last checkpoint)."""
+        for name in ("ts_s", "bid", "ask", "bid_qty", "ask_qty", "updates", "qi_mean"):
+            getattr(self, name).extend(np.asarray(data[name]).tolist())
+
     def arrays(self, include_open: bool) -> dict[str, np.ndarray]:
         """Flushed seconds, plus the second in progress when `include_open` (checkpoint of a
-        running day); the running second stays open for later updates."""
+        running day); the running second stays open for later updates. A second recorded twice
+        (a resumed day whose last checkpointed second receives more updates) keeps its last record."""
         out = {"ts_s": np.array(self.ts_s, dtype=np.int64), "bid": np.array(self.bid), "ask": np.array(self.ask), "bid_qty": np.array(self.bid_qty), "ask_qty": np.array(self.ask_qty),
                "updates": np.array(self.updates, dtype=np.int32), "qi_mean": np.array(self.qi_mean)}
         if include_open and self._last is not None:
@@ -154,6 +161,13 @@ class SecondReducer:
             out["bid_qty"], out["ask_qty"] = np.append(out["bid_qty"], bq), np.append(out["ask_qty"], aq)
             out["updates"] = np.append(out["updates"], np.int32(self._count))
             out["qi_mean"] = np.append(out["qi_mean"], self._qi_sum / self._qi_cnt if self._qi_cnt else np.nan)
+        ts = out["ts_s"]
+        if ts.size > 1 and not np.all(np.diff(ts) > 0):
+            order = np.argsort(ts, kind="stable")
+            ts_sorted = ts[order]
+            last = np.ones(ts_sorted.size, dtype=bool)
+            last[:-1] = ts_sorted[1:] != ts_sorted[:-1]
+            out = {name: values[order][last] for name, values in out.items()}
         return out
 
     def close(self) -> None:
@@ -179,6 +193,14 @@ class TradeBuffer:
 
     def __len__(self) -> int:
         return len(self.ts_us)
+
+    def seed(self, data) -> None:
+        """Resume a day already written by an earlier process (duplicates dropped at `arrays()`)."""
+        self.ts_us.extend(np.asarray(data["ts_us"], dtype=np.int64).tolist())
+        self.price.extend(np.asarray(data["price"], dtype=np.float64).tolist())
+        self.size.extend(np.asarray(data["size"], dtype=np.float64).tolist())
+        self.taker_buy.extend(np.asarray(data["taker_buy"], dtype=np.int8).tolist())
+        self.trade_id.extend(np.asarray(data["agg_trade_id"], dtype=np.int64).tolist())
 
     def arrays(self) -> dict[str, np.ndarray]:
         ts_us = np.array(self.ts_us, dtype=np.int64)
@@ -237,6 +259,14 @@ class DepthBuffer:
     def __len__(self) -> int:
         return len(self.ts_s)
 
+    def seed(self, data) -> None:
+        """Resume a day already written by an earlier process."""
+        self.ts_s.extend(np.asarray(data["ts_s"], dtype=np.int64).tolist())
+        self.bid.extend(np.asarray(data["bid"], dtype=np.float64).ravel().tolist())
+        self.ask.extend(np.asarray(data["ask"], dtype=np.float64).ravel().tolist())
+        self.coverage_bid.extend(np.asarray(data["coverage_bid_pct"], dtype=np.float64).tolist())
+        self.coverage_ask.extend(np.asarray(data["coverage_ask_pct"], dtype=np.float64).tolist())
+
     def arrays(self) -> dict[str, np.ndarray]:
         n = len(self.ts_s)
         return {"ts_s": np.array(self.ts_s, dtype=np.int64), "bid": np.array(self.bid).reshape(n, len(LEVELS)), "ask": np.array(self.ask).reshape(n, len(LEVELS)),
@@ -274,6 +304,7 @@ class SymbolDay:
         self.trades = TradeBuffer()
         self.book = SecondReducer()
         self.depth = DepthBuffer()
+        self.resumed: dict[str, int] = {}  # rows reloaded from disk per layout (a day resumed after a restart)
 
 
 class TapeStore:
@@ -302,7 +333,24 @@ class TapeStore:
         key = (symbol, day_of_ms(ts_ms))
         store = self.days.get(key)
         if store is None:
-            store = self.days[key] = SymbolDay()
+            store = self.days[key] = self._resume(symbol, key[1])
+        return store
+
+    def _resume(self, symbol: str, day: int) -> SymbolDay:
+        """A new in-memory day, seeded with the files an earlier process wrote for it (a capture
+        restarted during the day keeps the hours already recorded instead of overwriting them at
+        its next checkpoint)."""
+        store = SymbolDay()
+        date = date_of_day(day)
+        for folder, buffer in (("npz", store.trades), ("book", store.book), ("depth", store.depth)):
+            path = self.out_dir / folder / symbol / f"{symbol}-{date}.npz"
+            if not path.exists():
+                continue
+            with np.load(path) as data:
+                buffer.seed(data)
+                store.resumed[folder] = int(data["ts_us" if folder == "npz" else "ts_s"].size)
+        if store.resumed:
+            _log(f"resumed {symbol} {date} from disk: {store.resumed}")
         return store
 
     def open_days(self) -> list[int]:
@@ -314,6 +362,8 @@ class TapeStore:
             return None
         date = date_of_day(day)
         entry: dict = {"symbol": symbol, "date": date, "partial": not final, "written_at": _now()}
+        if store.resumed:
+            entry["resumed_rows"] = dict(store.resumed)  # rows reloaded from disk after a restart (disclosed)
         if final:
             store.book.close()
         for folder, arrays, first_key in (("npz", store.trades.arrays(), "ts_us"), ("book", store.book.arrays(include_open=not final), "ts_s"), ("depth", store.depth.arrays(), "ts_s")):
