@@ -136,3 +136,45 @@ def test_fwd_okx_protocol_is_one_frozen_long_configuration_on_twenty_pairs():
     assert spec["training_windows"] == ("fwd-okx-w0",) and spec["phases"] == {"validation": ("fwd-okx-w1",), "holdout": ("fwd-okx-w2",)}
     assert BINANCE_WINDOWS["fwd-okx-w1"] == ("2026-10-19", "2026-10-23") and BINANCE_WINDOWS["fwd-okx-w2"] == ("2026-10-26", "2026-10-30")
     assert spec["validation"] == PROTOCOLS["r8"]["validation"] and spec["gates"] == PROTOCOLS["r8"]["gates"]
+
+
+def test_a_restarted_capture_resumes_the_day_instead_of_overwriting_it(tmp_path: Path):
+    day_ms = (fwd.day_of_ms(T0_MS)) * fwd.DAY_S * 1000
+    date = fwd.date_of_day(fwd.day_of_ms(T0_MS))
+    first = fwd.TapeStore(tmp_path, ("BTCUSDT",))
+    for s in range(0, 300):
+        ts = day_ms + s * 1000
+        bucket = first.bucket("BTCUSDT", ts)
+        bucket.book.push(ts + 100, 100.0, 1.0, 100.1, 2.0)
+        bucket.trades.push(ts + 200, 100.0, 0.5, True, s)
+        if s % 30 == 0:
+            bucket.depth.push(ts // 1000, {"bid": [2.0] * 5, "ask": [1.0] * 5, "coverage_bid_pct": 0.9, "coverage_ask_pct": 2.0})
+    first.checkpoint()  # the process dies after this checkpoint; second 299 was still open
+    second = fwd.TapeStore(tmp_path, ("BTCUSDT",))  # the restart loop starts a new process
+    ts = day_ms + 299 * 1000
+    bucket = second.bucket("BTCUSDT", ts)
+    assert bucket.resumed == {"npz": 300, "book": 300, "depth": 10}
+    bucket.book.push(ts + 900, 100.2, 3.0, 100.3, 4.0)  # one more update in the last checkpointed second
+    bucket.trades.push(ts + 300, 100.0, 0.5, True, 299)  # the REST backfill returns an already-recorded print
+    for s in range(400, 500):
+        ts = day_ms + s * 1000
+        bucket = second.bucket("BTCUSDT", ts)
+        bucket.book.push(ts + 100, 100.0, 1.0, 100.1, 2.0)
+        bucket.trades.push(ts + 200, 100.0, 0.5, False, s)
+        if s % 30 == 0:
+            bucket.depth.push(ts // 1000, {"bid": [2.0] * 5, "ask": [1.0] * 5, "coverage_bid_pct": 0.9, "coverage_ask_pct": 2.0})
+    second.checkpoint()
+    second.finalize_days_before(fwd.day_of_ms(T0_MS) + 1)
+    entry = second.manifest["files"][f"BTCUSDT:{date}"]
+    assert entry["partial"] is False and entry["resumed_rows"] == {"npz": 300, "book": 300, "depth": 10}
+    assert entry["npz"]["rows"] == 400 and entry["book"]["rows"] == 400 and entry["depth"]["rows"] == 13  # 10 resumed + 420, 450, 480
+    with np.load(tmp_path / "npz" / "BTCUSDT" / f"BTCUSDT-{date}.npz") as data:
+        assert data["agg_trade_id"].tolist() == list(range(300)) + list(range(400, 500))  # nothing lost, the duplicate dropped
+    with np.load(tmp_path / "book" / "BTCUSDT" / f"BTCUSDT-{date}.npz") as data:
+        assert np.all(np.diff(data["ts_s"]) > 0) and data["ts_s"][0] == day_ms // 1000
+        last_old = int(np.flatnonzero(data["ts_s"] == day_ms // 1000 + 299)[0])
+        assert data["bid"][last_old] == pytest.approx(100.2)  # the second recorded twice keeps its last record
+    with np.load(tmp_path / "depth" / "BTCUSDT" / f"BTCUSDT-{date}.npz") as data:
+        assert data["bid"].shape == (13, 5) and np.all(np.diff(data["ts_s"]) > 0)
+    # A day never written before starts empty, as before.
+    assert fwd.TapeStore(tmp_path, ("BTCUSDT",)).bucket("BTCUSDT", day_ms + 2 * fwd.DAY_S * 1000).resumed == {}
