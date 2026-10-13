@@ -86,7 +86,8 @@ r10 (`tradingV3-private/research/20261013T121000Z-scalping-120-r10/`): `acquire-
 `acquire-r10-klines.sh` (aggTrades of the four 2024 windows, 1-minute klines March → August), `run-r10.sh`
 (training → select → budgets), `run-r10-validate.sh` (mid-cap validation tape and klines, validation, verdict,
 then the holdout into its own directory, read only for validated configurations); `disk-guard.sh` kills the r10
-acquisitions if the host drops under 15 GB free.
+acquisitions if the host drops under 15 GB free; `run-r10x.sh` is the exploratory pass of 2026-10-13
+(`EXPLORATORY-r10x.md`: the training windows re-read, no selection, no validation, no holdout).
 
 ```bash
 # r10 (PREREGISTRATION-r10.md): the platform's scalping setups 1.1.0 with the 1.2.0 geometries; `setups: True` loads
@@ -95,6 +96,10 @@ python -m scripts.research_exec.screen screen --source binance --phase training 
     --instruments <instrument-assumptions-r10.json> --out $X/part-b/binance-r10 --workers 3 --prereg $X/PREREGISTRATION-r10.md
 python -m scripts.research_exec.screen screen --source binance --phase validation --protocol r10 --tape-dir <tape dir> \
     --instruments … --out $X/part-b/binance-r10 --configs-file $X/part-b/binance-r10/validation-list.txt
+# r10x (EXPLORATORY-r10x.md, exploratory): the r10 training windows re-read with the volume-ratio thresholds (`V`) and
+# the entry zone (`Z`); training phase only — the CLI refuses any other phase for an exploratory protocol
+python -m scripts.research_exec.screen screen --source binance --phase training --protocol r10x --tape-dir <tape dir> \
+    --instruments <instrument-assumptions-r10.json> --out $X/part-b/binance-r10x --workers 3 --prereg $X/EXPLORATORY-r10x.md
 ```
 
 Every document records the sha256 of each package file (`code`) and, when `--prereg` is given,
@@ -140,7 +145,8 @@ gross / fees / net in bp, hold).
   the displayed quantity of the decision second plus its own 250 USDT, or when the price trades
   through) and its 2023-24 windows (`w2307` … `w2403`). A rule id is parsed token by token
   (`parse_rule`: `W` window, `B` depth band, `T` threshold, `K` sigma multiple, `D` delta, `Q`
-  queue threshold, `N` run length, `A` stack layers, flags `F`, `C`, bare `B`); a rule whose features are absent
+  queue threshold, `N` run length, `A` stack layers, `V` volume-ratio threshold and `Z` entry zone (r10x), flags `F`,
+  `C`, bare `B`); a rule whose features are absent
   (S3 without book sizes, Q without depth, P without the klines stacks) is skipped on that series.
   **r10** (`setups: True`) ports the platform's three scalping setups 1.1.0 (`platform_setups.py`:
   canonical indicator conventions, catalog 1.1.0 conditions, the 1h regime, 15m context and
@@ -153,6 +159,12 @@ gross / fees / net in bp, hold).
   no later than 23:59:00 UTC). Its phases carry their own symbol list (`phase_symbols`: the ten
   mid-caps for validation and holdout) and each series reports the share of decisions whose mid
   lies inside the 1.1.0 VWAP entry zone (`zone_share`, diagnostic only — the zone is not enforced).
+  **r10x** (`exploratory: True`, `setup_volume_thresholds`) re-reads the r10 training windows only:
+  the full stacks with the 5m and 1m volume-ratio confirmation at 1.1, 1.2 and 1.3
+  (`P{n}-A4-K{k}-V{t}`, stacks `p{n}_a4_v{t}` beside the 1.4 ones) and the 1.1.0 zone imposed or
+  excluded on the mid of the decision second (`Z1` / `Z0`, whose union is the r10 row); the gates
+  are listed for information, nothing is selected, and the protocol has no validation or holdout
+  phase (`phases: {}`; the CLI refuses any phase but training).
 
 ## Outputs
 
