@@ -24,12 +24,21 @@ from .tick import SECOND_US
 
 ENTRIES = ("E1", "E2", "E3")  # E3 (r9): at the touch with the queue fill rule
 QUEUE_ORDER_NOTIONAL = 250.0  # own size of an E3 order, in USDT (r9 §3)
-EXITS = ("X1", "X2", "X3", "X4", "Y1", "Y2", "Y3", "Y4", "Z1", "Z2", "Z3", "Z4")
+EXITS = ("X1", "X2", "X3", "X4", "Y1", "Y2", "Y3", "Y4", "Z1", "Z2", "Z3", "Z4", "B1", "B2", "B3", "B4")
 # Exit parameters: time exits (seconds), stop/target (sigma window, stop multiple, target multiple,
 # maximum hold), passive exits (post after, TTL, fallback at).
 TIME_EXITS = {"X1": 60, "X2": 300, "Y1": 900, "Y2": 3600, "Z1": 3600}
 BRACKET_EXITS = {"X3": (60, 1.0, 1.5, 300), "Y3": (300, 1.5, 3.0, 3600), "Z4": (300, 2.0, 4.0, 7200)}
 PASSIVE_EXITS = {"X4": (60, 30, 90), "Y4": (900, 60, 960), "Z2": (1800, 300, 3600), "Z3": (3600, 300, 3900)}
+# r10 (PREREGISTRATION-r10.md §3), the 1.2.0 geometries on the platform's setups: stop at 1.5 × ATR14(5m) of the
+# decision second (`atr5` feature, floor two ticks, a print at or beyond it, taker at the next touch); target as an
+# R multiple of the stop distance, maker (resting limit, through rule) or taker (a print at or beyond, taker at the
+# touch), None for the time-only exit; 2 h maximum hold and a taker exit no later than 23:59:00 UTC of the fill's day.
+SETUP_EXITS = {"B1": (1.8, "taker"), "B2": (1.8, "maker"), "B3": (3.0, "maker"), "B4": (None, None)}
+SETUP_STOP_ATR = 1.5
+SETUP_MAX_HOLD_S = 7200
+SETUP_DAY_CLOSE_S = 86400 - 60
+SETUP_TTL_US = 45_000_000  # scalping@1.1.0 order_policy.ttl_seconds
 EXIT_REASONS = {"time": 0, "stop": 1, "target": 2, "passive": 3, "fallback": 4}
 
 TRADE_DTYPE = np.dtype(
@@ -120,9 +129,12 @@ def run_policy(data: SeriesData, side: int, decisions: np.ndarray, policy: Polic
     queue = policy.entry == "E3"
     displayed = (bars.get("bid_size") if side > 0 else bars.get("ask_size")) if queue else None
     opposite_taker = 0 if side > 0 else 1  # a resting bid is hit by taker sells, a resting ask by taker buys
+    atr5 = data.features.get("atr5") if policy.exit in SETUP_EXITS else None
     for s in decisions.tolist():
         if s < busy_until or s >= data.n:
             continue
+        if atr5 is not None and not atr5[s] == atr5[s]:
+            continue  # no 5-minute ATR yet (warm-up, or a random control second before the first close)
         counters.decisions += 1
         mid = mids[s]
         if not mid == mid or ages[s] > policy.stale_s:  # NaN check without a numpy call
@@ -178,9 +190,42 @@ def _market_exit(data: SeriesData, policy: Policy, side: int, moment: int, reaso
     return exit_moment, price, reason, policy.taker_bp
 
 
+def _setup_exit(data: SeriesData, policy: Policy, side: int, s: int, entry: float, jf: int, fill_ts: int, tick: float, tol: float) -> tuple[int, float | None, int, float]:
+    """r10 B exits: ATR stop, R-multiple target (maker through rule or taker at the touch), 2 h
+    hold, UTC day close; the stop wins over the target within the same second."""
+    target_r, role = SETUP_EXITS[policy.exit]
+    distance = max(SETUP_STOP_ATR * float(data.features["atr5"][s]), 2 * tick)
+    stop = entry - side * distance
+    day_close = (fill_ts // (86400 * SECOND_US)) * 86400 * SECOND_US + SETUP_DAY_CLOSE_S * SECOND_US
+    deadline = min(fill_ts + SETUP_MAX_HOLD_S * SECOND_US, max(day_close, fill_ts))
+    k0 = jf + 1
+    k1 = int(np.searchsorted(data.tts, deadline, side="right"))
+    window = data.tpx[k0:k1]
+    stop_hit = (window <= stop + tol) if side > 0 else (window >= stop - tol)
+    ks = int(np.argmax(stop_hit)) if stop_hit.any() else -1
+    kt, target = -1, None
+    if target_r is not None:
+        target = entry + side * target_r * distance
+        target = (np.ceil(target / tick) if side > 0 else np.floor(target / tick)) * tick
+        if role == "maker":
+            target_hit = (window > target + tol) if side > 0 else (window < target - tol)
+        else:
+            target_hit = (window >= target - tol) if side > 0 else (window <= target + tol)
+        kt = int(np.argmax(target_hit)) if target_hit.any() else -1
+    if ks >= 0 and (kt < 0 or data.tts[k0 + ks] // SECOND_US <= data.tts[k0 + kt] // SECOND_US):
+        return _market_exit(data, policy, side, int(data.tts[k0 + ks]), EXIT_REASONS["stop"])
+    if kt >= 0:
+        if role == "maker":
+            return int(data.tts[k0 + kt]), float(target), EXIT_REASONS["target"], policy.maker_bp
+        return _market_exit(data, policy, side, int(data.tts[k0 + kt]), EXIT_REASONS["target"])
+    return _market_exit(data, policy, side, deadline, EXIT_REASONS["time"])
+
+
 def _exit(data: SeriesData, policy: Policy, side: int, s: int, entry: float, jf: int, fill_ts: int, tick: float, tol: float) -> tuple[int, float | None, int, float]:
     if policy.exit in TIME_EXITS:
         return _market_exit(data, policy, side, fill_ts + TIME_EXITS[policy.exit] * SECOND_US, EXIT_REASONS["time"])
+    if policy.exit in SETUP_EXITS:
+        return _setup_exit(data, policy, side, s, entry, jf, fill_ts, tick, tol)
     if policy.exit in BRACKET_EXITS:
         window_s, stop_k, target_k, max_hold = BRACKET_EXITS[policy.exit]
         sigma = float(data.features[f"sigma_{window_s}"][s])
