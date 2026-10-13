@@ -43,6 +43,17 @@ authority for the procedures: `okx-private-ws-observability.md`, `demo-testnet-o
    streams ready + snapshot loaded + reconciliation fresh). Without it, only protective
    writes pass the gate.
 
+## 0b. State observed on 2026-10-13 02:15Z (read-only)
+
+- The running `trading_app_php` container does not know `app:exchange:runtime-check … --json`
+  and still reports `trader.real_precision = 3`: the stack runs the code of the main checkout
+  at `5fb306bd` (2026-10-07), weeks behind `main`. Step zero of any demo attempt is therefore
+  to update the checkout the compose files mount and recreate the containers (`up -d
+  --force-recreate`, with the demo `--env-file`).
+- The three messenger consumers were recreated at 01:57Z; their environment holds `REDIS_HOST`
+  only — none of the OKX / demo variable names — so they run with the compose defaults (flags
+  at 0, no keys). No demo order can be placed from this stack as it is.
+
 ## 1. Owner-side inputs (never typed by an agent)
 
 | Variable (names only) | Required state for demo | Where read |

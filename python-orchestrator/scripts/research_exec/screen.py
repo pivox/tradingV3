@@ -43,6 +43,10 @@ BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",), "h
 # r1: the 2026-10-12 pre-registration (PREREGISTRATION.md); r2: PREREGISTRATION-r2.md (intraday holds).
 PROTOCOLS = {
     "r1": {"entries": ("E1", "E2"), "exits": ("X1", "X2", "X3", "X4"), "gates": {"min_trades": {"captures": 100, "binance": 300}, "min_mean_bp": 1.0, "min_pf": 1.15, "control_margin_bp": 2.0, "min_series_share": 0.75, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 50, "binance": 150}, "min_pf": 1.05, "min_series_share": 0.5}},
+    "r6": {"entries": ("E1",), "exits": ("X2", "Y1", "Y3", "Z3"), "sides": (1, -1), "training_windows": ("february", "march", "april", "may", "june", "july", "august", "september", "october"),
+           "rules": "catalogue+S7", "both_rules": ("S7-W300-K1.5", "S7-W300-K2.0", "S7-W900-K1.5", "S7-W900-K2.0"), "by_series": True,
+           "symbols": ("ARBUSDT", "OPUSDT", "APTUSDT", "SUIUSDT", "NEARUSDT", "TIAUSDT", "SEIUSDT", "INJUSDT", "ATOMUSDT", "FILUSDT"),
+           "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
     "r5": {"entries": ("E1",), "exits": ("Z3", "Z1"), "sides": (0,), "training_windows": ("march", "july", "may", "september", "february", "april", "june", "august", "october"),
            "rules": ("S7-W900-K2.0",), "features": R5_FEATURES, "by_series": True,
            "gates": {"min_trades": {"captures": 200, "binance": 200}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 50, "binance": 50}, "min_pf": 1.05, "min_series_share": 0.5}},
@@ -115,11 +119,18 @@ def parse_configuration(identifier: str) -> tuple[str, int, str, str]:
     return rule, {"long": 1, "short": -1, "both": 0}[side], entry, exit_
 
 
+S7_RULES = ("S7-W300-K1.5", "S7-W300-K2.0", "S7-W900-K1.5", "S7-W900-K2.0")
+
+
 def build_grid(book: bool, protocol: str = "r1") -> list[str]:
     spec = PROTOCOLS[protocol]
     rules = spec.get("rules") or rule_catalogue(book)
+    if rules == "catalogue+S7":
+        rules = tuple(rule_catalogue(book)) + S7_RULES
     sides = spec.get("sides", (1, -1))
-    return [configuration_id(rule, side, entry, exit_) for rule in rules for side in sides for entry in spec["entries"] for exit_ in spec["exits"]]
+    grid = [configuration_id(rule, side, entry, exit_) for rule in rules for side in sides for entry in spec["entries"] for exit_ in spec["exits"]]
+    grid += [configuration_id(rule, 0, entry, exit_) for rule in spec.get("both_rules", ()) for entry in spec["entries"] for exit_ in spec["exits"]]
+    return grid
 
 
 # ----------------------------------------------------------------------------- series
@@ -560,7 +571,7 @@ def main(argv: list[str] | None = None) -> int:
             series = load_capture_series(Path(args.extract_dir), args.phase)
             book = True
         else:
-            symbols = tuple(args.symbols.split(",")) if args.symbols else BINANCE_SYMBOLS
+            symbols = tuple(args.symbols.split(",")) if args.symbols else tuple(PROTOCOLS[args.protocol].get("symbols", BINANCE_SYMBOLS))
             windows = PROTOCOLS[args.protocol].get("training_windows") if args.phase == "training" else None
             series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols, windows)
             extra["missing_days"] = missing

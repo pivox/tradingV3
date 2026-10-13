@@ -71,6 +71,16 @@ due by 18:00 local (16:00Z).
 5. Item 2 (OKX demo checklist): runbook from the repository's gates and commands, no flag
    changed.
 
+## 2026-10-13: mid-caps (r6, r7)
+
+Owner's "go" at ~02:15Z. The running Docker stack was found on the main checkout of
+2026-10-07 without the exchange environment (demo impossible as is; noted in the checklist).
+Research continued on the one untested hypothesis, the fee hurdle: ten mid-cap perpetuals,
+550 tape files acquired and audited, r6 (200 configurations, nine windows): 0 pass, one
+configuration short of one gate; r7 (that configuration out of sample): November +12.8 bp on
+206 trades, December −20.9 bp on 145 — **no candidate**
+([report](../../handbook/reports/research-midcap-tick-2026-10-13.md), PR #480).
+
 ## Boundaries
 
 No exchange mutation, no flag change, no Docker restart, no rerun of the consumed holdout claim.

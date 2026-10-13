@@ -212,3 +212,10 @@ def test_by_series_mode_matches_pooled_mode(tmp_path):
         document = run_screen(series, "binance", "training", tmp_path / mode, ["S1-W10-T0.5|both|E1|X1", "S4-W60-K2|long|E1|X2"], 2, 1, extra)
         rows_by_mode[mode] = {row["id"]: (row["trades"], row["mean_net_bp"], row["control"]["median"]) for row in document["rows"]}
     assert rows_by_mode["pooled"] == rows_by_mode["by_series"]
+
+
+def test_r6_grid_has_two_hundred_configurations_with_both_sided_band_rules():
+    from scripts.research_exec.screen import PROTOCOLS, build_grid
+    grid = build_grid(False, "r6")
+    assert len(grid) == 200 and sum(1 for g in grid if "|both|" in g) == 16 and "S7-W900-K2.0|both|E1|Z3" in grid
+    assert all(g.split("|")[3] in ("X2", "Y1", "Y3", "Z3") for g in grid) and len(PROTOCOLS["r6"]["symbols"]) == 10
