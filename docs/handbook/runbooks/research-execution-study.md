@@ -23,7 +23,20 @@ extraction when installed and is optional.
 |---|---|---|
 | Captures | `tradingV3-private/paper-market-data/<dataset>/{manifest.json,events.ndjson}` | never modified; `extract` re-hashes the events file against the manifest |
 | Binance tape | `tradingV3-private/research/20261012T060000Z-tape-binance-r1/npz/<SYMBOL>/<SYMBOL>-<date>.npz` | daily `aggTrades` archives, sha256-checked at download, converted to `ts_us/price/size/taker_buy` |
-| Binance instruments | `tradingV3-private/research/20261009T060000Z-source-complements-r1/instrument-assumptions.json` | tick, step, minimums |
+| Binance instruments | `tradingV3-private/research/20261009T060000Z-source-complements-r1/instrument-assumptions.json` | tick, step, minimums; mid-caps in `…/20261012T060000Z-execution-r1/instrument-assumptions-midcap.json`, the union in `instrument-assumptions-r8.json` |
+| Binance depth (r8) | `…/20261013T061500Z-tape-binance-r8/depth/<SYMBOL>/<SYMBOL>-<date>.npz` | daily `bookDepth` archives (one snapshot every 30 s on average: cumulative notional within ±1 … 5 % of the mid), sha256-checked, `ts_s / bid / ask` (n × 5) |
+| Binance top of book (r9) | `…/20261013T063500Z-tape-binance-r9/book/<SYMBOL>/<SYMBOL>-<date>.npz` | daily `bookTicker` archives (every best bid/ask update with quantities, 2023-05-16 → 2024-03-30), reduced to one record per second: `ts_s / bid / ask / bid_qty / ask_qty / updates / qi_mean` |
+
+Acquisition of any of the three archives (`scripts/research_exec/acquire.py`): every zip is
+downloaded, checked against its published sha256 (fail-closed), converted and deleted; a
+`manifest-<kind>.json` records hashes, row counts and diagnostics; files already in the manifest
+are skipped. The bookTicker day of a major is over a gigabyte of text and is streamed.
+
+```bash
+python -m scripts.research_exec.acquire aggtrades  --out <dir> --symbols BTCUSDT,ETHUSDT --dates 2025-01-13..2025-01-17 --workers 3
+python -m scripts.research_exec.acquire bookdepth  --out <dir> --symbols BTCUSDT --dates 2025-02-10..2025-02-14,2025-03-10..2025-03-14
+python -m scripts.research_exec.acquire bookticker --out <dir> --symbols ATOMUSDT --dates 2023-07-10..2023-07-14 --workers 2
+```
 | Fees | maker 2 bp, taker 5 bp (`config/trading/runtime/exchange/*.yaml`) | the screen also reports fees × 1.5 |
 
 ## Commands
@@ -63,6 +76,10 @@ python -m scripts.research_exec.screen verdict --protocol r2 --training …/scre
 Chains used on 2026-10-12 (artifact directory): `run-part-a.sh`, `run-part-b-training.sh`
 (captures), `run-part-b-validate.sh <source>`, `run-binance-chain2.sh` (r2, then r1 training
 and validation), `run-r2.sh`, `run-r3.sh`, `run-r4.sh`, `run-r5.sh`, `run-r6.sh`, `run-r7.sh` (training → validation → holdout).
+On 2026-10-13: `acquire-r8.sh` → `launch-r8.sh` (waits for the acquisition, checks the file counts, runs `run-r8.sh`:
+training → select → validation → holdout), and `acquire-r9.sh` → `launch-r9.sh` (waits for the acquisition **and** the
+end of r8 on the four shared CPUs, then `run-r9.sh`). r8 and r9 run from two worktrees so that a running screen's
+code tree is never edited (`code_identity()` hashes the package at the end of each run).
 
 Every document records the sha256 of each package file (`code`) and, when `--prereg` is given,
 of the pre-registration. Outcomes per configuration are saved as `screen-<phase>-outcomes/*.npz`
@@ -97,7 +114,18 @@ gross / fees / net in bp, hold).
   configuration on it and frees it; the pooled and by-series drivers give identical rows);
   r6 carries its own symbol list (ten mid-cap perpetuals, instrument file from the exchange
   metadata) and the full catalogue plus the two-sided band rules; r7 reuses `--protocol r6`
-  with an explicit `--configs-file` for an out-of-sample validation and holdout.
+  with an explicit `--configs-file` for an out-of-sample validation and holdout; **r8** loads the
+  bookDepth snapshots next to the prints (`depth: True`), adds the depth features `di_1`, `di_2`,
+  `ddi_1`, `ddi_2` (120 s staleness, 300 s reference) and the families Q1–Q4, and carries its own
+  phases (`january` validation, `december-2024` holdout); **r9** replaces the print proxies by the
+  per-second bookTicker records (`book: True`, quotes with displayed quantities), adds the
+  features `qi`, `mpo`, `dmp_5`, `dmp_30` and the families M1–M3, the entry **E3** (queue rule: the
+  order fills when the prints at its price on the opposite taker side since activation exhaust
+  the displayed quantity of the decision second plus its own 250 USDT, or when the price trades
+  through) and its 2023-24 windows (`w2307` … `w2403`). A rule id is parsed token by token
+  (`parse_rule`: `W` window, `B` depth band, `T` threshold, `K` sigma multiple, `D` delta, `Q`
+  queue threshold, `N` run length, flags `F`, `C`, bare `B`); a rule whose features are absent
+  (S3 without book sizes, Q without depth) is skipped on that series.
 
 ## Outputs
 
@@ -110,4 +138,5 @@ gross / fees / net in bp, hold).
 | `part-b/<source>/verdict.json` | validation checks per configuration and the outcome |
 | `part-b/<source>/budgets.json` | notional, minimums, fees and projected net per day by budget |
 
-Report: `docs/handbook/reports/research-execution-tick-2026-10-12.md`.
+Reports: `docs/handbook/reports/research-execution-tick-2026-10-12.md` (A, r1–r5),
+`research-midcap-tick-2026-10-13.md` (r6, r7), `research-book-families-2026-10-13.md` (r8, r9).

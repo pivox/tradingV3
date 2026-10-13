@@ -81,6 +81,34 @@ configuration short of one gate; r7 (that configuration out of sample): November
 206 trades, December −20.9 bp on 145 — **no candidate**
 ([report](../../handbook/reports/research-midcap-tick-2026-10-13.md), PR #480).
 
+## 2026-10-13, 05:40Z onwards: "que faire alors ?" → 1, 2, 3
+
+Recommendation given and accepted by the owner ("fais le 1", "puis le 2 puis le 3"):
+
+1. **OKX demo on the legacy profile (owner side).** Done by the agent: the compose checkout
+   fast-forwarded to `main` (`bef26627`), a protective `trading-app/.dockerignore`, a pg_dump of
+   `trading_app`, the list of the 24 pending migrations. Refused by the agent's permission
+   policy (writes inside containers, image build, recreate): composer install, migrations,
+   build, `up --force-recreate`, contracts, private-WS worker, runtime check, bounded dry-run.
+   The exact commands, in order, are in
+   `tradingV3-private/research/20261013T080000Z-okx-demo-golive-r1/HANDOFF.md`; the flags stay
+   the owner's decision.
+2. **r8, depth families at the platform's cadence** (bookDepth, 2025, twenty pairs, 192
+   configurations, validation January 2025, holdout December 2024), pre-registered and
+   launched ([report](../../handbook/reports/research-book-families-2026-10-13.md)).
+3. **r9, queue and microprice families on event-level top of book** (bookTicker, 2023-24,
+   eighteen pairs, 256 configurations with the queue fill rule E3, validation February 2024,
+   holdout March 2024), pre-registered and launched after r8 (same report). Stated before the
+   result: a positive r9 is not executable by the minute loop; a negative one closes the
+   owner's list of families on fill-capable data.
+
+Outcome (2026-10-13, 09:42Z): r8 0 of 192, r9 0 of 256 (every configuration negative before
+fees, equal to its random control); r8b, the depth-supported long reversion out of sample,
+passes January 2025 and keeps a positive mean in December 2024 on nine pairs of twenty — no
+candidate by the rule. The list of families is closed on fill-capable data; the demo stack was
+brought to `main` by the owner the same morning (migrations, images, contracts, private WS
+connected, dry-run reaching the context validation; flags at 0).
+
 ## Boundaries
 
 No exchange mutation, no flag change, no Docker restart, no rerun of the consumed holdout claim.

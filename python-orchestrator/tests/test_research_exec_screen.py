@@ -219,3 +219,143 @@ def test_r6_grid_has_two_hundred_configurations_with_both_sided_band_rules():
     grid = build_grid(False, "r6")
     assert len(grid) == 200 and sum(1 for g in grid if "|both|" in g) == 16 and "S7-W900-K2.0|both|E1|Z3" in grid
     assert all(g.split("|")[3] in ("X2", "Y1", "Y3", "Z3") for g in grid) and len(PROTOCOLS["r6"]["symbols"]) == 10
+
+
+def test_rule_parser_keeps_s_rule_semantics_and_reads_depth_rules():
+    from scripts.research_exec.tick import parse_rule
+    assert parse_rule("S5-B") == ("S5", {"band": True})
+    assert parse_rule("S3-Q0.3-F") == ("S3", {"Q": "0.3", "F": True})
+    assert parse_rule("Q3-W900-K1.5-T0.25") == ("Q3", {"W": "900", "K": "1.5", "T": "0.25"})
+    assert parse_rule("Q1-B2-T0.4-F") == ("Q1", {"B": "2", "T": "0.4", "F": True})
+    for bad in ("S9-W10", "Q1-X1", "Q1-T"):
+        with pytest.raises(ValueError):
+            parse_rule(bad)
+
+
+def test_depth_features_forward_fill_staleness_and_reference_change():
+    from scripts.research_exec.tick import depth_features
+    ts = T0 + np.arange(1000)
+    snaps = np.array([T0 + 10, T0 + 40, T0 + 400, T0 + 700])
+    bid = np.array([[300.0, 600, 900, 1200, 1500], [100, 200, 300, 400, 500], [100, 300, 600, 900, 1200], [50, 100, 150, 200, 250]])
+    ask = np.array([[100.0, 200, 300, 400, 500], [300, 600, 900, 1200, 1500], [100, 100, 100, 100, 100], [50, 100, 150, 200, 250]])
+    f = depth_features(ts, {"ts_s": snaps, "bid": bid, "ask": ask})
+    assert np.isnan(f["di_1"][9]) and f["di_1"][10] == pytest.approx(0.5)  # a snapshot stamped at second t is usable from the end of t
+    assert f["di_1"][39] == pytest.approx(0.5) and f["di_1"][40] == pytest.approx(-0.5) and f["di_2"][40] == pytest.approx(-0.5)
+    assert f["di_1"][160] == pytest.approx(-0.5) and np.isnan(f["di_1"][161])  # stale after 120 s
+    assert f["di_1"][400] == pytest.approx(0.0) and f["ddi_1"][400] == pytest.approx(0.5)  # reference = the snapshot at +40 (≥ 300 s earlier)
+    assert np.isnan(f["ddi_1"][10]) and np.isnan(f["ddi_1"][40])  # no snapshot 300 s earlier
+    assert f["di_1"][700] == pytest.approx(0.0) and f["ddi_1"][700] == pytest.approx(0.0)
+    empty = depth_features(ts, {"ts_s": np.zeros(0, dtype=np.int64), "bid": np.zeros((0, 5)), "ask": np.zeros((0, 5))})
+    assert np.isnan(empty["di_1"]).all() and np.isnan(empty["ddi_2"]).all()
+
+
+def test_depth_rules_fire_on_the_imbalance_sign_and_combine_with_the_band():
+    n = 5
+    f = {"di_1": np.array([0.5, -0.5, 0.1, np.nan, 0.3]), "di_2": np.array([0.3, 0.3, -0.3, 0.3, 0.3]), "ddi_1": np.array([0.2, -0.2, 0.0, np.nan, 0.4]), "ddi_2": np.zeros(n),
+         "fi_60": np.array([1.0, 1.0, -1.0, 1.0, -1.0]), "band_dev_900": np.full(n, -0.01), "sigma_900": np.full(n, 0.002)}
+    assert signal_mask("Q1-B1-T0.25", f, 1).tolist() == [True, False, False, False, True]
+    assert signal_mask("Q1-B1-T0.25", f, -1).tolist() == [False, True, False, False, False]
+    assert signal_mask("Q1-B1-T0.25-F", f, 1).tolist() == [True, False, False, False, False]  # flow against the signal at index 4
+    assert signal_mask("Q4-B1-T0.25", f, 1).tolist() == [False, True, False, False, False]  # contrarian: long against the heavy ask side
+    assert signal_mask("Q4-B2-T0.25-F", f, -1).tolist() == [False, False, False, False, True]
+    assert signal_mask("Q2-B1-D0.15", f, 1).tolist() == [True, False, False, False, True]
+    assert signal_mask("Q2-B1-D0.15", f, -1).tolist() == [False, True, False, False, False]
+    assert signal_mask("Q3-W900-K2.0-T0.25", f, 1).tolist() == [True, False, False, False, False]
+    assert signal_mask("Q3-W900-K2.0-T0.25", f, -1).tolist() == [False] * n
+
+
+def test_r8_grid_has_192_configurations_and_depth_rules_need_depth_features():
+    from scripts.research_exec.screen import PROTOCOLS, Series, build_grid
+    grid = build_grid(False, "r8")
+    assert len(grid) == 192 and sum("|both|" in g for g in grid) == 24 and all(g.split("|")[3] in ("Y1", "Y3", "Z3") for g in grid)
+    assert sum(g.startswith("Q3") for g in grid) == 8 * 2 * 3 + 24 and len(PROTOCOLS["r8"]["symbols"]) == 20 and len(set(PROTOCOLS["r8"]["symbols"])) == 20
+    quotes, trades = _synthetic_series(seconds=2000)
+    depth = {"ts_s": T0 + np.arange(0, 2000, 30), "bid": np.full((67, 5), 2.0), "ask": np.full((67, 5), 1.0)}
+    series = Series("t", None, None, INSTRUMENT, T0, T0 + 2000, False, 10.0, True, loader=lambda: (quotes, trades, depth))
+    data = series.data(0)
+    assert data.features["di_1"][-1] == pytest.approx(1.0 / 3.0) and bool(signal_mask("Q1-B1-T0.25", data.features, 1)[-1])
+    plain = Series("p", quotes, trades, INSTRUMENT, T0, T0 + 2000, False, 10.0, True).data(1)
+    assert "di_1" not in plain.features
+
+
+def test_acquire_converters_on_synthetic_archives():
+    pytest.importorskip("pandas")  # the converters parse with pandas; the research runtime has it, CI may not
+    from scripts.research_exec.acquire import convert_aggtrades, convert_bookdepth, parse_dates
+    assert parse_dates("2025-01-13..2025-01-15,2024-12-09") == ["2025-01-13", "2025-01-14", "2025-01-15", "2024-12-09"]
+    csv = b"agg_trade_id,price,quantity,first_trade_id,last_trade_id,transact_time,is_buyer_maker\n2,100.5,1.5,1,1,1700000000001,false\n1,100.4,2.0,0,0,1700000000000,true\n"
+    arrays, diag = convert_aggtrades(csv)
+    assert arrays["ts_us"].tolist() == [1700000000000000, 1700000000001000] and arrays["taker_buy"].tolist() == [0, 1]
+    assert arrays["agg_trade_id"].tolist() == [1, 2] and diag["input_already_sorted"] is False and str(arrays["taker_buy"].dtype) == "int8"
+    headerless = b"1,100.4,2.0,0,0,1700000000000,True\n2,100.5,1.5,1,1,1700000000001,False\n"
+    arrays2, _ = convert_aggtrades(headerless)
+    assert arrays2["taker_buy"].tolist() == [0, 1] and arrays2["price"].tolist() == [100.4, 100.5]
+    levels = (-5, -4, -3, -2, -1, 1, 2, 3, 4, 5)
+    depth_csv = b"timestamp,percentage,depth,notional\n" + b"".join(f"2025-03-10 00:00:08,{p},{abs(p) * 10.0},{abs(p) * 100.0}\n".encode() for p in levels) + b"2025-03-10 00:00:53,-1,1,1\n"
+    arrays3, diag3 = convert_bookdepth(depth_csv)
+    assert arrays3["ts_s"].tolist() == [1741564808] and arrays3["bid"][0].tolist() == [100.0, 200.0, 300.0, 400.0, 500.0]
+    assert arrays3["ask"][0].tolist() == [100.0, 200.0, 300.0, 400.0, 500.0] and diag3["snapshots_incomplete_dropped"] == 1
+
+
+def test_microprice_features_from_sized_quotes():
+    q_rows = [((T0 + s) * SECOND + 50_000, 100.0, 100.1, 3.0, 1.0) for s in range(40)]
+    t_rows = [((T0 + s) * SECOND + 500_000, 100.05, 0.1, 1) for s in range(40)]
+    f = _make(q_rows, t_rows, seconds=40).features
+    assert f["qi"][0] == pytest.approx(0.5) and f["mpo"][0] == pytest.approx(0.25)  # mp = (100.1 · 3 + 100.0 · 1) / 4 = 100.075, mid 100.05, spread 0.1
+    assert np.isnan(f["dmp_5"][:5]).all() and f["dmp_5"][5:].tolist() == pytest.approx([0.0] * 35)
+    assert np.isnan(f["dmp_30"][29]) and f["dmp_30"][30] == pytest.approx(0.0)
+
+
+def test_m_rules_fire_on_microprice_and_queue_persistence():
+    n = 12
+    f = {"mpo": np.array([0.3, -0.3, 0.1, np.nan, 0.25] + [0.0] * 7), "fi_10": np.array([1.0, 1.0, 1.0, 1.0, -1.0] + [0.0] * 7),
+         "dmp_5": np.full(n, 0.001), "dmp_30": np.full(n, -0.001), "sigma_60": np.full(n, 0.0005), "a_60": np.array([1.0] * 6 + [0.5] * 6),
+         "qi": np.array([0.4, 0.4, 0.4, -0.1, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6])}
+    assert signal_mask("M1-T0.2", f, 1).tolist()[:5] == [True, False, False, False, True]
+    assert signal_mask("M1-T0.2-F", f, 1).tolist()[:5] == [True, False, False, False, False]
+    assert signal_mask("M1-T0.2", f, -1).tolist()[:5] == [False, True, False, False, False]
+    assert signal_mask("M2-W5-K1.0", f, 1).tolist() == [True] * 6 + [False] * 6 and not signal_mask("M2-W5-K1.0", f, -1).any()  # 0.001 > 0.0005 · sqrt(5/60), activity gate
+    assert signal_mask("M2-W30-K2.0", f, -1).tolist() == [True] * 6 + [False] * 6  # 0.001 > 2 · 0.0005 · sqrt(30/60)
+    assert signal_mask("M3-Q0.3-N3", f, 1).tolist() == [False, False, True, False, False, False, True, True, True, True, True, True]
+    assert signal_mask("M3-Q0.5-N3", f, 1).tolist() == [False] * 6 + [True] * 6 and not signal_mask("M3-Q0.3-N3", f, -1).any()
+
+
+def test_queue_entry_fills_when_prints_at_the_price_exhaust_the_displayed_quantity():
+    # Flat book 100.0 / 100.1 with 5.0 displayed at the bid. Decision at the end of second 2; taker sells of 2.0 at 100.0
+    # every second from +3.6 s: the queue rule (E3) fills on the fourth print (8.0 ≥ 5.0 + 250 / 100), the through rule (E1) never.
+    q_rows = [((T0 + s) * SECOND + 50_000, 100.0, 100.1, 5.0, 1.0) for s in range(700)]
+    t_rows = [((T0 + s) * SECOND + 500_000, 100.05, 0.1, 1) for s in range(700)]
+    sells = [((T0 + 3 + k) * SECOND + 600_000, 100.0, 2.0, 0) for k in range(10)]
+    data = _make(q_rows, t_rows + sells)
+    through, _ = run_policy(data, 1, np.array([2]), Policy("E1", "X1"))
+    queued, counters = run_policy(data, 1, np.array([2]), Policy("E3", "X1"))
+    assert through.size == 0 and queued.size == 1 and counters.filled == 1
+    assert queued["fill_ts"][0] == (T0 + 6) * SECOND + 600_000 and queued["exit_reason"][0] == EXIT_REASONS["time"]
+    buys = [((T0 + 3 + k) * SECOND + 600_000, 100.0, 2.0, 1) for k in range(10)]  # taker buys at 100.0 do not consume a resting bid's queue
+    none, _ = run_policy(_make(q_rows, t_rows + buys), 1, np.array([2]), Policy("E3", "X1"))
+    assert none.size == 0
+
+
+def test_bookticker_converter_keeps_the_last_update_per_second_and_counts():
+    pytest.importorskip("pandas")
+    from scripts.research_exec.acquire import convert_bookticker
+    csv = (b"update_id,best_bid_price,best_bid_qty,best_ask_price,best_ask_qty,transaction_time,event_time\n"
+           b"1,100.0,3.0,100.1,1.0,1700000000100,1700000000101\n"
+           b"2,100.0,1.0,100.1,3.0,1700000000900,1700000000901\n"
+           b"3,100.1,2.0,100.2,2.0,1700000002500,1700000002501\n"
+           b"4,100.0,1.0,100.1,1.0,1700000000500,1700000000501\n")  # out of order: belongs to the first second
+    arrays, diag = convert_bookticker(csv)
+    assert arrays["ts_s"].tolist() == [1700000000, 1700000002] and arrays["bid"].tolist() == [100.0, 100.1] and arrays["ask_qty"].tolist() == [3.0, 2.0]
+    assert arrays["updates"].tolist() == [3, 1] and arrays["qi_mean"][0] == pytest.approx(0.0) and arrays["qi_mean"][1] == pytest.approx(0.0)
+    assert diag["updates_total"] == 4 and diag["seconds_with_updates"] == 2 and diag["input_already_sorted"] is False
+
+
+def test_r9_grid_and_book_quotes_loader(tmp_path):
+    from scripts.research_exec.screen import PROTOCOLS, book_quotes, build_grid
+    grid = build_grid(True, "r9")
+    assert len(grid) == 256 and sum("|E3|" in g for g in grid) == 128 and all(g.split("|")[3] in ("X1", "X3", "X4", "Y1") for g in grid)
+    assert len({g.split("|")[0] for g in grid}) == 16 and len(PROTOCOLS["r9"]["symbols"]) == 18 and len(set(PROTOCOLS["r9"]["symbols"])) == 18
+    path = tmp_path / "BTCUSDT-2024-01-15.npz"
+    np.savez(path, ts_s=np.array([T0 + 1, T0]), bid=np.array([100.1, 100.0]), ask=np.array([100.2, 100.1]), bid_qty=np.array([2.0, 3.0]), ask_qty=np.array([1.0, 1.0]), updates=np.array([1, 1], dtype=np.int32), qi_mean=np.array([0.3, 0.5]))
+    quotes = book_quotes((path,))
+    assert quotes["ts"].tolist() == [(T0 + 1) * SECOND - 1, (T0 + 2) * SECOND - 1] and quotes["bid_size"].tolist() == [3.0, 2.0] and quotes["ask"].tolist() == [100.1, 100.2]
+    assert book_quotes(()).size == 0

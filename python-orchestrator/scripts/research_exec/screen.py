@@ -30,18 +30,35 @@ from .capture import QUOTE_DTYPE, TRADE_DTYPE, Instrument
 from .scalp_engine import ENTRIES, EXITS, Policy, SeriesData, run_policy
 from .scalp_engine import TRADE_DTYPE as ROW_DTYPE
 from .stats import block_bootstrap_lower_bound
-from .tick import SECOND_US, build_bars, compute_features, family_of, rule_catalogue, signal_mask
+from .tick import SECOND_US, book_rule_catalogue, build_bars, compute_features, depth_rule_catalogue, family_of, rule_catalogue, signal_mask
 
 CAPTURE_SPLIT_S = 12 * 3600
 BINANCE_WINDOWS = {
     "february": ("2025-02-10", "2025-02-14"), "march": ("2025-03-10", "2025-03-14"), "april": ("2025-04-14", "2025-04-18"), "may": ("2025-05-12", "2025-05-16"),
     "june": ("2025-06-16", "2025-06-20"), "july": ("2025-07-14", "2025-07-18"), "august": ("2025-08-11", "2025-08-15"), "september": ("2025-09-15", "2025-09-19"),
     "october": ("2025-10-13", "2025-10-17"), "november": ("2025-11-10", "2025-11-14"), "december": ("2025-12-08", "2025-12-12"),
+    "january": ("2025-01-13", "2025-01-17"), "december-2024": ("2024-12-09", "2024-12-13"),  # r8 validation and holdout, never read before r8
+    # r9 (bookTicker archive, 2023-05-16 .. 2024-03-30): four training windows, validation, holdout (the last full week).
+    "w2307": ("2023-07-10", "2023-07-14"), "w2309": ("2023-09-11", "2023-09-15"), "w2311": ("2023-11-13", "2023-11-17"), "w2401": ("2024-01-15", "2024-01-19"),
+    "w2402": ("2024-02-12", "2024-02-16"), "w2403": ("2024-03-25", "2024-03-29"),
 }
 R5_FEATURES = ("mid", "quote_age", "band_dev_900", "sigma_900", "fi_60", "sigma_60")
 BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",), "holdout": ("december",)}
 # r1: the 2026-10-12 pre-registration (PREREGISTRATION.md); r2: PREREGISTRATION-r2.md (intraday holds).
+R8_RULES, R8_BOTH_RULES = depth_rule_catalogue()
+# r8: majors and mid-caps interleaved so that the by-series workers do not load three dense majors at once.
+R8_SYMBOLS = ("BTCUSDT", "ARBUSDT", "ETHUSDT", "OPUSDT", "SOLUSDT", "APTUSDT", "XRPUSDT", "SUIUSDT", "DOGEUSDT", "NEARUSDT",
+              "BNBUSDT", "TIAUSDT", "ADAUSDT", "SEIUSDT", "LTCUSDT", "INJUSDT", "LINKUSDT", "ATOMUSDT", "AVAXUSDT", "FILUSDT")
+# r9: the eighteen pairs with bookTicker from 2023-07 (TIA and SEI listed later), majors and mid-caps interleaved.
+R9_SYMBOLS = ("BTCUSDT", "ARBUSDT", "ETHUSDT", "OPUSDT", "SOLUSDT", "APTUSDT", "XRPUSDT", "SUIUSDT", "DOGEUSDT", "NEARUSDT",
+              "BNBUSDT", "INJUSDT", "ADAUSDT", "ATOMUSDT", "LTCUSDT", "FILUSDT", "LINKUSDT", "AVAXUSDT")
 PROTOCOLS = {
+    "r9": {"entries": ("E1", "E3"), "exits": ("X1", "X3", "X4", "Y1"), "sides": (1, -1), "training_windows": ("w2307", "w2309", "w2311", "w2401"),
+           "phases": {"validation": ("w2402",), "holdout": ("w2403",)}, "rules": tuple(book_rule_catalogue()), "by_series": True, "book": True, "symbols": R9_SYMBOLS,
+           "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
+    "r8": {"entries": ("E1",), "exits": ("Y1", "Y3", "Z3"), "sides": (1, -1), "training_windows": ("february", "march", "april", "may", "june", "july", "august", "september", "october"),
+           "phases": {"validation": ("january",), "holdout": ("december-2024",)}, "rules": tuple(R8_RULES), "both_rules": tuple(R8_BOTH_RULES), "by_series": True, "depth": True, "symbols": R8_SYMBOLS,
+           "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
     "r1": {"entries": ("E1", "E2"), "exits": ("X1", "X2", "X3", "X4"), "gates": {"min_trades": {"captures": 100, "binance": 300}, "min_mean_bp": 1.0, "min_pf": 1.15, "control_margin_bp": 2.0, "min_series_share": 0.75, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 50, "binance": 150}, "min_pf": 1.05, "min_series_share": 0.5}},
     "r6": {"entries": ("E1",), "exits": ("X2", "Y1", "Y3", "Z3"), "sides": (1, -1), "training_windows": ("february", "march", "april", "may", "june", "july", "august", "september", "october"),
            "rules": "catalogue+S7", "both_rules": ("S7-W300-K1.5", "S7-W300-K2.0", "S7-W900-K1.5", "S7-W900-K2.0"), "by_series": True,
@@ -140,16 +157,20 @@ class Series:
     """One series: arrays given eagerly (captures) or produced by `loader` when `data()` runs
     (Binance tape: ninety series of structured prints do not fit the host at once)."""
 
-    def __init__(self, name: str, quotes: np.ndarray | None, trades: np.ndarray | None, instrument: Instrument, start_s: int, end_s: int, book: bool, min_notional: float, day_key: bool, loader=None) -> None:
+    def __init__(self, name: str, quotes: np.ndarray | None, trades: np.ndarray | None, instrument: Instrument, start_s: int, end_s: int, book: bool, min_notional: float, day_key: bool, loader=None, depth: dict | None = None) -> None:
         self.name, self.quotes, self.trades, self.instrument = name, quotes, trades, instrument
         self.start_s, self.end_s, self.book, self.min_notional, self.day_key = int(start_s), int(end_s), book, min_notional, day_key
         self.loader = loader
+        self.depth = depth  # r8: bookDepth snapshots (`ts_s`, `bid`, `ask`), or None
 
     def data(self, series_id: int, keep_features: tuple[str, ...] | None = None) -> SeriesData:
         if self.quotes is None and self.loader is not None:
-            self.quotes, self.trades = self.loader()
+            loaded = self.loader()
+            self.quotes, self.trades = loaded[0], loaded[1]
+            if len(loaded) > 2:
+                self.depth = loaded[2]
         bars = build_bars(self.quotes, self.trades, self.start_s, self.end_s)
-        features = compute_features(bars, self.instrument)
+        features = compute_features(bars, self.instrument, self.depth)
         if keep_features is not None:
             # Memory-light mode (r5): only the arrays the rule and the engine read are kept.
             features = {name: features[name] for name in keep_features}
@@ -226,16 +247,19 @@ def _day_s(date: str) -> int:
     return int(datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
 
-def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None) -> tuple[list[Series], list[str]]:
+def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None, depth: bool = False, book: bool = False) -> tuple[list[Series], list[str]]:
     """`tape_dir` holds the training and validation windows; the holdout window is read from
-    the sibling holdout directory when `phase == "holdout"`."""
+    the sibling holdout directory when `phase == "holdout"`. With `depth`, the bookDepth npz of
+    each day (`depth/<symbol>/<symbol>-<date>.npz`) is loaded with the prints (r8); with `book`,
+    the quotes come from the per-second bookTicker records (`book/<symbol>/<symbol>-<date>.npz`)
+    instead of the print proxies (r9)."""
     instruments = load_binance_instruments(instruments_path)
     series, missing = [], []
     for symbol in symbols:
         for window in windows or BINANCE_PHASES[phase]:
             first, last = BINANCE_WINDOWS[window]
             start_s, end_s = _day_s(first), _day_s(last) + 86400
-            paths = []
+            paths, depth_paths, book_paths = [], [], []
             for day in range((end_s - start_s) // 86400):
                 date = datetime.fromtimestamp(start_s + day * 86400, tz=timezone.utc).strftime("%Y-%m-%d")
                 path = tape_dir / "npz" / symbol / f"{symbol}-{date}.npz"
@@ -243,17 +267,43 @@ def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symb
                     missing.append(f"{symbol}:{date}")
                     continue
                 paths.append(path)
+                for wanted, folder, bucket in ((depth, "depth", depth_paths), (book, "book", book_paths)):
+                    if not wanted:
+                        continue
+                    extra = tape_dir / folder / symbol / f"{symbol}-{date}.npz"
+                    if extra.exists():
+                        bucket.append(extra)
+                    else:
+                        missing.append(f"{folder}:{symbol}:{date}")
             if not paths:
                 continue
             instrument, min_notional = instruments[symbol]
-            series.append(Series(f"binance:{symbol}:{window}", None, None, instrument, start_s, end_s, False, min_notional, True, loader=_tape_loader(tuple(paths), instrument.fixed_tick, start_s, end_s)))
+            loader = _tape_loader(tuple(paths), instrument.fixed_tick, start_s, end_s, tuple(depth_paths) if depth else None, tuple(book_paths) if book else None)
+            series.append(Series(f"binance:{symbol}:{window}", None, None, instrument, start_s, end_s, book, min_notional, True, loader=loader))
     return series, missing
 
 
-def _tape_loader(paths: tuple[Path, ...], tick: float, start_s: int, end_s: int):
-    """Deferred loading of one series' days: prints concatenated and sorted, quotes proxied."""
+def book_quotes(book_paths: tuple[Path, ...]) -> np.ndarray:
+    """Quotes from the per-second bookTicker records (r9): one quote per second with an update,
+    stamped at the end of its second, with the displayed quantities as sizes."""
+    pieces = []
+    for path in book_paths:
+        with np.load(path) as data:
+            rows = np.zeros(data["ts_s"].size, dtype=QUOTE_DTYPE)
+            end_us = (data["ts_s"].astype(np.int64) + 1) * SECOND_US - 1
+            rows["ts"], rows["recv"] = end_us, end_us
+            rows["bid"], rows["ask"], rows["bid_size"], rows["ask_size"] = data["bid"], data["ask"], data["bid_qty"], data["ask_qty"]
+        pieces.append(rows)
+    quotes = np.concatenate(pieces) if pieces else np.zeros(0, dtype=QUOTE_DTYPE)
+    return quotes[np.argsort(quotes["ts"], kind="stable")]
 
-    def load() -> tuple[np.ndarray, np.ndarray]:
+
+def _tape_loader(paths: tuple[Path, ...], tick: float, start_s: int, end_s: int, depth_paths: tuple[Path, ...] | None = None, book_paths: tuple[Path, ...] | None = None):
+    """Deferred loading of one series' days: prints concatenated and sorted, quotes proxied (or
+    read from the bookTicker records when `book_paths` is given, r9); with `depth_paths` (r8),
+    the bookDepth snapshots concatenated and sorted as a third item."""
+
+    def load() -> tuple:
         pieces = []
         for path in paths:
             with np.load(path) as data:
@@ -263,7 +313,22 @@ def _tape_loader(paths: tuple[Path, ...], tick: float, start_s: int, end_s: int)
             pieces.append(rows)
         trades = np.concatenate(pieces)
         trades = trades[np.argsort(trades["ts"], kind="stable")]
-        return proxy_quotes(trades, tick, start_s, end_s), trades
+        quotes = book_quotes(book_paths) if book_paths is not None else proxy_quotes(trades, tick, start_s, end_s)
+        if depth_paths is None:
+            return quotes, trades
+        snaps, bids, asks = [], [], []
+        for path in depth_paths:
+            with np.load(path) as data:
+                snaps.append(data["ts_s"].astype(np.int64))
+                bids.append(data["bid"].astype(np.float64))
+                asks.append(data["ask"].astype(np.float64))
+        if snaps:
+            ts_s = np.concatenate(snaps)
+            order = np.argsort(ts_s, kind="stable")
+            depth = {"ts_s": ts_s[order], "bid": np.concatenate(bids)[order], "ask": np.concatenate(asks)[order]}
+        else:
+            depth = {"ts_s": np.zeros(0, dtype=np.int64), "bid": np.zeros((0, 5)), "ask": np.zeros((0, 5))}
+        return quotes, trades, depth
 
     return load
 
@@ -299,6 +364,8 @@ def _replay_series(data: SeriesData, identifier: str, seeds: int) -> dict | None
     policy = Policy(entry, exit_)
     if rule.startswith("S3") and not np.isfinite(data.bars["bid_size"]).any():
         return None
+    if rule.startswith("Q") and "di_1" not in data.features:
+        return None  # depth rules need the bookDepth snapshots (r8)
     counters = {"decisions": 0, "orders": 0, "crossed": 0, "unfilled": 0, "filled": 0}
     control_sums = [[0.0, 0] for _ in range(seeds)]
     series_trades, signals = [], 0
@@ -571,11 +638,12 @@ def main(argv: list[str] | None = None) -> int:
             series = load_capture_series(Path(args.extract_dir), args.phase)
             book = True
         else:
-            symbols = tuple(args.symbols.split(",")) if args.symbols else tuple(PROTOCOLS[args.protocol].get("symbols", BINANCE_SYMBOLS))
-            windows = PROTOCOLS[args.protocol].get("training_windows") if args.phase == "training" else None
-            series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols, windows)
+            spec = PROTOCOLS[args.protocol]
+            symbols = tuple(args.symbols.split(",")) if args.symbols else tuple(spec.get("symbols", BINANCE_SYMBOLS))
+            windows = spec.get("training_windows") if args.phase == "training" else spec.get("phases", {}).get(args.phase)
+            series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols, windows, depth=bool(spec.get("depth")), book=bool(spec.get("book")))
             extra["missing_days"] = missing
-            book = False
+            book = bool(spec.get("book"))
         if args.configs_file:
             configurations = [line.strip() for line in Path(args.configs_file).read_text().splitlines() if line.strip()]
         else:
