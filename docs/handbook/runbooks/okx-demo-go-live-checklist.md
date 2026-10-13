@@ -142,3 +142,23 @@ today. Migrations `Version20260712120000` and `Version20260712230000` are requir
 - `APP_SECRET` is hard-coded in `docker-compose.yml`; there is no `trading-app/.dockerignore`,
   so `COPY . .` can bake local `.env*` files into the private-WS image when built from a
   checkout that holds them.
+
+## 6. State on 2026-10-13 06:15Z (owner's "fais le 1")
+
+- The compose checkout was fast-forwarded from `5fb306bd` to `main` (`bef26627`); the local
+  untracked copy of the roadmap plan that blocked the merge was set aside in the artifact
+  directory. `trading-app/.dockerignore` (untracked) now keeps `.git`, `.env.local`, the other
+  local env files, `var/cache` and `var/log` out of `COPY . .`.
+- A pg_dump of `trading_app` (15 MB, 40 tables) was taken before any migration;
+  `doctrine:migrations:list` with `main`'s code shows **24 pending migrations** (the database is
+  at the 2026-07-15 level).
+- `composer.lock` changed and `Dockerfile.mtf` gained `pdo_sqlite`: `composer install` and an
+  image rebuild are required before the recreate.
+- No legacy Temporal schedule exists (only `recipe-orchestrator-r1-r16-20260711`, paused) and
+  `cron_symfony_mtf_workers` is not running: step 4 of §0 is moot today; nothing triggers
+  `mtf:run` by itself.
+- The agent's permission policy refused every write inside the containers and every build or
+  recreate ("Remote Shell Writes", "Production Deploy"). The remaining steps, in order, with the
+  exact commands, are in `tradingV3-private/research/20261013T080000Z-okx-demo-golive-r1/HANDOFF.md`
+  (steps 1–7 with the flags at 0, then the owner's decision on the flags). Until step 3 runs, the
+  stack mixes `main`'s code (bind mount) with the old vendor and image and must not be used.
