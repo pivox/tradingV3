@@ -48,13 +48,80 @@ the texts).
   timing, 10 seeds; at most three per family to validation; validation and holdout checks
   trades ≥ 100, net > 0, PF ≥ 1.05, above the control median, ≥ 50 % of series positive).
 
-### r8 training
+### r8 training: 0 of 192 pass; the pure depth families have no content
 
-_Pending._
+180 series (twenty pairs × nine windows), 1,865 s with the series-by-series driver, no missing
+day. Every configuration trades (median 1,539 trades, 145 of 192 above 300), so the gates judge
+content, not sample size:
 
-### r8 validation and holdout
+| Family | Configurations | Median trades | Median mean net bp | Best configuration (mean net, trades, LB90) | Gates failed (typical) |
+|---|---:|---:|---:|---|---|
+| Q1 depth momentum | 48 | 3,789 | −7.6 | `Q1-B1-T0.4\|short\|E1\|Y3` −5.4 bp (n = 3,765, LB −6.7) | G2–G7, all 48 |
+| Q4 depth contrarian | 48 | 3,971 | −9.4 | `Q4-B2-T0.4\|short\|E1\|Y3` −4.7 bp (n = 2,780, LB −6.4) | G2–G7, 44 of 48 |
+| Q2 depth build-up | 24 | 2,502 | −8.5 | `Q2-B1-D0.3\|long\|E1\|Z3` −0.6 bp (n = 1,463, LB −5.2) | G2–G7, 21 of 24 |
+| Q3 band reversion with depth support | 72 | 145 | +3.6 | `Q3-W900-K1.5-T0.25\|short\|E1\|Z3` +30.5 bp (n = 137, LB +21.1) | G1 or G5 |
 
-_Pending._
+By exit the medians are −9.5 bp (Y1, taker at 15 min), −6.4 (Y3, bracket) and −5.7 (Z3,
+passive at 60 min). The three pure depth families lose at the control's level on both sides
+and at every hold: a heavy bid side within 1 or 2 % of the mid, its build-up over five
+minutes, or the fade of a heavy side, predict nothing at 15–60 minutes that the fees do not
+eat. The thresholds were set before the data; on these books the ±1 % imbalance is a
+narrow quantity (ARBUSDT, February: median +0.05, 95th percentile +0.13), so the rules at
+0.25 fire on about one second in a thousand, yet still on thousands of occasions over
+450 symbol-days; the result does not change with the sample.
+
+Q3 is the exception, and it is the r6 exception with one more filter. The rows that fail a
+single gate:
+
+| Configuration | Trades | Fill | Mean net bp | LB90 | PF | Control median / p95 | Series positive | Gate failed |
+|---|---:|---:|---:|---:|---:|---|---:|---|
+| `Q3-W900-K1.5-T0.1\|both\|E1\|Z3` | 1,462 | 75 % | +14.0 | +10.3 | 1.44 | −13.1 / −10.0 | 60 % of 168 | G5 |
+| `Q3-W900-K1.5-T0.1\|short\|E1\|Z3` | 332 | 78 % | +18.3 | +10.1 | 1.61 | −4.4 / +6.0 | 64 % of 99 | G5 |
+| `Q3-W900-K1.5-T0.25\|both\|E1\|Z3` | 558 | 77 % | +14.5 | +8.7 | 1.45 | −9.6 / −6.3 | 62 % of 119 | G5 |
+| `Q3-W900-K1.5-T0.1\|long\|E1\|Z3` | 1,130 | 75 % | +12.7 | +8.6 | 1.40 | −16.1 / −11.8 | 59 % of 167 | G5 |
+| `Q3-W900-K1.5-T0.1\|short\|E1\|Y3` | 379 | 77 % | +12.3 | +6.6 | 1.46 | −4.6 / −2.1 | 59 % of 99 | G5 |
+| `Q3-W900-K1.5-T0.1\|short\|E1\|Y1` | 342 | 78 % | +9.1 | +4.6 | 1.52 | −11.4 / −7.0 | 63 % of 99 | G5 |
+
+The depth filter (bid-side share within 1 % above 0.1 for a long, mirrored for a short) removes
+more than half of the band-reversion trades (1,462 on 180 series here against 1,698 on the 90
+mid-cap series of r6) and raises the mean from +10 bp (r6, mid-caps alone) to +13–18 bp per
+trade on the twenty pairs, with the same 60 % of series positive. Under
+the pre-registered rule nothing was selected and the January 2025 and December 2024 windows
+stayed unread by r8 (`part-b/binance-r8/`).
+
+### r8b: the depth-supported reversion out of sample, no candidate by one check
+
+Ninth-bis pre-registration (`PREREGISTRATION-r8b.md`, frozen 2026-10-13T07:15:29Z, sha256
+`9d080133…`, after the training result and before the two windows were read): the two Q3
+configurations with enough training trades to reach 100 in a five-day window, judged on
+January 2025 (validation) then December 2024 (holdout), with the r8 checks and no gate relaxed.
+
+| Configuration | Phase | Trades | Fill | Mean net bp | Median | PF | Win | LB90 | Control median / p95 | Pairs positive | Result |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---|
+| `Q3-W900-K1.5-T0.1\|both\|E1\|Z3` | training (r8) | 1,462 | 75 % | +14.0 | — | 1.44 | — | +10.3 | −13.1 / −10.0 | 60 % of 168 | one gate short |
+| `Q3-W900-K1.5-T0.1\|both\|E1\|Z3` | validation, January 2025 | 239 | 82 % | **−3.6** | +4.6 | 0.92 | 54 % | −13.9 | −5.4 / +7.6 | 9 of 20 | fails; holdout not read |
+| `Q3-W900-K1.5-T0.1\|long\|E1\|Z3` | training (r8) | 1,130 | 75 % | +12.7 | — | 1.40 | — | +8.6 | −16.1 / −11.8 | 59 % of 167 | one gate short |
+| `Q3-W900-K1.5-T0.1\|long\|E1\|Z3` | validation, January 2025 | 151 | 77 % | **+18.6** | +23.2 | 1.62 | 61 % | +7.0 | +5.5 / +16.1 | **14 of 20** | passes |
+| `Q3-W900-K1.5-T0.1\|long\|E1\|Z3` | holdout, December 2024 | 155 | 84 % | **+6.5** | +3.3 | 1.13 | 50 % | −7.1 | −26.4 / −17.3 | **9 of 20** | fails the series check only |
+
+The two-sided configuration loses in January (its short stream gives back what the long
+stream earns) and December stays unread for it. The long stream passes January on fourteen
+pairs and keeps a positive mean in December (+6.5 bp gross +10.6, fees 4.1, 33 bp above
+regime-matched random timing, which lost −26.4 bp in that falling week) but on nine pairs of
+twenty: ARB +576 bp on 13 trades, SEI +673 on 11, OP +480 on 5, APT +449 on 7, ATOM +289 on 8
+against ETH −365 on 6, FIL −361 on 8, SUI −354 on 7, LTC −172, INJ −152, SOL −143. The
+pre-registered check asks ten; outcome `no_eligible_candidate`
+(`part-b/binance-r8b/verdict-holdout.json`). January 2025 and December 2024 have now been read
+once each, for these two configurations.
+
+What survives is a statement, not a candidate: the long-only reversion to the 15-minute EMA
+with confirming flow and bid-side depth keeps a positive mean on three independent sets of
+windows (training +12.7 bp on 1,130 trades, January +18.6 on 151, December +6.5 on 155) and
+beats random timing in each, and its result is carried by a handful of pairs that change from
+window to window. At the holdout rate (31 trades a day across the twenty pairs, one position per
+pair) a 500 USDT notional per trade earns +0.3 USDT per trade and +10 USDT a day at the December
+mean, +29 at the January mean, for 0.2 USDT of fees per round trip; the figure scales with the
+notional and needs twenty positions' worth of margin to be realised.
 
 ## r9 — queue and microprice families on event-level top of book (bookTicker, 2023-24)
 
