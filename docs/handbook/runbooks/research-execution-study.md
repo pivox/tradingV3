@@ -26,6 +26,7 @@ extraction when installed and is optional.
 | Binance instruments | `tradingV3-private/research/20261009T060000Z-source-complements-r1/instrument-assumptions.json` | tick, step, minimums; mid-caps in `…/20261012T060000Z-execution-r1/instrument-assumptions-midcap.json`, the union in `instrument-assumptions-r8.json` |
 | Binance depth (r8) | `…/20261013T061500Z-tape-binance-r8/depth/<SYMBOL>/<SYMBOL>-<date>.npz` | daily `bookDepth` archives (one snapshot every 30 s on average: cumulative notional within ±1 … 5 % of the mid), sha256-checked, `ts_s / bid / ask` (n × 5) |
 | Binance top of book (r9) | `…/20261013T063500Z-tape-binance-r9/book/<SYMBOL>/<SYMBOL>-<date>.npz` | daily `bookTicker` archives (every best bid/ask update with quantities, 2023-05-16 → 2024-03-30), reduced to one record per second: `ts_s / bid / ask / bid_qty / ask_qty / updates / qi_mean` |
+| Binance klines (r10) | `…/20261013T121000Z-tape-binance-r10/klines/<SYMBOL>/<SYMBOL>-1m-<YYYY-MM>.npz` | monthly 1-minute candles (`ts_s / open / high / low / close / volume / quote_volume / count / taker_buy_volume`), sha256-checked; 5m, 15m and 1h candles are UTC aggregations; each series loads one warm-up month before its window |
 
 Acquisition of any of the three archives (`scripts/research_exec/acquire.py`): every zip is
 downloaded, checked against its published sha256 (fail-closed), converted and deleted; a
@@ -36,6 +37,7 @@ are skipped. The bookTicker day of a major is over a gigabyte of text and is str
 python -m scripts.research_exec.acquire aggtrades  --out <dir> --symbols BTCUSDT,ETHUSDT --dates 2025-01-13..2025-01-17 --workers 3
 python -m scripts.research_exec.acquire bookdepth  --out <dir> --symbols BTCUSDT --dates 2025-02-10..2025-02-14,2025-03-10..2025-03-14
 python -m scripts.research_exec.acquire bookticker --out <dir> --symbols ATOMUSDT --dates 2023-07-10..2023-07-14 --workers 2
+python -m scripts.research_exec.acquire klines     --out <dir> --symbols ARBUSDT,OPUSDT --dates 2024-03..2024-08 --workers 2   # months
 ```
 | Fees | maker 2 bp, taker 5 bp (`config/trading/runtime/exchange/*.yaml`) | the screen also reports fees × 1.5 |
 
@@ -80,6 +82,20 @@ On 2026-10-13: `acquire-r8.sh` → `launch-r8.sh` (waits for the acquisition, ch
 training → select → validation → holdout), and `acquire-r9.sh` → `launch-r9.sh` (waits for the acquisition **and** the
 end of r8 on the four shared CPUs, then `run-r9.sh`). r8 and r9 run from two worktrees so that a running screen's
 code tree is never edited (`code_identity()` hashes the package at the end of each run).
+r10 (`tradingV3-private/research/20261013T121000Z-scalping-120-r10/`): `acquire-r10-training.sh` and
+`acquire-r10-klines.sh` (aggTrades of the four 2024 windows, 1-minute klines March → August), `run-r10.sh`
+(training → select → budgets), `run-r10-validate.sh` (mid-cap validation tape and klines, validation, verdict,
+then the holdout into its own directory, read only for validated configurations); `disk-guard.sh` kills the r10
+acquisitions if the host drops under 15 GB free.
+
+```bash
+# r10 (PREREGISTRATION-r10.md): the platform's scalping setups 1.1.0 with the 1.2.0 geometries; `setups: True` loads
+# the klines of `--klines-dir` (default <tape dir>/klines); validation and holdout run on the protocol's `phase_symbols`
+python -m scripts.research_exec.screen screen --source binance --phase training --protocol r10 --tape-dir <tape dir> \
+    --instruments <instrument-assumptions-r10.json> --out $X/part-b/binance-r10 --workers 3 --prereg $X/PREREGISTRATION-r10.md
+python -m scripts.research_exec.screen screen --source binance --phase validation --protocol r10 --tape-dir <tape dir> \
+    --instruments … --out $X/part-b/binance-r10 --configs-file $X/part-b/binance-r10/validation-list.txt
+```
 
 Every document records the sha256 of each package file (`code`) and, when `--prereg` is given,
 of the pre-registration. Outcomes per configuration are saved as `screen-<phase>-outcomes/*.npz`
@@ -124,8 +140,19 @@ gross / fees / net in bp, hold).
   the displayed quantity of the decision second plus its own 250 USDT, or when the price trades
   through) and its 2023-24 windows (`w2307` … `w2403`). A rule id is parsed token by token
   (`parse_rule`: `W` window, `B` depth band, `T` threshold, `K` sigma multiple, `D` delta, `Q`
-  queue threshold, `N` run length, flags `F`, `C`, bare `B`); a rule whose features are absent
-  (S3 without book sizes, Q without depth) is skipped on that series.
+  queue threshold, `N` run length, `A` stack layers, flags `F`, `C`, bare `B`); a rule whose features are absent
+  (S3 without book sizes, Q without depth, P without the klines stacks) is skipped on that series.
+  **r10** (`setups: True`) ports the platform's three scalping setups 1.1.0 (`platform_setups.py`:
+  canonical indicator conventions, catalog 1.1.0 conditions, the 1h regime, 15m context and
+  trigger, 5m and 1m confirmations evaluated on closed candles at every 5-minute close, usable
+  from the end of second T − 1) as the family **P** — `P{1,2,3}-A{3,4}-K{k}`: setup (pullback
+  long, trend continuation long, trend momentum short; the side is implied, `rule_sides`), layers
+  (A4 the full stack, A3 without the 5m/1m confirmations), cost gate `ATR14(5m) ≥ k × (7 bp +
+  spread)` — with the contract's 45 s order TTL and the exits **B1–B4** (stop 1.5 × ATR14(5m) of
+  the decision, taker; target 1.8 R taker / 1.8 R maker / 3 R maker / none; 2 h hold; taker exit
+  no later than 23:59:00 UTC). Its phases carry their own symbol list (`phase_symbols`: the ten
+  mid-caps for validation and holdout) and each series reports the share of decisions whose mid
+  lies inside the 1.1.0 VWAP entry zone (`zone_share`, diagnostic only — the zone is not enforced).
 
 ## Outputs
 

@@ -13,14 +13,16 @@ import re
 import numpy as np
 
 from .capture import Instrument
+from .platform_setups import SETUP_SIDES
 
 SECOND_US = 1_000_000
 HOUR_S = 3600
 FEATURE_WINDOWS = (10, 60, 300)
 SIGMA_WINDOWS = (60, 300)
 FAMILIES = ("S1", "S2", "S3", "S4", "S5", "S6")
-_FAMILY = re.compile(r"^(S[1-7]|Q[1-4]|M[1-3])$")
+_FAMILY = re.compile(r"^(S[1-7]|Q[1-4]|M[1-3]|P[1-3])$")
 MICROPRICE_WINDOWS = (5, 30)  # r9: microprice momentum horizons in seconds
+SETUP_FEE_BP = 7.0  # r10 cost gate: maker entry 2 bp + taker exit 5 bp, plus the quoted spread (PREREGISTRATION-r10.md §3)
 DEPTH_STALE_S = 120  # a bookDepth snapshot older than this gives no depth feature (r8 §2)
 DEPTH_REF_S = 300  # `ddi` compares with the last snapshot at least this much earlier …
 DEPTH_REF_MAX_S = 900  # … and none within this horizon gives NaN
@@ -28,8 +30,9 @@ DEPTH_REF_MAX_S = 900  # … and none within this horizon gives NaN
 
 def parse_rule(rule: str) -> tuple[str, dict]:
     """`S7-W900-K1.5` → ("S7", {"W": "900", "K": "1.5"}). Tokens: W window, B depth band (a
-    digit), T threshold, K sigma multiple, D delta, Q queue threshold; flags F (flow), C
-    (continuation) and a bare B (the VWAP band of S5-B, key `band`)."""
+    digit), T threshold, K sigma multiple (cost multiple for the P rules), D delta, Q queue
+    threshold, N run length, A stack layers (r10); flags F (flow), C (continuation) and a bare B
+    (the VWAP band of S5-B, key `band`)."""
     family, *tokens = rule.split("-")
     if _FAMILY.match(family) is None:
         raise ValueError(f"unknown rule {rule}")
@@ -39,7 +42,7 @@ def parse_rule(rule: str) -> tuple[str, dict]:
             params["band"] = True
         elif token in ("F", "C"):
             params[token] = True
-        elif len(token) > 1 and token[0] in "WBTKDQN":
+        elif len(token) > 1 and token[0] in "WBTKDQNA":
             params[token[0]] = token[1:]
         else:
             raise ValueError(f"unknown rule {rule}")
@@ -212,6 +215,7 @@ def compute_features(bars: dict[str, np.ndarray], instrument: Instrument, depth:
         features["burst"] = (count > 3.0 * count_hour) & (count_hour > 0)
         features["mid"] = mid
         features["quote_age"] = bars["quote_age"]
+        features["spread_bp"] = (bars["ask"] - bars["bid"]) / mid * 1e4  # r10 cost gate
     if depth is not None:
         features.update(depth_features(bars["ts"], depth))
     assert all(value.shape == (n,) for value in features.values())
@@ -310,4 +314,13 @@ def signal_mask(rule: str, f: dict[str, np.ndarray], side: int) -> np.ndarray:
         if family == "M3":
             persistent = (sgn * f["qi"] > q).astype(np.float64)
             return _rolling_sum(np.cumsum(persistent), run_n) >= run_n
+        # r10 platform setups (PREREGISTRATION-r10.md §3): the stack of the decision second (klines-derived,
+        # `platform_setups.setup_features`) and the cost gate ATR14(5m) ≥ k × (7 bp + spread).
+        if family in ("P1", "P2", "P3"):
+            if side != SETUP_SIDES[int(family[1])]:
+                return np.zeros(f["mid"].shape, dtype=bool)
+            mask = f[f"p{family[1]}_a{int(p['A'])}"] & np.isfinite(f["atr5"])
+            if k:
+                mask &= f["atr5_bp"] >= k * (SETUP_FEE_BP + f["spread_bp"])
+            return mask
     raise ValueError(f"unknown family {family}")

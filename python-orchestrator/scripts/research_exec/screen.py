@@ -27,7 +27,8 @@ import numpy as np
 
 from . import capture
 from .capture import QUOTE_DTYPE, TRADE_DTYPE, Instrument
-from .scalp_engine import ENTRIES, EXITS, Policy, SeriesData, run_policy
+from .platform_setups import SETUP_SIDES, klines_loader, setup_rule_catalogue
+from .scalp_engine import ENTRIES, EXITS, SETUP_TTL_US, Policy, SeriesData, run_policy
 from .scalp_engine import TRADE_DTYPE as ROW_DTYPE
 from .stats import block_bootstrap_lower_bound
 from .tick import SECOND_US, book_rule_catalogue, build_bars, compute_features, depth_rule_catalogue, family_of, rule_catalogue, signal_mask
@@ -43,6 +44,9 @@ BINANCE_WINDOWS = {
     "w2402": ("2024-02-12", "2024-02-16"), "w2403": ("2024-03-25", "2024-03-29"),
     # fwd-okx-r1 (PREREGISTRATION-forward-okx-r1.md): forward OKX tape; w0 is the pipeline shakedown, w1 and w2 the judged weeks.
     "fwd-okx-w0": ("2026-10-14", "2026-10-16"), "fwd-okx-w1": ("2026-10-19", "2026-10-23"), "fwd-okx-w2": ("2026-10-26", "2026-10-30"),
+    # r10 (PREREGISTRATION-r10.md §1): 2024 windows never read at the tick level; validation and holdout weeks on the mid-caps only.
+    "w2404": ("2024-04-15", "2024-04-19"), "w2405": ("2024-05-13", "2024-05-17"), "w2406": ("2024-06-10", "2024-06-14"), "w2408": ("2024-08-12", "2024-08-16"),
+    "w2409a": ("2024-09-09", "2024-09-13"), "w2409b": ("2024-09-16", "2024-09-20"), "w2411a": ("2024-11-11", "2024-11-15"), "w2411b": ("2024-11-18", "2024-11-22"),
 }
 R5_FEATURES = ("mid", "quote_age", "band_dev_900", "sigma_900", "fi_60", "sigma_60")
 BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",), "holdout": ("december",)}
@@ -54,7 +58,15 @@ R8_SYMBOLS = ("BTCUSDT", "ARBUSDT", "ETHUSDT", "OPUSDT", "SOLUSDT", "APTUSDT", "
 # r9: the eighteen pairs with bookTicker from 2023-07 (TIA and SEI listed later), majors and mid-caps interleaved.
 R9_SYMBOLS = ("BTCUSDT", "ARBUSDT", "ETHUSDT", "OPUSDT", "SOLUSDT", "APTUSDT", "XRPUSDT", "SUIUSDT", "DOGEUSDT", "NEARUSDT",
               "BNBUSDT", "INJUSDT", "ADAUSDT", "ATOMUSDT", "LTCUSDT", "FILUSDT", "LINKUSDT", "AVAXUSDT")
+# r10: the ten mid-caps, the only pairs whose September and November 2024 are unread at every level (validation, holdout).
+R10_MIDCAPS = ("ARBUSDT", "OPUSDT", "APTUSDT", "SUIUSDT", "NEARUSDT", "TIAUSDT", "SEIUSDT", "INJUSDT", "ATOMUSDT", "FILUSDT")
 PROTOCOLS = {
+    # r10 (PREREGISTRATION-r10.md): the platform's three scalping setups (1.1.0 stacks ported from the klines) with the
+    # 1.2.0 geometries; sides implied by the setup; training on twenty pairs, validation and holdout on the mid-caps.
+    "r10": {"entries": ("E1",), "exits": ("B1", "B2", "B3", "B4"), "rule_sides": {f"P{n}": (side,) for n, side in SETUP_SIDES.items()},
+            "training_windows": ("w2404", "w2405", "w2406", "w2408"), "phases": {"validation": ("w2409a", "w2409b"), "holdout": ("w2411a", "w2411b")},
+            "phase_symbols": {"validation": R10_MIDCAPS, "holdout": R10_MIDCAPS}, "rules": tuple(setup_rule_catalogue()), "by_series": True, "setups": True, "symbols": R8_SYMBOLS,
+            "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
     # fwd-okx-r1: the r8b long stream, frozen, replayed forward on the OKX tape of `forward_okx.py` (real quotes with
     # sizes, prints, depth every 30 s); one configuration, judged week by week with the r8 validation checks.
     "fwd-okx-r1": {"entries": ("E1",), "exits": ("Z3",), "sides": (1,), "training_windows": ("fwd-okx-w0",),
@@ -153,7 +165,8 @@ def build_grid(book: bool, protocol: str = "r1") -> list[str]:
     if rules == "catalogue+S7":
         rules = tuple(rule_catalogue(book)) + S7_RULES
     sides = spec.get("sides", (1, -1))
-    grid = [configuration_id(rule, side, entry, exit_) for rule in rules for side in sides for entry in spec["entries"] for exit_ in spec["exits"]]
+    rule_sides = spec.get("rule_sides", {})  # r10: the side is implied by the setup family
+    grid = [configuration_id(rule, side, entry, exit_) for rule in rules for side in rule_sides.get(family_of(rule), sides) for entry in spec["entries"] for exit_ in spec["exits"]]
     grid += [configuration_id(rule, 0, entry, exit_) for rule in spec.get("both_rules", ()) for entry in spec["entries"] for exit_ in spec["exits"]]
     return grid
 
@@ -165,11 +178,12 @@ class Series:
     """One series: arrays given eagerly (captures) or produced by `loader` when `data()` runs
     (Binance tape: ninety series of structured prints do not fit the host at once)."""
 
-    def __init__(self, name: str, quotes: np.ndarray | None, trades: np.ndarray | None, instrument: Instrument, start_s: int, end_s: int, book: bool, min_notional: float, day_key: bool, loader=None, depth: dict | None = None) -> None:
+    def __init__(self, name: str, quotes: np.ndarray | None, trades: np.ndarray | None, instrument: Instrument, start_s: int, end_s: int, book: bool, min_notional: float, day_key: bool, loader=None, depth: dict | None = None, setup_loader=None) -> None:
         self.name, self.quotes, self.trades, self.instrument = name, quotes, trades, instrument
         self.start_s, self.end_s, self.book, self.min_notional, self.day_key = int(start_s), int(end_s), book, min_notional, day_key
         self.loader = loader
         self.depth = depth  # r8: bookDepth snapshots (`ts_s`, `bid`, `ask`), or None
+        self.setup_loader = setup_loader  # r10: per-second platform-setup features from the klines, or None
 
     def data(self, series_id: int, keep_features: tuple[str, ...] | None = None) -> SeriesData:
         if self.quotes is None and self.loader is not None:
@@ -179,6 +193,8 @@ class Series:
                 self.depth = loaded[2]
         bars = build_bars(self.quotes, self.trades, self.start_s, self.end_s)
         features = compute_features(bars, self.instrument, self.depth)
+        if self.setup_loader is not None:
+            features.update(self.setup_loader())
         if keep_features is not None:
             # Memory-light mode (r5): only the arrays the rule and the engine read are kept.
             features = {name: features[name] for name in keep_features}
@@ -255,14 +271,17 @@ def _day_s(date: str) -> int:
     return int(datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
 
-def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None, depth: bool = False, book: bool = False, venue: str = "binance") -> tuple[list[Series], list[str]]:
+def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None, depth: bool = False, book: bool = False, venue: str = "binance", setups: bool = False, klines_dir: Path | None = None) -> tuple[list[Series], list[str]]:
     """`tape_dir` holds the training and validation windows; the holdout window is read from
     the sibling holdout directory when `phase == "holdout"`. With `depth`, the bookDepth npz of
     each day (`depth/<symbol>/<symbol>-<date>.npz`) is loaded with the prints (r8); with `book`,
     the quotes come from the per-second bookTicker records (`book/<symbol>/<symbol>-<date>.npz`)
-    instead of the print proxies (r9). `venue` only labels the series (the forward OKX tape of
-    `forward_okx.py` uses the same layout)."""
+    instead of the print proxies (r9); with `setups` (r10), the platform-setup features of each
+    series are computed from the monthly 1-minute klines under `klines_dir` (default
+    `tape_dir/klines`). `venue` only labels the series (the forward OKX tape of `forward_okx.py`
+    uses the same layout)."""
     instruments = load_binance_instruments(instruments_path)
+    klines_dir = klines_dir or tape_dir / "klines"
     series, missing = [], []
     for symbol in symbols:
         for window in windows or BINANCE_PHASES[phase]:
@@ -288,7 +307,8 @@ def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symb
                 continue
             instrument, min_notional = instruments[symbol]
             loader = _tape_loader(tuple(paths), instrument.fixed_tick, start_s, end_s, tuple(depth_paths) if depth else None, tuple(book_paths) if book else None)
-            series.append(Series(f"{venue}:{symbol}:{window}", None, None, instrument, start_s, end_s, book, min_notional, True, loader=loader))
+            setup_loader = klines_loader(klines_dir, symbol, start_s, end_s) if setups else None
+            series.append(Series(f"{venue}:{symbol}:{window}", None, None, instrument, start_s, end_s, book, min_notional, True, loader=loader, setup_loader=setup_loader))
     return series, missing
 
 
@@ -370,19 +390,25 @@ def _control_decisions(data: SeriesData, trades: np.ndarray, seed: int) -> np.nd
 def _replay_series(data: SeriesData, identifier: str, seeds: int) -> dict | None:
     """One configuration on one series: trades, counters, control sums per seed."""
     rule, side, entry, exit_ = parse_configuration(identifier)
-    policy = Policy(entry, exit_)
+    setup = rule.startswith("P")
+    policy = Policy(entry, exit_, ttl_us=SETUP_TTL_US) if setup else Policy(entry, exit_)  # r10: the contract's 45 s order TTL
     if rule.startswith("S3") and not np.isfinite(data.bars["bid_size"]).any():
         return None
     if rule.startswith("Q") and "di_1" not in data.features:
         return None  # depth rules need the bookDepth snapshots (r8)
+    if setup and "p1_a4" not in data.features:
+        return None  # platform setups need the klines-derived stacks (r10)
     counters = {"decisions": 0, "orders": 0, "crossed": 0, "unfilled": 0, "filled": 0}
     control_sums = [[0.0, 0] for _ in range(seeds)]
-    series_trades, signals = [], 0
+    series_trades, signals, zone_inside = [], 0, []
     for stream in ((1, -1) if side == 0 else (side,)):
         decisions = np.flatnonzero(signal_mask(rule, data.features, stream))
         trades, count = run_policy(data, stream, decisions, policy)
         series_trades.append(trades)
         signals += int(decisions.size)
+        if setup and decisions.size:  # r10 diagnostic: share of decisions whose mid lies inside the 1.1.0 VWAP zone
+            mid = data.features["mid"][decisions]
+            zone_inside.append((mid >= data.features["zone_lo"][decisions]) & (mid <= data.features["zone_hi"][decisions]))
         for key in counters:
             counters[key] += getattr(count, key)
         if trades.size:
@@ -392,7 +418,10 @@ def _replay_series(data: SeriesData, identifier: str, seeds: int) -> dict | None
                     control_sums[seed][0] += float(control["net_bp"].sum())
                     control_sums[seed][1] += int(control.size)
     trades = np.concatenate(series_trades)
-    return {"trades": trades, "counters": counters, "signals": signals, "control_sums": control_sums}
+    part = {"trades": trades, "counters": counters, "signals": signals, "control_sums": control_sums}
+    if setup:
+        part["zone_share"] = _f(np.mean(np.concatenate(zone_inside))) if zone_inside else None
+    return part
 
 
 def _merge(identifier: str, parts: list[dict], seeds: int, started: float) -> dict:
@@ -410,6 +439,8 @@ def _merge(identifier: str, parts: list[dict], seeds: int, started: float) -> di
             control_sums[seed][1] += part["control_sums"][seed][1]
         trades = part["trades"]
         per_series[series_id] = {"signals": part["signals"], "trades": int(trades.size), "net_bp_sum": _f(trades["net_bp"].sum()) if trades.size else 0.0}
+        if "zone_share" in part:
+            per_series[series_id]["zone_share"] = part["zone_share"]
     trades = np.concatenate(pieces) if pieces else np.zeros(0, dtype=ROW_DTYPE)
     control_means = [s / n for s, n in control_sums if n > 0]
     return {"id": identifier, "trades": trades, "counters": counters, "per_series": per_series, "control_means": control_means, "elapsed": time.time() - started}
@@ -616,6 +647,7 @@ def main(argv: list[str] | None = None) -> int:
     screen.add_argument("--extract-dir", default="")
     screen.add_argument("--tape-dir", default="")
     screen.add_argument("--instruments", default="")
+    screen.add_argument("--klines-dir", default="")
     screen.add_argument("--configs-file", default="")
     screen.add_argument("--symbols", default="")
     screen.add_argument("--workers", type=int, default=3)
@@ -648,9 +680,10 @@ def main(argv: list[str] | None = None) -> int:
             book = True
         else:
             spec = PROTOCOLS[args.protocol]
-            symbols = tuple(args.symbols.split(",")) if args.symbols else tuple(spec.get("symbols", BINANCE_SYMBOLS))
+            symbols = tuple(args.symbols.split(",")) if args.symbols else tuple(spec.get("phase_symbols", {}).get(args.phase) or spec.get("symbols", BINANCE_SYMBOLS))
             windows = spec.get("training_windows") if args.phase == "training" else spec.get("phases", {}).get(args.phase)
-            series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols, windows, depth=bool(spec.get("depth")), book=bool(spec.get("book")), venue=spec.get("venue", "binance"))
+            series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols, windows, depth=bool(spec.get("depth")), book=bool(spec.get("book")), venue=spec.get("venue", "binance"),
+                                                  setups=bool(spec.get("setups")), klines_dir=Path(args.klines_dir) if args.klines_dir else None)
             extra["missing_days"] = missing
             extra["venue"] = spec.get("venue", "binance")
             book = bool(spec.get("book"))

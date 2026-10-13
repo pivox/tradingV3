@@ -14,6 +14,9 @@ Layouts (one npz per symbol-day, `numpy.savez_compressed`):
 - bookDepth → `depth/<SYMBOL>/<SYMBOL>-<date>.npz` with `ts_s` (snapshot time, seconds UTC),
   `bid` and `ask` (n × 5, cumulative notional within 1 … 5 % of the mid on that side); snapshots
   missing one of the ten levels are dropped and counted.
+- klines (r10, monthly 1-minute candles, `--dates 2024-03..2024-08`) → `klines/<SYMBOL>/<SYMBOL>-1m-<YYYY-MM>.npz`
+  with `ts_s` (candle open, seconds UTC), `open`, `high`, `low`, `close`, `volume`, `quote_volume`,
+  `count`, `taker_buy_volume`, sorted by open time.
 """
 
 from __future__ import annotations
@@ -38,10 +41,17 @@ except ImportError:  # pragma: no cover - exercised only where pandas is absent
     pd = None
 
 BASE = "https://data.binance.vision/data/futures/um/daily"
-KINDS = {"aggtrades": ("aggTrades", "npz"), "bookdepth": ("bookDepth", "depth"), "bookticker": ("bookTicker", "book")}
+BASE_MONTHLY = "https://data.binance.vision/data/futures/um/monthly"
+KINDS = {"aggtrades": ("aggTrades", "npz"), "bookdepth": ("bookDepth", "depth"), "bookticker": ("bookTicker", "book"), "klines": ("klines", "klines")}
 LEVELS = (1, 2, 3, 4, 5)
 AGG_COLUMNS = ("agg_trade_id", "price", "quantity", "first_trade_id", "last_trade_id", "transact_time", "is_buyer_maker")
 BOOK_COLUMNS = ("update_id", "best_bid_price", "best_bid_qty", "best_ask_price", "best_ask_qty", "transaction_time", "event_time")
+KLINE_COLUMNS = ("open_time", "open", "high", "low", "close", "volume", "close_time", "quote_volume", "count", "taker_buy_volume", "taker_buy_quote_volume", "ignore")
+KLINE_INTERVAL = "1m"
+
+
+def _source(kind: str) -> str:
+    return f"{BASE_MONTHLY}/klines" if kind == "klines" else f"{BASE}/{KINDS[kind][0]}"
 
 
 def _now() -> str:
@@ -68,6 +78,22 @@ def parse_dates(spec: str) -> list[str]:
                 day += timedelta(days=1)
         else:
             out.append(datetime.strptime(item, "%Y-%m-%d").strftime("%Y-%m-%d"))
+    return out
+
+
+def parse_months(spec: str) -> list[str]:
+    """`2024-03..2024-05,2024-08` → every month of each range, in order (klines)."""
+    out: list[str] = []
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        first, last = item.split("..") if ".." in item else (item, item)
+        month = datetime.strptime(first, "%Y-%m")
+        end = datetime.strptime(last, "%Y-%m")
+        while month <= end:
+            out.append(month.strftime("%Y-%m"))
+            month = (month.replace(day=1) + timedelta(days=32)).replace(day=1)
     return out
 
 
@@ -183,13 +209,37 @@ def convert_bookticker(raw: bytes) -> tuple[dict[str, np.ndarray], dict]:
     return arrays, diag
 
 
-CONVERTERS = {"aggtrades": convert_aggtrades, "bookdepth": convert_bookdepth, "bookticker": convert_bookticker}
+def convert_klines(raw: bytes) -> tuple[dict[str, np.ndarray], dict]:
+    """Monthly 1-minute candles (r10): one record per candle, sorted by open time, duplicates
+    dropped (the last wins); the diagnostic counts the minutes missing from the month."""
+    dtypes = {"open_time": "int64", "open": "float64", "high": "float64", "low": "float64", "close": "float64", "volume": "float64", "quote_volume": "float64", "count": "int64", "taker_buy_volume": "float64"}
+    frame = _read_csv(raw, KLINE_COLUMNS, dtypes, usecols=tuple(dtypes))
+    open_ms = frame["open_time"].to_numpy()
+    order = np.argsort(open_ms, kind="stable")
+    ts_s = (open_ms[order] // 1000).astype(np.int64)
+    keep = np.ones(ts_s.size, dtype=bool)
+    keep[:-1] = ts_s[1:] != ts_s[:-1]  # duplicates: keep the last record of a minute
+    arrays = {"ts_s": ts_s[keep]}
+    for name in ("open", "high", "low", "close", "volume", "quote_volume", "taker_buy_volume"):
+        arrays[name] = frame[name].to_numpy()[order][keep].astype(np.float64)
+    arrays["count"] = frame["count"].to_numpy()[order][keep].astype(np.int64)
+    rows = int(arrays["ts_s"].size)
+    expected = int((arrays["ts_s"][-1] - arrays["ts_s"][0]) // 60 + 1) if rows else 0
+    diag = {"input_already_sorted": bool(np.all(order == np.arange(order.size))), "duplicates": int((~keep).sum()), "missing_minutes": expected - rows, "close_min": float(arrays["close"].min()) if rows else None, "close_max": float(arrays["close"].max()) if rows else None}
+    return arrays, diag
+
+
+CONVERTERS = {"aggtrades": convert_aggtrades, "bookdepth": convert_bookdepth, "bookticker": convert_bookticker, "klines": convert_klines}
 
 
 def acquire_one(kind: str, out_dir: Path, symbol: str, date: str) -> dict:
     name, folder = KINDS[kind]
-    url = f"{BASE}/{name}/{symbol}/{symbol}-{name}-{date}.zip"
-    target = out_dir / folder / symbol / f"{symbol}-{date}.npz"
+    if kind == "klines":  # `date` is a month: monthly archive of 1-minute candles
+        url = f"{BASE_MONTHLY}/klines/{symbol}/{KLINE_INTERVAL}/{symbol}-{KLINE_INTERVAL}-{date}.zip"
+        target = out_dir / folder / symbol / f"{symbol}-{KLINE_INTERVAL}-{date}.npz"
+    else:
+        url = f"{BASE}/{name}/{symbol}/{symbol}-{name}-{date}.zip"
+        target = out_dir / folder / symbol / f"{symbol}-{date}.npz"
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = out_dir / "staging" / f"{symbol}-{name}-{date}.zip"
     staging.parent.mkdir(parents=True, exist_ok=True)
@@ -225,7 +275,7 @@ def acquire_one(kind: str, out_dir: Path, symbol: str, date: str) -> dict:
 
 def run(kind: str, out_dir: Path, symbols: list[str], dates: list[str], workers: int) -> dict:
     manifest_path = out_dir / f"manifest-{kind}.json"
-    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"kind": kind, "source": f"{BASE}/{KINDS[kind][0]}", "created_at": _now(), "files": [], "failures": []}
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"kind": kind, "source": _source(kind), "created_at": _now(), "files": [], "failures": []}
     done = {(item["symbol"], item["date"]) for item in manifest["files"]}
     # Date-major order: with the symbols listed heavy / light alternately, parallel workers do not
     # all hold a major's day at once.
@@ -270,7 +320,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dates", required=True)
     parser.add_argument("--workers", type=int, default=3)
     args = parser.parse_args(argv)
-    manifest = run(args.kind, Path(args.out), [s for s in args.symbols.split(",") if s], parse_dates(args.dates), args.workers)
+    dates = parse_months(args.dates) if args.kind == "klines" else parse_dates(args.dates)
+    manifest = run(args.kind, Path(args.out), [s for s in args.symbols.split(",") if s], dates, args.workers)
     print(json.dumps({"kind": args.kind, "files": len(manifest["files"]), "failures": len(manifest["failures"]), "status": manifest["status"]}))
     return 0 if manifest["status"] == "complete" else 1
 
