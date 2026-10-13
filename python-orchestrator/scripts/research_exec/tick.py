@@ -14,13 +14,14 @@ import numpy as np
 
 from .capture import Instrument
 from .platform_setups import SETUP_SIDES, volume_key
+from .positioning import METRICS_LAG_S, OI_WINDOW_S
 
 SECOND_US = 1_000_000
 HOUR_S = 3600
 FEATURE_WINDOWS = (10, 60, 300)
 SIGMA_WINDOWS = (60, 300)
 FAMILIES = ("S1", "S2", "S3", "S4", "S5", "S6")
-_FAMILY = re.compile(r"^(S[1-7]|Q[1-4]|M[1-3]|P[0-3]|R1)$")  # P0 (r11): the pool of the three platform setups; R1 (r12): the zone alone
+_FAMILY = re.compile(r"^(S[1-7]|Q[1-4]|M[1-3]|P[0-3]|R1|O[12])$")  # P0 (r11): the pool of the three platform setups; R1 (r12): the zone alone; O1/O2 (r13): open interest
 MICROPRICE_WINDOWS = (5, 30)  # r9: microprice momentum horizons in seconds
 SETUP_FEE_BP = 7.0  # r10 cost gate: maker entry 2 bp + taker exit 5 bp, plus the quoted spread (PREREGISTRATION-r10.md §3)
 DEPTH_STALE_S = 120  # a bookDepth snapshot older than this gives no depth feature (r8 §2)
@@ -253,6 +254,32 @@ def rule_catalogue(book: bool) -> list[str]:
     return rules
 
 
+def _lagged(values: np.ndarray, steps: int) -> np.ndarray:
+    """The value `steps` seconds earlier (NaN before the start of the series)."""
+    out = np.full(values.shape, np.nan)
+    if steps == 0:
+        return values.astype(np.float64)
+    if steps < values.size:
+        out[steps:] = values[:-steps]
+    return out
+
+
+def oi_price_condition(family: str, f: dict[str, np.ndarray], side: int, k: float, lag_s: int = METRICS_LAG_S, window_s: int = OI_WINDOW_S) -> np.ndarray:
+    """r13 (PREREGISTRATION-r13.md §3): the price part of the O rules at the decision seconds of the
+    metrics cadence — the log move of the mid over the open-interest window `[T − window_s, T]`
+    (`T` = decision − lag) against `k` × sigma_900 at `T`: O1 (flush reversal) wants a move against
+    the stream (`side` × move ≤ −k σ), O2 (build-up continuation) a move with it (≥ +k σ). Also the
+    candidate set of the price-matched random control (§4)."""
+    sgn = float(side)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        logmid = np.log(f["mid"])
+        move = _lagged(logmid, lag_s) - _lagged(logmid, lag_s + window_s)
+        sigma = _lagged(f["sigma_900"], lag_s)
+        usable = np.isfinite(move) & np.isfinite(sigma)
+        condition = (sgn * move <= -k * sigma) if family == "O1" else (sgn * move >= k * sigma)
+    return f["metrics_tick"] & usable & condition
+
+
 def family_of(rule: str) -> str:
     return rule.split("-")[0]
 
@@ -317,6 +344,12 @@ def signal_mask(rule: str, f: dict[str, np.ndarray], side: int) -> np.ndarray:
             return _rolling_sum(np.cumsum(persistent), run_n) >= run_n
         # r12 (PREREGISTRATION-r12.md §2): the zone alone — at the last second of each 5-minute candle, the mid inside
         # the 1.1.0 entry zone with a usable ATR; no stack, no regime, no side rule (each stream takes the same seconds).
+        # r13 (PREREGISTRATION-r13.md §3): open-interest positioning at the 5-minute metrics cadence — O1 a flush
+        # (open interest down by T % over fifteen minutes) against the price move, O2 a build-up (up by T %) with it.
+        if family in ("O1", "O2"):
+            mask = oi_price_condition(family, f, side, k)
+            oi = f["oi_chg_15"]
+            return mask & ((oi <= -theta / 100.0) if family == "O1" else (oi >= theta / 100.0))
         if family == "R1":
             return f["cadence5"] & np.isfinite(f["atr5"]) & (f["mid"] >= f["zone_lo"]) & (f["mid"] <= f["zone_hi"])
         # r10 platform setups (PREREGISTRATION-r10.md §3): the stack of the decision second (klines-derived,

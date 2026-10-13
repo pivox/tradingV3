@@ -27,6 +27,7 @@ extraction when installed and is optional.
 | Binance depth (r8) | `…/20261013T061500Z-tape-binance-r8/depth/<SYMBOL>/<SYMBOL>-<date>.npz` | daily `bookDepth` archives (one snapshot every 30 s on average: cumulative notional within ±1 … 5 % of the mid), sha256-checked, `ts_s / bid / ask` (n × 5) |
 | Binance top of book (r9) | `…/20261013T063500Z-tape-binance-r9/book/<SYMBOL>/<SYMBOL>-<date>.npz` | daily `bookTicker` archives (every best bid/ask update with quantities, 2023-05-16 → 2024-03-30), reduced to one record per second: `ts_s / bid / ask / bid_qty / ask_qty / updates / qi_mean` |
 | Binance klines (r10) | `…/20261013T121000Z-tape-binance-r10/klines/<SYMBOL>/<SYMBOL>-1m-<YYYY-MM>.npz` | monthly 1-minute candles (`ts_s / open / high / low / close / volume / quote_volume / count / taker_buy_volume`), sha256-checked; 5m, 15m and 1h candles are UTC aggregations; each series loads one warm-up month before its window |
+| Binance metrics (r13) | `…/<tape>/metrics/<SYMBOL>/<SYMBOL>-<date>.npz` | daily open-interest and positioning snapshots every five minutes (`ts_s / oi / oi_value / top_count_ratio / top_sum_ratio / ls_count_ratio / taker_ratio`), sha256-checked; rows floored to the 5-minute grid, sorted, last duplicate wins |
 
 Acquisition of any of the three archives (`scripts/research_exec/acquire.py`): every zip is
 downloaded, checked against its published sha256 (fail-closed), converted and deleted; a
@@ -38,6 +39,7 @@ python -m scripts.research_exec.acquire aggtrades  --out <dir> --symbols BTCUSDT
 python -m scripts.research_exec.acquire bookdepth  --out <dir> --symbols BTCUSDT --dates 2025-02-10..2025-02-14,2025-03-10..2025-03-14
 python -m scripts.research_exec.acquire bookticker --out <dir> --symbols ATOMUSDT --dates 2023-07-10..2023-07-14 --workers 2
 python -m scripts.research_exec.acquire klines     --out <dir> --symbols ARBUSDT,OPUSDT --dates 2024-03..2024-08 --workers 2   # months
+python -m scripts.research_exec.acquire metrics    --out <dir> --symbols ARBUSDT,OPUSDT --dates 2024-10-01..2024-10-31 --workers 3   # days (r13)
 ```
 | Fees | maker 2 bp, taker 5 bp (`config/trading/runtime/exchange/*.yaml`) | the screen also reports fees × 1.5 |
 
@@ -95,7 +97,11 @@ and the klines August–September into their own tape — the validation screen 
 only for validated configurations, `acquire-r11-holdout.sh` (November 2024) and the holdout screen into its own
 tape), `disk-guard.sh` with the same 15 GB floor. r12 (`tradingV3-private/research/20261013T160000Z-zone-only-r12/`,
 `PREREGISTRATION-r12.md`) reuses the r11 chain with its own scripts (`run-r12-training.sh`, `run-r12-validate.sh`,
-`acquire-r12-validation.sh`, `acquire-r12-holdout.sh`, `disk-guard.sh`) and tapes.
+`acquire-r12-validation.sh`, `acquire-r12-holdout.sh`, `disk-guard.sh`) and tapes. r13
+(`tradingV3-private/research/20261013T190000Z-oi-positioning-r13/`, `PREREGISTRATION-r13.md`): `acquire-r13-training-metrics.sh`
+(the metrics of the r10 training days into their own directory), `run-r13-training.sh` (the r10 prints with
+`--metrics-dir`), `run-r13-validate.sh` (`acquire-r13-validation.sh` — aggTrades and metrics of the ten mid-caps over
+October 2024 — then, only for validated configurations, `acquire-r13-holdout.sh`, November 2024), `disk-guard.sh`.
 
 ```bash
 # r10 (PREREGISTRATION-r10.md): the platform's scalping setups 1.1.0 with the 1.2.0 geometries; `setups: True` loads
@@ -199,6 +205,16 @@ gross / fees / net in bp, hold).
   policy (45 s TTL). Its selector is the unrestricted random control (no `zone_control`), its
   validation block adds `fee_x_net_positive` and `verdict` then checks `fees_x1_5` (the sum of
   gross minus 1.5 × fees over the trades is positive) beside the r8 checks.
+  **r13** (`metrics: True`, `price_control: True`, `series_group: "symbol"`) reads the open interest
+  of the daily metrics archives (`positioning.py`): a snapshot stamped `T` is usable from `T + 60`
+  s, the decision seconds (`metrics_tick`) are those seconds when a snapshot exists fifteen
+  minutes earlier, and `oi_chg_15` is the relative change between the two. The family **O** —
+  `O1-T{θ}-K{k}` (open interest down by θ % with a price move of k sigma_900 against the stream:
+  flush reversal) and `O2-T{θ}-K{k}` (up by θ % with the move: build-up continuation) — shares its
+  price part with the control (`oi_price_condition`): under `price_control` the random controls of
+  an O rule are drawn among the metrics-cadence seconds with the same price move, whatever the open
+  interest did. Under `series_group: "symbol"` the series checks pool each pair's windows (one
+  series per pair, `series_unit` recorded in the rows).
 
 ## Outputs
 

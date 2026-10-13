@@ -95,6 +95,14 @@ September 2024, read once, the two selected rules are below zero and below the r
 (−10.4 and −5.2 bp net on 1,840 and 896 trades); the holdout (November 2024) is not read; closed
 ([report](../../handbook/reports/research-zone-only-2026-10-13.md)). The forward test is untouched.
 
+**r13 open-interest positioning (owner's go of 2026-10-13 ~17:20Z for a family of another nature;
+frozen 17:31:12Z, sha256 `c80ffb2c…`):** none of the eight configurations passes every training
+gate, so October and November 2024 are not read. The flush reversal (O1) loses; the build-up
+continuation (O2) beats the price-matched control — +11.4 bp on 316 trades with a 1 % build-up
+(fails pair consistency, 11 of 20 pairs) and +38.6 bp on 65 trades with a 2 % build-up (fails the
+300-trade gate). A frozen follow-up on the unread October and November 2024 windows is proposed to
+the owner, not launched ([report](../../handbook/reports/research-oi-positioning-2026-10-13.md)).
+
 ## Constraints
 
 - The research tape is a research artifact (≈ 50 MB/day), deletable after the report; the
