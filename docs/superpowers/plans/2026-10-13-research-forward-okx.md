@@ -103,6 +103,12 @@ continuation (O2) beats the price-matched control — +11.4 bp on 316 trades wit
 300-trade gate). A frozen follow-up on the unread October and November 2024 windows is proposed to
 the owner, not launched ([report](../../handbook/reports/research-oi-positioning-2026-10-13.md)).
 
+**r14 open-interest build-up continuation (owner's go of 2026-10-13 ~18:25Z; frozen 18:38:32Z,
+sha256 `dd6859ee…`):** the two O2 rows, pre-declared, fail validation on the ten mid-caps over the
+whole of October 2024 — the 1 % rule −11.7 bp on 165 trades, below the price-matched control; the
+2 % rule +4.2 bp on 43 trades, under the 100-trade check; November 2024 is not read; closed
+([report](../../handbook/reports/research-oi-buildup-2026-10-13.md)). The forward test is untouched.
+
 ## Constraints
 
 - The research tape is a research artifact (≈ 50 MB/day), deletable after the report; the
