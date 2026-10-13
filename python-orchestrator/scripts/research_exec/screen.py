@@ -72,6 +72,17 @@ PROTOCOLS = {
             "training_windows": ("w2404", "w2405", "w2406", "w2408"), "phases": {"validation": ("w2409a", "w2409b"), "holdout": ("w2411a", "w2411b")},
             "phase_symbols": {"validation": R10_MIDCAPS, "holdout": R10_MIDCAPS}, "rules": tuple(setup_rule_catalogue()), "by_series": True, "setups": True, "symbols": R8_SYMBOLS,
             "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
+    # r14 (PREREGISTRATION-r14.md, owner's go of 2026-10-13 on the r13 proposal): the open-interest build-up continuation
+    # alone — the two O2 rows with the bracket exit Y3 that beat the price-matched control at the r13 training stage,
+    # pre-declared; no training stage (the r13 training is the post-hoc origin); validation on the ten mid-caps over
+    # October 2024, holdout over November 2024 (read only for validated configurations), one series per pair, the r8
+    # validation checks plus net > 0 at fees × 1.5 against the price-matched control.
+    "r14": {"entries": ("E1",), "exits": ("Y3",), "sides": (0,),
+            "training_windows": ("w2404", "w2405", "w2406", "w2408"), "phases": {"validation": ("m2410",), "holdout": ("m2411",)},
+            "phase_symbols": {"validation": R10_MIDCAPS, "holdout": R10_MIDCAPS}, "rules": ("O2-T1-K1.5", "O2-T2-K1.5"), "by_series": True, "metrics": True,
+            "price_control": True, "series_group": "symbol", "symbols": R8_SYMBOLS,
+            "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20},
+            "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5, "fee_x_net_positive": True}},
     # r13 (PREREGISTRATION-r13.md, owner's go of 2026-10-13 for a family of another nature): open-interest positioning
     # from the daily metrics archives — O1 flush reversal, O2 build-up continuation, at the 5-minute metrics cadence;
     # eight configurations ("both" streams, exits Z3 and Y3); the r8 training gates with the series check on pairs and

@@ -121,3 +121,17 @@ def test_r13_grid_windows_and_validation_block():
     assert spec["phases"] == {"validation": ("m2410",), "holdout": ("m2411",)} and spec["phase_symbols"]["validation"] == sc.R10_MIDCAPS
     assert spec["gates"] == sc.PROTOCOLS["r10"]["gates"] and spec["validation"]["fee_x_net_positive"] and spec["training_windows"] == sc.PROTOCOLS["r10"]["training_windows"]
     assert sc.BINANCE_WINDOWS["m2410"] == ("2024-10-01", "2024-10-31") and sc.BINANCE_WINDOWS["m2411"] == ("2024-11-01", "2024-11-30")
+
+
+def test_r14_declares_the_two_build_up_rows_for_october_and_november():
+    grid = sc.build_grid(False, "r14")
+    assert grid == ["O2-T1-K1.5|both|E1|Y3", "O2-T2-K1.5|both|E1|Y3"]
+    assert set(grid) <= set(sc.build_grid(False, "r13"))  # the r13 rows that beat the price-matched control
+    spec, origin = sc.PROTOCOLS["r14"], sc.PROTOCOLS["r13"]
+    for key in ("phases", "phase_symbols", "metrics", "price_control", "series_group", "gates", "validation", "training_windows"):
+        assert spec[key] == origin[key], key
+    sc.use_protocol("r14")
+    try:
+        assert sc.PRICE_CONTROL["enabled"] and sc.SERIES_GROUP["mode"] == "symbol" and sc.VALIDATION["fee_x_net_positive"]
+    finally:
+        sc.use_protocol("r10")
