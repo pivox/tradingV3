@@ -102,6 +102,9 @@ tape), `disk-guard.sh` with the same 15 GB floor. r12 (`tradingV3-private/resear
 (the metrics of the r10 training days into their own directory), `run-r13-training.sh` (the r10 prints with
 `--metrics-dir`), `run-r13-validate.sh` (`acquire-r13-validation.sh` — aggTrades and metrics of the ten mid-caps over
 October 2024 — then, only for validated configurations, `acquire-r13-holdout.sh`, November 2024), `disk-guard.sh`.
+r14 (`tradingV3-private/research/20261013T183000Z-oi-buildup-r14/`, `PREREGISTRATION-r14.md`): no training stage; the
+configuration list is written before the freeze and `run-r14-validate.sh` acquires October 2024, screens it with
+`--configs-file`, runs the verdict against the r13 training document, then November 2024 only for validated configurations.
 
 ```bash
 # r10 (PREREGISTRATION-r10.md): the platform's scalping setups 1.1.0 with the 1.2.0 geometries; `setups: True` loads
@@ -215,6 +218,9 @@ gross / fees / net in bp, hold).
   an O rule are drawn among the metrics-cadence seconds with the same price move, whatever the open
   interest did. Under `series_group: "symbol"` the series checks pool each pair's windows (one
   series per pair, `series_unit` recorded in the rows).
+  **r14** re-runs two O2 rows of r13 (`O2-T{1,2}-K1.5`, exit Y3) on the unread October and
+  November 2024 mid-cap windows with the same settings: protocol `r14` inherits the phases, gates,
+  control and series grouping of r13 and declares only those two rules and that exit.
 
 ## Outputs
 

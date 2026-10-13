@@ -94,6 +94,7 @@ nav:
       - "Zone + sortie au temps (r11) 2026-10-13": reports/research-zone-time-2026-10-13.md
       - "Zone seule (r12) 2026-10-13": reports/research-zone-only-2026-10-13.md
       - "Open interest (r13) 2026-10-13": reports/research-oi-positioning-2026-10-13.md
+      - "Open interest build-up (r14) 2026-10-13": reports/research-oi-buildup-2026-10-13.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 
