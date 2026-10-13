@@ -88,6 +88,12 @@ r10 (`tradingV3-private/research/20261013T121000Z-scalping-120-r10/`): `acquire-
 then the holdout into its own directory, read only for validated configurations); `disk-guard.sh` kills the r10
 acquisitions if the host drops under 15 GB free; `run-r10x.sh` is the exploratory pass of 2026-10-13
 (`EXPLORATORY-r10x.md`: the training windows re-read, no selection, no validation, no holdout).
+r11 (`tradingV3-private/research/20261013T153000Z-zone-time-r11/`, `PREREGISTRATION-r11.md`): `run-r11-training.sh`
+(the twelve configurations on the r10 tape, then `select --protocol r11` and the budgets), `run-r11-validate.sh`
+(only with a non-empty selection: `acquire-r11-validation.sh` — the ten mid-caps over the whole of September 2024
+and the klines August–September into their own tape — the validation screen with 2 workers, the verdict, then,
+only for validated configurations, `acquire-r11-holdout.sh` (November 2024) and the holdout screen into its own
+tape), `disk-guard.sh` with the same 15 GB floor.
 
 ```bash
 # r10 (PREREGISTRATION-r10.md): the platform's scalping setups 1.1.0 with the 1.2.0 geometries; `setups: True` loads
@@ -100,6 +106,14 @@ python -m scripts.research_exec.screen screen --source binance --phase validatio
 # the entry zone (`Z`); training phase only — the CLI refuses any other phase for an exploratory protocol
 python -m scripts.research_exec.screen screen --source binance --phase training --protocol r10x --tape-dir <tape dir> \
     --instruments <instrument-assumptions-r10.json> --out $X/part-b/binance-r10x --workers 3 --prereg $X/EXPLORATORY-r10x.md
+# r11 (PREREGISTRATION-r11.md): the core stacks inside the 1.1.0 zone with the zone-restricted controls; the training
+# stage reads the r10 tape, the selection keeps the rows that beat the restricted control (`select --protocol r11`),
+# validation and holdout read one 30-day series per mid-cap from their own tapes (2 workers)
+python -m scripts.research_exec.screen screen --source binance --phase training --protocol r11 --tape-dir <r10 tape dir> \
+    --instruments <instrument-assumptions-r11.json> --out $X/part-b/binance-r11 --workers 3 --prereg $X/PREREGISTRATION-r11.md
+python -m scripts.research_exec.screen select --protocol r11 --screen $X/part-b/binance-r11/screen-training.json --out $X/part-b/binance-r11/validation-list.json
+python -m scripts.research_exec.screen screen --source binance --phase validation --protocol r11 --tape-dir <validation tape dir> \
+    --instruments … --out $X/part-b/binance-r11 --workers 2 --prereg … --configs-file $X/part-b/binance-r11/validation-list.txt
 ```
 
 Every document records the sha256 of each package file (`code`) and, when `--prereg` is given,
@@ -165,6 +179,15 @@ gross / fees / net in bp, hold).
   excluded on the mid of the decision second (`Z1` / `Z0`, whose union is the r10 row); the gates
   are listed for information, nothing is selected, and the protocol has no validation or holdout
   phase (`phases: {}`; the CLI refuses any phase but training).
+  **r11** (`zone_control: True`, `selection: control`) tests the in-zone lead of r10x under a frozen
+  pre-registration: the core stacks inside the 1.1.0 zone (`P{1,2,3}-A3-K0-Z1`) and their pool
+  (`P0-A3-K0-Z1`, a "both" configuration whose long stream is P1 ∪ P2 and short stream P3), exits
+  B4 / B2 / B3. Under a `zone_control` protocol the random controls of a `Z` rule are drawn only
+  among the seconds with the rule's zone status and a usable ATR (`_zone_candidates`,
+  `_control_decisions(candidates)`), in the same hours as the trades; `select --protocol r11` keeps
+  the rows that beat that control (G4) — the training windows were already read by r10x, so only
+  the new information selects — and the validation checks are the r8 ones. Its validation and
+  holdout windows are full months (`m2409`, `m2411`), one series per pair, on the mid-caps.
 
 ## Outputs
 

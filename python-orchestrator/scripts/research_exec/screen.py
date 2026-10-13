@@ -31,7 +31,7 @@ from .platform_setups import EXPLORATION_VOLUME_THRESHOLDS, SETUP_SIDES, klines_
 from .scalp_engine import ENTRIES, EXITS, SETUP_TTL_US, Policy, SeriesData, run_policy
 from .scalp_engine import TRADE_DTYPE as ROW_DTYPE
 from .stats import block_bootstrap_lower_bound
-from .tick import SECOND_US, book_rule_catalogue, build_bars, compute_features, depth_rule_catalogue, family_of, rule_catalogue, signal_mask
+from .tick import SECOND_US, book_rule_catalogue, build_bars, compute_features, depth_rule_catalogue, family_of, rule_catalogue, signal_mask, parse_rule
 
 CAPTURE_SPLIT_S = 12 * 3600
 BINANCE_WINDOWS = {
@@ -47,6 +47,8 @@ BINANCE_WINDOWS = {
     # r10 (PREREGISTRATION-r10.md §1): 2024 windows never read at the tick level; validation and holdout weeks on the mid-caps only.
     "w2404": ("2024-04-15", "2024-04-19"), "w2405": ("2024-05-13", "2024-05-17"), "w2406": ("2024-06-10", "2024-06-14"), "w2408": ("2024-08-12", "2024-08-16"),
     "w2409a": ("2024-09-09", "2024-09-13"), "w2409b": ("2024-09-16", "2024-09-20"), "w2411a": ("2024-11-11", "2024-11-15"), "w2411b": ("2024-11-18", "2024-11-22"),
+    # r11 (PREREGISTRATION-r11.md §1, owner's adjustment): full months, one series per pair and month, for the mid-caps only.
+    "m2409": ("2024-09-01", "2024-09-30"), "m2411": ("2024-11-01", "2024-11-30"),
 }
 R5_FEATURES = ("mid", "quote_age", "band_dev_900", "sigma_900", "fi_60", "sigma_60")
 BINANCE_PHASES = {"training": ("march", "july"), "validation": ("november",), "holdout": ("december",)}
@@ -66,6 +68,18 @@ PROTOCOLS = {
     "r10": {"entries": ("E1",), "exits": ("B1", "B2", "B3", "B4"), "rule_sides": {f"P{n}": (side,) for n, side in SETUP_SIDES.items()},
             "training_windows": ("w2404", "w2405", "w2406", "w2408"), "phases": {"validation": ("w2409a", "w2409b"), "holdout": ("w2411a", "w2411b")},
             "phase_symbols": {"validation": R10_MIDCAPS, "holdout": R10_MIDCAPS}, "rules": tuple(setup_rule_catalogue()), "by_series": True, "setups": True, "symbols": R8_SYMBOLS,
+            "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
+    # r11 (PREREGISTRATION-r11.md, owner's go of 2026-10-13 on the r10x proposal): "zone + time exit" — the core stacks
+    # inside the 1.1.0 entry zone, the three setups and their pool (P0, a "both" configuration: long stream P1 ∪ P2,
+    # short stream P3), exits B4 / B2 / B3, twelve configurations pre-declared. Training = the r10 windows, already
+    # read (informational; the zone-restricted random controls are the new information and the only selector,
+    # `selection: control`); validation and holdout on the ten mid-caps over the full months of September and November
+    # 2024 (one series per pair and month, so that the series check measures consistency across pairs), each read
+    # once, with the r8 validation checks against the zone-restricted control.
+    "r11": {"entries": ("E1",), "exits": ("B4", "B2", "B3"), "rule_sides": {"P0": (0,), "P1": (1,), "P2": (1,), "P3": (-1,)},
+            "training_windows": ("w2404", "w2405", "w2406", "w2408"), "phases": {"validation": ("m2409",), "holdout": ("m2411",)},
+            "phase_symbols": {"validation": R10_MIDCAPS, "holdout": R10_MIDCAPS}, "rules": ("P0-A3-K0-Z1", "P1-A3-K0-Z1", "P2-A3-K0-Z1", "P3-A3-K0-Z1"),
+            "by_series": True, "setups": True, "zone_control": True, "selection": "control", "symbols": R8_SYMBOLS,
             "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
     # r10x (EXPLORATORY-r10x.md, owner's request of 2026-10-13): exploratory re-reading of the r10 training windows only —
     # the full stacks at the volume-ratio thresholds 1.1/1.2/1.3 and the 1.1.0 entry zone imposed or excluded; the gates
@@ -109,12 +123,17 @@ GATES = dict(PROTOCOLS["r1"]["gates"])
 VALIDATION = dict(PROTOCOLS["r1"]["validation"])
 
 
+ZONE_CONTROL = {"enabled": False}  # r11: random controls restricted to the rule's zone status (`zone_control` protocols)
+
+
 def use_protocol(name: str) -> None:
-    """Select the gates and validation thresholds of a pre-registration (r1 default)."""
+    """Select the gates and validation thresholds of a pre-registration (r1 default), and whether
+    the random controls of the Z rules are restricted to their zone status (r11)."""
     GATES.clear()
     GATES.update(PROTOCOLS[name]["gates"])
     VALIDATION.clear()
     VALIDATION.update(PROTOCOLS[name]["validation"])
+    ZONE_CONTROL["enabled"] = bool(PROTOCOLS[name].get("zone_control"))
 MAX_PER_FAMILY = 3
 BUDGETS = (500, 1000, 2000, 5000, 10000, 20000, 50000, 100000)
 REFERENCE_NOTIONAL = 250.0
@@ -380,19 +399,35 @@ _DAY_KEY = False
 _OUTCOMES: Path | None = None
 
 
-def _control_decisions(data: SeriesData, trades: np.ndarray, seed: int) -> np.ndarray:
-    """Random decision seconds with the trades' count per hour of the day (bar indices)."""
+def _control_decisions(data: SeriesData, trades: np.ndarray, seed: int, candidates: np.ndarray | None = None) -> np.ndarray:
+    """Random decision seconds with the trades' count per hour of the day (bar indices); with
+    `candidates`, a boolean mask over the bars, only those seconds are drawn (r11: the zone status)."""
     rng = np.random.default_rng(seed * 1_000_003 + data.series_id)
     hours = (trades["decision_s"] // 3600) % 24
     bar_hours = (data.bars["ts"] // 3600) % 24
     picks = []
     for hour, count in zip(*np.unique(hours, return_counts=True)):
-        candidates = np.flatnonzero(bar_hours == hour)
-        if candidates.size:
-            picks.append(rng.choice(candidates, size=int(count), replace=True))
+        pool = np.flatnonzero((bar_hours == hour) if candidates is None else ((bar_hours == hour) & candidates))
+        if pool.size:
+            picks.append(rng.choice(pool, size=int(count), replace=True))
     if not picks:
         return np.zeros(0, dtype=np.int64)
     return np.unique(np.concatenate(picks))
+
+
+def _zone_candidates(rule: str, features: dict[str, np.ndarray]) -> np.ndarray | None:
+    """r11 (PREREGISTRATION-r11.md §3): for a Z rule under a `zone_control` protocol, the seconds
+    with the rule's zone status (mid inside `Z1` / outside `Z0` the 1.1.0 zone, with an ATR), from
+    which the random controls are drawn; None otherwise (unrestricted controls, r10 and r10x)."""
+    if not ZONE_CONTROL["enabled"]:
+        return None
+    _, params = parse_rule(rule)
+    if "Z" not in params:
+        return None
+    with np.errstate(invalid="ignore"):
+        usable = np.isfinite(features["atr5"])
+        inside = usable & (features["mid"] >= features["zone_lo"]) & (features["mid"] <= features["zone_hi"])
+    return inside if params["Z"] == "1" else (usable & ~inside)
 
 
 def _replay_series(data: SeriesData, identifier: str, seeds: int) -> dict | None:
@@ -409,6 +444,7 @@ def _replay_series(data: SeriesData, identifier: str, seeds: int) -> dict | None
     counters = {"decisions": 0, "orders": 0, "crossed": 0, "unfilled": 0, "filled": 0}
     control_sums = [[0.0, 0] for _ in range(seeds)]
     series_trades, signals, zone_inside = [], 0, []
+    candidates = _zone_candidates(rule, data.features) if setup else None
     for stream in ((1, -1) if side == 0 else (side,)):
         decisions = np.flatnonzero(signal_mask(rule, data.features, stream))
         trades, count = run_policy(data, stream, decisions, policy)
@@ -421,7 +457,7 @@ def _replay_series(data: SeriesData, identifier: str, seeds: int) -> dict | None
             counters[key] += getattr(count, key)
         if trades.size:
             for seed in range(seeds):
-                control, _ = run_policy(data, stream, _control_decisions(data, trades, seed), policy)
+                control, _ = run_policy(data, stream, _control_decisions(data, trades, seed, candidates), policy)
                 if control.size:
                     control_sums[seed][0] += float(control["net_bp"].sum())
                     control_sums[seed][1] += int(control.size)
@@ -590,10 +626,19 @@ def _progress(iterator, total: int):
 # ----------------------------------------------------------------------------- selection, verdict, budgets
 
 
-def select(screen: dict, max_per_family: int = MAX_PER_FAMILY) -> list[dict]:
+def _selected(row: dict, policy: str) -> bool:
+    """`gates`: every training gate (r1–r10). `control` (r11 §4): the training windows were
+    already read, so only the new information selects — the row beats its zone-restricted random
+    control (G4) and has trades; the other gates are reported, not applied."""
+    if policy == "control":
+        return bool(row["trades"]) and bool(row["gates"].get("G4_control"))
+    return bool(row["passes"])
+
+
+def select(screen: dict, max_per_family: int = MAX_PER_FAMILY, policy: str = "gates") -> list[dict]:
     chosen = []
     for family in sorted({row["family"] for row in screen["rows"]}):
-        passing = [row for row in screen["rows"] if row["family"] == family and row["passes"]]
+        passing = [row for row in screen["rows"] if row["family"] == family and _selected(row, policy)]
         passing.sort(key=lambda row: -(row["lb90_bp"] or -1e9))
         chosen.extend({"id": row["id"], "family": family, "lb90_bp": row["lb90_bp"], "mean_net_bp": row["mean_net_bp"], "trades": row["trades"]} for row in passing[:max_per_family])
     return chosen
@@ -664,6 +709,7 @@ def main(argv: list[str] | None = None) -> int:
     sel = sub.add_parser("select")
     sel.add_argument("--screen", required=True)
     sel.add_argument("--out", required=True)
+    sel.add_argument("--protocol", choices=tuple(PROTOCOLS), default="")  # r11: the protocol's `selection` policy
     ver = sub.add_parser("verdict")
     ver.add_argument("--training", required=True)
     ver.add_argument("--validation", required=True)
@@ -710,7 +756,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"source": args.source, "phase": args.phase, "configurations": document["configurations"], "passes": document["passes"], "elapsed_seconds": document["elapsed_seconds"]}))
         return 0
     if args.command == "select":
-        chosen = select(json.loads(Path(args.screen).read_text()))
+        policy = PROTOCOLS[args.protocol].get("selection", "gates") if args.protocol else "gates"
+        chosen = select(json.loads(Path(args.screen).read_text()), policy=policy)
         Path(args.out).write_text(json.dumps({"selected": chosen, "generated_at": _now()}, indent=1) + "\n")
         Path(args.out).with_suffix(".txt").write_text("".join(item["id"] + "\n" for item in chosen))
         print(json.dumps({"selected": len(chosen)}))

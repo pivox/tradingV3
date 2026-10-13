@@ -80,6 +80,14 @@ below the control p95 for the one row with 200 trades or more). A frozen pre-reg
 "zone + time exit" (zone-restricted control, mid-cap validation September 2024, holdout November
 2024) is proposed to the owner, not launched. The forward test is untouched.
 
+**r11 "zone + time exit" (owner's go, frozen 2026-10-13T15:23:04Z, sha256 `6c9dc905…`):** the
+training stage closes it — none of the twelve pre-declared rows beats the random control
+restricted to the zone (the pool with the time exit: +12.1 bp on 296 trades against a control
+median of +3.2 and p95 of +12.7); nothing acquired, September and November 2024 unread, no
+candidate ([report](../../handbook/reports/research-zone-time-2026-10-13.md)). What r10x read as
+the stacks' contribution is the zone's; the zone alone is a different hypothesis, not tested.
+The forward test is untouched.
+
 ## Constraints
 
 - The research tape is a research artifact (≈ 50 MB/day), deletable after the report; the
