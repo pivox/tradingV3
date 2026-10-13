@@ -34,7 +34,7 @@ STOP_ATR_MULTIPLE = 1.5
 ZONE_ATR_MULTIPLE, ZONE_MIN_RATE, ZONE_MAX_RATE = 0.22, 0.0004, 0.0065
 SETUP_SIDES = {1: 1, 2: 1, 3: -1}  # P1 pullback long, P2 trend continuation long, P3 trend momentum short
 STACK_NAMES = tuple(f"p{n}_a{layers}" for n in (1, 2, 3) for layers in (3, 4))
-SETUP_FEATURES = STACK_NAMES + ("atr5", "atr5_bp", "vwap5", "zone_lo", "zone_hi")
+SETUP_FEATURES = STACK_NAMES + ("atr5", "atr5_bp", "vwap5", "zone_lo", "zone_hi", "cadence5")
 KLINE_FIELDS = ("ts_s", "open", "high", "low", "close", "volume")
 # r10x (EXPLORATORY-r10x.md, owner's request of 2026-10-13): the full stacks re-evaluated with the 5m and 1m
 # volume-ratio confirmation at these thresholds instead of the catalog's 1.4 (`VOLUME_RATIO_THRESHOLD`).
@@ -463,6 +463,9 @@ def setup_features(k1m: dict[str, np.ndarray], start_s: int, end_s: int, volume_
         mask = np.zeros(n, dtype=bool)
         mask[seconds] = values[inside]
         out[name] = mask
+    cadence = np.zeros(n, dtype=bool)
+    cadence[seconds] = True
+    out["cadence5"] = cadence  # r12: every decision second of the 5-minute cadence, whatever the stacks say
     marker = np.full(n, -1, dtype=np.int64)
     marker[seconds] = np.flatnonzero(inside)
     marker = np.maximum.accumulate(np.where(marker >= 0, marker, -1))
