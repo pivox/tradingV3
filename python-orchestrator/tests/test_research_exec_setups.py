@@ -12,7 +12,7 @@ import pytest
 from scripts.research_exec import platform_setups as ps
 from scripts.research_exec.capture import QUOTE_DTYPE, TRADE_DTYPE, Instrument
 from scripts.research_exec.scalp_engine import EXIT_REASONS, SETUP_TTL_US, Policy, SeriesData, run_policy
-from scripts.research_exec.screen import PROTOCOLS, build_grid, parse_configuration
+from scripts.research_exec.screen import PROTOCOLS, build_grid, main as screen_main, parse_configuration
 from scripts.research_exec.tick import build_bars, compute_features, parse_rule, signal_mask
 
 SECOND = 1_000_000
@@ -197,3 +197,62 @@ def test_r10_grid_has_96_configurations_with_implied_sides_and_p_rules_parse():
     spec = PROTOCOLS["r10"]
     assert spec["phase_symbols"]["validation"] == spec["phase_symbols"]["holdout"] and len(spec["phase_symbols"]["holdout"]) == 10
     assert spec["training_windows"] == ("w2404", "w2405", "w2406", "w2408") and spec["phases"]["holdout"] == ("w2411a", "w2411b")
+
+
+# r10x (EXPLORATORY-r10x.md): the volume-ratio threshold variants of the full stacks and the entry-zone tokens.
+
+
+def test_exploration_volume_thresholds_add_nested_full_stacks():
+    c = _candles(3 * 1440, seed=5, drift=2e-4)
+    assert ps.volume_key(1.1) == "v11" and ps.volume_key(1.2) == "v12" and ps.volume_key(1.3) == "v13"
+    ind = ps.indicators(ps.aggregate(c, 300))
+    ind["volume_ratio"] = np.full(ind["close"].shape, 1.25)
+    assert ps.conditions(ind, 1.2)["volume_ratio_ok"].all() and not ps.conditions(ind, 1.3)["volume_ratio_ok"].any() and not ps.conditions(ind)["volume_ratio_ok"].any()
+    at = ps.stacks_at_cadence(c, volume_thresholds=ps.EXPLORATION_VOLUME_THRESHOLDS)
+    plain = ps.stacks_at_cadence(c)
+    for n in (1, 2, 3):
+        assert (at[f"p{n}_a4"] == plain[f"p{n}_a4"]).all() and (at[f"p{n}_a3"] == plain[f"p{n}_a3"]).all()  # the r10 stacks are unchanged
+        chain = [at[f"p{n}_a3"], at[f"p{n}_a4_v11"], at[f"p{n}_a4_v12"], at[f"p{n}_a4_v13"], at[f"p{n}_a4"]]
+        for wider, tighter in zip(chain, chain[1:]):
+            assert not (tighter & ~wider).any()  # a higher volume threshold decides a subset of the lower one's decisions
+    start_s, end_s = DAY + 86400 + 3600, DAY + 86400 + 7200 + 17
+    f = ps.setup_features(c, start_s, end_s, volume_thresholds=(1.1,))
+    assert "p1_a4_v11" in f and "p1_a4_v12" not in f and f["p3_a4_v11"].shape == (end_s - start_s,) and set(ps.SETUP_FEATURES) <= set(f)
+    fired = np.flatnonzero(np.logical_or.reduce([f[name] for name in f if name.startswith("p")]))
+    assert all((start_s + s + 1) % 300 == 0 for s in fired)
+
+
+def test_exploration_rule_tokens_select_the_threshold_stack_and_the_zone():
+    assert parse_rule("P1-A4-K0-V1.2") == ("P1", {"A": "4", "K": "0", "V": "1.2"})
+    assert parse_rule("P3-A3-K0-Z1") == ("P3", {"A": "3", "K": "0", "Z": "1"})
+    n = 6
+    features = {"mid": np.full(n, 100.0), "spread_bp": np.full(n, 1.0), "atr5": np.full(n, 0.5), "atr5_bp": np.full(n, 50.0),
+                "zone_lo": np.array([99.9, 100.1, 99.9, 99.9, np.nan, 99.9]), "zone_hi": np.array([100.1, 100.2, 100.1, 99.95, np.nan, 100.1]),
+                "p1_a4": np.array([True, True, True, True, True, False]), "p1_a4_v12": np.array([True, True, False, True, True, True]), "p1_a3": np.ones(n, dtype=bool)}
+    features["atr5"][4] = np.nan  # no ATR at the decision second: never a decision, in or out of the zone
+    assert signal_mask("P1-A4-K0-V1.2", features, 1).tolist() == [True, True, False, True, False, True]
+    assert signal_mask("P1-A4-K0", features, 1).tolist() == [True, True, True, True, False, False]
+    assert signal_mask("P1-A4-K0-V1.2", features, -1).sum() == 0
+    inside, outside = signal_mask("P1-A3-K0-Z1", features, 1), signal_mask("P1-A3-K0-Z0", features, 1)
+    assert inside.tolist() == [True, False, True, False, False, True] and outside.tolist() == [False, True, False, True, False, False]
+    assert (inside | outside).tolist() == signal_mask("P1-A3-K0", features, 1).tolist()  # the two zone rows partition the unconstrained decisions
+    assert signal_mask("P1-A3-K2-Z1", features, 1).sum() == 3 and signal_mask("P1-A3-K8-Z1", features, 1).sum() == 0  # 50 bp ≥ 2 × 8, < 8 × 8
+    with pytest.raises(ValueError):
+        signal_mask("P1-A3-K0-V1.2", features, 1)
+    with pytest.raises(ValueError):
+        signal_mask("P1-A3-K0-Z2", features, 1)
+
+
+def test_r10x_exploration_grid_has_180_configurations_and_no_validation_phase(tmp_path):
+    grid = build_grid(False, "r10x")
+    assert len(grid) == 180 and len(set(grid)) == 180
+    assert sum(1 for item in grid if "-V" in item) == 108 and sum(1 for item in grid if "-Z" in item) == 48
+    baseline = [item for item in grid if "-V" not in item and "-Z" not in item]
+    assert len(baseline) == 24 and set(baseline) <= set(build_grid(False, "r10"))
+    assert all(parse_configuration(item)[1] == (-1 if item.startswith("P3") else 1) for item in grid)
+    assert all(parse_rule(item.split("|")[0])[1]["A"] == "4" for item in grid if "-V" in item)
+    spec = PROTOCOLS["r10x"]
+    assert spec["exploratory"] and spec["phases"] == {} and spec["training_windows"] == PROTOCOLS["r10"]["training_windows"]
+    assert spec["setup_volume_thresholds"] == (1.1, 1.2, 1.3) and spec["gates"] == PROTOCOLS["r10"]["gates"]
+    with pytest.raises(SystemExit):  # the exploratory protocol never reads a validation or holdout window
+        screen_main(["screen", "--source", "binance", "--phase", "validation", "--protocol", "r10x", "--out", str(tmp_path), "--tape-dir", str(tmp_path), "--instruments", str(tmp_path / "none.json")])

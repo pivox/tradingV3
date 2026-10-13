@@ -27,7 +27,7 @@ import numpy as np
 
 from . import capture
 from .capture import QUOTE_DTYPE, TRADE_DTYPE, Instrument
-from .platform_setups import SETUP_SIDES, klines_loader, setup_rule_catalogue
+from .platform_setups import EXPLORATION_VOLUME_THRESHOLDS, SETUP_SIDES, klines_loader, setup_exploration_catalogue, setup_rule_catalogue
 from .scalp_engine import ENTRIES, EXITS, SETUP_TTL_US, Policy, SeriesData, run_policy
 from .scalp_engine import TRADE_DTYPE as ROW_DTYPE
 from .stats import block_bootstrap_lower_bound
@@ -67,6 +67,14 @@ PROTOCOLS = {
             "training_windows": ("w2404", "w2405", "w2406", "w2408"), "phases": {"validation": ("w2409a", "w2409b"), "holdout": ("w2411a", "w2411b")},
             "phase_symbols": {"validation": R10_MIDCAPS, "holdout": R10_MIDCAPS}, "rules": tuple(setup_rule_catalogue()), "by_series": True, "setups": True, "symbols": R8_SYMBOLS,
             "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
+    # r10x (EXPLORATORY-r10x.md, owner's request of 2026-10-13): exploratory re-reading of the r10 training windows only —
+    # the full stacks at the volume-ratio thresholds 1.1/1.2/1.3 and the 1.1.0 entry zone imposed or excluded; the gates
+    # are reported for information, nothing is selected; no validation or holdout phase exists (September and November
+    # 2024 stay unread).
+    "r10x": {"entries": ("E1",), "exits": ("B1", "B2", "B3", "B4"), "rule_sides": {f"P{n}": (side,) for n, side in SETUP_SIDES.items()},
+             "training_windows": ("w2404", "w2405", "w2406", "w2408"), "phases": {}, "exploratory": True,
+             "rules": tuple(setup_exploration_catalogue()), "by_series": True, "setups": True, "setup_volume_thresholds": EXPLORATION_VOLUME_THRESHOLDS, "symbols": R8_SYMBOLS,
+             "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
     # fwd-okx-r1: the r8b long stream, frozen, replayed forward on the OKX tape of `forward_okx.py` (real quotes with
     # sizes, prints, depth every 30 s); one configuration, judged week by week with the r8 validation checks.
     "fwd-okx-r1": {"entries": ("E1",), "exits": ("Z3",), "sides": (1,), "training_windows": ("fwd-okx-w0",),
@@ -271,7 +279,7 @@ def _day_s(date: str) -> int:
     return int(datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
 
-def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None, depth: bool = False, book: bool = False, venue: str = "binance", setups: bool = False, klines_dir: Path | None = None) -> tuple[list[Series], list[str]]:
+def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symbols: tuple[str, ...] = BINANCE_SYMBOLS, windows: tuple[str, ...] | None = None, depth: bool = False, book: bool = False, venue: str = "binance", setups: bool = False, klines_dir: Path | None = None, setup_volume_thresholds: tuple[float, ...] = ()) -> tuple[list[Series], list[str]]:
     """`tape_dir` holds the training and validation windows; the holdout window is read from
     the sibling holdout directory when `phase == "holdout"`. With `depth`, the bookDepth npz of
     each day (`depth/<symbol>/<symbol>-<date>.npz`) is loaded with the prints (r8); with `book`,
@@ -307,7 +315,7 @@ def load_binance_series(tape_dir: Path, instruments_path: Path, phase: str, symb
                 continue
             instrument, min_notional = instruments[symbol]
             loader = _tape_loader(tuple(paths), instrument.fixed_tick, start_s, end_s, tuple(depth_paths) if depth else None, tuple(book_paths) if book else None)
-            setup_loader = klines_loader(klines_dir, symbol, start_s, end_s) if setups else None
+            setup_loader = klines_loader(klines_dir, symbol, start_s, end_s, tuple(setup_volume_thresholds)) if setups else None
             series.append(Series(f"{venue}:{symbol}:{window}", None, None, instrument, start_s, end_s, book, min_notional, True, loader=loader, setup_loader=setup_loader))
     return series, missing
 
@@ -680,10 +688,14 @@ def main(argv: list[str] | None = None) -> int:
             book = True
         else:
             spec = PROTOCOLS[args.protocol]
+            if spec.get("exploratory") and args.phase != "training":
+                raise SystemExit(f"{args.protocol} is exploratory: it reads the training windows only (no validation or holdout phase)")
             symbols = tuple(args.symbols.split(",")) if args.symbols else tuple(spec.get("phase_symbols", {}).get(args.phase) or spec.get("symbols", BINANCE_SYMBOLS))
             windows = spec.get("training_windows") if args.phase == "training" else spec.get("phases", {}).get(args.phase)
             series, missing = load_binance_series(Path(args.tape_dir), Path(args.instruments), args.phase, symbols, windows, depth=bool(spec.get("depth")), book=bool(spec.get("book")), venue=spec.get("venue", "binance"),
-                                                  setups=bool(spec.get("setups")), klines_dir=Path(args.klines_dir) if args.klines_dir else None)
+                                                  setups=bool(spec.get("setups")), klines_dir=Path(args.klines_dir) if args.klines_dir else None, setup_volume_thresholds=tuple(spec.get("setup_volume_thresholds", ())))
+            if spec.get("exploratory"):
+                extra["exploratory"] = True
             extra["missing_days"] = missing
             extra["venue"] = spec.get("venue", "binance")
             book = bool(spec.get("book"))
