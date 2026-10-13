@@ -152,11 +152,11 @@ def convert_bookticker(raw: bytes) -> tuple[dict[str, np.ndarray], dict]:
     updates (r9 §1). Rows are ordered by transaction time (file order for ties)."""
     used = ("best_bid_price", "best_bid_qty", "best_ask_price", "best_ask_qty", "transaction_time")
     frame = _read_csv(raw, BOOK_COLUMNS, {name: "float64" if name != "transaction_time" else "int64" for name in used}, usecols=used)
-    t_ms = frame["transaction_time"].to_numpy()
-    order = np.argsort(t_ms, kind="stable")
-    sec = (t_ms[order] // 1000).astype(np.int64)
-    bid, bq, ask, aq = (frame[column].to_numpy()[order] for column in ("best_bid_price", "best_bid_qty", "best_ask_price", "best_ask_qty"))
-    del frame
+    columns = {name: frame[name].to_numpy() for name in used}
+    del frame  # one column set alive at a time: a major's day is 30 M rows
+    order = np.argsort(columns["transaction_time"], kind="stable")
+    sec = (columns.pop("transaction_time")[order] // 1000).astype(np.int64)
+    bid, bq, ask, aq = (columns.pop(name)[order] for name in ("best_bid_price", "best_bid_qty", "best_ask_price", "best_ask_qty"))
     if sec.size == 0:
         empty = {"ts_s": np.zeros(0, dtype=np.int64), "bid": np.zeros(0), "ask": np.zeros(0), "bid_qty": np.zeros(0), "ask_qty": np.zeros(0), "updates": np.zeros(0, dtype=np.int32), "qi_mean": np.zeros(0)}
         return empty, {"updates_total": 0, "seconds_with_updates": 0}
@@ -221,7 +221,9 @@ def run(kind: str, out_dir: Path, symbols: list[str], dates: list[str], workers:
     manifest_path = out_dir / f"manifest-{kind}.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"kind": kind, "source": f"{BASE}/{KINDS[kind][0]}", "created_at": _now(), "files": [], "failures": []}
     done = {(item["symbol"], item["date"]) for item in manifest["files"]}
-    todo = [(symbol, date) for symbol in symbols for date in dates if (symbol, date) not in done]
+    # Date-major order: with the symbols listed heavy / light alternately, parallel workers do not
+    # all hold a major's day at once.
+    todo = [(symbol, date) for date in dates for symbol in symbols if (symbol, date) not in done]
     _log(f"{kind}: {len(todo)} files to acquire ({len(done)} already in the manifest) into {out_dir}")
     failures = []
     started = time.time()
