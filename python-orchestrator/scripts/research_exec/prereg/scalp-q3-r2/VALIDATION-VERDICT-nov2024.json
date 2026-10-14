@@ -1,0 +1,33 @@
+{
+ "decision": "VALIDATION_FAIL",
+ "validation": {
+  "per_candidate": {
+   "C4-SL": {
+    "criteria": {
+     "V1_trades_150": true,
+     "V2_mean_net_positive": false,
+     "V3_pf_1.05": false,
+     "V4_surplus_positive": false,
+     "V5_holm_p_0.05": false,
+     "V6_ci90_lb_positive": false,
+     "V7_pairs": false,
+     "V8_pessimistic_mean_positive": false,
+     "V9_trimmed_positive": false,
+     "V10_portfolio_pnl_positive": false,
+     "V11_dd_10pct": false,
+     "V12_worst_trade_2x": true
+    },
+    "passes": false,
+    "pairs_with_trades": 20,
+    "pairs_positive": 5,
+    "portfolio_trades": 174
+   }
+  },
+  "decision": "VALIDATION_FAIL",
+  "passing": []
+ },
+ "holm": {
+  "C4": 0.8001998001998002
+ },
+ "results_sha256": "77988ec9c08912684d4235eaaa253a5c648d67f3e0fc2f916d2fc937c72a88d0"
+}
