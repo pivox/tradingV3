@@ -64,6 +64,7 @@ STOP_LIMIT_TTL_MS = FOUR_HOURS
 STOP_LIMIT_OFFSET_ATR = 0.25
 TARGET_R = 3.0
 EXCHANGE_MIN_NOTIONAL = 5.0
+GAP_WARMUP_MS = 42 * 86_400_000  # the 250-bar 4h warm-up
 
 LOOKBACKS = (30, 60, 120)
 STRENGTHS = (0.0, 0.25, 0.5)
@@ -72,7 +73,7 @@ STOPS = (2.0, 3.0)
 EXITS = ("T3", "CH")
 HOLDS = (7, 14)
 SIDES = ("long", "short")
-EXIT_CLASSES = ("stop", "target", "time", "trailing")
+EXIT_CLASSES = ("stop", "target", "time", "trailing", "delisting")
 
 
 class EngineError(ValueError):
@@ -153,10 +154,35 @@ class Market:
     funding: Mapping[str, ex.FundingSeries]
     instruments: Mapping[str, Mapping]
     paths: dict = field(default_factory=dict)  # memo of simulated paths
+    eligible: Mapping[str, frozenset] | None = None  # symbol -> months "YYYY-MM" open to NEW entries (None: always)
+    gaps: Mapping[str, Sequence[tuple[int, int]]] | None = None  # symbol -> [first missing minute, next real minute)
+
+    def open_to_entries(self, symbol: str, decision_ms: int) -> bool:
+        """Universe membership gates only new entries (an open position runs to its exit regardless); no entry
+        when a data gap lies within the warm-up (the 42 days before the decision)."""
+        if self.eligible is not None and month_of_ms(decision_ms) not in self.eligible.get(symbol, frozenset()):
+            return False
+        for start, end in (self.gaps or {}).get(symbol, ()):
+            if start <= decision_ms and end > decision_ms - GAP_WARMUP_MS:
+                return False
+        return True
+
+    def data_end_after(self, symbol: str, after_ms: int, series_end: int) -> int:
+        """End of the usable data after ``after_ms``: the next gap's first missing minute, or the series end."""
+        for start, _ in (self.gaps or {}).get(symbol, ()):
+            if start > after_ms:
+                return min(start, series_end)
+        return series_end
 
     @property
     def symbols(self) -> tuple[str, ...]:
         return tuple(sorted(self.frames))
+
+
+def month_of_ms(ms: int) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m")
 
 
 def _regime(frame: sw.Frame, index: int, side: str) -> bool:
@@ -192,6 +218,8 @@ def signals(market: Market, config: Config, window: tuple[int, int]) -> list[Sig
     for symbol in market.symbols:
         frame = market.frames[symbol]
         for index in frame.decisions(*window):
+            if not market.open_to_entries(symbol, frame.close_ms(index)):
+                continue
             value = strength_at(frame, index, config.side, config.lookback)
             if value is not None and value >= config.strength:
                 rows.append((frame.close_ms(index), -value, symbol, index, config.side, value))
@@ -199,7 +227,8 @@ def signals(market: Market, config: Config, window: tuple[int, int]) -> list[Sig
 
 
 def regime_bars(market: Market, side: str, window: tuple[int, int]) -> dict[str, list[int]]:
-    return {symbol: [i for i in market.frames[symbol].decisions(*window) if _regime(market.frames[symbol], i, side)]
+    return {symbol: [i for i in market.frames[symbol].decisions(*window) if _regime(market.frames[symbol], i, side)
+                     and market.open_to_entries(symbol, market.frames[symbol].close_ms(i))]
             for symbol in market.symbols}
 
 
@@ -247,6 +276,7 @@ class Path:
     exit_ms: int = 0
     exit_price: float = float("nan")
     reason: str = "entry_expired"
+    delisting: bool = False  # the deadline is the end of the instrument's data before the holding limit or the phase end
     ambiguous: bool = False
     atr: float = float("nan")
     deadline_ms: int = 0
@@ -296,7 +326,10 @@ def _simulate(market: Market, symbol: str, index: int, geometry: Geometry, phase
     long = geometry.side == "long"
     decision = frame.close_ms(index)
     atr = float(frame["atr"][index])
-    deadline = min(decision + geometry.horizon_ms, phase_end)
+    # A delisted instrument's data stop, and a listing gap interrupts them: settle at the last close before.
+    data_end = market.data_end_after(symbol, decision, candles.start_ms + candles.count * MINUTE)
+    deadline = min(decision + geometry.horizon_ms, phase_end, data_end)
+    delisting = data_end < min(decision + geometry.horizon_ms, phase_end)
     release = decision + geometry.ttl_ms
     first = candles.index(decision)
     if first < 0 or first >= candles.count:
@@ -350,7 +383,7 @@ def _simulate(market: Market, symbol: str, index: int, geometry: Geometry, phase
     if deadline_index >= candles.count:
         raise EngineError(f"{symbol}: position outlives candle coverage")
     common = dict(entry=entry, initial_stop=stop, target=target, fill_index=fill, fill_ms=fill_ms, atr=atr,
-                  deadline_ms=deadline, reference_entry=reference)
+                  deadline_ms=deadline, reference_entry=reference, delisting=delisting)
 
     def stop_price(i: int, level: float) -> float:
         return min(opening[i], level) if long else max(opening[i], level)
@@ -364,7 +397,7 @@ def _simulate(market: Market, symbol: str, index: int, geometry: Geometry, phase
         hit = sw.first_touch(candles, blocks, fill + 1, deadline_index, lower, upper)
         if hit is None:
             return Path(True, deadline, exit_index=deadline_index, exit_ms=deadline, exit_price=close[deadline_index - 1],
-                        reason="time", ambiguous=ambiguous, **common)
+                        reason="delisting" if delisting else "time", ambiguous=ambiguous, **common)
         exit_ms = candles.start_ms + (hit + 1) * MINUTE
         stop_hit = (low[hit] <= stop) if long else (high[hit] >= stop)
         if stop_hit:
@@ -397,7 +430,7 @@ def _simulate(market: Market, symbol: str, index: int, geometry: Geometry, phase
                              else ex.ceil_to(extreme + geometry.stop_atr * current_atr, tick))
                 level = max(level, candidate) if long else min(level, candidate)
         begin = end
-    reason = "time"
+    reason = "delisting" if delisting else "time"
     return Path(True, deadline, exit_index=deadline_index, exit_ms=deadline, exit_price=close[deadline_index - 1],
                 reason=reason, **common)
 
@@ -525,7 +558,7 @@ def settle(market: Market, symbol: str, path: Path, geometry: Geometry, quantity
                    path.target if path.reason == "target" else math.nan, units, 1.0, 0.0, path.deadline_ms,
                    geometry.side)
     outcome = ex.Outcome(plan, filled=True, fill_ms=path.fill_ms, exit_ms=path.exit_ms, exit_price=path.exit_price,
-                         reason="holding_deadline" if path.reason == "time" else path.reason, ambiguous=path.ambiguous)
+                         reason="holding_deadline" if path.reason in ("time", "delisting") else path.reason, ambiguous=path.ambiguous)
     outcome.entry_cost = units * path.entry * entry_rate(geometry, profile)
     ex.settle(outcome, market.candles[symbol], market.funding.get(symbol), profile, path.fill_index, path.exit_index)
     return outcome.net, outcome.funding

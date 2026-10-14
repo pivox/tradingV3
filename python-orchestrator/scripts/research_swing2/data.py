@@ -29,7 +29,11 @@ from .engine import DAY, FOUR_HOURS, MINUTE, Market
 
 VALIDATION_CUT_MS = 1_767_225_600_000  # 2026-01-01T00:00:00Z
 HOLDOUT_END_MS = 1_791_525_600_000  # 2026-10-09T06:00:00Z, the frozen end of the 2026 holdout
+OKX_END_MS = 1_791_820_800_000  # 2026-10-12T16:00:00Z, the last archived OKX minute + 1 (proposal, fixed at the freeze)
 MIDCAPS = ("ARBUSDT", "OPUSDT", "APTUSDT", "SUIUSDT", "NEARUSDT", "TIAUSDT", "SEIUSDT", "INJUSDT", "ATOMUSDT", "FILUSDT")
+
+
+GAP_MINUTES = 60  # longer runs of missing minutes are gaps: no entry with one in the warm-up, positions settle before
 
 
 class DataError(RuntimeError):
@@ -84,13 +88,19 @@ def assemble_candles(files: list[Path], symbol: str, end_ms: int) -> tuple[ex.Ca
         filled[name][slots] = values
     # Forward fill the missing minutes with flat candles at the previous close.
     missing = np.flatnonzero(~present)
+    gaps = []  # spans of more than GAP_MINUTES missing minutes: [first missing minute, next real minute)
+    if missing.size:
+        breaks = np.flatnonzero(np.diff(missing) > 1)
+        starts = np.concatenate(([missing[0]], missing[breaks + 1]))
+        ends = np.concatenate((missing[breaks], [missing[-1]])) + 1
+        gaps = [[int(start + a * MINUTE), int(start + b * MINUTE)] for a, b in zip(starts, ends) if b - a > GAP_MINUTES]
     for slot in missing:
         previous = filled["close"][slot - 1]
         for name in filled:
             filled[name][slot] = previous
     series = ex.CandleSeries(symbol, start, *(array("d", filled[name].tolist()) for name in ("open", "high", "low", "close")))
     receipt = {"symbol": symbol, "files": [p.name for p in files], "start_ms": start, "last_open_ms": last, "candles": int(count),
-               "missing_minutes_filled": int(missing.size), "dropped_before_first_midnight": int(begin), "end_ms_exclusive": end_ms}
+               "missing_minutes_filled": int(missing.size), "gaps": gaps, "dropped_before_first_midnight": int(begin), "end_ms_exclusive": end_ms}
     return series, receipt
 
 
@@ -126,6 +136,7 @@ def build_root(tapes: list[Path], out: Path, symbols: tuple[str, ...], end_ms: i
         candle_receipt["first_decision_ms"] = frame.close_ms(sw.WINDOW - 1) if frame.count >= sw.WINDOW else None
         receipt["symbols"][symbol] = candle_receipt
     (out / "funding.json").write_text(json.dumps(funding_doc))
+    (out / "gaps.json").write_text(json.dumps({s: r["gaps"] for s, r in receipt["symbols"].items()}))
     (out / "instrument-assumptions.json").write_text(json.dumps({**instrument_doc, "symbols": [by_symbol[s] for s in symbols]}, indent=1))
     (out / "cost-assumptions.json").write_text(costs.read_text())
     (out / "build-receipt.json").write_text(json.dumps(receipt, indent=1, sort_keys=True) + "\n")
@@ -157,7 +168,10 @@ def load_market(root: Path, symbols: tuple[str, ...], cut_ms: int) -> tuple[Mark
         last_open = candles[symbol].start_ms + (candles[symbol].count - 1) * MINUTE
         if last_open >= cut_ms or (funding[symbol].timestamps and funding[symbol].timestamps[-1] >= cut_ms):
             raise DataError(f"{symbol}: data at or after the cut")  # pragma: no cover - guarded above
-    return Market(frames, candles, blocks, funding, instruments), profiles
+    market = Market(frames, candles, blocks, funding, instruments)
+    if (root / "gaps.json").exists():
+        market.gaps = {s: [tuple(g) for g in v if g[0] < cut_ms] for s, v in json.loads((root / "gaps.json").read_text()).items() if s in symbols}
+    return market, profiles
 
 
 def _truncate(series: ex.CandleSeries, cut_ms: int) -> ex.CandleSeries:
@@ -172,11 +186,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tapes", required=True, help="comma-separated tape directories")
     parser.add_argument("--out", required=True)
     parser.add_argument("--symbols", default=",".join(MIDCAPS))
-    parser.add_argument("--end", choices=("validation", "holdout"), required=True)
+    parser.add_argument("--end", choices=("validation", "holdout", "okx"), required=True)
     parser.add_argument("--instruments", required=True)
     parser.add_argument("--costs", required=True)
     args = parser.parse_args(argv)
-    end = VALIDATION_CUT_MS if args.end == "validation" else HOLDOUT_END_MS
+    end = {"validation": VALIDATION_CUT_MS, "holdout": HOLDOUT_END_MS, "okx": OKX_END_MS}[args.end]
     receipt = build_root([Path(t) for t in args.tapes.split(",")], Path(args.out), tuple(args.symbols.split(",")), end,
                          Path(args.instruments), Path(args.costs))
     print(json.dumps({s: {k: v for k, v in r.items() if k != "files"} for s, r in receipt["symbols"].items()}, indent=1))

@@ -389,3 +389,53 @@ def test_an_entry_resting_past_the_end_of_the_data_is_scanned_up_to_the_last_can
     end = START + count * MINUTE
     path = en.simulate_path(market, "AAAUSDT", DECISION, en.Geometry("long", "C", 2.0, "T3", 14), end)
     assert not path.filled and path.deadline_ms == end
+
+
+def test_monthly_universe_gates_only_new_entries_and_the_control_draws():
+    symbols = ["AAAUSDT", "BBBUSDT"]
+    market = _breakout_market(symbols)
+    month = en.month_of_ms(market.frames["AAAUSDT"].close_ms(DECISION))
+    market.eligible = {"AAAUSDT": frozenset({month})}
+    config = en.Config(30, 0.0, en.Geometry("long", "L", 2.0, "T3", 7))
+    assert [row[2] for row in en.signals(market, config, WINDOW)] == ["AAAUSDT"]
+    regime = en.regime_bars(market, "long", WINDOW)
+    assert regime["BBBUSDT"] == [] and all(en.month_of_ms(market.frames["AAAUSDT"].close_ms(i)) == month for i in regime["AAAUSDT"])
+
+
+def test_a_position_on_a_delisted_instrument_settles_at_its_last_close():
+    first = first_minute(DECISION)
+    frame = frame_for("AAAUSDT", close=100.0)
+    count = first + 3 * BAR  # the data stop twelve hours after the decision
+    candles = ex.CandleSeries("AAAUSDT", START, *(array("d", [100.0] * count) for _ in range(4)))
+    market = market_for({"AAAUSDT": frame}, {"AAAUSDT": candles})
+    path = en.simulate_path(market, "AAAUSDT", DECISION, en.Geometry("long", "L", 2.0, "T3", 14), WINDOW[1])
+    assert path.filled and path.reason == "delisting" and path.delisting and path.exit_ms == START + count * MINUTE
+
+
+def test_okx_phase_requires_200_trades_positive_net_and_p_in_the_verdict():
+    assert "insufficient_trades" in st.gate_reasons(_summary(trades=150), "okx", "baseline", ("2023",))
+    assert "nonpositive_net_pnl" in st.gate_reasons({**_summary(trades=250), "net_quote": -1.0}, "okx", "baseline", ())
+    summary = {"gate_reasons": [], "mean_net_r": 0.1, "trades": 250}
+    row = {"id": "A", "passes_gates": True, "baseline": summary, "adverse": summary,
+           "control": {"baseline": {"surplus": 0.1, "p_empirical": 0.2}, "adverse": {"surplus": 0.1, "p_empirical": 0.05}}}
+    out = sc.verdict({"phase": "okx", "configurations": [row]}, ["A"])
+    assert out["status"] == "no_eligible_candidate" and out["rows"][0]["checks"]["p_baseline"] is False
+
+
+def test_a_data_gap_blocks_entries_during_the_warm_up_and_ends_open_positions():
+    symbols = ["AAAUSDT"]
+    market = _breakout_market(symbols)
+    decision_ms = market.frames["AAAUSDT"].close_ms(DECISION)
+    market.gaps = {"AAAUSDT": [(decision_ms - 10 * DAY, decision_ms - 9 * DAY)]}
+    config = en.Config(30, 0.0, en.Geometry("long", "L", 2.0, "T3", 14))
+    assert en.signals(market, config, WINDOW) == []
+    market.gaps = {"AAAUSDT": [(decision_ms + 2 * DAY, decision_ms + 30 * DAY)]}
+    assert [row[2] for row in en.signals(market, config, WINDOW)] == ["AAAUSDT"]
+    path = en.simulate_path(market, "AAAUSDT", DECISION, config.geometry, WINDOW[1])
+    assert path.reason == "delisting" and path.exit_ms == decision_ms + 2 * DAY
+
+
+def test_assemble_candles_records_gaps_longer_than_an_hour(tmp_path):
+    _kline_file(tmp_path / "A-1m.npz", START // 1000, 1440, skip=set(range(100, 200)) | {500})
+    _, receipt = dt.assemble_candles([tmp_path / "A-1m.npz"], "AUSDT", START + DAY)
+    assert receipt["gaps"] == [[START + 100 * MINUTE, START + 200 * MINUTE]] and receipt["missing_minutes_filled"] == 101

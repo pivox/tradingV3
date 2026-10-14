@@ -11,15 +11,15 @@ from datetime import datetime, timezone
 from .engine import REFERENCE_EQUITY, RISK_FRACTION, Trade
 
 PROFILES = ("baseline", "adverse")
-MIN_TRADES = {"training": 100, "validation": 50, "holdout": 50}
+MIN_TRADES = {"training": 100, "validation": 50, "holdout": 50, "okx": 200}
 MIN_PAIRS = 5
 MIN_PF = {"training": {"baseline": 1.2, "adverse": 1.0}, "validation": {"baseline": 1.2, "adverse": 1.0},
-          "holdout": {"baseline": 1.1, "adverse": 1.0}}
+          "holdout": {"baseline": 1.1, "adverse": 1.0}, "okx": {"baseline": 1.1, "adverse": 1.0}}
 MAX_DRAWDOWN_R = 20.0
 MIN_YEAR_TRADES = 30
 MAX_SELECTED_PER_SIDE = 3
 SELECTION_P = 0.10
-EXIT_CLASSES = ("stop", "target", "time", "trailing")
+EXIT_CLASSES = ("stop", "target", "time", "trailing", "delisting")
 
 
 def year_of(ms: int) -> str:
@@ -87,6 +87,8 @@ def gate_reasons(summary: Mapping, phase: str, profile: str, years: Sequence[str
         reasons.append("insufficient_pairs")
     if summary["mean_net_r"] is None or summary["mean_net_r"] <= 0:
         reasons.append("nonpositive_mean_net_r")
+    if phase == "okx" and summary.get("net_quote", 0.0) <= 0:
+        reasons.append("nonpositive_net_pnl")
     pf = summary["profit_factor"]
     if pf is None:
         reasons.append("undefined_profit_factor")
