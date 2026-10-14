@@ -38,6 +38,12 @@ OUTCOME_FIELDS = (
     ("s_exit_ts", np.int64), ("s_exit", np.float64), ("s_reason", np.int8), ("s_fund_bp", np.float64), ("s_busy", np.int32),
     ("s_trigger", np.float64), ("s_slip_bp", np.float64), ("fund_missing", np.int8),
 )
+# AMENDMENT-2 (B2): a passive Z3 exit fills only the volume that traded through its price; the remainder follows Z3
+# (taker at fill + 3 900 s) and, for Z3-SL200, stays under the stop until then. Columns filled for passive exits only.
+REMAINDER_FIELDS = (
+    ("pv_thr", np.float64), ("rz_exit_ts", np.int64), ("rz_exit", np.float64), ("rz_fund_bp", np.float64),
+    ("pv_thr_s", np.float64), ("rs_exit_ts", np.int64), ("rs_exit", np.float64), ("rs_reason", np.int8), ("rs_fund_bp", np.float64), ("rs_slip_bp", np.float64),
+)
 
 
 def config_id(config: str, variant: str) -> str:
@@ -151,14 +157,15 @@ def stop_exit(data: SeriesData, policy: Policy, entry: float, jf: int, fill_ts: 
     return moment, price, trigger, (trigger - price) / trigger * 1e4
 
 
-def compute_outcomes(data: SeriesData, policy: Policy, seconds: np.ndarray | None = None, funding: Funding | None = None, stop_bp: float = STOP_BP) -> dict[str, np.ndarray]:
+def compute_outcomes(data: SeriesData, policy: Policy, seconds: np.ndarray | None = None, funding: Funding | None = None, stop_bp: float = STOP_BP,
+                     remainder: bool = False) -> dict[str, np.ndarray]:
     """Outcome columns for the decision seconds `seconds` (default: every second of the series), long side, E1/Z3 policy."""
     if policy.entry != "E1" or policy.exit != "Z3":
         raise ValueError("scalp-q3-r2 replays E1 / Z3 only")
     seconds = np.arange(data.n, dtype=np.int64) if seconds is None else np.asarray(seconds, dtype=np.int64)
     m = seconds.size
-    cols = {name: np.zeros(m, dtype=dtype) for name, dtype in OUTCOME_FIELDS}
-    for name in ("price", "z_exit", "s_exit", "s_trigger", "s_slip_bp", "z_fund_bp", "s_fund_bp"):
+    cols = {name: np.zeros(m, dtype=dtype) for name, dtype in OUTCOME_FIELDS + (REMAINDER_FIELDS if remainder else ())}
+    for name in ("price", "z_exit", "s_exit", "s_trigger", "s_slip_bp", "z_fund_bp", "s_fund_bp") + (("pv_thr", "rz_exit", "rz_fund_bp", "pv_thr_s", "rs_exit", "rs_fund_bp", "rs_slip_bp") if remainder else ()):
         cols[name][:] = np.nan
     bars = data.bars
     mids, ages, bids, ticks = bars["mid"], bars["quote_age"], bars["bid"], data.ticks
@@ -209,13 +216,85 @@ def compute_outcomes(data: SeriesData, policy: Policy, seconds: np.ndarray | Non
             s_reason = STOP
         cols["s_exit_ts"][row], cols["s_exit"][row], cols["s_reason"][row] = s_exit_ts, s_exit, s_reason
         cols["s_busy"][row] = int((s_exit_ts - start_us) // SECOND_US) + 1
+        if remainder and reason == PASSIVE:
+            _remainder(data, policy, cols, row, price, fill_ts, exit_ts, exit_price, tick, tol, s_reason == PASSIVE, stop_bp)
     filled = status == FILLED
     if filled.any():
         for v in ("z", "s"):
             fb, miss = funding_bp(funding, tts, tpx, fill_c[filled], cols[f"{v}_exit_ts"][filled], price_c[filled])
             cols[f"{v}_fund_bp"][filled] = fb
             cols["fund_missing"][filled] |= miss
+    if remainder:
+        for v in ("rz", "rs"):
+            has = cols[f"{v}_exit_ts"] > 0
+            if has.any():
+                fb, miss = funding_bp(funding, tts, tpx, fill_c[has], cols[f"{v}_exit_ts"][has], price_c[has])
+                cols[f"{v}_fund_bp"][has] = fb
+                cols["fund_missing"][has] |= miss
     return cols
+
+
+def _remainder(data: SeriesData, policy: Policy, cols: dict, row: int, entry: float, fill_ts: int, passive_ts: int, ask: float, tick: float, tol: float, sl_passive: bool,
+               stop_bp: float) -> None:
+    """AMENDMENT-2 (B2), for a passive Z3 exit at `ask` first traded through at `passive_ts`: the volume that traded
+    through the ask between the posting and the end of its TTL (`pv_thr`, the most the order can fill when it is last in
+    the queue); the Z3 remainder exit (taker at the live bid at fill + 3 900 s + latency); for Z3-SL200 when its exit
+    was this passive one, the remainder stays under the stop from the first passive fill until the fallback order
+    time, and the through volume only counts before a stop trigger (`pv_thr_s`)."""
+    post_after, ttl_s, fallback_at = PASSIVE_EXITS["Z3"]
+    post = fill_ts + post_after * SECOND_US + policy.latency_us
+    tts, tpx, tsz = data.tts, data.tpx, data.tsz
+    k0 = int(np.searchsorted(tts, post, side="right"))
+    k1 = int(np.searchsorted(tts, post + ttl_s * SECOND_US, side="right"))
+    through = tpx[k0:k1] > ask + tol
+    cols["pv_thr"][row] = float(tsz[k0:k1][through].sum())
+    fb_moment = fill_ts + fallback_at * SECOND_US + policy.latency_us
+    bid = _bid_at(data, fb_moment)
+    cols["rz_exit_ts"][row], cols["rz_exit"][row] = fb_moment, (bid if bid is not None else np.nan)
+    if not sl_passive:
+        return
+    jp = int(np.searchsorted(tts, passive_ts, side="left"))
+    stop = stop_exit(data, policy, entry, jp, passive_ts, tick, tol, fill_ts + fallback_at * SECOND_US, stop_bp)
+    if stop is None:
+        cols["pv_thr_s"][row] = cols["pv_thr"][row]
+        cols["rs_exit_ts"][row], cols["rs_exit"][row], cols["rs_reason"][row] = fb_moment, cols["rz_exit"][row], EXIT_REASONS["fallback"]
+        return
+    moment, price, trigger, slip = stop
+    trigger_ts = moment - policy.latency_us
+    k_stop = int(np.searchsorted(tts, trigger_ts, side="left"))
+    upto = min(k1, k_stop)
+    cols["pv_thr_s"][row] = float(tsz[k0:upto][tpx[k0:upto] > ask + tol].sum()) if upto > k0 else 0.0
+    cols["rs_exit_ts"][row], cols["rs_exit"][row], cols["rs_reason"][row], cols["rs_slip_bp"][row] = moment, price, STOP, slip
+
+
+def exit_mix(cols: dict, rows: np.ndarray, variant: str, qty: np.ndarray, step: float | np.ndarray = 0.0) -> dict[str, np.ndarray]:
+    """AMENDMENT-2 (B2): the exit of `qty` units at the outcome rows, split between the passive fill (at most the volume
+    that traded through, rounded down to the quantity step) and the remainder (Z3 fallback or, for Z3-SL200, stop or
+    fallback). Without the remainder columns or for a non-passive exit, the whole quantity exits at the table's exit.
+    Returns the passive fraction, both prices, the remainder's reason, the exit moment (last leg) and funding (bp)."""
+    p = "z" if variant == "Z3" else "s"
+    rows = np.asarray(rows, dtype=np.int64)
+    qty = np.asarray(qty, dtype=np.float64)
+    exit_px, reason = cols[f"{p}_exit"][rows], cols[f"{p}_reason"][rows]
+    out = {"frac": np.ones(rows.size), "exit": exit_px, "rem_exit": exit_px.copy(), "rem_reason": reason.copy(), "reason": reason,
+           "end_ts": cols[f"{p}_exit_ts"][rows].copy(), "fund_bp": cols[f"{p}_fund_bp"][rows].copy(), "rem_fund_bp": cols[f"{p}_fund_bp"][rows].copy(),
+           "rem_slip_bp": np.full(rows.size, np.nan)}
+    if "pv_thr" not in cols:
+        return out
+    passive = reason == PASSIVE
+    thr = cols["pv_thr" if p == "z" else "pv_thr_s"][rows]
+    step = np.broadcast_to(np.asarray(step, dtype=np.float64), rows.shape)
+    filled = np.where(step > 0, np.floor(np.nan_to_num(thr) / np.where(step > 0, step, 1.0) + 1e-9) * step, np.nan_to_num(thr))
+    frac = np.where(passive & (qty > 0), np.minimum(1.0, filled / np.where(qty > 0, qty, 1.0)), 1.0)
+    short = passive & (frac < 1.0 - 1e-12)
+    r = "rz" if p == "z" else "rs"
+    out["frac"] = frac
+    out["rem_exit"] = np.where(short, cols[f"{r}_exit"][rows], exit_px)
+    out["rem_reason"] = np.where(short, cols["rs_reason"][rows] if p == "s" else EXIT_REASONS["fallback"], reason).astype(np.int8)
+    out["end_ts"] = np.where(short, cols[f"{r}_exit_ts"][rows], out["end_ts"])
+    out["rem_fund_bp"] = np.where(short, cols[f"{r}_fund_bp"][rows], out["fund_bp"])
+    out["rem_slip_bp"] = np.where(short & (out["rem_reason"] == STOP), cols["rs_slip_bp"][rows] if p == "s" else np.nan, np.nan)
+    return out
 
 
 def fees_bp(reason: np.ndarray, maker_bp: float, taker_bp: float) -> np.ndarray:
