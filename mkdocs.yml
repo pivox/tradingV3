@@ -117,6 +117,12 @@ nav:
       - "H1 — amendment A1": research/AMENDMENT-H1-A1.md
       - "H1 — amendment A2": research/AMENDMENT-H1-A2.md
       - "H1 — S_A screen result": research/H1-SA-SCREEN-RESULT.md
+      - "France — exchange eligibility": research/FRANCE-EXCHANGE-ELIGIBILITY.md
+      - "France — tradable instrument universe": research/TRADABLE-INSTRUMENT-UNIVERSE.md
+      - "TradingV3 — exchange compatibility": research/TRADINGV3-EXCHANGE-COMPATIBILITY.md
+      - "H1 — executability review (France)": research/H1-EXECUTABILITY-REVIEW.md
+      - "H2 — feasibility review (France)": research/H2-FEASIBILITY-REVIEW.md
+      - "Research eligibility gates M1–M5": research/RESEARCH-ELIGIBILITY-GATES.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 
