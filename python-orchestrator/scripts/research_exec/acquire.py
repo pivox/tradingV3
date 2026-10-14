@@ -17,6 +17,10 @@ Layouts (one npz per symbol-day, `numpy.savez_compressed`):
 - klines (r10, monthly 1-minute candles, `--dates 2024-03..2024-08`) → `klines/<SYMBOL>/<SYMBOL>-1m-<YYYY-MM>.npz`
   with `ts_s` (candle open, seconds UTC), `open`, `high`, `low`, `close`, `volume`, `quote_volume`,
   `count`, `taker_buy_volume`, sorted by open time.
+- klinesdaily (swing v2, daily 1-minute candles for a month not yet archived) → the klines layout with
+  `<SYMBOL>-1m-<YYYY-MM-DD>.npz`.
+- fundingrate (swing v2, monthly funding events) → `funding/<SYMBOL>/<SYMBOL>-fundingRate-<YYYY-MM>.npz` with
+  `ts_ms` (calc time, ms UTC), `rate` and `interval_hours`, sorted.
 - metrics (r13, daily positioning snapshots every five minutes) → `metrics/<SYMBOL>/<SYMBOL>-<date>.npz` with
   `ts_s` (snapshot time on the 5-minute grid, seconds UTC), `oi` (open interest, base units), `oi_value`
   (USDT), `top_count_ratio`, `top_sum_ratio`, `ls_count_ratio`, `taker_ratio`, sorted, one record per grid point.
@@ -45,7 +49,9 @@ except ImportError:  # pragma: no cover - exercised only where pandas is absent
 
 BASE = "https://data.binance.vision/data/futures/um/daily"
 BASE_MONTHLY = "https://data.binance.vision/data/futures/um/monthly"
-KINDS = {"aggtrades": ("aggTrades", "npz"), "bookdepth": ("bookDepth", "depth"), "bookticker": ("bookTicker", "book"), "klines": ("klines", "klines"), "metrics": ("metrics", "metrics")}
+KINDS = {"aggtrades": ("aggTrades", "npz"), "bookdepth": ("bookDepth", "depth"), "bookticker": ("bookTicker", "book"), "klines": ("klines", "klines"), "metrics": ("metrics", "metrics"),
+         "klinesdaily": ("klines", "klines"), "fundingrate": ("fundingRate", "funding")}
+MONTHLY_KINDS = ("klines", "fundingrate")
 LEVELS = (1, 2, 3, 4, 5)
 AGG_COLUMNS = ("agg_trade_id", "price", "quantity", "first_trade_id", "last_trade_id", "transact_time", "is_buyer_maker")
 BOOK_COLUMNS = ("update_id", "best_bid_price", "best_bid_qty", "best_ask_price", "best_ask_qty", "transaction_time", "event_time")
@@ -54,7 +60,9 @@ KLINE_INTERVAL = "1m"
 
 
 def _source(kind: str) -> str:
-    return f"{BASE_MONTHLY}/klines" if kind == "klines" else f"{BASE}/{KINDS[kind][0]}"
+    if kind in MONTHLY_KINDS:
+        return f"{BASE_MONTHLY}/{KINDS[kind][0]}"
+    return f"{BASE}/{KINDS[kind][0]}"
 
 
 def _now() -> str:
@@ -262,7 +270,27 @@ def convert_metrics(raw: bytes) -> tuple[dict[str, np.ndarray], dict]:
     return arrays, diag
 
 
-CONVERTERS = {"aggtrades": convert_aggtrades, "bookdepth": convert_bookdepth, "bookticker": convert_bookticker, "klines": convert_klines, "metrics": convert_metrics}
+FUNDING_COLUMNS = ("calc_time", "funding_interval_hours", "last_funding_rate")
+
+
+def convert_fundingrate(raw: bytes) -> tuple[dict[str, np.ndarray], dict]:
+    """Monthly funding events (swing v2): `ts_ms` (calc time, ms UTC) and `rate`, sorted, duplicates
+    of a timestamp dropped (the last wins)."""
+    frame = _read_csv(raw, FUNDING_COLUMNS, {"calc_time": "int64", "funding_interval_hours": "float64", "last_funding_rate": "float64"})
+    stamps = frame["calc_time"].to_numpy()
+    order = np.argsort(stamps, kind="stable")
+    ts_ms = stamps[order].astype(np.int64)
+    keep = np.ones(ts_ms.size, dtype=bool)
+    keep[:-1] = ts_ms[1:] != ts_ms[:-1]
+    arrays = {"ts_ms": ts_ms[keep], "rate": frame["last_funding_rate"].to_numpy(dtype=np.float64)[order][keep],
+              "interval_hours": frame["funding_interval_hours"].to_numpy(dtype=np.float64)[order][keep]}
+    diag = {"input_already_sorted": bool(np.all(order == np.arange(order.size))), "duplicates": int((~keep).sum()),
+            "rate_nan": int(np.sum(~np.isfinite(arrays["rate"])))}
+    return arrays, diag
+
+
+CONVERTERS = {"aggtrades": convert_aggtrades, "bookdepth": convert_bookdepth, "bookticker": convert_bookticker, "klines": convert_klines, "metrics": convert_metrics,
+              "klinesdaily": convert_klines, "fundingrate": convert_fundingrate}
 
 
 def acquire_one(kind: str, out_dir: Path, symbol: str, date: str) -> dict:
@@ -270,6 +298,12 @@ def acquire_one(kind: str, out_dir: Path, symbol: str, date: str) -> dict:
     if kind == "klines":  # `date` is a month: monthly archive of 1-minute candles
         url = f"{BASE_MONTHLY}/klines/{symbol}/{KLINE_INTERVAL}/{symbol}-{KLINE_INTERVAL}-{date}.zip"
         target = out_dir / folder / symbol / f"{symbol}-{KLINE_INTERVAL}-{date}.npz"
+    elif kind == "klinesdaily":  # `date` is a day: daily archive of 1-minute candles (a month not yet archived)
+        url = f"{BASE}/klines/{symbol}/{KLINE_INTERVAL}/{symbol}-{KLINE_INTERVAL}-{date}.zip"
+        target = out_dir / folder / symbol / f"{symbol}-{KLINE_INTERVAL}-{date}.npz"
+    elif kind == "fundingrate":  # `date` is a month: monthly archive of funding events
+        url = f"{BASE_MONTHLY}/fundingRate/{symbol}/{symbol}-fundingRate-{date}.zip"
+        target = out_dir / folder / symbol / f"{symbol}-fundingRate-{date}.npz"
     else:
         url = f"{BASE}/{name}/{symbol}/{symbol}-{name}-{date}.zip"
         target = out_dir / folder / symbol / f"{symbol}-{date}.npz"
@@ -296,7 +330,7 @@ def acquire_one(kind: str, out_dir: Path, symbol: str, date: str) -> dict:
             del raw
     staging.unlink()
     np.savez_compressed(target, **arrays)
-    first_key = "ts_us" if kind == "aggtrades" else "ts_s"
+    first_key = {"aggtrades": "ts_us", "fundingrate": "ts_ms"}.get(kind, "ts_s")
     rows = int(arrays[first_key].size)
     return {
         "symbol": symbol, "date": date, "url": url, "zip_sha256_expected": expected, "zip_sha256_actual": actual, "zip_bytes": zip_bytes, "rows": rows,
@@ -353,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dates", required=True)
     parser.add_argument("--workers", type=int, default=3)
     args = parser.parse_args(argv)
-    dates = parse_months(args.dates) if args.kind == "klines" else parse_dates(args.dates)
+    dates = parse_months(args.dates) if args.kind in MONTHLY_KINDS else parse_dates(args.dates)
     manifest = run(args.kind, Path(args.out), [s for s in args.symbols.split(",") if s], dates, args.workers)
     print(json.dumps({"kind": args.kind, "files": len(manifest["files"]), "failures": len(manifest["failures"]), "status": manifest["status"]}))
     return 0 if manifest["status"] == "complete" else 1
