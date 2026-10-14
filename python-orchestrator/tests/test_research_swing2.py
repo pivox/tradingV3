@@ -402,14 +402,42 @@ def test_monthly_universe_gates_only_new_entries_and_the_control_draws():
     assert regime["BBBUSDT"] == [] and all(en.month_of_ms(market.frames["AAAUSDT"].close_ms(i)) == month for i in regime["AAAUSDT"])
 
 
-def test_a_position_on_a_delisted_instrument_settles_at_its_last_close():
+def test_a_position_on_a_delisted_instrument_settles_at_the_last_hour_mean():
     first = first_minute(DECISION)
     frame = frame_for("AAAUSDT", close=100.0)
     count = first + 3 * BAR  # the data stop twelve hours after the decision
-    candles = ex.CandleSeries("AAAUSDT", START, *(array("d", [100.0] * count) for _ in range(4)))
+    closes = [100.0] * (count - 60) + [101.0] * 30 + [102.0] * 30
+    candles = ex.CandleSeries("AAAUSDT", START, array("d", closes), array("d", closes), array("d", closes), array("d", closes))
     market = market_for({"AAAUSDT": frame}, {"AAAUSDT": candles})
     path = en.simulate_path(market, "AAAUSDT", DECISION, en.Geometry("long", "L", 2.0, "T3", 14), WINDOW[1])
-    assert path.filled and path.reason == "delisting" and path.delisting and path.exit_ms == START + count * MINUTE
+    assert path.filled and path.reason == "delisting" and path.event == "delisting" and path.exit_ms == START + count * MINUTE
+    assert path.exit_price == pytest.approx(101.5)
+
+
+def test_cadence_known_at_entry_and_missing_settlements_are_imputed_against_the_position():
+    market = _breakout_market(["AAAUSDT"])
+    hour = 3_600_000
+    times = [START + k * 8 * hour for k in range(10)] + [START + 80 * hour + k * 4 * hour for k in range(5)]
+    times.remove(START + 88 * hour)  # one 4 h settlement missing
+    market.funding = {"AAAUSDT": ex.FundingSeries.from_events([(t, -0.0001 if t < START + 80 * hour else 0.0002, None) for t in times])}
+    assert market.cadence_hours("AAAUSDT", START + 50 * hour) == 8
+    assert market.cadence_hours("AAAUSDT", START + 87 * hour) == 4
+    missing = en.missing_settlements(market, "AAAUSDT", START + 84 * hour, START + 95 * hour, 4)
+    assert [ts for ts, _ in missing] == [START + 88 * hour] and missing[0][1] == pytest.approx(0.0002)
+
+
+def test_conservative_scenario_books_event_trades_at_no_better_than_minus_one_risk():
+    trade = en.Trade("AAAUSDT", "long", START, START, START + DAY, 100.0, 98.0, 99.0, "delisting", False, 1.0, 0.5,
+                     {"baseline": 3.0}, {"baseline": 2.0}, {"baseline": 0.0}, "delisting", {"baseline": 2.5}, 0)
+    assert trade.net_conservative("baseline") == -2.5 and trade.r_conservative("baseline") == -1.0
+    plain = en.Trade("AAAUSDT", "long", START, START, START + DAY, 100.0, 98.0, 106.0, "target", False, 1.0, 0.5,
+                     {"baseline": 6.0}, {"baseline": 2.0}, {"baseline": 0.0}, None, {"baseline": 2.5}, 0)
+    assert plain.net_conservative("baseline") == 6.0
+
+
+def test_okx_decisions_stop_fourteen_days_before_the_end_of_the_data():
+    (start, last_decision), end, _ = sc.PHASES["okx"]
+    assert end - last_decision == 14 * DAY and last_decision == 1_790_611_200_000
 
 
 def test_okx_phase_requires_200_trades_positive_net_and_p_in_the_verdict():
@@ -420,19 +448,32 @@ def test_okx_phase_requires_200_trades_positive_net_and_p_in_the_verdict():
            "control": {"baseline": {"surplus": 0.1, "p_empirical": 0.2}, "adverse": {"surplus": 0.1, "p_empirical": 0.05}}}
     out = sc.verdict({"phase": "okx", "configurations": [row]}, ["A"])
     assert out["status"] == "no_eligible_candidate" and out["rows"][0]["checks"]["p_baseline"] is False
+    assert out["rows"][0]["checks"]["p_adverse_conservative"] is False  # the conservative scenarios are required too
 
 
-def test_a_data_gap_blocks_entries_during_the_warm_up_and_ends_open_positions():
+def test_a_data_gap_blocks_entries_during_the_warm_up_and_an_open_position_is_carried_across_it():
     symbols = ["AAAUSDT"]
     market = _breakout_market(symbols)
     decision_ms = market.frames["AAAUSDT"].close_ms(DECISION)
     market.gaps = {"AAAUSDT": [(decision_ms - 10 * DAY, decision_ms - 9 * DAY)]}
     config = en.Config(30, 0.0, en.Geometry("long", "L", 2.0, "T3", 14))
     assert en.signals(market, config, WINDOW) == []
-    market.gaps = {"AAAUSDT": [(decision_ms + 2 * DAY, decision_ms + 30 * DAY)]}
+    market.gaps = {"AAAUSDT": [(decision_ms + 2 * DAY, decision_ms + 3 * DAY)]}
     assert [row[2] for row in en.signals(market, config, WINDOW)] == ["AAAUSDT"]
     path = en.simulate_path(market, "AAAUSDT", DECISION, config.geometry, WINDOW[1])
-    assert path.reason == "delisting" and path.exit_ms == decision_ms + 2 * DAY
+    assert path.reason == "time" and path.event == "interruption" and path.exit_ms == decision_ms + 14 * DAY
+
+
+def test_a_deadline_inside_an_interruption_moves_to_the_first_bar_after_it():
+    market = _breakout_market(["AAAUSDT"])
+    decision_ms = market.frames["AAAUSDT"].close_ms(DECISION)
+    market.gaps = {"AAAUSDT": [(decision_ms + 13 * DAY, decision_ms + 15 * DAY)]}
+    path = en.simulate_path(market, "AAAUSDT", DECISION, en.Geometry("long", "L", 2.0, "T3", 14), WINDOW[1])
+    assert path.exit_ms == decision_ms + 15 * DAY + MINUTE and path.event == "interruption"
+    market.paths.clear()
+    end = decision_ms + 14 * DAY + 60 * MINUTE  # the phase ends inside the interruption: censored
+    path = en.simulate_path(market, "AAAUSDT", DECISION, en.Geometry("long", "L", 2.0, "T3", 14), end)
+    assert path.reason == "censored" and path.event == "censored" and path.exit_ms == end
 
 
 def test_assemble_candles_records_gaps_longer_than_an_hour(tmp_path):

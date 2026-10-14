@@ -26,12 +26,14 @@ from . import engine as en
 from . import stats as st
 from .data import HOLDOUT_END_MS, OKX_END_MS, VALIDATION_CUT_MS, load_market
 
+OKX_LAST_DECISION_MS = 1_790_611_200_000  # 2026-09-28T16:00:00Z: 14 full days before the end of the OKX data
 PHASES = {
     "training": ((1_672_531_200_000, 1_735_689_600_000), 1_735_689_600_000, ("2023", "2024")),
     "validation": ((1_672_531_200_000, VALIDATION_CUT_MS), VALIDATION_CUT_MS, ("2023", "2024", "2025")),
     "holdout": ((VALIDATION_CUT_MS, HOLDOUT_END_MS), HOLDOUT_END_MS, ("2026",)),
     # OKX campaign (owner, 2026-10-14): one configuration, the monthly universe, 2023-01-01 to the end of the archive.
-    "okx": ((1_672_531_200_000, OKX_END_MS), OKX_END_MS, ("2023", "2024", "2025", "2026")),
+    # Decisions until 2026-09-28T16:00Z (14 full days before the end of the data), positions until the data end.
+    "okx": ((1_672_531_200_000, OKX_LAST_DECISION_MS), OKX_END_MS, ("2023", "2024", "2025", "2026")),
 }
 OKX_SELECTION_P = 0.10
 DEFAULT_SEEDS = 100
@@ -60,8 +62,9 @@ _STATE: dict = {}
 
 def _init(root: str, symbols: tuple[str, ...], cut: int, universe: str | None = None) -> None:
     market, profiles = load_market(Path(root), symbols, cut)
-    if universe is not None:
+    if universe is not None:  # the OKX campaign
         market.eligible = eligibility(Path(universe))
+        market.cadence_aware = True
     _STATE.update(market=market, profiles=profiles)
 
 
@@ -80,31 +83,45 @@ def _compact(run: en.StreamRun, profiles, phase: str, years) -> dict:
     for profile in profiles:
         document[profile] = st.summarize(run.trades, profile)
         document[profile]["gate_reasons"] = st.gate_reasons(document[profile], phase, profile, years)
+        if phase == "okx":
+            name = f"{profile}_conservative"
+            document[name] = st.summarize(run.trades, profile, conservative=True)
+            document[name]["gate_reasons"] = st.gate_reasons(document[name], phase, profile, years)
     return document
+
+
+def _scenarios(phase: str, profiles) -> list[str]:
+    return [*profiles, *(f"{p}_conservative" for p in profiles)] if phase == "okx" else list(profiles)
 
 
 def evaluate(config: en.Config, phase: str, seeds: int, regime=None) -> dict:
     market, profiles = _STATE["market"], _STATE["profiles"]
-    window, _, years = PHASES[phase]
+    window, cut, years = PHASES[phase]
     rows = en.signals(market, config, window)
-    run = en.run_stream(market, rows, {config.side: config.geometry}, window, profiles)
+    run = en.run_stream(market, rows, {config.side: config.geometry}, window, profiles, phase_end=cut)
     document = {"id": config.id, "side": config.side, "lookback": config.lookback, "strength": config.strength,
                 "geometry": config.geometry.id, **_compact(run, profiles, phase, years)}
-    document["passes_gates"] = st.passes(document, phase, years)
+    scenarios = _scenarios(phase, profiles)
+    document["passes_gates"] = all(not document[s]["gate_reasons"] for s in scenarios)
+    if phase == "okx":
+        document["trades"] = [{"symbol": t.symbol, "decision_ms": t.decision_ms, "fill_ms": t.fill_ms, "exit_ms": t.exit_ms,
+                               "entry": t.entry, "stop": t.stop, "exit_price": t.exit_price, "reason": t.reason, "event": t.event,
+                               "quantity": t.quantity, "net": t.net, "risk": t.risk, "risk_conservative": t.risk_conservative,
+                               "funding": t.funding, "funding_imputed": t.funding_imputed} for t in run.trades]
     counts = Counter(row[2] for row in rows)
     controls = []
     for seed in range(seeds):
         crow = en.control_signals(market, config, window, seed, regime, counts)
-        crun = en.run_stream(market, crow, {config.side: config.geometry}, window, profiles)
+        crun = en.run_stream(market, crow, {config.side: config.geometry}, window, profiles, phase_end=cut)
         compact = _compact(crun, profiles, phase, years)
         controls.append({"seed": seed, "trades": compact["baseline"]["trades"], "unfilled": compact["unfilled"],
-                         "mean_net_r": {p: compact[p]["mean_net_r"] for p in profiles},
-                         "net_quote": {p: compact[p]["net_quote"] for p in profiles},
-                         "profit_factor": {p: compact[p]["profit_factor"] for p in profiles},
-                         "passes_gates": st.passes(compact, phase, years)})
+                         "mean_net_r": {p: compact[p]["mean_net_r"] for p in scenarios},
+                         "net_quote": {p: compact[p]["net_quote"] for p in scenarios},
+                         "profit_factor": {p: compact[p]["profit_factor"] for p in scenarios},
+                         "passes_gates": all(not compact[s]["gate_reasons"] for s in scenarios)})
     document["controls"] = controls
     document["control"] = {p: st.control_position(document[p]["mean_net_r"], [c["mean_net_r"][p] for c in controls])
-                           for p in profiles}
+                           for p in scenarios}
     return document
 
 
@@ -233,10 +250,12 @@ def verdict(screen: dict, selected: list[str]) -> dict:
             "surplus_baseline": (r["control"]["baseline"]["surplus"] or 0) > 0,
             "surplus_adverse": (r["control"]["adverse"]["surplus"] or 0) > 0,
         }
-        if phase == "okx":
-            for profile in st.PROFILES:
-                p = r["control"][profile]["p_empirical"]
-                checks[f"p_{profile}"] = p is not None and p <= OKX_SELECTION_P
+        if phase == "okx":  # every scenario: both cost profiles, main and conservative
+            for scenario in st.SCENARIOS:
+                position = r["control"].get(scenario, {})
+                checks[f"surplus_{scenario}"] = (position.get("surplus") or 0) > 0
+                p = position.get("p_empirical")
+                checks[f"p_{scenario}"] = p is not None and p <= OKX_SELECTION_P
         passed = all(checks.values())
         decided = r["id"] in selected
         out["rows"].append({"id": r["id"], "selected": decided, "passes": passed, "checks": checks,
