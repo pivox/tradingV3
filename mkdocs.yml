@@ -117,6 +117,7 @@ nav:
       - "H1 — amendment A1": research/AMENDMENT-H1-A1.md
       - "H1 — amendment A2": research/AMENDMENT-H1-A2.md
       - "H1 — S_A screen result": research/H1-SA-SCREEN-RESULT.md
+      - "H1 — S_B implementation note": research/H1-SB-IMPLEMENTATION-NOTE.md
       - "France — exchange eligibility": research/FRANCE-EXCHANGE-ELIGIBILITY.md
       - "France — tradable instrument universe": research/TRADABLE-INSTRUMENT-UNIVERSE.md
       - "TradingV3 — exchange compatibility": research/TRADINGV3-EXCHANGE-COMPATIBILITY.md

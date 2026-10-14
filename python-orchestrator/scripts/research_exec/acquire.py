@@ -32,6 +32,7 @@ import argparse
 import hashlib
 import io
 import json
+import shutil
 import sys
 import time
 import urllib.request
@@ -50,8 +51,10 @@ except ImportError:  # pragma: no cover - exercised only where pandas is absent
 BASE = "https://data.binance.vision/data/futures/um/daily"
 BASE_MONTHLY = "https://data.binance.vision/data/futures/um/monthly"
 KINDS = {"aggtrades": ("aggTrades", "npz"), "bookdepth": ("bookDepth", "depth"), "bookticker": ("bookTicker", "book"), "klines": ("klines", "klines"), "metrics": ("metrics", "metrics"),
-         "klinesdaily": ("klines", "klines"), "fundingrate": ("fundingRate", "funding")}
-MONTHLY_KINDS = ("klines", "fundingrate")
+         "klinesdaily": ("klines", "klines"), "fundingrate": ("fundingRate", "funding"),
+         "klines1h": ("klines", "klines1h"), "klines1d": ("klines", "klines1d")}
+MONTHLY_KINDS = ("klines", "fundingrate", "klines1h", "klines1d")
+INTERVALS = {"klines1h": "1h", "klines1d": "1d"}  # monthly archives of hourly / daily candles (H1 S_B)
 LEVELS = (1, 2, 3, 4, 5)
 AGG_COLUMNS = ("agg_trade_id", "price", "quantity", "first_trade_id", "last_trade_id", "transact_time", "is_buyer_maker")
 BOOK_COLUMNS = ("update_id", "best_bid_price", "best_bid_qty", "best_ask_price", "best_ask_qty", "transaction_time", "event_time")
@@ -290,12 +293,17 @@ def convert_fundingrate(raw: bytes) -> tuple[dict[str, np.ndarray], dict]:
 
 
 CONVERTERS = {"aggtrades": convert_aggtrades, "bookdepth": convert_bookdepth, "bookticker": convert_bookticker, "klines": convert_klines, "metrics": convert_metrics,
-              "klinesdaily": convert_klines, "fundingrate": convert_fundingrate}
+              "klinesdaily": convert_klines, "fundingrate": convert_fundingrate,
+              "klines1h": convert_klines, "klines1d": convert_klines}
 
 
 def acquire_one(kind: str, out_dir: Path, symbol: str, date: str) -> dict:
     name, folder = KINDS[kind]
-    if kind == "klines":  # `date` is a month: monthly archive of 1-minute candles
+    if kind in INTERVALS:  # `date` is a month: monthly archive of hourly or daily candles
+        interval = INTERVALS[kind]
+        url = f"{BASE_MONTHLY}/klines/{symbol}/{interval}/{symbol}-{interval}-{date}.zip"
+        target = out_dir / folder / symbol / f"{symbol}-{interval}-{date}.npz"
+    elif kind == "klines":  # `date` is a month: monthly archive of 1-minute candles
         url = f"{BASE_MONTHLY}/klines/{symbol}/{KLINE_INTERVAL}/{symbol}-{KLINE_INTERVAL}-{date}.zip"
         target = out_dir / folder / symbol / f"{symbol}-{KLINE_INTERVAL}-{date}.npz"
     elif kind == "klinesdaily":  # `date` is a day: daily archive of 1-minute candles (a month not yet archived)
@@ -340,19 +348,26 @@ def acquire_one(kind: str, out_dir: Path, symbol: str, date: str) -> dict:
     }
 
 
-def run(kind: str, out_dir: Path, symbols: list[str], dates: list[str], workers: int) -> dict:
+MIN_FREE_BYTES = 15 * 1024**3  # disk guard: stop before the free space falls under 15 GB
+
+
+def run(kind: str, out_dir: Path, symbols: list[str], dates: list[str], workers: int, pairs: list[tuple[str, str]] | None = None) -> dict:
+    """``pairs``: explicit (symbol, date) list instead of the symbols × dates product (H1 S_B: each event's own months)."""
     manifest_path = out_dir / f"manifest-{kind}.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"kind": kind, "source": _source(kind), "created_at": _now(), "files": [], "failures": []}
     done = {(item["symbol"], item["date"]) for item in manifest["files"]}
     # Date-major order: with the symbols listed heavy / light alternately, parallel workers do not
     # all hold a major's day at once.
-    todo = [(symbol, date) for date in dates for symbol in symbols if (symbol, date) not in done]
+    todo = [(symbol, date) for date in dates for symbol in symbols if (symbol, date) not in done] if pairs is None \
+        else [p for p in sorted(set(pairs), key=lambda p: (p[1], p[0])) if p not in done]
     _log(f"{kind}: {len(todo)} files to acquire ({len(done)} already in the manifest) into {out_dir}")
     failures = []
     started = time.time()
 
     def work(item):
         symbol, date = item
+        if shutil.disk_usage(out_dir).free < MIN_FREE_BYTES:
+            return {"symbol": symbol, "date": date, "error": "disk guard: free space under 15 GB, not fetched"}
         try:
             return acquire_one(kind, out_dir, symbol, date)
         except Exception as error:  # noqa: BLE001 - recorded, the run continues
@@ -383,12 +398,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="research_exec.acquire")
     parser.add_argument("kind", choices=tuple(KINDS))
     parser.add_argument("--out", required=True)
-    parser.add_argument("--symbols", required=True)
-    parser.add_argument("--dates", required=True)
+    parser.add_argument("--symbols", default="")
+    parser.add_argument("--dates", default="")
+    parser.add_argument("--pairs-file", default="", help="JSON {symbol: [dates]} (replaces --symbols × --dates)")
     parser.add_argument("--workers", type=int, default=3)
     args = parser.parse_args(argv)
-    dates = parse_months(args.dates) if args.kind in MONTHLY_KINDS else parse_dates(args.dates)
-    manifest = run(args.kind, Path(args.out), [s for s in args.symbols.split(",") if s], dates, args.workers)
+    pairs = [(sym, d) for sym, ds in json.loads(Path(args.pairs_file).read_text()).items() for d in ds] if args.pairs_file else None
+    dates = [] if pairs else (parse_months(args.dates) if args.kind in MONTHLY_KINDS else parse_dates(args.dates))
+    manifest = run(args.kind, Path(args.out), [s for s in args.symbols.split(",") if s], dates, args.workers, pairs)
     print(json.dumps({"kind": args.kind, "files": len(manifest["files"]), "failures": len(manifest["failures"]), "status": manifest["status"]}))
     return 0 if manifest["status"] == "complete" else 1
 
