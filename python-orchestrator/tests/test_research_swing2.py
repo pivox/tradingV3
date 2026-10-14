@@ -358,3 +358,23 @@ def test_phase_windows_never_cross_the_cuts():
     assert training[0][1] <= training[1] and validation[0][1] == dt.VALIDATION_CUT_MS
     assert holdout[0] == (dt.VALIDATION_CUT_MS, dt.HOLDOUT_END_MS)
     assert math.isclose(dt.HOLDOUT_END_MS, 1_791_525_600_000)
+
+
+def test_posthoc_claim_needs_a_frozen_preregistration(tmp_path):
+    prereg = tmp_path / "PREREGISTRATION-x.md"
+    prereg.write_text("body")
+    with pytest.raises(SystemExit):
+        sc.claim(tmp_path, posthoc=["X"], prereg=prereg)  # not frozen: no .sha256 next to it
+    prereg.with_suffix(".sha256").write_text("abc123 2026-10-14T00:00:00Z\n")
+    payload = sc.claim(tmp_path, posthoc=["X"], prereg=prereg)
+    assert payload["status"] == "posthoc_indicative_not_validated" and payload["prereg_sha256_file"] == "abc123"
+    sc._holdout_guard(tmp_path, tmp_path / "screen-holdout.json", ["X"])
+    with pytest.raises(FileExistsError):
+        sc.claim(tmp_path, posthoc=["X"], prereg=prereg)
+
+
+def test_summary_splits_by_exit_month():
+    trade = en.Trade("AAAUSDT", "long", START, START + 60_000, START + 40 * DAY, 100.0, 98.0, 106.0, "target", False,
+                     1.0, 0.5, {"baseline": 6.0}, {"baseline": 2.0}, {"baseline": 0.0})
+    summary = st.summarize([trade], "baseline")
+    assert summary["by_month"] == {"2023-02": {"trades": 1, "net": 6.0, "net_r": 3.0}}
