@@ -109,6 +109,11 @@ nav:
       - "Next strategy — retained hypothesis (draft)": research/HYPOTHESIS-next-strategy.md
       - "Next strategy — DRAFT pre-registration (not frozen)": research/DRAFT-PREREGISTRATION-next-strategy.md
       - "Next strategy — implementation plan (draft)": research/IMPLEMENTATION-PLAN-next-strategy.md
+      - "H1 — listing audit": research/H1-LISTING-AUDIT.md
+      - "H1 — execution feasibility at 500 USDT": research/H1-EXECUTION-FEASIBILITY.md
+      - "H1 — methodology review": research/H1-METHODOLOGY-REVIEW.md
+      - "H1 — pre-registration v1 (frozen, not executed)": research/PREREGISTRATION-H1.md
+      - "H1 — data manifest": research/H1-DATA-MANIFEST.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 

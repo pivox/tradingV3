@@ -1,5 +1,32 @@
 # Implementation plan — post-listing drift study (H1)
 
+> **Updated 2026-10-14 for `PREREGISTRATION-H1.md` (version 1).** Done:
+> - the metadata audit (`scripts/research_listing/audit.py`);
+> - the conventions for returns, funding sign, stop and sizing (`scripts/research_listing/conventions.py`);
+> - 9 synthetic tests (`tests/test_research_listing.py`).
+>
+> Changes to the original plan below:
+> - **S_B decides Gate 1**; S_A is a screen (§9 of the protocol);
+> - matching uses hourly σ over 24 h;
+> - delisting: last close plus an unfavourable sensitivity;
+> - the prospective test lasts **12 months**.
+>
+> New steps, in order:
+> 1. `events.py` reads the frozen `events-classified.json`.
+> 2. `benchmark.py`: OKX index from the on-disk tape; Binance index from hourly klines downloaded at step 4.
+> 3. `study.py`: diagnostics and exclusions written before outcomes; month and 2-month block bootstraps; Holm.
+>    Tests on synthetic clustered events.
+> 4. With the owner's authorisation, the S_A screen.
+> 5. With the owner's authorisation, the S_B download and the decisive Gate 1 run.
+> 6. `strategy.py` (Gate 2, S_A ∪ S_B, conditional).
+> 7. S_C: the prospective recorder (metadata and specifications at listing, a daily public-data capture of the
+>    first 31 days, funding) as a separate systemd user timer, never touching `fwd-okx-*`.
+>
+> Estimates:
+> - S_B: 0.4–0.9 GB of zips transient, about 0.1 GB of hourly data;
+> - RAM < 2 GB;
+> - code: about 1 day for step 3, 1 day for step 6, 1 day for step 7.
+
 This plan becomes work only after the owner approves the draft protocol and it is frozen.
 
 ## 1. Reusable modules

@@ -1,5 +1,8 @@
 # DRAFT_NOT_FROZEN — Pre-registration proposal: post-listing drift of new perpetuals (H1)
 
+> **Version 0, superseded by `PREREGISTRATION-H1.md` (version 1, 2026-10-14).** Kept unchanged below for history.
+> Changes are listed in version 1, §21.
+
 > **Status: DRAFT_NOT_FROZEN.** This is a proposal for the owner's review. No data may be analysed under it
 > until it is reviewed, amended if needed, and frozen (sha256) in a separate, explicit step. Every number below
 > is a proposal, open to the review; none was chosen from data.
