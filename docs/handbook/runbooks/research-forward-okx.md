@@ -58,8 +58,12 @@ are final; stops after W2; `touch STOP-EVAL` ends it). Logs under `logs/`.
 the loops after a reboot: `fwd-okx-capture.service` (`run-capture.sh`) and `fwd-okx-evaluate.service`
 (`evaluate.sh`), working directory the research directory, `Restart=on-failure`, not started while
 `STOP` / `STOP-EVAL` exist or once `screen-holdout.json` is written. An `ExecStartPre` guard refuses
-to start a service while a loop of the same kind already runs, so the loops launched by hand on
-2026-10-13 keep running untouched. **After a reboot, do not relaunch by hand**; check instead:
+to start a service while a real loop of the same kind already runs (it matches the capture's Python
+process and `evaluate.sh` themselves, not shells that merely mention them). The loops launched by
+hand on 2026-10-13 were moved under the services on 2026-10-14 at 05:44Z, right after a checkpoint
+(the capture resumed the twenty symbol-days from disk). **Never relaunch by hand**; to stop, use
+`systemctl --user stop fwd-okx-capture` (or `touch STOP`, which also prevents the start at boot);
+to check:
 
 ```bash
 systemctl --user status fwd-okx-capture fwd-okx-evaluate
