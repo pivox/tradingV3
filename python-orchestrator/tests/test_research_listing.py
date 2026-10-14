@@ -138,3 +138,15 @@ def test_outcomes_refuse_an_existing_output(tmp_path):
     out.write_text("{}")
     with pytest.raises(SystemExit):
         st.outcomes(tmp_path / "prepare.json", tmp_path, out)
+
+
+def test_normalized_return_uses_the_volatility_at_t():
+    assert cv.normalized_return(-0.10, 0.25, 14) == pytest.approx(-0.10 / (0.25 * math.sqrt(14)))
+    with pytest.raises(ValueError):
+        cv.normalized_return(-0.1, 0.0, 14)
+
+
+def test_a2_controls_follow_the_volume_ranking_without_volatility_filter():
+    ranking = ["A", "B", "C", "D", "E"]
+    assert cv.select_established_controls(ranking, {"B", "D", "E"}, 2) == ["B", "D"]
+    assert cv.select_established_controls(ranking, set(), 20) == []

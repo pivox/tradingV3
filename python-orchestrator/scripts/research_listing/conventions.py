@@ -29,6 +29,19 @@ def paired_surplus(ar_event: float, ar_controls: Sequence[float]) -> float:
     return ar_event - sum(ar_controls) / len(ar_controls)
 
 
+def normalized_return(ar: float, sigma_daily_at_t: float, horizon_days: float) -> float:
+    """Risk-normalised relative return (amendment A2): AR / (σ_T × √h), σ_T the daily volatility known at T."""
+    if sigma_daily_at_t <= 0 or horizon_days <= 0:
+        raise ValueError("volatility and horizon must be positive")
+    return ar / (sigma_daily_at_t * math.sqrt(horizon_days))
+
+
+def select_established_controls(ranking: Sequence[str], usable_at_t: set[str], count: int) -> list[str]:
+    """A2 primary controls: the first ``count`` established perpetuals of the previous-month volume ranking that have a
+    price and a volatility at T. No volatility tolerance; nothing after T is used."""
+    return [inst for inst in ranking if inst in usable_at_t][:count]
+
+
 def short_return(p_entry: float, p_exit: float) -> float:
     """Absolute return of an unhedged short, before costs: (entry − exit) / entry (a price fall is a gain)."""
     return (p_entry - p_exit) / p_entry

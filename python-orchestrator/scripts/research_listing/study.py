@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from . import audit as au
-from .conventions import log_return, paired_surplus
+from .conventions import log_return, normalized_return, paired_surplus, select_established_controls
 
 HOUR = 3600
 DAY = 86_400
@@ -43,6 +43,7 @@ MAX_CONTROLS = 20
 MIN_CONTROLS = 3
 MAX_UNCOMPARABLE = 0.30
 MAX_MISSING_SECONDS = 6 * HOUR
+A2_CONTROLS = 20  # amendment A2: the 20 first established perpetuals of the volume ranking with data at T
 SEED = 20261014
 
 
@@ -182,6 +183,19 @@ def prepare(campaign: Path, tape: Path, volumes_path: Path, out: Path) -> dict:
                 if gap <= TOLERANCE:
                     admissible.append((gap, c, cs_sigma, ranking.index(c) + 1))
             admissible.sort()
+            # Amendment A2 primary controls: established perpetuals at T, by previous-month volume, no volatility filter.
+            usable = {}
+            for c in ranking:
+                cs = series(c)
+                if cs is None or cs.price_before(T) is None:
+                    continue
+                cs_sigma = hourly_sigma(cs, T)
+                if cs_sigma is not None and cs_sigma > 0:
+                    usable[c] = cs_sigma
+            chosen = select_established_controls(ranking, set(usable), A2_CONTROLS)
+            record["controls_a2"] = [{"instId": c, "sigma_h": usable[c], "volume_rank": ranking.index(c) + 1,
+                                      "log_vol_ratio": math.log(usable[c] / sigma) if sigma else None} for c in chosen]
+            record["a2_usable"] = len(chosen) >= MIN_CONTROLS
             record["controls"] = [{"instId": c, "sigma_h": cs, "log_ratio": g, "volume_rank": k} for g, c, cs, k in admissible[:MAX_CONTROLS]]
             record["admissible_controls"] = len(admissible)
             record["comparable"] = len(admissible) >= MIN_CONTROLS
@@ -200,6 +214,10 @@ def prepare(campaign: Path, tape: Path, volumes_path: Path, out: Path) -> dict:
             "abs_log_vol_ratio_median": statistics.median(ratios) if ratios else None,
             "event_sigma_median": statistics.median([e["sigma_h"] for e in usable]) if usable else None,
             "control_volume_rank_median": statistics.median([c["volume_rank"] for e in usable for c in e.get("controls", [])]) if ratios else None,
+            "a2_events_with_3_controls": sum(e.get("a2_usable", False) for e in usable),
+            "a2_controls_median": statistics.median([len(e.get("controls_a2", [])) for e in usable]) if usable else None,
+            "a2_abs_log_vol_ratio_median": statistics.median([abs(c["log_vol_ratio"]) for e in usable for c in e.get("controls_a2", []) if c["log_vol_ratio"] is not None]) if usable else None,
+            "a2_event_over_control_vol_median": statistics.median([math.exp(-c["log_vol_ratio"]) for e in usable for c in e.get("controls_a2", []) if c["log_vol_ratio"] is not None]) if usable else None,
         }
     document = {"stage": "prepare", "written_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "events": events, "diagnostics": diagnostics}
     out.write_text(json.dumps(document, indent=1))
@@ -288,18 +306,26 @@ def outcomes(prepared: Path, tape: Path, out: Path) -> dict:
                     continue
                 r = log_return(p0, p1)
                 ar = r - rm
-                ars = []
-                for c in e["controls"]:
-                    cs = series_of(c["instId"])
-                    c0, c1 = cs.price_before(T), cs.price_before(T + h * DAY) if cs.end >= T + h * DAY else float(cs.close[-1])
-                    if c0 and c1:
-                        ars.append(log_return(c0, c1) - rm)
+                def control_ars(controls):
+                    out = []
+                    for c in controls:
+                        cs = series_of(c["instId"])
+                        c0 = cs.price_before(T)
+                        c1 = cs.price_before(T + h * DAY) if cs.end >= T + h * DAY else float(cs.close[-1])
+                        if c0 and c1:
+                            out.append((log_return(c0, c1) - rm, c["sigma_h"]))
+                    return out
                 row[f"{tag}_r{h}"] = r
                 row[f"{tag}_ar{h}"] = ar
                 row[f"{tag}_how{h}"] = how
-                if e["comparable"] and len(ars) >= MIN_CONTROLS:
-                    row[f"{tag}_s{h}"] = paired_surplus(ar, ars)
-                    row[f"{tag}_control_ar{h}_median"] = statistics.median(ars)
+                a2 = control_ars(e["controls_a2"])
+                if len(a2) >= MIN_CONTROLS:  # amendment A2 primary: raw and risk-normalised paired surplus
+                    row[f"{tag}_s{h}"] = paired_surplus(ar, [x for x, _ in a2])
+                    row[f"{tag}_z{h}"] = normalized_return(ar, e["sigma_h"], h) - sum(normalized_return(x, sc, h) for x, sc in a2) / len(a2)
+                    row[f"{tag}_control_ar{h}_median"] = statistics.median([x for x, _ in a2])
+                v1 = control_ars(e["controls"])
+                if e["comparable"] and len(v1) >= MIN_CONTROLS:  # v1 volatility-matched control: secondary diagnostic
+                    row[f"{tag}_s_v1{h}"] = paired_surplus(ar, [x for x, _ in v1])
         window = s.window(T, T + PRIMARY * DAY)
         if window.size:
             row["mae14_short"] = math.log(float(window.max()) / p0)
@@ -316,7 +342,14 @@ def outcomes(prepared: Path, tape: Path, out: Path) -> dict:
             for x in g:
                 if f"{tag}_s{PRIMARY}" in x:
                     by_month[x["month"]].append(x[f"{tag}_s{PRIMARY}"])
+            z_by_month: dict[str, list] = defaultdict(list)
+            for x in g:
+                if f"{tag}_z{PRIMARY}" in x:
+                    z_by_month[x["month"]].append(x[f"{tag}_z{PRIMARY}"])
             block[tag] = {
+                "z14": summarize_values([x[f"{tag}_z{PRIMARY}"] for x in g if f"{tag}_z{PRIMARY}" in x]),
+                "z14_ci90_1m": block_ci(z_by_month, 1), "z14_ci90_2m": block_ci(z_by_month, 2), "z14_ci90_3m": block_ci(z_by_month, 3),
+                "s14_v1_volatility_matched_NOT_GENERALIZABLE": summarize_values([x[f"{tag}_s_v1{PRIMARY}"] for x in g if f"{tag}_s_v1{PRIMARY}" in x]),
                 "s14": summarize_values(s14),
                 "s14_ci90_1m": block_ci(by_month, 1), "s14_ci90_2m": block_ci(by_month, 2), "s14_ci90_3m": block_ci(by_month, 3),
                 "months": len(by_month),
@@ -330,14 +363,12 @@ def outcomes(prepared: Path, tape: Path, out: Path) -> dict:
         block["p_mae_over_25pct"] = sum(1 for x in g if x.get("mae14_short", 0) > math.log(1.25)) / len(g) if g else None
         block["p_mae_over_50pct"] = sum(1 for x in g if x.get("mae14_short", 0) > math.log(1.5)) / len(g) if g else None
         report[group] = block
-    main = report["primary"]["main"]["s14"]
-    sens_all = report["with_survivorship_sensitivity"]["main"]["s14"]
-    screen = {
-        "primary_mean_negative": main.get("n", 0) > 0 and main["mean"] < 0,
-        "primary_median_negative": main.get("n", 0) > 0 and main["median"] < 0,
-        "with_delisted_mean_negative": sens_all.get("n", 0) > 0 and sens_all["mean"] < 0,
-        "with_delisted_median_negative": sens_all.get("n", 0) > 0 and sens_all["median"] < 0,
-    }
+    screen = {}
+    for group, label in (("primary", "primary"), ("with_survivorship_sensitivity", "with_delisted")):
+        for stat in ("s14", "z14"):  # amendment A2: raw AND risk-normalised paired surplus
+            v = report[group]["main"][stat]
+            screen[f"{label}_{stat}_mean_negative"] = v.get("n", 0) > 0 and v["mean"] < 0
+            screen[f"{label}_{stat}_median_negative"] = v.get("n", 0) > 0 and v["median"] < 0
     verdict = "S_A_SCREEN_PASS" if all(screen.values()) else "S_A_SCREEN_FAIL"
     document = {"stage": "outcomes", "set": "S_A (OKX)", "written_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "screen_checks": screen, "verdict": verdict, "report": report, "events": results}
