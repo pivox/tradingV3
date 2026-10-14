@@ -378,3 +378,14 @@ def test_summary_splits_by_exit_month():
                      1.0, 0.5, {"baseline": 6.0}, {"baseline": 2.0}, {"baseline": 0.0})
     summary = st.summarize([trade], "baseline")
     assert summary["by_month"] == {"2023-02": {"trades": 1, "net": 6.0, "net_r": 3.0}}
+
+
+def test_an_entry_resting_past_the_end_of_the_data_is_scanned_up_to_the_last_candle():
+    first = first_minute(DECISION)
+    frame = frame_for("AAAUSDT", close=100.0, high=100.5, atr=2.0)
+    count = first + 120  # the data end two hours into the four-hour stop-limit window
+    candles = ex.CandleSeries("AAAUSDT", START, *(array("d", [100.0] * count) for _ in range(4)))
+    market = market_for({"AAAUSDT": frame}, {"AAAUSDT": candles})
+    end = START + count * MINUTE
+    path = en.simulate_path(market, "AAAUSDT", DECISION, en.Geometry("long", "C", 2.0, "T3", 14), end)
+    assert not path.filled and path.deadline_ms == end
