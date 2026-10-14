@@ -590,9 +590,10 @@ def summarise(args, out, metas, cand, stress_cand, counters, parity, rp_trades, 
     for c in CONFIGS:
         identifier = f"{CONFIG_RULES[c]}|long|E1|Z3"
         mine = np.concatenate(rp_trades[c]) if rp_trades[c] else np.zeros(0, dtype=TRADE_DTYPE)
+        mine = mine[np.lexsort((mine["decision_s"], mine["series"]))]  # q3x order: series id, then time
         table = _cat(cand[(c, "Z3")])
         item = {"trades": int(mine.size), "mean_net_bp": _fv(mine["net_bp"].mean()) if mine.size else None, "table_trades": int(table["net_bp"].size),
-                "table_equals_run_policy": bool(table["net_bp"].size == mine.size and np.array_equal(table["net_bp"], mine["net_bp"]))}
+                "table_equals_run_policy": bool(table["net_bp"].size == mine.size and np.array_equal(np.sort(table["net_bp"]), np.sort(mine["net_bp"])))}
         control_means = [s / k for s, k in hist_sums[c] if k > 0]
         item["historical_control_median_bp"] = _fv(np.median(control_means)) if control_means else None
         path = q3x / (identifier.replace("|", "__") + ".npz")
@@ -602,7 +603,8 @@ def summarise(args, out, metas, cand, stress_cand, counters, parity, rp_trades, 
             item["q3x_trades"] = int(ref.size)
             item["identical_to_q3x"] = bool(ref.size == mine.size and all(np.array_equal(ref[f], mine[f]) for f in TRADE_DTYPE.names))
             item["q3x_control_median_bp"] = q3x_rows[identifier]["control"]["median"]
-            item["control_identical_to_q3x"] = item["historical_control_median_bp"] == item["q3x_control_median_bp"]
+            # Same seeds and draws; only the order of the floating-point sums differs (windows outer here, series outer in q3x).
+            item["control_identical_to_q3x"] = bool(np.isclose(item["historical_control_median_bp"], item["q3x_control_median_bp"], rtol=1e-9, atol=1e-9))
         checks[c] = item
     parity["configs"] = checks
     parity["ok"] = (not parity["rp_vs_table_mismatch_series"] and not parity["rp_counters_mismatch"]
