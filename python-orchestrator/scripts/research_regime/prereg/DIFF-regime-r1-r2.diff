@@ -1,0 +1,148 @@
+--- /tmp/claude-1000/-home-haythem-workspace-perso-tradingV3/ac4fccb7-d381-5090-ae65-db42b93d73f9/scratchpad/regime/v1.md	2026-10-14 11:50:34.232642559 +0200
++++ PREREGISTRATION-regime-r2.md	2026-10-14 11:51:18.655708049 +0200
+@@ -1,8 +1,20 @@
+-# Pré-enregistrement regime-r1 — détecteurs de régime LONG / SHORT / NEUTRE
++# Pré-enregistrement regime-r2 — détecteurs de régime LONG / SHORT / NEUTRE
+ 
+ Rédigé le 2026-10-14 dans la session tradingv3-db, sur GO du propriétaire du même jour, avant tout
+ téléchargement de prix et avant tout calcul de performance. Seules des listes de fichiers
+-(data.binance.vision, sans contenu) ont été consultées pour fixer les sources (§3).
++(data.binance.vision, sans contenu) ont été consultées pour fixer les sources (§3) et les annexes.
++
++**Version 2.** Remplace regime-r1 (sha256 72a78d507d5ac761c6fb072262bcbd5f98228fbac7a4a566c9f3fc1b3eca4480,
++conservé intact comme trace). Modifications, toutes décidées par le propriétaire avant toute lecture de
++prix : (1) §3, suppression de la séparation d'actifs par variation de prix et table d'identité
++(annexe B) ; (2) §5, préchauffage propre à chaque détecteur, dont D5 (≈ 395 jours) et premières dates
++éligibles ; (3) §3-§4, listes d'exclusion figées en annexe A ; (4) §6-§8, intervalle de confiance du
++surplus apparié et critère de sélection Q1 sur sa borne basse. Aucun prix n'a été lu, aucune
++performance n'a été calculée pour cette version.
++
++Annexes figées avec ce document (leurs sha256 sont dans `PREREGISTRATION-regime-r2.sha256`) :
++`ANNEX-A-exclusions.md` (stablecoins, actifs indexés, actions tokenisées, tokens à levier, symboles
++non ASCII) et `ANNEX-B-symbol-identity.md` (table `symbol → asset_id`).
+ 
+ ## 0. Question
+ 
+@@ -52,18 +64,29 @@
+ 
+ Règles :
+ 
+-- Aucune valeur manquante n'est reconstituée. Un jour sans bougie rend l'actif inéligible ce jour-là ;
+-  un trou de plus de 3 jours coupe la série (préchauffage refait).
+-- **Symboles réutilisés** (ex. LUNAUSDT après mai 2022) : une coupure de cotation de plus de 7 jours
+-  ou un changement de prix > ×20 d'un jour à l'autre ouvre une nouvelle série (nouvel actif).
+-- Stablecoins, paires indexées et tokens à levier (UP/DOWN/BULL/BEAR) exclus par liste déclarée
+-  dans le code avant le gel.
++- Aucune valeur manquante n'est reconstituée. Un jour sans bougie rend l'actif inéligible ce jour-là
++  (aucune décision, aucun rendement futur calculé à travers ce jour).
++- **Interruptions et symboles réutilisés.**
++  - Une interruption de cotation supérieure à 7 jours sépare deux segments historiques et impose un
++    nouveau préchauffage de tous les indicateurs. Une interruption de 1 à 7 jours rend seulement les
++    jours manquants inéligibles.
++  - Une interruption ne signifie pas que l'actif a changé d'identité.
++  - Les réutilisations connues de symboles sont identifiées par la table `symbol → asset_id` de
++    l'annexe B, avec dates et sources, figée avant les calculs.
++  - **Aucun seuil de variation de prix ne peut déclencher une séparation d'actifs.** Les variations
++    extrêmes réelles, y compris les effondrements de plus de 95 %, sont conservées.
++  - Si l'identité historique d'un symbole reste ambiguë, il est exclu sur la période concernée et
++    l'exclusion est documentée (annexe B), sans consulter son PnL.
++- Stablecoins, monnaies fiat, actifs indexés (or, actifs « wrapped » ou de staking), actions et ETF
++  tokenisés, tokens à levier et symboles non ASCII sont exclus selon la liste exacte de l'annexe A.
++  Le code lit ces listes depuis les annexes figées ; il ne peut pas en ajouter ni en retirer.
+ - Toutes les décisions utilisent la bougie **fermée** de la veille ; la décision du jour J est
+   connue à J 00:00 UTC et appliquée au prix d'ouverture de J.
+ 
+ ## 4. Univers à chaque date (sans biais de survivance)
+ 
+-- **U50(t)** : les 50 paires spot USDT éligibles (≥ 200 jours d'historique continu) ayant le plus
++- **U50(t)** : les 50 paires spot USDT éligibles (hors annexe A et périodes exclues par l'annexe B ;
++  ≥ 200 jours d'historique continu dans le segment courant) ayant le plus
+   fort volume quote médian sur les 30 jours précédant t. Recalculé le 1er de chaque mois, à partir
+   des seules données connues à cette date, paires retirées incluses.
+ - **U20(t)** : les 20 premières de U50(t). Univers de trading de la couche B ; en couche B, une paire
+@@ -85,8 +108,24 @@
+ | D5 | Volatilité | volatilité réalisée 30 j au-dessus du 80e percentile de ses 365 derniers jours → NEUTRE ; sinon direction de D2 |
+ | D6 | Combinaison prédéfinie | D1 et D3 d'accord → ce côté ; sinon NEUTRE |
+ 
+-D4 étant indisponible avant 2021, son entraînement couvre 2021-01-01 → 2022-12-31 seulement
+-(déclaré ; puissance plus faible).
++**Préchauffage et premières dates éligibles.** Chaque détecteur n'émet une décision pour un actif
++qu'une fois son historique nécessaire disponible dans le segment courant ; avant, l'actif est
++inéligible pour ce détecteur (ni décision, ni valeur de remplacement). Le comparateur aléatoire et
++les comparateurs déterministes sont évalués sur exactement les mêmes (actif, date) éligibles.
++
++| Détecteur | Historique requis par actif | Première date de décision possible (archives spot depuis 2017-08-17, funding depuis 2020-01-01) |
++|---|---|---|
++| D1 | 200 jours (SMA200) | 2018-03-05 |
++| D2 | 84 jours (rendement 12 semaines) | 2017-11-09 ; entraînement à partir du 2018-03-01 |
++| D3 | U50(t) : 200 jours par paire ; SMA50 | 2018-03-05 |
++| D4 | 7 jours (moyenne) + 365 jours (z-score) de funding | 2021-01-08 |
++| D4-OI | D4 + 14 jours d'open interest (archives depuis 2020-09-01) | 2021-09-01 (rapportée seulement) |
++| D5 | 30 jours (volatilité réalisée) + 365 jours (percentile) ≈ 395 jours | 2018-09-16 |
++| D6 | max(D1, D3) | 2018-03-05 |
++
++Les fenêtres d'entraînement effectives sont donc : D1, D3, D6 à partir du 2018-03-05 ; D2 à partir
++du 2018-03-01 ; D5 à partir du 2018-09-16 ; D4 du 2021-01-08 au 2022-12-31 (puissance plus faible,
++déclarée). Les phases de validation et de holdout sont communes.
+ 
+ ## 6. Couche A — prédiction (Q1)
+ 
+@@ -104,8 +143,12 @@
+   4. **tendance simple** : signe de close − SMA200, sans zone neutre.
+ - **Surplus** = score du détecteur − médiane des tirages aléatoires ; p empirique = part des tirages
+   ≥ score.
+-- **Intervalles** : bootstrap circulaire par blocs de 30 jours (10 000 rééchantillonnages) sur la
+-  série quotidienne du score ; IC à 90 %.
++- **Intervalles** (bootstrap circulaire par blocs de 30 jours, 10 000 rééchantillonnages, IC à 90 %) :
++  1. **IC du score brut**, sur la série quotidienne du score (moyenne transversale du jour) ;
++  2. **IC du surplus**, sur la série quotidienne appariée du surplus : pour chaque jour, score du
++     détecteur ce jour-là moins la moyenne, sur les 1 000 tirages, du score aléatoire ce même jour.
++     Le rééchantillonnage tire des blocs de jours entiers : toutes les cryptos d'un même jour, le
++     détecteur et ses contrôles restent ensemble.
+ 
+ ## 7. Couche B — trading (Q2)
+ 
+@@ -129,7 +172,8 @@
+ Un détecteur **passe Q1** sur une phase si, sur le panier U20 :
+ 
+ 1. surplus > 0 et p ≤ 0,10 contre l'aléatoire apparié ;
+-2. borne basse de l'IC à 90 % par blocs > 0 ;
++2. borne basse de l'IC à 90 % **du surplus** (§6, intervalle 2) strictement positive ; l'IC du score
++   brut est rapporté sans gate ;
+ 3. score > score de toujours LONG, toujours SHORT et tendance simple ;
+ 4. stabilité : surplus > 0 dans au moins 2/3 des années civiles de la phase comptant ≥ 60 jours de
+    décision non NEUTRE.
+@@ -145,7 +189,7 @@
+ BTC seul est rapporté avec les mêmes critères, à titre d'information.
+ 
+ **Sélection après l'entraînement** : parmi les détecteurs qui passent Q1 **et** Q2, au plus deux,
+-classés par la borne basse de l'IC du surplus Q1. D4-OI n'est jamais sélectionnable. Si aucun ne
++classés par la borne basse de l'IC à 90 % du surplus apparié (§6, intervalle 2). D4-OI n'est jamais sélectionnable. Si aucun ne
+ passe : arrêt, validation et holdout non lus.
+ 
+ **Validation** : détecteurs sélectionnés seulement, mêmes critères. **Holdout** : détecteurs qui ont
+@@ -162,16 +206,20 @@
+ 
+ ## 9. Rapport (obligatoire, quel que soit le résultat)
+ 
+-Pour chaque détecteur et chaque phase lue : scores Q1 et Q2, comparateurs, IC par blocs, résultats
++Pour chaque détecteur et chaque phase lue : scores Q1 et Q2, comparateurs, IC du score brut et IC
++du surplus apparié, résultats
+ par année et par grande phase de marché (découpage fixé ici pour le rapport seulement :
+ 2018 baisse ; 2019 reprise ; 2020-03 → 2021-11 hausse ; 2021-12 → 2022-12 baisse ; 2023-2024
+ reprise ; 2025-2026), exposition, horizons secondaires 7/30 jours, valeur du NEUTRE, liste des
+-actifs et séries coupées (§3), toutes les entorses au protocole.
++actifs, segments et exclusions effectivement appliqués (§3, annexes A et B), toutes les entorses au
++protocole.
+ 
+ ## 10. Exécution
+ 
+-- Code : branche `claude/research-regime-r1`, worktree séparé ; tests (anticipation, univers à date,
+-  chaînes de Markov, bootstrap, coûts) écrits avant toute lecture de prix.
++- Code : branche `claude/research-regime-r2`, worktree séparé ; tests (anticipation, univers à date,
++  segments et identités, chaînes de Markov, bootstrap apparié, coûts) écrits avant toute lecture de
++  prix. Le pré-enregistrement V1, la V2 et les annexes sont commités tels quels dans cette branche ;
++  le commit est cité dans les résultats.
+ - Une seule exécution par phase ; empreinte du code et des données enregistrée dans les résultats.
+ - Ressources : 1 worker, `nice 15`, aucune interférence avec les services systemd `fwd-okx-*` ni
+   avec la campagne swing v2 OKX de la session Ubuntu ; arrêt si la RAM disponible passe sous
