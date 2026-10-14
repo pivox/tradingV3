@@ -95,3 +95,46 @@ def test_eligibility_requires_a_verified_first_listing():
 
 def test_normalise_bases():
     assert au.normalise("1000PEPE") == "PEPE" and au.normalise("1000000MOG") == "MOG" and au.normalise("1INCH") == "1INCH"
+
+
+def _series(start, closes):
+    np = pytest.importorskip("numpy")
+    from scripts.research_listing import study as st
+
+    ts = np.array([start + 60 * i for i in range(len(closes))], dtype=np.int64)
+    return st.Series(ts, np.array(closes, dtype=float))
+
+
+def test_price_before_uses_only_completed_minutes():
+    s = _series(3600, [1.0, 2.0, 3.0])
+    assert s.price_before(3600 + 120) == 2.0  # the candle opened at +60 ended at +120
+    assert s.price_before(3600) is None  # nothing completed before the first candle
+
+
+def test_hourly_sigma_uses_prices_up_to_t_only():
+    from scripts.research_listing import study as st
+
+    closes = [1.0 + 0.01 * (i // 60 % 2) for i in range(26 * 60)]
+    s = _series(0, closes)
+    t = 25 * 3600
+    sigma = st.hourly_sigma(s, t)
+    later = _series(0, closes + [100.0] * 600)  # prices after t changed: σ at t unchanged
+    assert sigma is not None and sigma == st.hourly_sigma(later, t)
+
+
+def test_block_ci_widens_with_clustering():
+    from scripts.research_listing import study as st
+
+    spread = {f"2024-{m:02d}": [(-1) ** m * 0.1] * 5 for m in range(1, 13)}
+    narrow = {f"2024-{m:02d}": [0.1, -0.1] * 2 + [0.0] for m in range(1, 13)}
+    a, b = st.block_ci(spread, 1, draws=2000), st.block_ci(narrow, 1, draws=2000)
+    assert (a[1] - a[0]) > (b[1] - b[0])
+
+
+def test_outcomes_refuse_an_existing_output(tmp_path):
+    from scripts.research_listing import study as st
+
+    out = tmp_path / "outcomes.json"
+    out.write_text("{}")
+    with pytest.raises(SystemExit):
+        st.outcomes(tmp_path / "prepare.json", tmp_path, out)
