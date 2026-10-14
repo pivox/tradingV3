@@ -328,3 +328,4 @@ The body above this line is hashed (sha256 over the file content up to and inclu
 and the following blank line). The hash, the time and the git commit go to `PREREGISTRATION-H1.sha256`. Status:
 **FROZEN_NOT_EXECUTED.**
 
+FROZEN_NOT_EXECUTED 2026-10-14T20:12:44Z body sha256 10d4f0c336a003583986c3e386928ac9606f0020f0a889424f8b5946a2ab0d16 (code and documents at commit d4532589fecc931a81b9fb72e424299f9dd5331a)
