@@ -1,0 +1,7 @@
+10d4f0c336a003583986c3e386928ac9606f0020f0a889424f8b5946a2ab0d16  PREREGISTRATION-H1.md body (up to '## 22. Freeze' + blank line)
+frozen_at 2026-10-14T20:12:44Z
+status FROZEN_NOT_EXECUTED
+commit d4532589fecc931a81b9fb72e424299f9dd5331a
+code python-orchestrator/scripts/research_listing/audit.py sha256 5ccb0f1c8882da1e82a2d9790cfe4bb3023fb1c68dfe5025fc830be6d898a54f
+code python-orchestrator/scripts/research_listing/conventions.py sha256 6619b4ec20b0eb57d16f5306e428312db701441f33eb70d60e237b2314ab7f89
+manifest docs/handbook/research/H1-DATA-MANIFEST.md sha256 0db965f661cddef5a5796a901aa8f0b62af1f3006a715248552a86402265645c
