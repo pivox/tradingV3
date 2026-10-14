@@ -38,6 +38,7 @@ are memoised and shared by a configuration and its controls.
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import math
 import random
@@ -64,6 +65,7 @@ STOP_LIMIT_TTL_MS = FOUR_HOURS
 STOP_LIMIT_OFFSET_ATR = 0.25
 TARGET_R = 3.0
 EXCHANGE_MIN_NOTIONAL = 5.0
+GAP_WARMUP_MS = 42 * 86_400_000  # the 250-bar 4h warm-up
 
 LOOKBACKS = (30, 60, 120)
 STRENGTHS = (0.0, 0.25, 0.5)
@@ -72,7 +74,7 @@ STOPS = (2.0, 3.0)
 EXITS = ("T3", "CH")
 HOLDS = (7, 14)
 SIDES = ("long", "short")
-EXIT_CLASSES = ("stop", "target", "time", "trailing")
+EXIT_CLASSES = ("stop", "target", "time", "trailing", "delisting", "censored")
 
 
 class EngineError(ValueError):
@@ -153,10 +155,50 @@ class Market:
     funding: Mapping[str, ex.FundingSeries]
     instruments: Mapping[str, Mapping]
     paths: dict = field(default_factory=dict)  # memo of simulated paths
+    eligible: Mapping[str, frozenset] | None = None  # symbol -> months "YYYY-MM" open to NEW entries (None: always)
+    cadence_aware: bool = False  # OKX: funding provision at the cadence known at entry, missing settlements imputed
+    gaps: Mapping[str, Sequence[tuple[int, int]]] | None = None  # symbol -> [first missing minute, next real minute)
+
+    def open_to_entries(self, symbol: str, decision_ms: int) -> bool:
+        """Universe membership gates only new entries (an open position runs to its exit regardless); no entry
+        when a data gap lies within the warm-up (the 42 days before the decision)."""
+        if self.eligible is not None and month_of_ms(decision_ms) not in self.eligible.get(symbol, frozenset()):
+            return False
+        for start, end in (self.gaps or {}).get(symbol, ()):
+            if start <= decision_ms and end > decision_ms - GAP_WARMUP_MS:
+                return False
+        return True
+
+    def gap_containing(self, symbol: str, at_ms: int) -> tuple[int, int] | None:
+        for start, end in (self.gaps or {}).get(symbol, ()):
+            if start <= at_ms < end:
+                return start, end
+        return None
+
+    def overlaps_gap(self, symbol: str, begin_ms: int, end_ms: int) -> bool:
+        return any(start < end_ms and end > begin_ms for start, end in (self.gaps or {}).get(symbol, ()))
+
+    def cadence_hours(self, symbol: str, at_ms: int) -> int:
+        """Funding settlement cadence known at ``at_ms``: the last interval between two recorded settlements before
+        it, rounded to 1, 2, 4 or 8 h (8 h when fewer than two settlements are known)."""
+        series = self.funding.get(symbol)
+        if series is None:
+            return 8
+        index = bisect.bisect_left(series.timestamps, at_ms)
+        if index < 2:
+            return 8
+        hours = (series.timestamps[index - 1] - series.timestamps[index - 2]) / 3_600_000
+        return min((1, 2, 4, 8), key=lambda h: abs(h - hours))
 
     @property
     def symbols(self) -> tuple[str, ...]:
         return tuple(sorted(self.frames))
+
+
+def month_of_ms(ms: int) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m")
 
 
 def _regime(frame: sw.Frame, index: int, side: str) -> bool:
@@ -192,6 +234,8 @@ def signals(market: Market, config: Config, window: tuple[int, int]) -> list[Sig
     for symbol in market.symbols:
         frame = market.frames[symbol]
         for index in frame.decisions(*window):
+            if not market.open_to_entries(symbol, frame.close_ms(index)):
+                continue
             value = strength_at(frame, index, config.side, config.lookback)
             if value is not None and value >= config.strength:
                 rows.append((frame.close_ms(index), -value, symbol, index, config.side, value))
@@ -199,7 +243,8 @@ def signals(market: Market, config: Config, window: tuple[int, int]) -> list[Sig
 
 
 def regime_bars(market: Market, side: str, window: tuple[int, int]) -> dict[str, list[int]]:
-    return {symbol: [i for i in market.frames[symbol].decisions(*window) if _regime(market.frames[symbol], i, side)]
+    return {symbol: [i for i in market.frames[symbol].decisions(*window) if _regime(market.frames[symbol], i, side)
+                     and market.open_to_entries(symbol, market.frames[symbol].close_ms(i))]
             for symbol in market.symbols}
 
 
@@ -247,6 +292,8 @@ class Path:
     exit_ms: int = 0
     exit_price: float = float("nan")
     reason: str = "entry_expired"
+    delisting: bool = False  # the deadline is the end of the instrument's data before the holding limit or the phase end
+    event: str | None = None  # "delisting", "interruption" (an interruption inside the position) or "censored"
     ambiguous: bool = False
     atr: float = float("nan")
     deadline_ms: int = 0
@@ -286,8 +333,32 @@ def simulate_path(market: Market, symbol: str, index: int, geometry: Geometry, p
     key = (symbol, index, geometry, phase_end)
     cached = market.paths.get(key)
     if cached is None:
-        cached = market.paths[key] = _simulate(market, symbol, index, geometry, phase_end)
+        cached = market.paths[key] = _with_event(market, symbol, _simulate(market, symbol, index, geometry, phase_end))
     return cached
+
+
+SETTLEMENT_MINUTES = 60
+
+
+def settlement_proxy(candles: ex.CandleSeries) -> float:
+    """Delisting settlement proxy: the mean of the last hour of closes (OKX settles a delisted swap on the average
+    index price of its last hour; the index itself is not archived)."""
+    count = min(SETTLEMENT_MINUTES, candles.count)
+    return float(sum(candles.close[candles.count - count:]) / count)
+
+
+def _with_event(market: Market, symbol: str, path: "Path") -> "Path":
+    if not path.filled:
+        return path
+    import dataclasses
+
+    if path.reason == "delisting":
+        return dataclasses.replace(path, exit_price=settlement_proxy(market.candles[symbol]), event="delisting")
+    if path.reason == "censored":
+        return dataclasses.replace(path, event="censored")
+    if market.overlaps_gap(symbol, path.fill_ms, path.exit_ms):
+        return dataclasses.replace(path, event="interruption")
+    return path
 
 
 def _simulate(market: Market, symbol: str, index: int, geometry: Geometry, phase_end: int) -> Path:
@@ -296,7 +367,19 @@ def _simulate(market: Market, symbol: str, index: int, geometry: Geometry, phase
     long = geometry.side == "long"
     decision = frame.close_ms(index)
     atr = float(frame["atr"][index])
-    deadline = min(decision + geometry.horizon_ms, phase_end)
+    # The series of a segment ends before the phase end only when the instrument was delisted: a position still open
+    # then settles at the delisting settlement proxy. A deadline falling inside an interruption moves to the first
+    # bar after it (the position could not be closed before); beyond the phase end it is censored.
+    series_end = candles.start_ms + candles.count * MINUTE
+    natural = min(decision + geometry.horizon_ms, phase_end)
+    delisting = series_end < natural
+    deadline = min(natural, series_end)
+    censored = False
+    gap = market.gap_containing(symbol, deadline - MINUTE)
+    if gap is not None:
+        deadline = gap[1] + MINUTE
+        if deadline > min(phase_end, series_end):
+            deadline, censored = min(phase_end, series_end), True
     release = decision + geometry.ttl_ms
     first = candles.index(decision)
     if first < 0 or first >= candles.count:
@@ -350,7 +433,7 @@ def _simulate(market: Market, symbol: str, index: int, geometry: Geometry, phase
     if deadline_index >= candles.count:
         raise EngineError(f"{symbol}: position outlives candle coverage")
     common = dict(entry=entry, initial_stop=stop, target=target, fill_index=fill, fill_ms=fill_ms, atr=atr,
-                  deadline_ms=deadline, reference_entry=reference)
+                  deadline_ms=deadline, reference_entry=reference, delisting=delisting and deadline == series_end)
 
     def stop_price(i: int, level: float) -> float:
         return min(opening[i], level) if long else max(opening[i], level)
@@ -364,7 +447,8 @@ def _simulate(market: Market, symbol: str, index: int, geometry: Geometry, phase
         hit = sw.first_touch(candles, blocks, fill + 1, deadline_index, lower, upper)
         if hit is None:
             return Path(True, deadline, exit_index=deadline_index, exit_ms=deadline, exit_price=close[deadline_index - 1],
-                        reason="time", ambiguous=ambiguous, **common)
+                        reason="delisting" if delisting and deadline == series_end else ("censored" if censored else "time"),
+                        ambiguous=ambiguous, **common)
         exit_ms = candles.start_ms + (hit + 1) * MINUTE
         stop_hit = (low[hit] <= stop) if long else (high[hit] >= stop)
         if stop_hit:
@@ -397,7 +481,7 @@ def _simulate(market: Market, symbol: str, index: int, geometry: Geometry, phase
                              else ex.ceil_to(extreme + geometry.stop_atr * current_atr, tick))
                 level = max(level, candidate) if long else min(level, candidate)
         begin = end
-    reason = "time"
+    reason = "delisting" if delisting and deadline == series_end else ("censored" if censored else "time")
     return Path(True, deadline, exit_index=deadline_index, exit_ms=deadline, exit_price=close[deadline_index - 1],
                 reason=reason, **common)
 
@@ -409,18 +493,21 @@ def entry_rate(geometry: Geometry, profile: Mapping[str, float]) -> float:
     return ex.TAKER_FEE + profile["stop_spread_rate"] + profile["stop_slippage_rate"]
 
 
-def planned_loss(entry: float, stop: float, geometry: Geometry, profile: Mapping[str, float], contract: float) -> float:
-    """Loss per unit of quantity if the initial stop is hit: price, entry and exit costs, funding provision."""
+def planned_loss(entry: float, stop: float, geometry: Geometry, profile: Mapping[str, float], contract: float,
+                 intervals: int | None = None) -> float:
+    """Loss per unit of quantity if the initial stop is hit: price, entry and exit costs, funding provision for
+    ``intervals`` settlements (default: one per 8 h of the horizon)."""
     stop_rate = ex.TAKER_FEE + profile["stop_spread_rate"] + profile["stop_slippage_rate"]
-    funding = entry * max(0.0, profile["funding_provision_rate"]) * geometry.funding_intervals
+    count = geometry.funding_intervals if intervals is None else intervals
+    funding = entry * max(0.0, profile["funding_provision_rate"]) * count
     return contract * (abs(entry - stop) + entry * entry_rate(geometry, profile) + stop * stop_rate + funding)
 
 
 def size(entry: float, stop: float, geometry: Geometry, profile: Mapping[str, float], instrument: Mapping,
-         equity: float) -> float:
+         equity: float, intervals: int | None = None) -> float:
     contract = float(instrument["contract_size"])
     step = float(instrument["quantity_step"])
-    per_unit = planned_loss(entry, stop, geometry, profile, contract)
+    per_unit = planned_loss(entry, stop, geometry, profile, contract, intervals)
     if not per_unit > 0:
         return 0.0
     cap = equity * LEVERAGE / MAX_ACTIVE
@@ -451,9 +538,21 @@ class Trade:
     net: dict  # by profile
     risk: dict  # planned loss by profile
     funding: dict
+    event: str | None = None  # delisting / interruption / censored
+    risk_conservative: dict | None = None  # planned loss with the conservative funding provision
+    funding_imputed: int = 0  # missing settlements booked against the position
 
     def r(self, profile: str) -> float:
         return self.net[profile] / self.risk[profile]
+
+    def net_conservative(self, profile: str) -> float:
+        """Conservative scenario: a trade touched by a delisting, an interruption or the censoring is booked at no
+        better than the loss of its full conservative planned risk."""
+        risk = (self.risk_conservative or self.risk)[profile]
+        return min(self.net[profile], -risk) if self.event else self.net[profile]
+
+    def r_conservative(self, profile: str) -> float:
+        return self.net_conservative(profile) / (self.risk_conservative or self.risk)[profile]
 
 
 @dataclass
@@ -468,9 +567,12 @@ class StreamRun:
 
 def run_stream(market: Market, rows: Sequence[Signal], geometries: Mapping[str, Geometry], window: tuple[int, int],
                profiles: Mapping[str, Mapping[str, float]], equity: float = REFERENCE_EQUITY,
-               max_active: int = MAX_ACTIVE, sizing_profile: str = "baseline") -> StreamRun:
-    """Admit ``rows`` (sorted signals) through the portfolio; ``geometries`` maps a side to its geometry."""
+               max_active: int = MAX_ACTIVE, sizing_profile: str = "baseline", phase_end: int | None = None) -> StreamRun:
+    """Admit ``rows`` (sorted signals) through the portfolio; ``geometries`` maps a side to its geometry.
+
+    ``window`` bounds the decisions; positions run until ``phase_end`` (default: the window end)."""
     start, end = window
+    end = end if phase_end is None else phase_end
     active: list[tuple[str, int]] = []  # (symbol, release_ms)
     trades: list[Trade] = []
     rejections: Counter = Counter()
@@ -489,7 +591,10 @@ def run_stream(market: Market, rows: Sequence[Signal], geometries: Mapping[str, 
         tick = float(instrument["tick_size"])
         reference = reference_entry(frame, index, geometry, tick)
         probe_stop = _stop_from(reference, float(frame["atr"][index]), geometry.stop_atr, tick, side)
-        if size(reference, probe_stop, geometry, profiles[sizing_profile], instrument, equity) <= 0:
+        cadence = market.cadence_hours(symbol, decision) if market.cadence_aware else 8
+        intervals = -(-geometry.hold_days * 24 // cadence)
+        conservative_intervals = -(-geometry.hold_days * 24 // max(1, cadence // 2))
+        if size(reference, probe_stop, geometry, profiles[sizing_profile], instrument, equity, intervals if market.cadence_aware else None) <= 0:
             unsized += 1
             rejections["unsized"] += 1
             continue
@@ -499,21 +604,52 @@ def run_stream(market: Market, rows: Sequence[Signal], geometries: Mapping[str, 
         if not path.filled:
             unfilled += 1
             continue
-        quantity = size(path.entry, path.initial_stop, geometry, profiles[sizing_profile], instrument, equity)
+        quantity = size(path.entry, path.initial_stop, geometry, profiles[sizing_profile], instrument, equity,
+                        intervals if market.cadence_aware else None)
         if quantity <= 0:
             unsized += 1
             rejections["unsized_at_fill"] += 1
             continue
-        nets, risks, fundings = {}, {}, {}
+        nets, risks, fundings, risks_conservative = {}, {}, {}, {}
+        imputed = missing_settlements(market, symbol, path.fill_ms, path.exit_ms, cadence) if market.cadence_aware else []
+        contract = float(instrument["contract_size"])
         for name, profile in profiles.items():
             net, funding = settle(market, symbol, path, geometry, quantity, profile)
-            nets[name] = net
-            fundings[name] = funding
-            risks[name] = quantity * planned_loss(path.entry, path.initial_stop, geometry, profile,
-                                                  float(instrument["contract_size"]))
+            # A missing settlement is never booked as zero: the nearest recorded rate, against the position.
+            charge = sum(abs(rate) for _, rate in imputed) * quantity * contract * path.entry
+            nets[name] = net - charge
+            fundings[name] = funding - charge
+            risks[name] = quantity * planned_loss(path.entry, path.initial_stop, geometry, profile, contract,
+                                                  intervals if market.cadence_aware else None)
+            risks_conservative[name] = quantity * planned_loss(path.entry, path.initial_stop, geometry, profile, contract,
+                                                               conservative_intervals if market.cadence_aware else None)
         trades.append(Trade(symbol, side, decision, path.fill_ms, path.exit_ms, path.entry, path.initial_stop,
-                            path.exit_price, path.reason, path.ambiguous, quantity, value, nets, risks, fundings))
+                            path.exit_price, path.reason, path.ambiguous, quantity, value, nets, risks, fundings,
+                            path.event, risks_conservative, len(imputed)))
     return StreamRun(trades, len(rows), admitted, unfilled, unsized, rejections)
+
+
+def missing_settlements(market: Market, symbol: str, begin_ms: int, end_ms: int, cadence_h: int) -> list[tuple[int, float]]:
+    """Settlements missing between ``begin_ms`` and ``end_ms``: every interval between consecutive recorded settlements
+    (the boundaries included) longer than 1.5 x the cadence lacks round(interval / cadence) - 1 of them; each is
+    returned with the nearest recorded rate."""
+    series = market.funding.get(symbol)
+    if series is None or not len(series.timestamps):
+        return []
+    step = cadence_h * 3_600_000
+    times = list(series.timestamps)
+    lo = bisect.bisect_left(times, begin_ms - step)
+    hi = bisect.bisect_right(times, end_ms + step)
+    window = times[lo:hi]
+    out = []
+    for a, b in zip(window, window[1:]):
+        if b - a > 1.5 * step and a < end_ms and b > begin_ms:
+            for k in range(1, round((b - a) / step)):
+                ts = a + k * step
+                if begin_ms < ts <= end_ms:
+                    nearest = lo + (window.index(a) if ts - a <= b - ts else window.index(b))
+                    out.append((ts, float(series.rates[nearest])))
+    return out
 
 
 def settle(market: Market, symbol: str, path: Path, geometry: Geometry, quantity: float,
@@ -525,7 +661,8 @@ def settle(market: Market, symbol: str, path: Path, geometry: Geometry, quantity
                    path.target if path.reason == "target" else math.nan, units, 1.0, 0.0, path.deadline_ms,
                    geometry.side)
     outcome = ex.Outcome(plan, filled=True, fill_ms=path.fill_ms, exit_ms=path.exit_ms, exit_price=path.exit_price,
-                         reason="holding_deadline" if path.reason == "time" else path.reason, ambiguous=path.ambiguous)
+                         reason="holding_deadline" if path.reason in ("time", "delisting", "censored") else path.reason,
+                         ambiguous=path.ambiguous)
     outcome.entry_cost = units * path.entry * entry_rate(geometry, profile)
     ex.settle(outcome, market.candles[symbol], market.funding.get(symbol), profile, path.fill_index, path.exit_index)
     return outcome.net, outcome.funding

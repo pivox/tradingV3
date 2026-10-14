@@ -29,7 +29,11 @@ from .engine import DAY, FOUR_HOURS, MINUTE, Market
 
 VALIDATION_CUT_MS = 1_767_225_600_000  # 2026-01-01T00:00:00Z
 HOLDOUT_END_MS = 1_791_525_600_000  # 2026-10-09T06:00:00Z, the frozen end of the 2026 holdout
+OKX_END_MS = 1_791_820_800_000  # 2026-10-12T16:00:00Z, the last archived OKX minute + 1 (proposal, fixed at the freeze)
 MIDCAPS = ("ARBUSDT", "OPUSDT", "APTUSDT", "SUIUSDT", "NEARUSDT", "TIAUSDT", "SEIUSDT", "INJUSDT", "ATOMUSDT", "FILUSDT")
+
+
+GAP_MINUTES = 60  # longer runs of missing minutes are gaps: no entry with one in the warm-up, positions settle before
 
 
 class DataError(RuntimeError):
@@ -48,7 +52,7 @@ def _kline_files(tapes: list[Path], symbol: str) -> list[Path]:
     return sorted((path for tape in tapes for path in (tape / "klines" / symbol).glob(f"{symbol}-1m-*.npz")), key=lambda p: p.name)
 
 
-def assemble_candles(files: list[Path], symbol: str, end_ms: int) -> tuple[ex.CandleSeries, dict]:
+def assemble_candles(files: list[Path], symbol: str, end_ms: int, begin_ms: int = 0) -> tuple[ex.CandleSeries, dict]:
     """Concatenate converted 1m kline files into one contiguous series [first UTC midnight, end_ms)."""
     parts = {name: [] for name in ("ts_s", "open", "high", "low", "close")}
     for path in files:
@@ -65,7 +69,7 @@ def assemble_candles(files: list[Path], symbol: str, end_ms: int) -> tuple[ex.Ca
     keep[:-1] = ts_ms[1:] != ts_ms[:-1]  # duplicate minutes across files: the last wins
     ts_ms = ts_ms[keep]
     columns = {name: values[keep] for name, values in columns.items()}
-    inside = ts_ms < end_ms
+    inside = (ts_ms < end_ms) & (ts_ms >= begin_ms)
     ts_ms = ts_ms[inside]
     columns = {name: values[inside] for name, values in columns.items()}
     start = -(-int(ts_ms[0]) // DAY) * DAY
@@ -84,13 +88,19 @@ def assemble_candles(files: list[Path], symbol: str, end_ms: int) -> tuple[ex.Ca
         filled[name][slots] = values
     # Forward fill the missing minutes with flat candles at the previous close.
     missing = np.flatnonzero(~present)
+    gaps = []  # spans of more than GAP_MINUTES missing minutes: [first missing minute, next real minute)
+    if missing.size:
+        breaks = np.flatnonzero(np.diff(missing) > 1)
+        starts = np.concatenate(([missing[0]], missing[breaks + 1]))
+        ends = np.concatenate((missing[breaks], [missing[-1]])) + 1
+        gaps = [[int(start + a * MINUTE), int(start + b * MINUTE)] for a, b in zip(starts, ends) if b - a > GAP_MINUTES]
     for slot in missing:
         previous = filled["close"][slot - 1]
         for name in filled:
             filled[name][slot] = previous
     series = ex.CandleSeries(symbol, start, *(array("d", filled[name].tolist()) for name in ("open", "high", "low", "close")))
     receipt = {"symbol": symbol, "files": [p.name for p in files], "start_ms": start, "last_open_ms": last, "candles": int(count),
-               "missing_minutes_filled": int(missing.size), "dropped_before_first_midnight": int(begin), "end_ms_exclusive": end_ms}
+               "missing_minutes_filled": int(missing.size), "gaps": gaps, "dropped_before_first_midnight": int(begin), "end_ms_exclusive": end_ms}
     return series, receipt
 
 
@@ -126,14 +136,22 @@ def build_root(tapes: list[Path], out: Path, symbols: tuple[str, ...], end_ms: i
         candle_receipt["first_decision_ms"] = frame.close_ms(sw.WINDOW - 1) if frame.count >= sw.WINDOW else None
         receipt["symbols"][symbol] = candle_receipt
     (out / "funding.json").write_text(json.dumps(funding_doc))
+    (out / "gaps.json").write_text(json.dumps({s: r["gaps"] for s, r in receipt["symbols"].items()}))
     (out / "instrument-assumptions.json").write_text(json.dumps({**instrument_doc, "symbols": [by_symbol[s] for s in symbols]}, indent=1))
     (out / "cost-assumptions.json").write_text(costs.read_text())
     (out / "build-receipt.json").write_text(json.dumps(receipt, indent=1, sort_keys=True) + "\n")
     return receipt
 
 
-def load_market(root: Path, symbols: tuple[str, ...], cut_ms: int) -> tuple[Market, dict]:
-    """Load a root for ``symbols``; refuses any candle or funding event at or after ``cut_ms``."""
+FRAME_COLUMNS = ("close", "high", "low", "ema200", "atr", "dh30", "dh60", "dh120", "dl30", "dl60", "dl120")
+
+
+def load_market(root: Path, symbols: tuple[str, ...], cut_ms: int, keep: dict[str, tuple[int, int]] | None = None,
+                light: bool = False) -> tuple[Market, dict]:
+    """Load a root for ``symbols``; refuses any candle or funding event at or after ``cut_ms``.
+
+    ``keep`` (symbol -> [begin, end) ms): the 1-minute candles are kept only over that span (begin on a UTC day), the
+    span where entries and their exits can happen; ``light`` keeps only the frame columns the engine reads."""
     candles, frames, blocks, funding = {}, {}, {}, {}
     funding_doc = json.loads((root / "funding.json").read_text())
     for symbol in symbols:
@@ -143,8 +161,14 @@ def load_market(root: Path, symbols: tuple[str, ...], cut_ms: int) -> tuple[Mark
         last_open = series.start_ms + (series.count - 1) * MINUTE
         if last_open >= cut_ms:
             series = _truncate(series, cut_ms)
+        if keep is not None and symbol in keep:
+            series = _span(series, *keep[symbol])
         candles[symbol] = series
-        frame = sw.Frame.from_json(json.loads((root / "features" / f"{symbol}.frame.json").read_text()))
+        document = json.loads((root / "features" / f"{symbol}.frame.json").read_text())
+        if light:
+            document["columns"] = {k: v for k, v in document["columns"].items() if k in FRAME_COLUMNS}
+        frame = sw.Frame.from_json(document)
+        del document
         bars = -((series.start_ms - cut_ms) // FOUR_HOURS) if frame.close_ms(frame.count - 1) > cut_ms else frame.count
         if bars < frame.count:
             frame = sw.Frame(frame.symbol, frame.step, frame.start_ms, {k: v[:bars] for k, v in frame.columns.items()})
@@ -157,7 +181,17 @@ def load_market(root: Path, symbols: tuple[str, ...], cut_ms: int) -> tuple[Mark
         last_open = candles[symbol].start_ms + (candles[symbol].count - 1) * MINUTE
         if last_open >= cut_ms or (funding[symbol].timestamps and funding[symbol].timestamps[-1] >= cut_ms):
             raise DataError(f"{symbol}: data at or after the cut")  # pragma: no cover - guarded above
-    return Market(frames, candles, blocks, funding, instruments), profiles
+    market = Market(frames, candles, blocks, funding, instruments)
+    if (root / "gaps.json").exists():
+        market.gaps = {s: [tuple(g) for g in v if g[0] < cut_ms] for s, v in json.loads((root / "gaps.json").read_text()).items() if s in symbols}
+    return market, profiles
+
+
+def _span(series: ex.CandleSeries, begin_ms: int, end_ms: int) -> ex.CandleSeries:
+    begin_ms = max(series.start_ms, begin_ms // DAY * DAY)
+    first = (begin_ms - series.start_ms) // MINUTE
+    last = min(series.count, max(first + 1, (end_ms - series.start_ms) // MINUTE))
+    return ex.CandleSeries(series.symbol, begin_ms, series.open[first:last], series.high[first:last], series.low[first:last], series.close[first:last])
 
 
 def _truncate(series: ex.CandleSeries, cut_ms: int) -> ex.CandleSeries:
@@ -172,11 +206,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tapes", required=True, help="comma-separated tape directories")
     parser.add_argument("--out", required=True)
     parser.add_argument("--symbols", default=",".join(MIDCAPS))
-    parser.add_argument("--end", choices=("validation", "holdout"), required=True)
+    parser.add_argument("--end", choices=("validation", "holdout", "okx"), required=True)
     parser.add_argument("--instruments", required=True)
     parser.add_argument("--costs", required=True)
     args = parser.parse_args(argv)
-    end = VALIDATION_CUT_MS if args.end == "validation" else HOLDOUT_END_MS
+    end = {"validation": VALIDATION_CUT_MS, "holdout": HOLDOUT_END_MS, "okx": OKX_END_MS}[args.end]
     receipt = build_root([Path(t) for t in args.tapes.split(",")], Path(args.out), tuple(args.symbols.split(",")), end,
                          Path(args.instruments), Path(args.costs))
     print(json.dumps({s: {k: v for k, v in r.items() if k != "files"} for s, r in receipt["symbols"].items()}, indent=1))

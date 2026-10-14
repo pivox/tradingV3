@@ -11,15 +11,16 @@ from datetime import datetime, timezone
 from .engine import REFERENCE_EQUITY, RISK_FRACTION, Trade
 
 PROFILES = ("baseline", "adverse")
-MIN_TRADES = {"training": 100, "validation": 50, "holdout": 50}
+SCENARIOS = ("baseline", "adverse", "baseline_conservative", "adverse_conservative")  # OKX campaign
+MIN_TRADES = {"training": 100, "validation": 50, "holdout": 50, "okx": 200}
 MIN_PAIRS = 5
 MIN_PF = {"training": {"baseline": 1.2, "adverse": 1.0}, "validation": {"baseline": 1.2, "adverse": 1.0},
-          "holdout": {"baseline": 1.1, "adverse": 1.0}}
+          "holdout": {"baseline": 1.1, "adverse": 1.0}, "okx": {"baseline": 1.1, "adverse": 1.0}}
 MAX_DRAWDOWN_R = 20.0
 MIN_YEAR_TRADES = 30
 MAX_SELECTED_PER_SIDE = 3
 SELECTION_P = 0.10
-EXIT_CLASSES = ("stop", "target", "time", "trailing")
+EXIT_CLASSES = ("stop", "target", "time", "trailing", "delisting")
 
 
 def year_of(ms: int) -> str:
@@ -30,12 +31,15 @@ def month_of(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m")
 
 
-def summarize(trades: Sequence[Trade], profile: str, equity: float = REFERENCE_EQUITY) -> dict:
-    """Trades in exit order; PnL attributed to the exit year; drawdown on realized equity, in R of 1 % of equity."""
+def summarize(trades: Sequence[Trade], profile: str, equity: float = REFERENCE_EQUITY, conservative: bool = False) -> dict:
+    """Trades in exit order; PnL attributed to the exit year; drawdown on realized equity, in R of 1 % of equity.
+
+    ``conservative``: trades touched by a delisting, an interruption or the censoring are booked at no better than
+    the loss of their conservative planned risk, and R is measured against the conservative planned risk."""
     ordered = sorted(trades, key=lambda t: (t.exit_ms, t.symbol))
     count = len(ordered)
-    nets = [t.net[profile] for t in ordered]
-    rs = [t.r(profile) for t in ordered]
+    nets = [t.net_conservative(profile) if conservative else t.net[profile] for t in ordered]
+    rs = [t.r_conservative(profile) if conservative else t.r(profile) for t in ordered]
     gains = sum(n for n in nets if n > 0)
     losses = -sum(n for n in nets if n <= 0)
     equity_curve = peak = drawdown = 0.0
@@ -51,6 +55,14 @@ def summarize(trades: Sequence[Trade], profile: str, equity: float = REFERENCE_E
             bucket["trades"] += 1
             bucket["net"] += net
             bucket["net_r"] += r
+    by_decision_year: dict = defaultdict(lambda: {"trades": 0, "net": 0.0, "net_r": 0.0})
+    by_month_r: dict = defaultdict(list)
+    for trade, net, r in zip(ordered, nets, rs):
+        bucket = by_decision_year[year_of(trade.decision_ms)]
+        bucket["trades"] += 1
+        bucket["net"] += net
+        bucket["net_r"] += r
+        by_month_r[month_of(trade.decision_ms)].append(r)
     holds = [(t.exit_ms - t.fill_ms) / 3_600_000 for t in ordered]
     reasons = Counter(t.reason for t in ordered)
     return {
@@ -71,7 +83,29 @@ def summarize(trades: Sequence[Trade], profile: str, equity: float = REFERENCE_E
         "by_year": {k: dict(v) for k, v in sorted(by_year.items())},
         "by_pair": {k: dict(v) for k, v in sorted(by_pair.items())},
         "by_month": {k: dict(v) for k, v in sorted(by_month.items())},
+        "by_decision_year": {k: dict(v) for k, v in sorted(by_decision_year.items())},
+        "events": {e: sum(1 for t in ordered if getattr(t, "event", None) == e) for e in ("delisting", "interruption", "censored")},
+        "funding_imputed": sum(getattr(t, "funding_imputed", 0) for t in ordered),
+        "month_block_ci90": month_block_ci(by_month_r),
     }
+
+
+def month_block_ci(by_month: Mapping[str, list], draws: int = 2000, seed: int = 20261014) -> list | None:
+    """90 % interval of the mean net R by a bootstrap over calendar months of decision (correlated pairs: a month is
+    one block)."""
+    import random
+
+    blocks = [v for v in by_month.values() if v]
+    if len(blocks) < 2:
+        return None
+    rng = random.Random(seed)
+    means = []
+    for _ in range(draws):
+        sample = [blocks[rng.randrange(len(blocks))] for _ in blocks]
+        values = [x for block in sample for x in block]
+        means.append(sum(values) / len(values))
+    means.sort()
+    return [means[int(0.05 * draws)], means[int(0.95 * draws) - 1]]
 
 
 def gate_reasons(summary: Mapping, phase: str, profile: str, years: Sequence[str]) -> list[str]:
@@ -87,6 +121,8 @@ def gate_reasons(summary: Mapping, phase: str, profile: str, years: Sequence[str
         reasons.append("insufficient_pairs")
     if summary["mean_net_r"] is None or summary["mean_net_r"] <= 0:
         reasons.append("nonpositive_mean_net_r")
+    if phase == "okx" and summary.get("net_quote", 0.0) <= 0:
+        reasons.append("nonpositive_net_pnl")
     pf = summary["profit_factor"]
     if pf is None:
         reasons.append("undefined_profit_factor")

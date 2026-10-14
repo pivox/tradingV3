@@ -389,3 +389,139 @@ def test_an_entry_resting_past_the_end_of_the_data_is_scanned_up_to_the_last_can
     end = START + count * MINUTE
     path = en.simulate_path(market, "AAAUSDT", DECISION, en.Geometry("long", "C", 2.0, "T3", 14), end)
     assert not path.filled and path.deadline_ms == end
+
+
+def test_monthly_universe_gates_only_new_entries_and_the_control_draws():
+    symbols = ["AAAUSDT", "BBBUSDT"]
+    market = _breakout_market(symbols)
+    month = en.month_of_ms(market.frames["AAAUSDT"].close_ms(DECISION))
+    market.eligible = {"AAAUSDT": frozenset({month})}
+    config = en.Config(30, 0.0, en.Geometry("long", "L", 2.0, "T3", 7))
+    assert [row[2] for row in en.signals(market, config, WINDOW)] == ["AAAUSDT"]
+    regime = en.regime_bars(market, "long", WINDOW)
+    assert regime["BBBUSDT"] == [] and all(en.month_of_ms(market.frames["AAAUSDT"].close_ms(i)) == month for i in regime["AAAUSDT"])
+
+
+def test_a_position_on_a_delisted_instrument_settles_at_the_last_hour_mean():
+    first = first_minute(DECISION)
+    frame = frame_for("AAAUSDT", close=100.0)
+    count = first + 3 * BAR  # the data stop twelve hours after the decision
+    closes = [100.0] * (count - 60) + [101.0] * 30 + [102.0] * 30
+    candles = ex.CandleSeries("AAAUSDT", START, array("d", closes), array("d", closes), array("d", closes), array("d", closes))
+    market = market_for({"AAAUSDT": frame}, {"AAAUSDT": candles})
+    path = en.simulate_path(market, "AAAUSDT", DECISION, en.Geometry("long", "L", 2.0, "T3", 14), WINDOW[1])
+    assert path.filled and path.reason == "delisting" and path.event == "delisting" and path.exit_ms == START + count * MINUTE
+    assert path.exit_price == pytest.approx(101.5)
+
+
+def test_cadence_known_at_entry_and_missing_settlements_are_imputed_against_the_position():
+    market = _breakout_market(["AAAUSDT"])
+    hour = 3_600_000
+    times = [START + k * 8 * hour for k in range(10)] + [START + 80 * hour + k * 4 * hour for k in range(5)]
+    times.remove(START + 88 * hour)  # one 4 h settlement missing
+    market.funding = {"AAAUSDT": ex.FundingSeries.from_events([(t, -0.0001 if t < START + 80 * hour else 0.0002, None) for t in times])}
+    assert market.cadence_hours("AAAUSDT", START + 50 * hour) == 8
+    assert market.cadence_hours("AAAUSDT", START + 87 * hour) == 4
+    missing = en.missing_settlements(market, "AAAUSDT", START + 84 * hour, START + 95 * hour, 4)
+    assert [ts for ts, _ in missing] == [START + 88 * hour] and missing[0][1] == pytest.approx(0.0002)
+
+
+def test_conservative_scenario_books_event_trades_at_no_better_than_minus_one_risk():
+    trade = en.Trade("AAAUSDT", "long", START, START, START + DAY, 100.0, 98.0, 99.0, "delisting", False, 1.0, 0.5,
+                     {"baseline": 3.0}, {"baseline": 2.0}, {"baseline": 0.0}, "delisting", {"baseline": 2.5}, 0)
+    assert trade.net_conservative("baseline") == -2.5 and trade.r_conservative("baseline") == -1.0
+    plain = en.Trade("AAAUSDT", "long", START, START, START + DAY, 100.0, 98.0, 106.0, "target", False, 1.0, 0.5,
+                     {"baseline": 6.0}, {"baseline": 2.0}, {"baseline": 0.0}, None, {"baseline": 2.5}, 0)
+    assert plain.net_conservative("baseline") == 6.0
+
+
+def test_okx_decisions_stop_fourteen_days_before_the_end_of_the_data():
+    (start, last_decision), end, _ = sc.PHASES["okx"]
+    assert end - last_decision == 14 * DAY and last_decision == 1_790_611_200_000
+
+
+def test_okx_phase_requires_200_trades_positive_net_and_p_in_the_verdict():
+    assert "insufficient_trades" in st.gate_reasons(_summary(trades=150), "okx", "baseline", ("2023",))
+    assert "nonpositive_net_pnl" in st.gate_reasons({**_summary(trades=250), "net_quote": -1.0}, "okx", "baseline", ())
+    summary = {"gate_reasons": [], "mean_net_r": 0.1, "trades": 250}
+    row = {"id": "A", "passes_gates": True, "baseline": summary, "adverse": summary,
+           "control": {"baseline": {"surplus": 0.1, "p_empirical": 0.2}, "adverse": {"surplus": 0.1, "p_empirical": 0.05}}}
+    out = sc.verdict({"phase": "okx", "configurations": [row]}, ["A"])
+    assert out["status"] == "no_eligible_candidate" and out["rows"][0]["checks"]["p_baseline"] is False
+    assert out["rows"][0]["checks"]["p_adverse_conservative"] is False  # the conservative scenarios are required too
+
+
+def test_a_data_gap_blocks_entries_during_the_warm_up_and_an_open_position_is_carried_across_it():
+    symbols = ["AAAUSDT"]
+    market = _breakout_market(symbols)
+    decision_ms = market.frames["AAAUSDT"].close_ms(DECISION)
+    market.gaps = {"AAAUSDT": [(decision_ms - 10 * DAY, decision_ms - 9 * DAY)]}
+    config = en.Config(30, 0.0, en.Geometry("long", "L", 2.0, "T3", 14))
+    assert en.signals(market, config, WINDOW) == []
+    market.gaps = {"AAAUSDT": [(decision_ms + 2 * DAY, decision_ms + 3 * DAY)]}
+    assert [row[2] for row in en.signals(market, config, WINDOW)] == ["AAAUSDT"]
+    path = en.simulate_path(market, "AAAUSDT", DECISION, config.geometry, WINDOW[1])
+    assert path.reason == "time" and path.event == "interruption" and path.exit_ms == decision_ms + 14 * DAY
+
+
+def test_a_deadline_inside_an_interruption_moves_to_the_first_bar_after_it():
+    market = _breakout_market(["AAAUSDT"])
+    decision_ms = market.frames["AAAUSDT"].close_ms(DECISION)
+    market.gaps = {"AAAUSDT": [(decision_ms + 13 * DAY, decision_ms + 15 * DAY)]}
+    path = en.simulate_path(market, "AAAUSDT", DECISION, en.Geometry("long", "L", 2.0, "T3", 14), WINDOW[1])
+    assert path.exit_ms == decision_ms + 15 * DAY + MINUTE and path.event == "interruption"
+    market.paths.clear()
+    end = decision_ms + 14 * DAY + 60 * MINUTE  # the phase ends inside the interruption: censored
+    path = en.simulate_path(market, "AAAUSDT", DECISION, en.Geometry("long", "L", 2.0, "T3", 14), end)
+    assert path.reason == "censored" and path.event == "censored" and path.exit_ms == end
+
+
+def test_assemble_candles_records_gaps_longer_than_an_hour(tmp_path):
+    _kline_file(tmp_path / "A-1m.npz", START // 1000, 1440, skip=set(range(100, 200)) | {500})
+    _, receipt = dt.assemble_candles([tmp_path / "A-1m.npz"], "AUSDT", START + DAY)
+    assert receipt["gaps"] == [[START + 100 * MINUTE, START + 200 * MINUTE]] and receipt["missing_minutes_filled"] == 101
+
+
+def _okx_universe_inputs(extra_future_volume: float = 0.0):
+    from scripts.research_swing2 import okx_audit as oa
+
+    month_start = oa._month_start_ms("2024-03") // 86_400_000
+    audits, volumes = {}, {}
+    for k, name in enumerate(["AAA-USDT-SWAP", "BBB-USDT-SWAP", "CCC-USDT-SWAP"]):
+        audits[name] = {"segments": [{"series": name, "start_s": (month_start - 200) * 86_400, "end_s": (month_start + 60) * 86_400}]}
+        days = {str(d): [1_000.0 * (k + 1), "rest_quote", 1440] for d in range(month_start - 40, month_start)}
+        for d in range(month_start, month_start + 40):  # March and later: must not change the March ranking
+            days[str(d)] = [1_000.0 * (3 - k) + extra_future_volume * (k == 0), "rest_quote", 1440]
+        volumes[name] = days
+    return oa, audits, volumes
+
+
+def test_okx_monthly_universe_uses_no_data_from_the_month_or_later():
+    oa, audits, volumes = _okx_universe_inputs()
+    march = oa._universe(audits, volumes, True, None)["2024-03"]
+    assert march["universe"][:3] == ["CCC-USDT-SWAP", "BBB-USDT-SWAP", "AAA-USDT-SWAP"]
+    oa, audits, volumes = _okx_universe_inputs(extra_future_volume=1e9)
+    assert oa._universe(audits, volumes, True, None)["2024-03"]["universe"] == march["universe"]
+    assert oa._universe(audits, volumes, True, None)["2024-04"]["universe"][0] == "AAA-USDT-SWAP"
+
+
+def test_okx_a_segment_starting_less_than_42_days_before_the_month_is_not_eligible():
+    oa, audits, volumes = _okx_universe_inputs()
+    month_start = oa._month_start_ms("2024-03") // 86_400_000
+    audits["CCC-USDT-SWAP"]["segments"][0]["start_s"] = (month_start - 30) * 86_400
+    assert "CCC-USDT-SWAP" not in oa._universe(audits, volumes, True, None)["2024-03"]["universe"]
+
+
+def test_okx_contract_change_splits_a_segment():
+    from scripts.research_swing2 import okx_audit as oa
+
+    days = np.repeat(np.arange(10, 20), 3)
+    data = {"base_volume": np.where(days < 15, 10.0, 100.0), "contracts": np.ones(days.size)}
+    assert oa._split_on_contract_changes(data, [(0, days.size)], days, None) == [(0, 15), (15, 30)]
+
+
+def test_okx_kept_candles_start_a_day_before_the_first_month_of_membership(tmp_path):
+    import inspect
+
+    source = inspect.getsource(sc._init)
+    assert "en_month_start(min(months)) - en.DAY" in source
