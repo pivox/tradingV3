@@ -829,7 +829,7 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--out", required=True)
     a.add_argument("--q3x-dir", required=True)
     a.add_argument("--seeds", type=int, default=1000)
-    a.add_argument("--portfolio-seeds", type=int, default=200)
+    a.add_argument("--portfolio-seeds", type=int, default=1000)  # AMENDMENT-1
     args = parser.parse_args(argv)
     if args.command == "prepare":
         return prepare(args)
