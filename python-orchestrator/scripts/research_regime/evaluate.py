@@ -230,3 +230,89 @@ def metrics(pnl: np.ndarray, days: np.ndarray, lo: int, hi: int, exposure: np.nd
     ex = exposure[lo:hi + 1]
     return {"net": net, "annualized": ann, "max_dd": dd, "calmar": ann / dd if dd > 0 else float("inf"),
             "exposure": float(np.nanmean(ex)) if np.isfinite(ex).any() else 0.0, "by_year": by_year}
+
+
+# ---------------------------------------------------------------------------------------------- correction c1
+
+def missing_funding_block(m: Market, horizon: int = 14) -> np.ndarray:
+    """(A, T) True when the window [t, t+horizon-1] holds a day with a perp price (real or carried) and no funding."""
+    listed = ~np.isnan(_ffill(m.perp_close))
+    miss = (listed & (m.fund_cnt == 0)).astype(np.int64)
+    A, T = miss.shape
+    cs = np.concatenate([np.zeros((A, 1), dtype=np.int64), np.cumsum(miss, axis=1)], axis=1)
+    out = np.zeros((A, T), dtype=bool)
+    if T > horizon:
+        out[:, :T - horizon + 1] = (cs[:, horizon:] - cs[:, :T - horizon + 1]) > 0
+    out[:, T - horizon + 1:] = (cs[:, -1:] - cs[:, T - horizon + 1:T]) > 0
+    return out
+
+
+def simulate_selffinanced(state: np.ndarray, open_mask: np.ndarray, book: Book, costs: np.ndarray,
+                          blocked: np.ndarray, lo: int, hi: int, horizon: int = 14) -> dict:
+    """Correction c1: the tranche of day t is (equity at the close of t-1) / horizon, no leverage.
+
+    Positions whose window holds a day without funding (``blocked``) stay in cash; basket weights unchanged.
+    Equity is 1 on day ``lo`` and is valued daily until ``hi`` (inclusive).
+    """
+    rows = np.where(open_mask.any(axis=1))[0]
+    state, open_mask, costs, blocked = state[rows], open_mask[rows], costs[rows], blocked[rows]
+    inc = [x[rows] for x in book.inc]
+    fund = book.fund[rows]
+    A, T = state.shape
+    n = open_mask.sum(axis=0)
+    w = np.where(n > 0, 1.0 / np.maximum(n, 1), 0.0)
+    s = np.where(open_mask & ~np.isnan(state) & ~blocked, state, 0.0)
+    ws = s * w[None, :]
+    unit = np.zeros((horizon + 1, T))  # PnL on day t+k of a tranche of notional 1 opened on day t
+    for k in range(horizon + 1):
+        unit[k, :T - k] += (ws[:, :T - k] * inc[k][:, :T - k]).sum(axis=0)
+    for k in range(horizon):
+        unit[k, :T - k] -= (ws[:, :T - k] * fund[:, k:]).sum(axis=0)
+    cost = (np.abs(s) * w[None, :] * costs[:, None]).sum(axis=0)
+    unit[0] -= cost
+    unit[horizon] -= cost
+    # gross value at the close of day t+k (k = 0 .. horizon-1) of a tranche of notional 1 opened on day t
+    gross_unit = np.zeros((horizon, T))
+    ratio = np.zeros_like(ws)
+    for k in range(horizon):
+        ratio[:, :T - k] += inc[k][:, :T - k]
+        gross_unit[k, :T - k] = (np.abs(ws[:, :T - k]) * (1.0 + ratio[:, :T - k])).sum(axis=0)
+    notional = np.zeros(T)
+    equity = np.full(T, np.nan)
+    eq = 1.0
+    ruined = False
+    for d in range(lo, hi + 1):
+        gross_prev = sum(notional[d - 1 - k] * gross_unit[k, d - 1 - k] for k in range(horizon) if d - 1 - k >= lo)
+        cap = max(0.0, eq - gross_prev)  # amendment a: gross exposure never exceeds equity at opening
+        notional[d] = 0.0 if ruined else min(max(eq, 0.0) / horizon, cap)
+        pnl = 0.0
+        for k in range(horizon + 1):
+            t = d - k
+            if t >= lo:
+                pnl += notional[t] * unit[k, t]
+        eq += pnl
+        equity[d] = eq
+        if eq <= 0:
+            ruined = True
+    exposure = np.where(n > 0, (s != 0).sum(axis=0) / np.maximum(n, 1), np.nan)
+    return {"equity": equity, "exposure": exposure, "ruined": ruined,
+            "blocked_positions": int((open_mask & ~np.isnan(state) & (state != 0) & blocked).sum()),
+            "tranches": int((n[lo:hi + 1] > 0).sum())}
+
+
+def metrics_selffinanced(sim: dict, days: np.ndarray, lo: int, hi: int) -> dict:
+    eq = sim["equity"][lo:hi + 1]
+    peak = np.maximum.accumulate(np.concatenate([[1.0], eq]))[1:]
+    dd = float(((peak - eq) / peak).max()) if len(eq) else 0.0
+    years = len(eq) / 365.25
+    final = float(eq[-1])
+    ann = final ** (1 / years) - 1 if final > 0 and years > 0 else -1.0
+    by_year, prev = {}, 1.0
+    for i, v in enumerate(eq):
+        y = date_of(days[lo + i]).year
+        by_year.setdefault(y, [prev, v])[1] = v
+        prev = v
+    ex = sim["exposure"][lo:hi + 1]
+    return {"net": final - 1, "annualized": ann, "max_dd": dd, "calmar": ann / dd if dd > 0 else float("inf"),
+            "exposure": float(np.nanmean(ex)) if np.isfinite(ex).any() else 0.0, "ruined": sim["ruined"],
+            "by_year": {y: b / a - 1 for y, (a, b) in by_year.items()}}

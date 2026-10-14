@@ -233,3 +233,54 @@ def test_training_pipeline_end_to_end_on_synthetic_data(tmp_path, monkeypatch):
         assert q1["ci_surplus_90"][0] <= q1["ci_surplus_90"][1]
         assert set(r["q2_basket"]["normal"]["comparators"]) == {"always_long", "always_short", "simple_trend"}
     assert (tmp_path / "out" / "training.json").exists()
+
+
+# ---------------------------------------------------------------------------------------------- correction c1
+
+def _single_asset_market(price: np.ndarray, fund_cnt: np.ndarray | None = None) -> data.Market:
+    n = len(price)
+    days = np.arange(data.day_of(START), data.day_of(START) + n)
+    cnt = np.full((1, n), 3, dtype=np.int16) if fund_cnt is None else fund_cnt[None, :].astype(np.int16)
+    return data.Market(days, ["AUSDT#0"], ["AUSDT"], price[None, :].copy(), price[None, :].copy(), np.ones((1, n)),
+                       np.array([0]), price[None, :].copy(), price[None, :].copy(),
+                       np.where(cnt > 0, 0.0, np.nan), cnt)
+
+
+def test_selffinanced_long_never_below_zero_in_a_crash():
+    price = np.concatenate([np.full(20, 100.0), 100.0 * 0.6 ** np.arange(1, 41)])  # -99.99 % over 40 days
+    m = _single_asset_market(price)
+    book = ev.build_book(m)
+    mask = np.ones((1, len(price)), dtype=bool)
+    blocked = np.zeros_like(mask)
+    sim = ev.simulate_selffinanced(np.ones((1, len(price))), mask, book, np.zeros(1), blocked, 0, len(price) - 1)
+    r = ev.metrics_selffinanced(sim, m.days, 0, len(price) - 1)
+    assert np.nanmin(sim["equity"]) > 0 and 0 < r["max_dd"] <= 1.0
+    old = ev.simulate(np.ones((1, len(price))), mask, book, np.zeros(1))
+    assert ev.metrics(old["pnl"], m.days, 0, len(price) - 1, old["exposure"])["max_dd"] > 1.0  # run1 artefact
+
+
+def test_selffinanced_tranche_follows_equity_and_blocked_stays_cash():
+    price = 100 * 1.01 ** np.arange(60)
+    m = _single_asset_market(price)
+    book = ev.build_book(m)
+    mask = np.zeros((1, 60), dtype=bool)
+    mask[0, 10] = True
+    blocked = np.zeros_like(mask)
+    sim = ev.simulate_selffinanced(np.ones((1, 60)), mask, book, np.zeros(1), blocked, 10, 40)
+    assert sim["equity"][40] - 1 == pytest.approx((price[24] / price[10] - 1) / 14)
+    blocked[0, 10] = True
+    sim_b = ev.simulate_selffinanced(np.ones((1, 60)), mask, book, np.zeros(1), blocked, 10, 40)
+    assert sim_b["equity"][40] == pytest.approx(1.0) and sim_b["blocked_positions"] == 1
+    mask[0, 11] = True  # second tranche is sized on the equity of the close of day 10
+    sim2 = ev.simulate_selffinanced(np.ones((1, 60)), mask, book, np.zeros(1), np.zeros_like(mask), 10, 40)
+    eq10 = sim2["equity"][10]
+    gain2 = (sim2["equity"][40] - 1) - (price[24] / price[10] - 1) / 14
+    assert gain2 == pytest.approx(eq10 / 14 * (price[25] / price[11] - 1))
+
+
+def test_missing_funding_block_window():
+    cnt = np.full(40, 3)
+    cnt[20] = 0
+    m = _single_asset_market(100 * np.ones(40), cnt)
+    b = ev.missing_funding_block(m)[0]
+    assert not b[6] and b[7] and b[20] and not b[21]  # windows [t, t+13] containing day 20

@@ -97,7 +97,9 @@ def layer_a_report(name: str, state: np.ndarray, rets: dict, elig: np.ndarray, c
 
 
 def layer_b_report(state: np.ndarray, open_mask: np.ndarray, comps: dict, book: ev.Book, m: data.Market,
-                   lo: int, hi: int, rng: np.random.Generator) -> dict:
+                   lo: int, hi: int, rng: np.random.Generator, engine: str = "run1",
+                   blocked: np.ndarray | None = None) -> dict:
+    """engine "run1": fixed notional (archived first run); "c1": self-financed correction (AUDIT-Q2-c1.md)."""
     out = {}
     hi_pnl = min(hi + 14, len(m.days) - 1)
     chains = {}
@@ -106,21 +108,25 @@ def layer_b_report(state: np.ndarray, open_mask: np.ndarray, comps: dict, book: 
         if len(cols):
             pi, q = ev.chain_params(state[a, cols])
             chains[a] = (cols, ev.sample_chains(pi, q, len(cols), N_RANDOM_B, rng))
+    def run_one(st, costs):
+        if engine == "c1":
+            sim = ev.simulate_selffinanced(st, open_mask, book, costs, blocked, lo, hi_pnl)
+            return sim, ev.metrics_selffinanced(sim, m.days, lo, hi_pnl)
+        sim = ev.simulate(st, open_mask, book, costs)
+        return sim, ev.metrics(sim["pnl"], m.days, lo, hi_pnl, sim["exposure"])
+
     for profile in ("normal", "adverse"):
         costs = ev.side_cost(m.symbols, profile)
-        sim = ev.simulate(state, open_mask, book, costs)
-        res = ev.metrics(sim["pnl"], m.days, lo, hi_pnl, sim["exposure"])
+        sim, res = run_one(state, costs)
         comp = {}
         for k, v in comps.items():
-            s = ev.simulate(np.where(open_mask, np.nan_to_num(v, nan=0.0), np.nan), open_mask, book, costs)
-            comp[k] = ev.metrics(s["pnl"], m.days, lo, hi_pnl, s["exposure"])
+            comp[k] = run_one(np.where(open_mask, np.nan_to_num(v, nan=0.0), np.nan), costs)[1]
         nets = []
         for i in range(N_RANDOM_B):
             rs = np.full(state.shape, np.nan)
             for a, (cols, draws) in chains.items():
                 rs[a, cols] = draws[i]
-            s = ev.simulate(rs, open_mask, book, costs)
-            nets.append(float(s["pnl"][lo:hi_pnl + 1].sum()))
+            nets.append(float(run_one(rs, costs)[1]["net"]))
         nets = np.array(nets)
         best_det = max(c["net"] for c in comp.values())
         checks = {
@@ -132,12 +138,12 @@ def layer_b_report(state: np.ndarray, open_mask: np.ndarray, comps: dict, book: 
         }
         out[profile] = {**res, "random_median_net": float(np.median(nets)), "random_p": float(np.mean(nets >= res["net"])),
                         "comparators": comp, "checks": checks, "pass": all(checks.values()),
-                        "tranches": sim["tranches"]}
+                        "tranches": sim["tranches"], "blocked_positions": sim.get("blocked_positions")}
     out["pass"] = out["normal"]["pass"] and out["adverse"]["pass"]
     return out
 
 
-def train(data_dir: Path, out_dir: Path) -> dict:
+def train(data_dir: Path, out_dir: Path, engine: str = "run1") -> dict:
     frozen = annexes.verify_frozen()
     out_dir.mkdir(parents=True, exist_ok=True)
     spot, perp, fund = data.load_dir(data_dir)
@@ -152,6 +158,7 @@ def train(data_dir: Path, out_dir: Path) -> dict:
               "D6": det.d6_combo(d1, d3)}
     rets = {h: ev.forward_return(m, h) for h in (7, 14, 30)}
     book = ev.build_book(m)
+    blocked = ev.missing_funding_block(m) if engine == "c1" else None
     btc = np.array([s == "BTCUSDT" for s in m.symbols])[:, None]
     results = {}
     for i, (name, st) in enumerate(states.items()):
@@ -168,8 +175,8 @@ def train(data_dir: Path, out_dir: Path) -> dict:
         winb = window_mask(m, b_lo, TRAIN_END)[None, :]
         open_basket = u20 & book.tradable & ~np.isnan(st) & winb
         open_btc = btc & book.tradable & ~np.isnan(st) & winb
-        res["q2_basket"] = layer_b_report(st, open_basket, comps, book, m, lo, hi, rng)
-        res["q2_btc"] = layer_b_report(st, open_btc, comps, book, m, lo, hi, rng)
+        res["q2_basket"] = layer_b_report(st, open_basket, comps, book, m, lo, hi, rng, engine, blocked)
+        res["q2_btc"] = layer_b_report(st, open_btc, comps, book, m, lo, hi, rng, engine, blocked)
         res["pass_q1"] = res["q1_basket"]["pass"]
         res["pass_q2"] = res["q2_basket"]["pass"]
         results[name] = res
@@ -182,7 +189,7 @@ def train(data_dir: Path, out_dir: Path) -> dict:
     except Exception:  # noqa: BLE001
         commit = None
     summary = {
-        "protocol": "regime-r2", "phase": "training", "frozen": frozen, "code_sha256": code_hash(), "git_commit": commit,
+        "protocol": "regime-r2", "phase": "training", "q2_engine": engine, "frozen": frozen, "code_sha256": code_hash(), "git_commit": commit,
         "data_manifest_sha256": hashlib.sha256((data_dir / "manifest.json").read_bytes()).hexdigest(),
         "assets": len(m.asset_ids), "notes": m.notes, "missing_funding_days": book.missing_funding_days,
         "deviations": ["D4-OI not computed in this run (secondary, non-selectable; daily metrics archives not acquired)"],
@@ -190,7 +197,8 @@ def train(data_dir: Path, out_dir: Path) -> dict:
         "verdict": "selected" if selected else "no_detector_passes_training",
         "next": "validation 2023-2024 for the selected detectors" if selected else "stop: validation and holdout stay unread",
     }
-    (out_dir / "training.json").write_text(json.dumps(summary, indent=1, default=float))
+    name = "training.json" if engine == "run1" else f"training-{engine}.json"
+    (out_dir / name).write_text(json.dumps(summary, indent=1, default=float))
     return summary
 
 
@@ -199,8 +207,9 @@ def main() -> None:
     ap.add_argument("phase", choices=["train"])
     ap.add_argument("--data", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--q2-engine", choices=["run1", "c1"], default="run1")
     a = ap.parse_args()
-    s = train(a.data, a.out)
+    s = train(a.data, a.out, a.q2_engine)
     print(json.dumps({"verdict": s["verdict"], "selected": s["selected"]}))
 
 
