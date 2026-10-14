@@ -44,8 +44,8 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _kline_files(tape: Path, symbol: str) -> list[Path]:
-    return sorted((tape / "klines" / symbol).glob(f"{symbol}-1m-*.npz"))
+def _kline_files(tapes: list[Path], symbol: str) -> list[Path]:
+    return sorted((path for tape in tapes for path in (tape / "klines" / symbol).glob(f"{symbol}-1m-*.npz")), key=lambda p: p.name)
 
 
 def assemble_candles(files: list[Path], symbol: str, end_ms: int) -> tuple[ex.CandleSeries, dict]:
@@ -94,9 +94,9 @@ def assemble_candles(files: list[Path], symbol: str, end_ms: int) -> tuple[ex.Ca
     return series, receipt
 
 
-def assemble_funding(tape: Path, symbol: str, start_ms: int, end_ms: int) -> list[list]:
+def assemble_funding(tapes: list[Path], symbol: str, start_ms: int, end_ms: int) -> list[list]:
     events: dict[int, float] = {}
-    for path in sorted((tape / "funding" / symbol).glob(f"{symbol}-fundingRate-*.npz")):
+    for path in sorted(path for tape in tapes for path in (tape / "funding" / symbol).glob(f"{symbol}-fundingRate-*.npz")):
         with np.load(path) as data:
             for ts, rate in zip(data["ts_ms"].tolist(), data["rate"].tolist()):
                 if start_ms <= ts < end_ms:
@@ -104,7 +104,7 @@ def assemble_funding(tape: Path, symbol: str, start_ms: int, end_ms: int) -> lis
     return [[ts, events[ts], None] for ts in sorted(events)]
 
 
-def build_root(tape: Path, out: Path, symbols: tuple[str, ...], end_ms: int, instruments: Path, costs: Path) -> dict:
+def build_root(tapes: list[Path], out: Path, symbols: tuple[str, ...], end_ms: int, instruments: Path, costs: Path) -> dict:
     """Write a universe root from converted archives; returns the receipt (also written to the root)."""
     (out / "candles").mkdir(parents=True, exist_ok=True)
     (out / "features").mkdir(exist_ok=True)
@@ -113,14 +113,14 @@ def build_root(tape: Path, out: Path, symbols: tuple[str, ...], end_ms: int, ins
     missing = [s for s in symbols if s not in by_symbol]
     if missing:
         raise DataError(f"instruments missing for {missing}")
-    receipt = {"end_ms_exclusive": end_ms, "symbols": {}, "instruments_sha256": sha256_file(instruments), "costs_sha256": sha256_file(costs)}
+    receipt = {"tapes": [str(t) for t in tapes], "end_ms_exclusive": end_ms, "symbols": {}, "instruments_sha256": sha256_file(instruments), "costs_sha256": sha256_file(costs)}
     funding_doc = {}
     for symbol in symbols:
-        series, candle_receipt = assemble_candles(_kline_files(tape, symbol), symbol, end_ms)
-        series.write(out / "candles" / f"{symbol}.candles.bin", {"source": str(tape), "end_ms_exclusive": end_ms})
+        series, candle_receipt = assemble_candles(_kline_files(tapes, symbol), symbol, end_ms)
+        series.write(out / "candles" / f"{symbol}.candles.bin", {"source": [str(t) for t in tapes], "end_ms_exclusive": end_ms})
         frame = sw.build_frame(symbol, sw.aggregate(series, FOUR_HOURS))
         (out / "features" / f"{symbol}.frame.json").write_text(json.dumps(frame.to_json()))
-        funding_doc[symbol] = assemble_funding(tape, symbol, series.start_ms, end_ms)
+        funding_doc[symbol] = assemble_funding(tapes, symbol, series.start_ms, end_ms)
         candle_receipt["funding_events"] = len(funding_doc[symbol])
         candle_receipt["bars_4h"] = frame.count
         candle_receipt["first_decision_ms"] = frame.close_ms(sw.WINDOW - 1) if frame.count >= sw.WINDOW else None
@@ -163,3 +163,25 @@ def load_market(root: Path, symbols: tuple[str, ...], cut_ms: int) -> tuple[Mark
 def _truncate(series: ex.CandleSeries, cut_ms: int) -> ex.CandleSeries:
     keep = (cut_ms - series.start_ms) // MINUTE
     return ex.CandleSeries(series.symbol, series.start_ms, series.open[:keep], series.high[:keep], series.low[:keep], series.close[:keep])
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="research_swing2.data")
+    parser.add_argument("--tapes", required=True, help="comma-separated tape directories")
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--symbols", default=",".join(MIDCAPS))
+    parser.add_argument("--end", choices=("validation", "holdout"), required=True)
+    parser.add_argument("--instruments", required=True)
+    parser.add_argument("--costs", required=True)
+    args = parser.parse_args(argv)
+    end = VALIDATION_CUT_MS if args.end == "validation" else HOLDOUT_END_MS
+    receipt = build_root([Path(t) for t in args.tapes.split(",")], Path(args.out), tuple(args.symbols.split(",")), end,
+                         Path(args.instruments), Path(args.costs))
+    print(json.dumps({s: {k: v for k, v in r.items() if k != "files"} for s, r in receipt["symbols"].items()}, indent=1))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
