@@ -54,9 +54,23 @@ python -m scripts.research_exec.screen budgets --screen <out>/screen-validation.
 The research directory holds two detached loops: `run-capture.sh` (restarts the capture on exit;
 `touch STOP` ends it) and `evaluate.sh` (every hour, replays a window once all its symbol-days
 are final; stops after W2; `touch STOP-EVAL` ends it). Logs under `logs/`.
-Neither loop survives a reboot of the host: after one, relaunch both from the research directory
-(`setsid nohup ./run-capture.sh >/dev/null 2>&1 < /dev/null &`, the same for `./evaluate.sh`); a day
-that misses its rollover stays `partial: true` and keeps its window from being judged.
+**Reboots (since 2026-10-14).** Two systemd user services, enabled at boot with linger on, relaunch
+the loops after a reboot: `fwd-okx-capture.service` (`run-capture.sh`) and `fwd-okx-evaluate.service`
+(`evaluate.sh`), working directory the research directory, `Restart=on-failure`, not started while
+`STOP` / `STOP-EVAL` exist or once `screen-holdout.json` is written. An `ExecStartPre` guard refuses
+to start a service while a loop of the same kind already runs, so the loops launched by hand on
+2026-10-13 keep running untouched. **After a reboot, do not relaunch by hand**; check instead:
+
+```bash
+systemctl --user status fwd-okx-capture fwd-okx-evaluate
+journalctl --user -u fwd-okx-capture -n 50
+journalctl --user -u fwd-okx-evaluate -n 50
+```
+
+Both scripts run from the worktree `.worktrees/research-forward-okx`: it must stay in place until
+2026-10-31. A day that misses its rollover while the host is down stays `partial: true` and keeps
+its window from being judged; a day interrupted and resumed keeps its earlier hours
+(`resumed_rows`).
 
 ## Health checks
 
