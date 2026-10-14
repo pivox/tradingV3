@@ -68,7 +68,7 @@ def _init(root: str, symbols: tuple[str, ...], cut: int, universe: str | None = 
         gaps = json.loads((Path(root) / "gaps.json").read_text())
         keep = {}
         for symbol, months in eligible.items():
-            begin = en_month_start(min(months))
+            begin = en_month_start(min(months)) - en.DAY  # one day of margin: a settlement at 00:00 needs a prior close
             end = en_month_start(_next_month(max(months))) + 15 * en.DAY
             if gaps.get(symbol):  # a deadline may move past an interruption: keep everything after
                 end = cut

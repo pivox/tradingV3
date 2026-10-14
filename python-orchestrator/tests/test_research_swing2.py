@@ -518,3 +518,10 @@ def test_okx_contract_change_splits_a_segment():
     days = np.repeat(np.arange(10, 20), 3)
     data = {"base_volume": np.where(days < 15, 10.0, 100.0), "contracts": np.ones(days.size)}
     assert oa._split_on_contract_changes(data, [(0, days.size)], days, None) == [(0, 15), (15, 30)]
+
+
+def test_okx_kept_candles_start_a_day_before_the_first_month_of_membership(tmp_path):
+    import inspect
+
+    source = inspect.getsource(sc._init)
+    assert "en_month_start(min(months)) - en.DAY" in source
