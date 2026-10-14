@@ -1,8 +1,8 @@
 # Détecteurs de régime LONG / SHORT / NEUTRE (regime-r2) — 2026-10-14
 
-**Statut : entraînement terminé, aucun détecteur ne passe Q1 et Q2. Validation (2023-2024) et test
-final (2025-2026) non téléchargés, non lus. Clôture suspendue à l'audit technique de la couche Q2
-(§6), décidé par le propriétaire.**
+**Statut : CLOS. Aucun détecteur ne passe Q1 et Q2, ni dans l'entraînement run1 ni dans le rejeu
+correctif c1 (audit de Q2, §6). Validation (2023-2024) et test final (2025-2026) non téléchargés,
+non lus.**
 
 ## 1. Question
 
@@ -104,4 +104,61 @@ Sans toucher aux détecteurs ni à leurs paramètres, et sans accès à 2023-202
 - si une correction change un résultat : un seul rejeu correctif de l'entraînement, versionné et
   documenté, le premier résultat restant archivé avec son empreinte.
 
-Résultats de l'audit : à compléter dans ce rapport.
+### 6.1 Constats
+
+1. **Valorisation (écart 3).** Run1 donnait à chaque tranche 1/14 du capital **initial**, sans
+   capitalisation : les pertes cumulées pouvaient dépasser le capital (drawdowns de 98 à 168 %). Ce
+   n'est pas un portefeuille autofinancé et ses Calmar ne mesurent pas un portefeuille exécutable.
+2. **Funding (écart 2).** Sur les 5 438 jours-actif sans règlement, 4 015 suivent le retrait de la
+   paire (aucune entrée possible) ; 13 entrées sur 20 300 du panier ont un tel jour dans leur
+   fenêtre de 14 jours.
+
+### 6.2 Correction c1, figée avant le rejeu
+
+`AUDIT-Q2-c1.md` (sha256 `c196b6cb…`) puis `AUDIT-Q2-c1-amendment-a.md` (sha256 `02be919c…`), tous
+deux écrits avant tout résultat c1 et commités dans `prereg/` :
+
+- tranche du jour t = `min(équité(t−1) / 14, équité(t−1) − exposition brute(t−1))`, sans levier ;
+  équité valorisée chaque jour, rendement annualisé composé, drawdown en % de la pointe ;
+- l'amendement a été ajouté après qu'un test synthétique (long seul, −99,99 % en 40 jours) a montré
+  que la première rédaction (« équité / 14 ») créait un levier caché : l'équité devenait négative ;
+- une position dont la fenêtre contient un jour sans funding reste en trésorerie (aucun taux
+  inventé ; poids des autres actifs inchangés) ;
+- détecteurs, univers, Q1, graines, critères inchangés. Un seul rejeu.
+
+Tests : 19 (3 nouveaux : équité positive dans un krach sans levier et drawdown ≤ 100 %, tranche
+proportionnelle à l'équité, position bloquée en trésorerie). Commit `28624787`.
+
+### 6.3 Résultat du rejeu c1
+
+Contrôle de non-régression : **Q1 identique** à run1 pour les six détecteurs (panier et BTC).
+
+Q2, panier U20, coûts normaux (pessimistes : mêmes verdicts) :
+
+| Détecteur | Net c1 (run1) | Drawdown c1 (run1) | Calmar c1 | Aléatoire médian / p | Positions écartées (funding) | Q2 run1 → c1 |
+|---|---|---|---|---|---|---|
+| D1 | −9,0 % (+54,9 %) | 63,7 % (98,1 %) | −0,05 | +32,9 % / 0,89 | 13 | ❌ → ❌ |
+| D2 | +28,0 % (+69,1 %) | 47,6 % (60,1 %) | 0,18 | +40,1 % / 0,63 | 4 | ✅ → ❌ |
+| D3 | +56,6 % (+133,9 %) | 48,6 % (73,0 %) | 0,34 | +15,0 % / 0,14 | 13 | ✅ → ❌ |
+| D4 | −25,6 % (−19,3 %) | 38,1 % (37,1 %) | −0,36 | −6,7 % / 0,97 | 3 | ❌ → ❌ |
+| D5 | +9,8 % (+31,8 %) | 41,4 % (49,2 %) | 0,08 | +27,0 % / 0,73 | 0 | ❌ → ❌ |
+| D6 | +36,9 % (+80,7 %) | 50,0 % (69,3 %) | 0,22 | +26,2 % / 0,40 | 6 | ✅ → ❌ |
+
+Comparateurs c1 (même moteur) : toujours LONG −15,4 % (drawdown 84,1 %), toujours SHORT −81,4 %,
+tendance simple −9,1 %. Aucune ruine.
+
+Chaque détecteur échoue désormais au premier critère Q2 (rendement net supérieur à l'aléatoire avec
+p ≤ 0,10). Les passes Q2 de D2, D3 et D6 dans run1 venaient de la valorisation à notionnel fixe, qui
+additionnait des gains de 2021 calculés sur un capital que le portefeuille n'avait plus après les
+pertes de 2020 ; l'effet du funding manquant est marginal (0 à 13 positions écartées).
+
+## 7. Conclusion
+
+- Aucun détecteur ne passe Q1 et Q2, avant comme après correction : la recherche regime-r2 est
+  **close** selon la règle du propriétaire ; validation et test final restent non lus.
+- D5 (volatilité + momentum) garde un pouvoir prédictif mesurable à 14 jours sur 2018-2022 (borne
+  basse de l'IC du surplus +16 bp), sans gain exploitable une fois simulé en portefeuille autofinancé
+  (+9,8 % contre +27,0 % pour l'aléatoire apparié). Résultat de recherche, sans application.
+- Aucun détecteur n'est appliqué aux signaux B120 ou r8b.
+- Run1 (`training.json`, sha256 `b715bde0…`) et c1 (`training-c1.json`, empreintes dans
+  `ARCHIVE-training-c1.sha256`) restent archivés en lecture seule.
