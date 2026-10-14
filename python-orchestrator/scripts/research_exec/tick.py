@@ -21,7 +21,7 @@ HOUR_S = 3600
 FEATURE_WINDOWS = (10, 60, 300)
 SIGMA_WINDOWS = (60, 300)
 FAMILIES = ("S1", "S2", "S3", "S4", "S5", "S6")
-_FAMILY = re.compile(r"^(S[1-7]|Q[1-4]|QB|QD|Q3L|M[1-3]|P[0-3]|R1|O[12])$")  # QB/QD/Q3L (q3x): Q3 ablations  # P0 (r11): the pool of the three platform setups; R1 (r12): the zone alone; O1/O2 (r13): open interest
+_FAMILY = re.compile(r"^(S[1-7]|S7L|Q[1-4]|QB|QD|Q3L|M[1-3]|P[0-3]|R1|O[12])$")  # QB/QD/Q3L (q3x): Q3 ablations; S7L (scalp-q3-r2): S7 with the active-seconds sigma  # P0 (r11): the pool of the three platform setups; R1 (r12): the zone alone; O1/O2 (r13): open interest
 MICROPRICE_WINDOWS = (5, 30)  # r9: microprice momentum horizons in seconds
 SETUP_FEE_BP = 7.0  # r10 cost gate: maker entry 2 bp + taker exit 5 bp, plus the quoted spread (PREREGISTRATION-r10.md §3)
 DEPTH_STALE_S = 120  # a bookDepth snapshot older than this gives no depth feature (r8 §2)
@@ -322,6 +322,8 @@ def signal_mask(rule: str, f: dict[str, np.ndarray], side: int) -> np.ndarray:
             return f["burst"] & (sgn * f["fi_60"] < -0.5) & (sgn * f["r_60"] < -2.0 * f["sigma_60"])
         if family == "S7":
             return (sgn * f[f"band_dev_{w}"] < -k * f[f"sigma_{w}"]) & (sgn * f["fi_60"] > 0.0)
+        if family == "S7L":  # scalp-q3-r2 C3 (PREREGISTRATION-scalp-q3-r2.md §3): S7 with the active-seconds sigma
+            return (sgn * f[f"band_dev_{w}"] < -k * f[f"sigma_{w}_live"]) & (sgn * f["fi_60"] > 0.0)
         # r8 depth families (PREREGISTRATION-r8.md §3): `di_b` bid-minus-ask share of the notional
         # within b % of the mid, `ddi_b` its change over the last five minutes.
         if family == "Q1":
