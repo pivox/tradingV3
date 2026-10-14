@@ -305,6 +305,49 @@ with ≥ 30 trades.
 | 95 | B30-Q0.25\|long\|L\|S3\|CH\|H14d | 338 | +0.11 | +0.06 | 0.01 | 0.023 | 387 | -0.01 | -0.02 | +0.01 | 0.36 | R≤0, PF, DD, 2024 / R≤0, PF, DD, 2024 |
 | 96 | B30-Q0.5\|long\|L\|S3\|T3\|H14d | 228 | +0.16 | +0.04 | 0.23 | 0.309 | 277 | +0.03 | +0.02 | +0.02 | 0.33 | PF, DD, 2024, 2025 / DD, 2024, 2025 |
 
+## Indicative 2026 read (post-hoc)
+
+After the verdict, the owner asked to see the 2026 result of the best configuration anyway ("lance le test
+sur l'année pour voir ce que ça donne", relayed by tradingv3-db). He decided this knowing that about 35–40
+trades were expected and that it consumes a **second 2026 holdout claim**, on the mid-caps.
+
+`B120-Q0.5|long|C|S3|T3|H14d` was chosen **after** the validation. It is **not a validated candidate**,
+and this read is **indicative**: no contract, no promotion, and the verdict above is unchanged.
+
+Pre-registration
+`tradingV3-private/research/20261014T094500Z-swing-v2-look2026/PREREGISTRATION-look2026.md`, frozen
+2026-10-14T08:56:14Z (sha256 `4c0c07a6…`). The post-hoc claim was taken at 08:56:15Z, before the 2026
+archives were downloaded. The configuration is frozen as it is. The window covers the ten mid-caps from
+2026-01-01 to 2026-10-09T06:00Z, with warm-up on 2025. Funding of 2026-10-01..09 is not modelled.
+
+| Costs | Trades | Mean net R | PF | Drawdown | Net at 10,000 USDT | Pairs + | Control median / p90 | Surplus | Percentile / p |
+|---|---:|---:|---:|---:|---:|---:|---|---:|---|
+| baseline | 45 | +0.17 | 1.33 | 5.5 R | +770 | 6 of 9 | +0.12 / +0.30 | +0.05 | 66 % / 0.35 |
+| adverse | 45 | +0.10 | 1.28 | 5.8 R | +673 | 6 of 9 | +0.07 / +0.20 | +0.03 | 63 % / 0.38 |
+
+- **The absolute result is positive; the signal does not stand out from random timing.** In 2026, on these
+  pairs, random long entries above the EMA200, with the same continuation entry, stop, target and
+  portfolio, also earned money: +0.12 R median over 100 seeds. The configuration ranks at the 66th
+  percentile of its control.
+- **Holdout gates, for information.** Only the 50-trade gate fails (45), as declared before the read. PF,
+  mean R, drawdown, pairs and the surplus sign pass.
+- **By pair.** NEAR +613, SUI +309, ARB +138, OP +97, ATOM +67 and INJ +45 against APT −37, TIA −109 and
+  FIL −351 (SEI did not trade).
+- **By month.** Six of ten months positive: January +300, February −262, March −121, April +407, May +286,
+  June −90, July −132, August +138, September +261, October −16.
+- **Exits and entries.** 26 stops, 11 targets and 8 at the time limit. 8 of 53 continuation entries did not
+  fill (51 % for the control).
+- **Budgets** (`budgets-holdout.json`). +37.8 USDT at 500 USDT (+7.6 % over nine months, drawdown 27.6),
+  +191.7 at 2,500 and +770 at 10,000. No plan fell below the minimums.
+- **Defect, disclosed.** The first launch (08:59Z) stopped before writing any output. The window ends at
+  06:00Z, inside a 4h bar, and the engine required a full stop-limit window for the last decision. Commit
+  `73febdf2` scans up to the last candle; with full coverage nothing changes (the 339-path check is still
+  identical). The run then ran once, on the same claim and data (`DEFECT-2026-10-14.md`).
+
+**2026 holdout claims used: 2** (the majors' `B30_2s` on 2026-10-12; the mid-caps here). The owner also
+approved a forward paper test of the same frozen configuration on a wider universe of pairs never used in
+swing. It is pre-registered separately.
+
 ## Limits
 
 - **Training.** The majors' 2023-24 had been read by every earlier swing study; training is
