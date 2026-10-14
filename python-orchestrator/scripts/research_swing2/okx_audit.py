@@ -33,6 +33,7 @@ from .okx import _get, _log
 from .okx_universe import EXCLUDED, MIN_DAYS_IN_PREVIOUS_MONTH, UNIVERSE_FROM, UNIVERSE_SIZE, UNIVERSE_TO, WARMUP_DAYS, _month_start_ms, _months
 
 SEGMENT_GAP_DAYS = 7
+CONTRACT_CHANGE = 0.05  # a change of the observed contract value above 5 % starts a new segment (rounding noise ~1 %)
 REST_FROM_MS = 1_661_990_400_000  # 2022-09-01
 REST_TO_MS = 1_791_936_000_000  # 2026-10-14
 DAY_S = 86_400
@@ -92,12 +93,58 @@ def _round_step(value: float | None) -> float | None:
     return float(10 ** exponent)
 
 
+def _daily_ratio(data: dict, days: np.ndarray, rest: dict | None) -> dict[int, float]:
+    both = np.isfinite(data["base_volume"]) & np.isfinite(data["contracts"]) & (data["contracts"] > 0)
+    out = {}
+    for day in np.unique(days[both]):
+        mask = both & (days == day)
+        out[int(day)] = float(data["base_volume"][mask].sum() / data["contracts"][mask].sum())
+    for day, (vol, vol_ccy, _) in (rest or {}).items():
+        if vol > 0:
+            out.setdefault(day, vol_ccy / vol)
+    return out
+
+
+def _split_on_contract_changes(data: dict, bounds: list, days: np.ndarray, rest: dict | None) -> list:
+    """Split each segment where the observed contract value moves by more than CONTRACT_CHANGE (a new contract)."""
+    ratios = _daily_ratio(data, days, rest)
+    out = []
+    for a, b in bounds:
+        observed = sorted((d, v) for d, v in ratios.items() if int(days[a]) <= d <= int(days[b - 1]))
+        cut_days = [d1 for (d0, v0), (d1, v1) in zip(observed, observed[1:]) if abs(v1 / v0 - 1) > CONTRACT_CHANGE]
+        start = a
+        for day in cut_days:
+            index = int(np.searchsorted(days, day))
+            if start < index < b:
+                out.append((start, index))
+                start = index
+        out.append((start, b))
+    return out
+
+
+def refine(tape: Path, out_dir: Path, instruments: list[str]) -> None:
+    """Recompute the audit and the reliable volumes of some instruments (merged into the existing files)."""
+    audit_doc = json.loads((out_dir / "instrument-audit.json").read_text())
+    volumes = json.loads((out_dir / "reliable-daily-volume.json").read_text())
+    live = {i["instId"]: i for i in _get("/api/v5/public/instruments?instType=SWAP")["data"]}
+    for inst in instruments:
+        rest = rest_daily(inst) if inst in live else None
+        audit = audit_instrument(tape, inst, live.get(inst), rest)
+        audit_doc["instruments"][inst] = audit
+        volumes[inst] = reliable_daily_volume(tape, inst, audit, rest)
+        _log(f"refined {inst}: {[s['series'] for s in audit['segments']]}")
+    audit_doc["contract_change_threshold"] = CONTRACT_CHANGE
+    (out_dir / "instrument-audit.json").write_text(json.dumps(audit_doc, indent=1) + "\n")
+    (out_dir / "reliable-daily-volume.json").write_text(json.dumps(volumes) + "\n")
+
+
 def audit_instrument(tape: Path, inst: str, live: dict | None, rest: dict[int, list[float]] | None) -> dict:
     data = _archive(tape, inst)
     ts = data["ts_s"]
     breaks = np.flatnonzero(np.diff(ts) > SEGMENT_GAP_DAYS * DAY_S)
     bounds = list(zip(np.concatenate(([0], breaks + 1)), np.concatenate((breaks + 1, [ts.size]))))
     days = (ts // DAY_S).astype(np.int64)
+    bounds = _split_on_contract_changes(data, bounds, days, rest)
     segments = []
     for n, (a, b) in enumerate(bounds, 1):
         seg = {k: v[a:b] for k, v in data.items()}
@@ -115,7 +162,7 @@ def audit_instrument(tape: Path, inst: str, live: dict | None, rest: dict[int, l
         values = [v for _, v in observed]
         changes = []
         for (d0, v0), (d1, v1) in zip(observed, observed[1:]):
-            if abs(v1 / v0 - 1) > 0.01:
+            if abs(v1 / v0 - 1) > CONTRACT_CHANGE:
                 changes.append([d1, v0, v1])
         tick = _round_step(_increment(np.concatenate([seg[k] for k in ("open", "high", "low", "close")])))
         lot = _round_step(_increment(seg["contracts"]))
@@ -255,7 +302,14 @@ def main(argv: list[str] | None = None) -> int:
     u = sub.add_parser("universe")
     u.add_argument("--tape", required=True)
     u.add_argument("--out", required=True)
+    r = sub.add_parser("refine")
+    r.add_argument("--tape", required=True)
+    r.add_argument("--out", required=True)
+    r.add_argument("--instruments", required=True)
     args = parser.parse_args(argv)
+    if args.command == "refine":
+        refine(Path(args.tape), Path(args.out), args.instruments.split(","))
+        return 0
     if args.command == "build":
         print(json.dumps(build(Path(args.tape), Path(args.inventory), Path(args.out))))
     else:

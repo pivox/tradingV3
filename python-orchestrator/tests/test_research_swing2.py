@@ -480,3 +480,41 @@ def test_assemble_candles_records_gaps_longer_than_an_hour(tmp_path):
     _kline_file(tmp_path / "A-1m.npz", START // 1000, 1440, skip=set(range(100, 200)) | {500})
     _, receipt = dt.assemble_candles([tmp_path / "A-1m.npz"], "AUSDT", START + DAY)
     assert receipt["gaps"] == [[START + 100 * MINUTE, START + 200 * MINUTE]] and receipt["missing_minutes_filled"] == 101
+
+
+def _okx_universe_inputs(extra_future_volume: float = 0.0):
+    from scripts.research_swing2 import okx_audit as oa
+
+    month_start = oa._month_start_ms("2024-03") // 86_400_000
+    audits, volumes = {}, {}
+    for k, name in enumerate(["AAA-USDT-SWAP", "BBB-USDT-SWAP", "CCC-USDT-SWAP"]):
+        audits[name] = {"segments": [{"series": name, "start_s": (month_start - 200) * 86_400, "end_s": (month_start + 60) * 86_400}]}
+        days = {str(d): [1_000.0 * (k + 1), "rest_quote", 1440] for d in range(month_start - 40, month_start)}
+        for d in range(month_start, month_start + 40):  # March and later: must not change the March ranking
+            days[str(d)] = [1_000.0 * (3 - k) + extra_future_volume * (k == 0), "rest_quote", 1440]
+        volumes[name] = days
+    return oa, audits, volumes
+
+
+def test_okx_monthly_universe_uses_no_data_from_the_month_or_later():
+    oa, audits, volumes = _okx_universe_inputs()
+    march = oa._universe(audits, volumes, True, None)["2024-03"]
+    assert march["universe"][:3] == ["CCC-USDT-SWAP", "BBB-USDT-SWAP", "AAA-USDT-SWAP"]
+    oa, audits, volumes = _okx_universe_inputs(extra_future_volume=1e9)
+    assert oa._universe(audits, volumes, True, None)["2024-03"]["universe"] == march["universe"]
+    assert oa._universe(audits, volumes, True, None)["2024-04"]["universe"][0] == "AAA-USDT-SWAP"
+
+
+def test_okx_a_segment_starting_less_than_42_days_before_the_month_is_not_eligible():
+    oa, audits, volumes = _okx_universe_inputs()
+    month_start = oa._month_start_ms("2024-03") // 86_400_000
+    audits["CCC-USDT-SWAP"]["segments"][0]["start_s"] = (month_start - 30) * 86_400
+    assert "CCC-USDT-SWAP" not in oa._universe(audits, volumes, True, None)["2024-03"]["universe"]
+
+
+def test_okx_contract_change_splits_a_segment():
+    from scripts.research_swing2 import okx_audit as oa
+
+    days = np.repeat(np.arange(10, 20), 3)
+    data = {"base_volume": np.where(days < 15, 10.0, 100.0), "contracts": np.ones(days.size)}
+    assert oa._split_on_contract_changes(data, [(0, days.size)], days, None) == [(0, 15), (15, 30)]

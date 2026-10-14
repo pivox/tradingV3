@@ -52,7 +52,7 @@ def _kline_files(tapes: list[Path], symbol: str) -> list[Path]:
     return sorted((path for tape in tapes for path in (tape / "klines" / symbol).glob(f"{symbol}-1m-*.npz")), key=lambda p: p.name)
 
 
-def assemble_candles(files: list[Path], symbol: str, end_ms: int) -> tuple[ex.CandleSeries, dict]:
+def assemble_candles(files: list[Path], symbol: str, end_ms: int, begin_ms: int = 0) -> tuple[ex.CandleSeries, dict]:
     """Concatenate converted 1m kline files into one contiguous series [first UTC midnight, end_ms)."""
     parts = {name: [] for name in ("ts_s", "open", "high", "low", "close")}
     for path in files:
@@ -69,7 +69,7 @@ def assemble_candles(files: list[Path], symbol: str, end_ms: int) -> tuple[ex.Ca
     keep[:-1] = ts_ms[1:] != ts_ms[:-1]  # duplicate minutes across files: the last wins
     ts_ms = ts_ms[keep]
     columns = {name: values[keep] for name, values in columns.items()}
-    inside = ts_ms < end_ms
+    inside = (ts_ms < end_ms) & (ts_ms >= begin_ms)
     ts_ms = ts_ms[inside]
     columns = {name: values[inside] for name, values in columns.items()}
     start = -(-int(ts_ms[0]) // DAY) * DAY
@@ -143,8 +143,15 @@ def build_root(tapes: list[Path], out: Path, symbols: tuple[str, ...], end_ms: i
     return receipt
 
 
-def load_market(root: Path, symbols: tuple[str, ...], cut_ms: int) -> tuple[Market, dict]:
-    """Load a root for ``symbols``; refuses any candle or funding event at or after ``cut_ms``."""
+FRAME_COLUMNS = ("close", "high", "low", "ema200", "atr", "dh30", "dh60", "dh120", "dl30", "dl60", "dl120")
+
+
+def load_market(root: Path, symbols: tuple[str, ...], cut_ms: int, keep: dict[str, tuple[int, int]] | None = None,
+                light: bool = False) -> tuple[Market, dict]:
+    """Load a root for ``symbols``; refuses any candle or funding event at or after ``cut_ms``.
+
+    ``keep`` (symbol -> [begin, end) ms): the 1-minute candles are kept only over that span (begin on a UTC day), the
+    span where entries and their exits can happen; ``light`` keeps only the frame columns the engine reads."""
     candles, frames, blocks, funding = {}, {}, {}, {}
     funding_doc = json.loads((root / "funding.json").read_text())
     for symbol in symbols:
@@ -154,8 +161,14 @@ def load_market(root: Path, symbols: tuple[str, ...], cut_ms: int) -> tuple[Mark
         last_open = series.start_ms + (series.count - 1) * MINUTE
         if last_open >= cut_ms:
             series = _truncate(series, cut_ms)
+        if keep is not None and symbol in keep:
+            series = _span(series, *keep[symbol])
         candles[symbol] = series
-        frame = sw.Frame.from_json(json.loads((root / "features" / f"{symbol}.frame.json").read_text()))
+        document = json.loads((root / "features" / f"{symbol}.frame.json").read_text())
+        if light:
+            document["columns"] = {k: v for k, v in document["columns"].items() if k in FRAME_COLUMNS}
+        frame = sw.Frame.from_json(document)
+        del document
         bars = -((series.start_ms - cut_ms) // FOUR_HOURS) if frame.close_ms(frame.count - 1) > cut_ms else frame.count
         if bars < frame.count:
             frame = sw.Frame(frame.symbol, frame.step, frame.start_ms, {k: v[:bars] for k, v in frame.columns.items()})
@@ -172,6 +185,13 @@ def load_market(root: Path, symbols: tuple[str, ...], cut_ms: int) -> tuple[Mark
     if (root / "gaps.json").exists():
         market.gaps = {s: [tuple(g) for g in v if g[0] < cut_ms] for s, v in json.loads((root / "gaps.json").read_text()).items() if s in symbols}
     return market, profiles
+
+
+def _span(series: ex.CandleSeries, begin_ms: int, end_ms: int) -> ex.CandleSeries:
+    begin_ms = max(series.start_ms, begin_ms // DAY * DAY)
+    first = (begin_ms - series.start_ms) // MINUTE
+    last = min(series.count, max(first + 1, (end_ms - series.start_ms) // MINUTE))
+    return ex.CandleSeries(series.symbol, begin_ms, series.open[first:last], series.high[first:last], series.low[first:last], series.close[first:last])
 
 
 def _truncate(series: ex.CandleSeries, cut_ms: int) -> ex.CandleSeries:

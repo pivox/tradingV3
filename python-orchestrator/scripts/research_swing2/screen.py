@@ -61,11 +61,34 @@ _STATE: dict = {}
 
 
 def _init(root: str, symbols: tuple[str, ...], cut: int, universe: str | None = None) -> None:
-    market, profiles = load_market(Path(root), symbols, cut)
-    if universe is not None:  # the OKX campaign
-        market.eligible = eligibility(Path(universe))
+    if universe is None:
+        market, profiles = load_market(Path(root), symbols, cut)
+    else:  # the OKX campaign: candles kept from the first month of membership to the last one + the holding horizon
+        eligible = eligibility(Path(universe))
+        gaps = json.loads((Path(root) / "gaps.json").read_text())
+        keep = {}
+        for symbol, months in eligible.items():
+            begin = en_month_start(min(months))
+            end = en_month_start(_next_month(max(months))) + 15 * en.DAY
+            if gaps.get(symbol):  # a deadline may move past an interruption: keep everything after
+                end = cut
+            keep[symbol] = (begin, min(end, cut))
+        market, profiles = load_market(Path(root), symbols, cut, keep=keep, light=True)
+        market.eligible = eligible
         market.cadence_aware = True
     _STATE.update(market=market, profiles=profiles)
+
+
+def en_month_start(month: str) -> int:
+    from datetime import datetime, timezone
+
+    year, number = map(int, month.split("-"))
+    return int(datetime(year, number, 1, tzinfo=timezone.utc).timestamp() * 1000)
+
+
+def _next_month(month: str) -> str:
+    year, number = map(int, month.split("-"))
+    return f"{year + (number == 12):04d}-{number % 12 + 1:02d}"
 
 
 def eligibility(path: Path) -> dict[str, frozenset]:
@@ -269,22 +292,23 @@ def verdict(screen: dict, selected: list[str]) -> dict:
 
 
 # --------------------------------------------------------------------------- budgets
-def budgets(root: Path, symbols: tuple[str, ...], phase: str, ids: list[str], equities: list[float]) -> dict:
+def budgets(root: Path, symbols: tuple[str, ...], phase: str, ids: list[str], equities: list[float], universe: str | None = None) -> dict:
     window, cut, _ = PHASES[phase]
-    market, profiles = load_market(root, symbols, cut)
+    _init(str(root), symbols, cut, universe)
+    market, profiles = _STATE["market"], _STATE["profiles"]
     days = (window[1] - window[0]) / en.DAY
     out = {"phase": phase, "equities": equities, "rows": []}
     for config_id in ids:
         config = en.Config.parse(config_id)
         rows = en.signals(market, config, window)
         for equity in equities:
-            run = en.run_stream(market, rows, {config.side: config.geometry}, window, profiles, equity=equity)
+            run = en.run_stream(market, rows, {config.side: config.geometry}, window, profiles, equity=equity, phase_end=cut)
             entry = {"id": config_id, "equity": equity, "unsized": run.unsized, "trades": len(run.trades)}
             for profile in st.PROFILES:
                 summary = st.summarize(run.trades, profile, equity)
                 entry[profile] = {"net_quote": summary["net_quote"], "net_per_day": summary["net_quote"] / days,
                                   "drawdown_quote": summary["drawdown_quote"], "return_pct": 100 * summary["net_quote"] / equity}
-            entry["min_notional"] = min((t.quantity * t.entry for t in run.trades), default=None)
+            entry["min_notional"] = min((t.quantity * t.entry * float(market.instruments[t.symbol]["contract_size"]) for t in run.trades), default=None)
             out["rows"].append(entry)
     return out
 
@@ -371,6 +395,7 @@ def main(argv: list[str] | None = None) -> int:
     bud_p.add_argument("--phase", choices=tuple(PHASES), required=True)
     bud_p.add_argument("--configs", required=True)
     bud_p.add_argument("--equities", default="500,1000,2500,5000,10000")
+    bud_p.add_argument("--universe")
     bud_p.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     if args.command == "run":
@@ -407,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("claim needs --verdict or --posthoc")
     elif args.command == "budgets":
         document = budgets(Path(args.root), tuple(args.symbols.split(",")), args.phase, _ids(args.configs),
-                           [float(x) for x in args.equities.split(",")])
+                           [float(x) for x in args.equities.split(",")], args.universe)
         Path(args.out).write_text(json.dumps(document, indent=1, default=_json_default) + "\n")
     return 0
 
