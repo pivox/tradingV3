@@ -134,6 +134,13 @@ PROTOCOLS = {
     "r9": {"entries": ("E1", "E3"), "exits": ("X1", "X3", "X4", "Y1"), "sides": (1, -1), "training_windows": ("w2307", "w2309", "w2311", "w2401"),
            "phases": {"validation": ("w2402",), "holdout": ("w2403",)}, "rules": tuple(book_rule_catalogue()), "by_series": True, "book": True, "symbols": R9_SYMBOLS,
            "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
+    # q3x (EXPLORATORY-q3x.md, owner's go of 2026-10-14): exploratory re-reading of the r8 TRAINING windows only — the
+    # long stream of fwd-okx-r1 (entry E1, exit Z3) and its ablations: band only (QB), band + flow (S7), band + depth (QD),
+    # the full rule (Q3) and Q3 with the live-seconds sigma (Q3L); nothing is selected, no validation or holdout exists.
+    "q3x": {"entries": ("E1",), "exits": ("Z3",), "sides": (1,), "training_windows": ("february", "march", "april", "may", "june", "july", "august", "september", "october"),
+            "phases": {}, "exploratory": True, "rules": ("QB-W900-K1.5", "S7-W900-K1.5", "QD-W900-K1.5-T0.1", "Q3-W900-K1.5-T0.1", "Q3L-W900-K1.5-T0.1"),
+            "by_series": True, "depth": True, "symbols": R8_SYMBOLS,
+            "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},
     "r8": {"entries": ("E1",), "exits": ("Y1", "Y3", "Z3"), "sides": (1, -1), "training_windows": ("february", "march", "april", "may", "june", "july", "august", "september", "october"),
            "phases": {"validation": ("january",), "holdout": ("december-2024",)}, "rules": tuple(R8_RULES), "both_rules": tuple(R8_BOTH_RULES), "by_series": True, "depth": True, "symbols": R8_SYMBOLS,
            "gates": {"min_trades": {"captures": 300, "binance": 300}, "min_mean_bp": 2.0, "min_pf": 1.15, "control_margin_bp": 3.0, "min_series_share": 0.70, "fee_multiplier": 1.5, "min_fill_rate": 0.20}, "validation": {"min_trades": {"captures": 100, "binance": 100}, "min_pf": 1.05, "min_series_share": 0.5}},

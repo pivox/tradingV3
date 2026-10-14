@@ -21,7 +21,7 @@ HOUR_S = 3600
 FEATURE_WINDOWS = (10, 60, 300)
 SIGMA_WINDOWS = (60, 300)
 FAMILIES = ("S1", "S2", "S3", "S4", "S5", "S6")
-_FAMILY = re.compile(r"^(S[1-7]|Q[1-4]|M[1-3]|P[0-3]|R1|O[12])$")  # P0 (r11): the pool of the three platform setups; R1 (r12): the zone alone; O1/O2 (r13): open interest
+_FAMILY = re.compile(r"^(S[1-7]|Q[1-4]|QB|QD|Q3L|M[1-3]|P[0-3]|R1|O[12])$")  # QB/QD/Q3L (q3x): Q3 ablations  # P0 (r11): the pool of the three platform setups; R1 (r12): the zone alone; O1/O2 (r13): open interest
 MICROPRICE_WINDOWS = (5, 30)  # r9: microprice momentum horizons in seconds
 SETUP_FEE_BP = 7.0  # r10 cost gate: maker entry 2 bp + taker exit 5 bp, plus the quoted spread (PREREGISTRATION-r10.md §3)
 DEPTH_STALE_S = 120  # a bookDepth snapshot older than this gives no depth feature (r8 §2)
@@ -212,6 +212,13 @@ def compute_features(bars: dict[str, np.ndarray], instrument: Instrument, depth:
         features["band_dev_300"] = features["band_dev"]
         features["band_dev_900"] = (mid - _ema(mid, 900)) / mid
         features["sigma_900"] = np.maximum(np.sqrt(_rolling_sum(cum2, 900)), tick_floor)
+        # q3x (EXPLORATORY-q3x.md): share of the last 900 s without any print, and sigma_900 computed on the seconds with
+        # prints only, rescaled to 900 s (a quiet stretch no longer lowers it).
+        live = (bars["n"] > 0).astype(np.float64)
+        live_n = _rolling_sum(np.cumsum(live), 900)
+        features["stale_900"] = 1.0 - live_n / 900.0
+        live2 = _rolling_sum(np.cumsum(np.where(live > 0, dlog * dlog, 0.0)), 900)
+        features["sigma_900_live"] = np.maximum(np.sqrt(np.where(live_n > 0, live2 * 900.0 / np.maximum(live_n, 1.0), np.nan)), tick_floor)
         count = _rolling_sum(np.cumsum(bars["n"]), 60)
         count_hour = _rolling_sum(np.cumsum(np.where(np.isfinite(count), count, 0.0)), HOUR_S) / HOUR_S
         features["burst"] = (count > 3.0 * count_hour) & (count_hour > 0)
@@ -331,6 +338,13 @@ def signal_mask(rule: str, f: dict[str, np.ndarray], side: int) -> np.ndarray:
             return sgn * f[f"ddi_{b}"] > d
         if family == "Q3":
             return (sgn * f[f"band_dev_{w}"] < -k * f[f"sigma_{w}"]) & (sgn * f["fi_60"] > 0.0) & (sgn * f["di_1"] > theta)
+        # q3x ablations (EXPLORATORY-q3x.md): band only, band + depth, and Q3 with the live-seconds sigma.
+        if family == "QB":
+            return sgn * f[f"band_dev_{w}"] < -k * f[f"sigma_{w}"]
+        if family == "QD":
+            return (sgn * f[f"band_dev_{w}"] < -k * f[f"sigma_{w}"]) & (sgn * f["di_1"] > theta)
+        if family == "Q3L":
+            return (sgn * f[f"band_dev_{w}"] < -k * f[f"sigma_{w}_live"]) & (sgn * f["fi_60"] > 0.0) & (sgn * f["di_1"] > theta)
         # r9 microprice and queue families (PREREGISTRATION-r9.md §3).
         if family == "M1":
             mask = sgn * f["mpo"] > theta

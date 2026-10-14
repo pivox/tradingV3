@@ -359,3 +359,39 @@ def test_r9_grid_and_book_quotes_loader(tmp_path):
     quotes = book_quotes((path,))
     assert quotes["ts"].tolist() == [(T0 + 1) * SECOND - 1, (T0 + 2) * SECOND - 1] and quotes["bid_size"].tolist() == [3.0, 2.0] and quotes["ask"].tolist() == [100.1, 100.2]
     assert book_quotes(()).size == 0
+
+
+def test_q3x_ablation_masks_nest_and_q3_is_unchanged():
+    """q3x: QB ⊇ S7 ⊇ Q3, QB ⊇ QD ⊇ Q3; Q3L equals Q3 when every second has a print."""
+    np = pytest.importorskip("numpy")
+    from scripts.research_exec import tick
+    rng = np.random.default_rng(0)
+    n = 5_000
+    f = {"band_dev_900": rng.normal(0, 1e-3, n), "sigma_900": np.full(n, 5e-4), "sigma_900_live": np.full(n, 5e-4),
+         "fi_60": rng.uniform(-1, 1, n), "di_1": rng.uniform(-1, 1, n)}
+    qb = tick.signal_mask("QB-W900-K1.5", f, 1)
+    s7 = tick.signal_mask("S7-W900-K1.5", f, 1)
+    qd = tick.signal_mask("QD-W900-K1.5-T0.1", f, 1)
+    q3 = tick.signal_mask("Q3-W900-K1.5-T0.1", f, 1)
+    q3l = tick.signal_mask("Q3L-W900-K1.5-T0.1", f, 1)
+    assert q3.sum() > 0 and (q3 <= s7).all() and (s7 <= qb).all() and (q3 <= qd).all() and (qd <= qb).all()
+    np.testing.assert_array_equal(q3, q3l)
+    expected = (f["band_dev_900"] < -1.5 * f["sigma_900"]) & (f["fi_60"] > 0) & (f["di_1"] > 0.1)
+    np.testing.assert_array_equal(q3, expected)  # the frozen Q3 definition
+
+
+def test_live_sigma_ignores_quiet_seconds():
+    np = pytest.importorskip("numpy")
+    from scripts.research_exec import tick
+    from scripts.research_exec.capture import Instrument
+    n = 2_000
+    mid = 100 * np.exp(np.cumsum(np.random.default_rng(1).normal(0, 1e-4, n)))
+    prints = np.ones(n)
+    prints[1_000:1_450] = 0  # 450 quiet seconds: the proxied mid stays flat
+    mid[1_000:1_450] = mid[999]
+    bars = {"ts": np.arange(n), "mid": mid, "bid": mid - 0.01, "ask": mid + 0.01, "last": mid, "bid_size": np.ones(n),
+            "ask_size": np.ones(n), "buy_vol": prints, "sell_vol": prints, "n": prints, "quote_age": np.zeros(n)}
+    f = tick.compute_features(bars, Instrument("X", "X", 1.0, 0.001, 0.001, fixed_tick=0.0001))
+    t = 1_600
+    assert f["stale_900"][t] == pytest.approx(450 / 900)
+    assert f["sigma_900_live"][t] > f["sigma_900"][t] * 1.3
