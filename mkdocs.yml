@@ -96,6 +96,8 @@ nav:
       - "Open interest (r13) 2026-10-13": reports/research-oi-positioning-2026-10-13.md
       - "Open interest build-up (r14) 2026-10-13": reports/research-oi-buildup-2026-10-13.md
       - "Swing v2, ranked breakouts 2026-10-14": reports/research-swing-v2-2026-10-14.md
+      - "Swing v2 OKX data readiness 2026-10-14": reports/okx-swing-v2-data-readiness-2026-10-14.md
+      - "Swing v2 OKX single run 2026-10-14": reports/research-swing-v2-okx-2026-10-14.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 
