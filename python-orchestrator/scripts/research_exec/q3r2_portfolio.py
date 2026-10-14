@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .q3r2_engine import CROSSED, DEAD, FILLED, PASSIVE, STOP_BP, UNFILLED
+from .q3r2_engine import CROSSED, DEAD, FILLED, PASSIVE, STOP_BP, UNFILLED, exit_mix
 from .tick import SECOND_US
 
 
@@ -76,6 +76,7 @@ class Result:
     refusals: dict = field(default_factory=lambda: {"slots": 0, "min_notional": 0, "exposure": 0, "risk": 0, "capital": 0})
     partial: int = 0
     partial_unfillable: int = 0
+    partial_exit: int = 0
     daily: dict = field(default_factory=dict)  # UTC day → realised PnL
     records: list = field(default_factory=list)
     items: list = field(default_factory=list)
@@ -85,7 +86,7 @@ def _qty(target_notional: float, price: float, step: float) -> float:
     return math.floor(target_notional / price / step + 1e-9) * step
 
 
-def run_window(streams: list[Stream], variant: str, costs: Costs, book: Book, equity: float, record: bool = False) -> Result:
+def run_window(streams: list[Stream], variant: str, costs: Costs, book: Book, equity: float, record: bool = False, partial_exit: bool = False) -> Result:
     """Simulate one window (pairs trading at the same time) from `equity`; returns the window's result and final equity."""
     res = Result(equity=equity)
     d = book.risk_unit(costs)
@@ -175,6 +176,22 @@ def run_window(streams: list[Stream], variant: str, costs: Costs, book: Book, eq
                 fund_bp = float(cols[f"{exit_prefix}_fund_bp"][s])
                 funding = fq * price * fund_bp / 1e4
                 pnl = fq * (exit_price - price) - fee_in - fee_out - slip - funding
+                frac, rem_exit, rem_reason = 1.0, exit_price, exit_reason
+                if partial_exit and not taker and "pv_thr" in cols:
+                    # AMENDMENT-2 (B2): the passive exit fills at most the volume that traded through it; the remainder
+                    # leaves as Z3 says (taker at fill + 3 900 s, or the stop for Z3-SL200), with taker fees and slippage.
+                    mix = exit_mix(cols, np.array([s]), variant, np.array([fq]), st.step)
+                    frac = float(mix["frac"][0])
+                    if frac < 1.0 - 1e-12:
+                        rem_exit, rem_reason = float(mix["rem_exit"][0]), int(mix["rem_reason"][0])
+                        q1, q2 = fq * frac, fq * (1.0 - frac)
+                        fee_out = q1 * exit_price * costs.maker_bp / 1e4 + q2 * rem_exit * costs.taker_bp / 1e4
+                        slip = q2 * rem_exit * costs.slip_bp / 1e4
+                        funding = price * (q1 * fund_bp + q2 * float(mix["rem_fund_bp"][0])) / 1e4
+                        pnl = q1 * (exit_price - price) + q2 * (rem_exit - price) - fee_in - fee_out - slip - funding
+                        end = int(mix["end_ts"][0])
+                        busy = int((end - st.start_s * SECOND_US) // SECOND_US) + 1
+                        res.partial_exit += 1
                 day = end // (86400 * SECOND_US)
                 res.trades += 1
                 res.pnl += pnl
@@ -182,7 +199,8 @@ def run_window(streams: list[Stream], variant: str, costs: Costs, book: Book, eq
                     rec = {"series_id": st.series_id, "symbol": st.symbol, "s": s, "decision_us": decision_us, "fill_ts": int(cols["fill_ts"][s]), "exit_ts": end,
                            "qty": fq, "order_qty": qty, "entry": price, "exit": exit_price, "reason": exit_reason, "pnl": pnl, "fee_in": fee_in, "fee_out": fee_out,
                            "slip": slip, "funding": funding, "fund_missing": int(cols["fund_missing"][s]), "equity_at_entry": cash, "notional": fq * price,
-                           "nominal_risk": notional * d, "risk_budget": book.risk_pct * cash, "partial": fq < qty - 1e-12}
+                           "nominal_risk": notional * d, "risk_budget": book.risk_pct * cash, "partial": fq < qty - 1e-12,
+                           "passive_frac": frac, "rem_exit": rem_exit, "rem_reason": rem_reason}
                     res.records.append(rec)
         risk = notional * d
         heapq.heappush(active, (end, seq, notional, risk, pnl, day))

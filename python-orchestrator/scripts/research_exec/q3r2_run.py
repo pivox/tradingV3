@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from . import screen as sc
-from .q3r2_engine import (CONFIG_DEPTH, CONFIG_RULES, CONFIG_SIGMA, CONFIGS, CROSSED, DEAD, FILLED, NONE, OUTCOME_FIELDS, PASSIVE, STOP, UNFILLED, VARIANTS,
+from .q3r2_engine import (CONFIG_DEPTH, CONFIG_RULES, CONFIG_SIGMA, CONFIGS, CROSSED, DEAD, FILLED, NONE, OUTCOME_FIELDS, PASSIVE, REMAINDER_FIELDS, STOP, UNFILLED, VARIANTS,
                           Funding, compute_outcomes, excursions, passive_through_qty, path_marks, standalone, trade_rows)
 from .q3r2_portfolio import SCENARIOS, Book, Stream, run_window
 from .q3r2_stats import (BOOT_RESAMPLES, band_state_draws, bootstrap_surplus, bootstrap_total, hour_of, hour_pools, max_drawdown, p_value, rng_for, shift_episodes,
@@ -49,6 +49,7 @@ HISTORICAL_SEEDS = 10
 BASE = Policy("E1", "Z3")
 STRESS = Policy("E1", "Z3", latency_us=STRESS_LATENCY_US)
 FIELDS = tuple(name for name, _ in OUTCOME_FIELDS)
+REMAINDER_NAMES = tuple(name for name, _ in REMAINDER_FIELDS)  # AMENDMENT-2: present in tables prepared after 2026-10-14 14:30Z
 
 
 def check_phase(phase: str, windows: tuple[str, ...]) -> None:
@@ -148,16 +149,16 @@ def prepare_one(index: int) -> dict:
     _, symbol, window = series.name.split(":")
     data = series.data(index)
     funding = load_funding(Path(_ARGS["funding_dir"]), symbol, series.start_s, series.end_s)
-    cols = compute_outcomes(data, BASE, None, funding)
+    cols = compute_outcomes(data, BASE, None, funding, remainder=True)
     f = data.features
-    payload: dict = {f"t_{name}": cols[name] for name in FIELDS}
+    payload: dict = {f"t_{name}": cols[name] for name in FIELDS + REMAINDER_NAMES}
     signals = {c: np.flatnonzero(signal_mask(CONFIG_RULES[c], f, 1)).astype(np.int64) for c in CONFIGS}
     for c, sig in signals.items():
         payload[f"sig_{c}"] = sig
     union = np.unique(np.concatenate(list(signals.values()))) if signals else np.zeros(0, dtype=np.int64)
-    stress = compute_outcomes(data, STRESS, union, funding)
+    stress = compute_outcomes(data, STRESS, union, funding, remainder=True)
     payload["x_s"] = union
-    for name in FIELDS:
+    for name in FIELDS + REMAINDER_NAMES:
         payload[f"x_{name}"] = stress[name]
     payload.update(candidate_detail(data, cols, union, BASE))
     hours = hour_of(series.start_s, data.n)
@@ -193,9 +194,12 @@ def prepare_one(index: int) -> dict:
     return meta
 
 
-def load_series_list(tape_dir: Path, instruments: Path) -> list:
-    check_phase("training", TRAINING_WINDOWS)
-    series, missing = sc.load_binance_series(tape_dir, instruments, "training", symbols=SYMBOLS, windows=TRAINING_WINDOWS, depth=True)
+def load_series_list(tape_dir: Path, instruments: Path, windows: tuple[str, ...] | None = None) -> list:
+    """Training windows by default; another window set only through `q3r2_c2.validation_windows_checked` (AMENDMENT-2)."""
+    if windows is None:
+        check_phase("training", TRAINING_WINDOWS)
+        windows = TRAINING_WINDOWS
+    series, missing = sc.load_binance_series(tape_dir, instruments, "training", symbols=SYMBOLS, windows=windows, depth=True)
     if missing:
         raise SystemExit(f"missing tape days: {missing[:10]}")
     return series
@@ -205,7 +209,7 @@ def prepare(args) -> int:
     out = Path(args.out)
     (out / "series").mkdir(parents=True, exist_ok=True)
     guard(out)
-    series = load_series_list(Path(args.tape_dir), Path(args.instruments))
+    series = load_series_list(Path(args.tape_dir), Path(args.instruments), getattr(args, "windows", None))
     manifest = {"protocol": PROTOCOL, "started_at": _now(), "series": [s.name for s in series], "tape_dir": args.tape_dir, "instruments": args.instruments,
                 "instruments_sha256": hashlib.sha256(Path(args.instruments).read_bytes()).hexdigest(), "funding_dir": args.funding_dir,
                 "prereg_sha256": hashlib.sha256(Path(args.prereg).read_bytes()).hexdigest() if args.prereg else None, "code": sc.code_identity(), "workers": args.workers}
@@ -249,13 +253,13 @@ def _load(path: Path) -> tuple[dict, dict]:
 
 
 def _table(payload: dict, prefix: str) -> dict:
-    return {name: payload[f"{prefix}_{name}"] for name in FIELDS}
+    return {name: payload[f"{prefix}_{name}"] for name in FIELDS + REMAINDER_NAMES if f"{prefix}_{name}" in payload}
 
 
 def _full_stress(payload: dict, n: int) -> dict:
     """Stress outcomes (computed on the candidate seconds only) laid out as a full-length table."""
     out = {}
-    for name, dtype in OUTCOME_FIELDS:
+    for name, dtype in OUTCOME_FIELDS + tuple(item for item in REMAINDER_FIELDS if f"x_{item[0]}" in payload):
         arr = np.zeros(n, dtype=dtype)
         if np.issubdtype(np.dtype(dtype), np.floating):
             arr[:] = np.nan
