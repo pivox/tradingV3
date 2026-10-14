@@ -110,6 +110,7 @@ def plan(campaign: Path, out: Path) -> dict:
 def volumes(tape: Path, fapi_path: Path, archive_first: Path, out: Path) -> dict:
     """{symbol: {day: [quote volume, source, 1440]}} from the daily klines; listing time per symbol."""
     fapi = {s["symbol"]: s for s in json.loads(fapi_path.read_text())["symbols"]}
+    first_day = json.loads(archive_first.read_text())
     vol, listing = {}, {}
     for d in sorted((tape / "klines1d").iterdir()):
         days = {}
@@ -121,7 +122,9 @@ def volumes(tape: Path, fapi_path: Path, archive_first: Path, out: Path) -> dict
                     first = ts if first is None else min(first, ts)
         vol[d.name] = days
         info = fapi.get(d.name)
-        listing[d.name] = int(info["onboardDate"]) // 1000 if info else first
+        # same listing rule as ``plan``: exchangeInfo onboardDate, else the archive's first day (else the first candle)
+        listing[d.name] = int(info["onboardDate"]) // 1000 if info else (
+            int(datetime.strptime(first_day[d.name], "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()) if d.name in first_day else first)
     out.write_text(json.dumps({"volumes": vol, "listing": listing}))
     return {"symbols": len(vol)}
 
