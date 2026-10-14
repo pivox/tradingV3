@@ -299,9 +299,11 @@ def _simulate(market: Market, symbol: str, index: int, geometry: Geometry, phase
     deadline = min(decision + geometry.horizon_ms, phase_end)
     release = decision + geometry.ttl_ms
     first = candles.index(decision)
-    eligible = geometry.ttl_ms // MINUTE
-    if first < 0 or first + eligible > candles.count:
+    if first < 0 or first >= candles.count:
         raise EngineError(f"{symbol}: decision outside candle coverage")
+    # An order resting past the end of the data (a window ending inside a 4h bar) is scanned up to the
+    # last candle; the scan also stops at the deadline, which never exceeds the phase end.
+    eligible = min(geometry.ttl_ms // MINUTE, candles.count - first)
     low, high, opening, close = candles.low, candles.high, candles.open, candles.close
     reference = reference_entry(frame, index, geometry, tick)
     fill = entry = None

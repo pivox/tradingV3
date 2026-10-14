@@ -26,6 +26,10 @@ def year_of(ms: int) -> str:
     return str(datetime.fromtimestamp(ms / 1000, tz=timezone.utc).year)
 
 
+def month_of(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m")
+
+
 def summarize(trades: Sequence[Trade], profile: str, equity: float = REFERENCE_EQUITY) -> dict:
     """Trades in exit order; PnL attributed to the exit year; drawdown on realized equity, in R of 1 % of equity."""
     ordered = sorted(trades, key=lambda t: (t.exit_ms, t.symbol))
@@ -41,8 +45,9 @@ def summarize(trades: Sequence[Trade], profile: str, equity: float = REFERENCE_E
         drawdown = max(drawdown, peak - equity_curve)
     by_year: dict = defaultdict(lambda: {"trades": 0, "net": 0.0, "net_r": 0.0})
     by_pair: dict = defaultdict(lambda: {"trades": 0, "net": 0.0, "net_r": 0.0})
+    by_month: dict = defaultdict(lambda: {"trades": 0, "net": 0.0, "net_r": 0.0})
     for trade, net, r in zip(ordered, nets, rs):
-        for bucket in (by_year[year_of(trade.exit_ms)], by_pair[trade.symbol]):
+        for bucket in (by_year[year_of(trade.exit_ms)], by_pair[trade.symbol], by_month[month_of(trade.exit_ms)]):
             bucket["trades"] += 1
             bucket["net"] += net
             bucket["net_r"] += r
@@ -65,6 +70,7 @@ def summarize(trades: Sequence[Trade], profile: str, equity: float = REFERENCE_E
         "mean_hold_hours": sum(holds) / count if count else None,
         "by_year": {k: dict(v) for k, v in sorted(by_year.items())},
         "by_pair": {k: dict(v) for k, v in sorted(by_pair.items())},
+        "by_month": {k: dict(v) for k, v in sorted(by_month.items())},
     }
 
 

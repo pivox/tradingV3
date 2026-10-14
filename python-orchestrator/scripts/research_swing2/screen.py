@@ -253,14 +253,26 @@ def budgets(root: Path, symbols: tuple[str, ...], phase: str, ids: list[str], eq
 
 
 # --------------------------------------------------------------------------- holdout claim
-def claim(campaign: Path, validation_verdict: Path) -> dict:
-    """Create the one-shot holdout claim (exclusive create); refuses when one exists or nothing validated."""
-    document = json.loads(validation_verdict.read_text())
-    if document.get("phase") != "validation" or not document.get("validated"):
-        raise SystemExit("no validated configuration: the holdout stays closed")
+def claim(campaign: Path, validation_verdict: Path | None = None, posthoc: list[str] | None = None,
+          prereg: Path | None = None) -> dict:
+    """Create the one-shot holdout claim (exclusive create); refuses when one exists or nothing validated.
+
+    ``posthoc``: an indicative read of configurations chosen after a validation (owner's decision), bound
+    to a frozen pre-registration (its ``.sha256`` file must exist); the claim says so and lists them under
+    ``validated`` only so that the holdout guard can check the run against it.
+    """
+    if posthoc is not None:
+        if not posthoc or prereg is None or not prereg.with_suffix(".sha256").exists():
+            raise SystemExit("post-hoc claim refused: configurations and a frozen pre-registration are required")
+        payload = {"claimed_at": _now(), "validated": posthoc, "status": "posthoc_indicative_not_validated",
+                   "prereg": str(prereg), "prereg_sha256_file": prereg.with_suffix(".sha256").read_text().split()[0]}
+    else:
+        document = json.loads(validation_verdict.read_text())
+        if document.get("phase") != "validation" or not document.get("validated"):
+            raise SystemExit("no validated configuration: the holdout stays closed")
+        payload = {"claimed_at": _now(), "validated": document["validated"],
+                   "validation_verdict_sha256": hashlib.sha256(validation_verdict.read_bytes()).hexdigest()}
     path = campaign / CLAIM_NAME
-    payload = {"claimed_at": _now(), "validated": document["validated"],
-               "validation_verdict_sha256": hashlib.sha256(validation_verdict.read_bytes()).hexdigest()}
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
     with os.fdopen(descriptor, "w") as handle:
         handle.write(json.dumps(payload, indent=1) + "\n")
@@ -311,7 +323,9 @@ def main(argv: list[str] | None = None) -> int:
     ver_p.add_argument("--out", required=True)
     claim_p = sub.add_parser("claim")
     claim_p.add_argument("--campaign", required=True)
-    claim_p.add_argument("--verdict", required=True)
+    claim_p.add_argument("--verdict")
+    claim_p.add_argument("--posthoc", help="file of configuration ids (indicative post-hoc read)")
+    claim_p.add_argument("--prereg", help="the frozen pre-registration of the post-hoc read")
     bud_p = sub.add_parser("budgets")
     bud_p.add_argument("--root", required=True)
     bud_p.add_argument("--symbols", required=True)
@@ -345,7 +359,12 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.out).write_text(json.dumps(document, indent=1, default=_json_default) + "\n")
         print(json.dumps({"status": document["status"], "validated": document["validated"]}))
     elif args.command == "claim":
-        print(json.dumps(claim(Path(args.campaign), Path(args.verdict))))
+        if args.posthoc:
+            print(json.dumps(claim(Path(args.campaign), posthoc=_ids(args.posthoc), prereg=Path(args.prereg) if args.prereg else None)))
+        elif args.verdict:
+            print(json.dumps(claim(Path(args.campaign), Path(args.verdict))))
+        else:
+            raise SystemExit("claim needs --verdict or --posthoc")
     elif args.command == "budgets":
         document = budgets(Path(args.root), tuple(args.symbols.split(",")), args.phase, _ids(args.configs),
                            [float(x) for x in args.equities.split(",")])
