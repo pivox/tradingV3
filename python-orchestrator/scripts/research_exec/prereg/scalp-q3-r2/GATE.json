@@ -1,0 +1,73 @@
+{
+ "per_candidate": {
+  "C2-SL": {
+   "criteria": {
+    "T1_trades": true,
+    "T2_mean": true,
+    "T3_surplus": true,
+    "T4_flow": true,
+    "T5_portfolio": true,
+    "T6_pessimistic": true,
+    "T7_stress": true,
+    "T8_consistency": true,
+    "T9_tails": true,
+    "T10_risk": true,
+    "T11_fill": true
+   },
+   "comparability": {
+    "checks": {
+     "signal_trades": true,
+     "portfolio_trades": false,
+     "position_time": true,
+     "notional_exposure": false
+    },
+    "ok": false,
+    "residuals": {
+     "signal_trades": -0.054935540069686484,
+     "portfolio_trades": -0.15749084249084255,
+     "position_time": -0.15551649031945192,
+     "notional_exposure": -0.23807962231422075
+    }
+   },
+   "status": "statistical_blocker"
+  },
+  "C4-SL": {
+   "criteria": {
+    "T1_trades": true,
+    "T2_mean": true,
+    "T3_surplus": true,
+    "T4_flow": true,
+    "T5_portfolio": true,
+    "T6_pessimistic": true,
+    "T7_stress": true,
+    "T8_consistency": true,
+    "T9_tails": true,
+    "T10_risk": true,
+    "T11_fill": true
+   },
+   "comparability": {
+    "checks": {
+     "signal_trades": true,
+     "portfolio_trades": true,
+     "position_time": true,
+     "notional_exposure": true
+    },
+    "ok": true,
+    "residuals": {
+     "signal_trades": -0.05260348162475825,
+     "portfolio_trades": -0.1203993506493507,
+     "position_time": -0.11919466960588943,
+     "notional_exposure": -0.19689569934093476
+    }
+   },
+   "status": "eligible"
+  }
+ },
+ "forwarded": [
+  "C4"
+ ],
+ "decision": "GATE_PASS",
+ "source": "run-c2/results-c2.json",
+ "source_sha256": "db5c38dc3f97cb6fceace3c75d10651db4b959b1ab2ec12646f3d12ad1e810fa",
+ "written_at": "2026-10-14T15:45:15Z"
+}
