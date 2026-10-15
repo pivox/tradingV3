@@ -12,8 +12,12 @@ A. at the open, per instrument: (1) resting protective orders first: an open thr
    gap, worse than the stop, recorded separately), an open through the target fills at the target; (2) pending
    adaptive actions decided at a previous ``D <= t`` (a stop tightened through the open triggers at the open);
    (3) market closes: max holding reached, fail-safe for an unprotected position, kill-switch flattening; (4) pending
-   entries decided at ``D <= t``: an IOC limit at the gate's collar price fills at the open when the open is inside
-   the collar and the gate's re-check at that price passes; otherwise no position opens.
+   entries decided at ``D <= t``: before sending, the order is refused when the kill switch is active at ``t`` or the
+   equity is not positive (``order_not_sent``); once sent, the ORDER is journalled first, then the venue decides: an
+   IOC limit at the gate's collar price does not fill when the open is beyond the collar, and fills at the open
+   otherwise. A filled order is venue truth: the position always exists. When the gate's re-check at the fill price
+   refuses it (the open is through the stop, or the limits fail at the current equity), the position is closed at
+   once at the same open by a reduce-only fail-safe market close (``fill_recheck_failed``), never dropped.
 B. intrabar: stop before target when both are touched (pessimistic, flagged); liquidation proxy (isolated, 1x:
    unreachable for a long, a short needs ~+99 %) compared with the stop, the worse wins; a target fills only on a
    trade-through by default.
@@ -26,15 +30,31 @@ E. decisions at ``D``: kill switch; for each open position, ``ManagementPolicy.d
    only from bars available at ``D``, every action validated by the risk gate (admitted actions run at the next
    open); then the candidates whose decision instant is in ``(previous D, D]`` go through ``admit_entry``.
 
-Costs are separate cash lines (fee, spread, slippage) on raw prices; the nominal risk R of a trade is the gate's
-cost-inclusive risk at the actual fill. ``loss_beyond_nominal`` = max(0, -net PnL - R) and ``gap_loss`` (fills worse
-than the stop) are reported per trade and in total, never clipped. The wallet is reconciled at the end.
+Costs are separate cash lines (fee, spread, slippage) on raw prices. The nominal risk R of a trade is fixed at the
+decision: the gate's cost-inclusive risk of the admitted quantity at the collar price (``RiskDecision.risk_amount``
+of the admission), known before any fill and never larger than 0.5 % of the equity it was sized on; the risk at the
+actual fill price is recorded separately (``fill_risk``). An R measured at the fill swung up to ~3x with the fill
+price (review R2-F4). ``loss_beyond_nominal`` = max(0, -net PnL - R) and ``gap_loss`` (fills worse than the stop) are
+reported per trade and in total, never clipped. The wallet is reconciled at the end.
+
+Timing (review R2-F5, R2-F6, R1-F6). With a bar latency > 0 the decision instant ``D`` falls after the next open, so
+entries and adaptive actions run one full bar after their decision. This is a bar-resolution convention, not a
+measurement: it is a documented blocker of any non-synthetic run (H3-INDEPENDENT-REVIEWS.md). A stop tightened through
+the open at application is counted per trade (flag ``stop_through_open_at_action_application``, summary
+``action_application_gap_exits``). A kill switch and a pending market close execute only at an open at or after the
+decision that set them, and the kill switch is active for orders only from its decision instant.
+
+Pessimistic scenario (review R1-F10): fees, spread and slippage are multiplied by ``CostModel.pessimistic_multiplier``
+(``costs.cost_rates``), and so are adverse funding cash flows (credits are not scaled), as the pre-registration says.
 
 Injected failures (``FailurePlan``): entry order rejected; entry network error with the venue truth (filled or not,
 the client order id is the admission decision id, so a retry cannot double it); stop attachment failed (the position
 is unprotected until a fail-safe market close at the next open); stop or target modification failed (the old one is
-kept); close order rejected (the position stays protected). A modification that arrives after the stop already
-filled is refused as ``position_already_closed``.
+kept); close order rejected (the position stays protected); an action's network error with the venue truth (applied
+on the venue: the simulator applies it, so a retry cannot double a close); a stop replacement whose cancel succeeded
+and whose new order failed (``REPLACE_CANCELLED_PLACE_FAILED``, the cancel-then-place of ``TpSlTwoTargetsService``: the
+position is unprotected for the bar and closed by the fail-safe at the next open). A modification that arrives after
+the stop already filled is refused as ``position_already_closed``.
 
 Research prototype: no order, no exchange, no market data file, no Temporal or Symfony dependency.
 """
@@ -65,17 +85,20 @@ class FailureKind(str, enum.Enum):
     NETWORK_ERROR = 'network_error'
     PROTECTION_FAILED = 'protection_failed'
     MODIFICATION_FAILED = 'modification_failed'
+    REPLACE_CANCELLED_PLACE_FAILED = 'replace_cancelled_place_failed'
 
 
 _ENTRY_FAILURES = (FailureKind.ORDER_REJECTED, FailureKind.NETWORK_ERROR, FailureKind.PROTECTION_FAILED)
-_ACTION_FAILURES = (FailureKind.ORDER_REJECTED, FailureKind.NETWORK_ERROR, FailureKind.MODIFICATION_FAILED)
+_ACTION_FAILURES = (FailureKind.ORDER_REJECTED, FailureKind.NETWORK_ERROR, FailureKind.MODIFICATION_FAILED,
+                    FailureKind.REPLACE_CANCELLED_PLACE_FAILED)
 
 
 @dataclass(frozen=True)
 class InjectedFailure:
     """An entry failure names ``candidate_id``; an action failure names the position's ``candidate_id`` and the
     ``action_kind`` (the first such action of that position fails). ``filled_on_venue`` is the venue truth behind a
-    NETWORK_ERROR on an entry."""
+    NETWORK_ERROR (entry: the order filled; action: the venue applied it); it is refused with any other kind. A
+    REPLACE_CANCELLED_PLACE_FAILED failure names a TIGHTEN_STOP action."""
 
     kind: FailureKind
     candidate_id: str
@@ -85,6 +108,10 @@ class InjectedFailure:
     def __post_init__(self) -> None:
         allowed = _ENTRY_FAILURES if self.action_kind is None else _ACTION_FAILURES
         if self.kind not in allowed or self.action_kind is ActionKind.HOLD:
+            raise ContractError('h3_sim_failure_invalid')
+        if self.filled_on_venue and self.kind is not FailureKind.NETWORK_ERROR:
+            raise ContractError('h3_sim_failure_invalid')
+        if self.kind is FailureKind.REPLACE_CANCELLED_PLACE_FAILED and self.action_kind is not ActionKind.TIGHTEN_STOP:
             raise ContractError('h3_sim_failure_invalid')
 
 
@@ -144,6 +171,7 @@ class Trade:
     funding: Decimal
     net_pnl: Decimal
     nominal_risk: Decimal
+    fill_risk: Decimal
     realized_r: Decimal
     loss_beyond_nominal: Decimal
     gap_loss: Decimal
@@ -220,6 +248,10 @@ class VariantRunResult:
             'trades_beyond_nominal': sum(1 for t in trades if t.loss_beyond_nominal > 0),
             'gap_exits': sum(1 for t in trades if t.gap_through_stop),
             'liquidations': sum(1 for t in trades if t.liquidated),
+            'action_application_gap_exits': sum(1 for t in trades
+                                                if 'stop_through_open_at_action_application' in t.flags),
+            'fail_safe_closes': sum(1 for t in trades if t.exit_reason in ('fail_safe_unprotected',
+                                                                           'fill_recheck_failed')),
             'refusals': len(self.refusals), 'max_open_risk_fraction': wire_decimal(self.max_open_risk_fraction),
             'max_leverage': wire_decimal(self.max_leverage), 'kill_switch_ms': self.kill_switch_ms,
             'audit_records': len(self.audit), 'audit_head': self.audit.head_fingerprint(),
@@ -240,6 +272,7 @@ class _Position:
     stop: Decimal
     target: Decimal | None
     nominal_risk: Decimal
+    fill_risk: Decimal
     protected: bool
     mfe: Decimal
     mae: Decimal
@@ -253,6 +286,7 @@ class _Position:
     actions_applied: list[str] = field(default_factory=list)
     flags: list[str] = field(default_factory=list)
     pending_close: str | None = None
+    pending_close_ms: int = 0           # earliest open at which ``pending_close`` may execute
     closed_ms: int | None = None
     exit_intrabar: bool = False
     exit_reason: str | None = None
@@ -327,6 +361,7 @@ class _VariantSimulator:
         self.policy, self.gate = policy, gate
         self.rates = gate.rates
         self.assumptions = gate.config.assumptions
+        self.funding_scale = gate.config.cost_model.pessimistic_multiplier if self.assumptions.pessimistic else ONE
         self.scores = dict(scores or {})
         self.initial_equity, self.cash, self.quote_ccy = initial_equity, initial_equity, quote_ccy
         self.failures = list(failures.failures)
@@ -396,7 +431,7 @@ class _VariantSimulator:
         return PortfolioView(portfolio_id=self.portfolio_id, variant=self.variant, quote_ccy=self.quote_ccy,
                              clock=clock, equity=self.cash + unrealized, cash=self.cash, open_risk=open_risk,
                              open_notional=notional, open_position_ids=tuple(p.position_id for p in open_positions),
-                             kill_switch=self.kill_switch_ms is not None)
+                             kill_switch=self.kill_switch_ms is not None and self.kill_switch_ms <= clock.decision_ms)
 
     def _occupied(self, exclude: _PendingEntry | None = None) -> frozenset[str]:
         return frozenset([p.inst.inst_id for p in self._open()]
@@ -466,7 +501,7 @@ class _VariantSimulator:
                       initial_target=p.candidate.initial_target_price, final_target=p.target, exit_ms=p.closed_ms,
                       exit_reason=p.exit_reason, exits=tuple(p.exits), gross_pnl=p.gross, fees=p.fees,
                       spread_cost=p.spread, slippage_cost=p.slippage, funding=p.funding, net_pnl=net,
-                      nominal_risk=p.nominal_risk, realized_r=net / p.nominal_risk,
+                      nominal_risk=p.nominal_risk, fill_risk=p.fill_risk, realized_r=net / p.nominal_risk,
                       loss_beyond_nominal=max(ZERO, -net - p.nominal_risk), gap_loss=gap,
                       gap_through_stop=gap > 0, liquidated=p.liquidated, actions_applied=tuple(p.actions_applied),
                       flags=tuple(p.flags))
@@ -509,22 +544,36 @@ class _VariantSimulator:
             self._refuse(bar.open_ms, 'action_execution', action.action_id, ['action_already_applied'], header)
             return
         failure = self._take_failure(p.candidate.candidate_id, action.kind)
-        if failure is not None:
+        if failure is not None and failure.kind is FailureKind.REPLACE_CANCELLED_PLACE_FAILED:
+            # Cancel-then-place without rollback (TpSlTwoTargetsService): the old stop is cancelled, the new one is
+            # not placed. The position is unprotected (full notional at risk) until the fail-safe at the next open.
+            p.protected, p.pending_close, p.pending_close_ms = False, 'fail_safe_unprotected', bar.open_ms + 1
+            p.flag('stop_replacement_failed_unprotected')
+            self._refuse(bar.open_ms, 'action_execution', action.action_id,
+                         ['stop_replacement_failed_position_unprotected'], header)
+            return
+        venue_applied = failure is not None and failure.kind is FailureKind.NETWORK_ERROR and failure.filled_on_venue
+        if failure is not None and not venue_applied:
             reason = {FailureKind.MODIFICATION_FAILED: 'modification_failed_previous_order_kept',
                       FailureKind.NETWORK_ERROR: 'network_error_previous_state_kept',
                       FailureKind.ORDER_REJECTED: 'close_order_rejected_position_kept'}[failure.kind]
             p.flag(reason)
             self._refuse(bar.open_ms, 'action_execution', action.action_id, [reason], header)
             return
+        if venue_applied:  # the acknowledgement was lost but the venue applied it: venue truth, applied once
+            p.flag('action_reconciled_after_network_error')
         p.actions_applied.append(action.action_id)
         self.audit.record_private(header=header, event=AuditEvent.ACTION, kind='action_execution',
                                   subject_id=action.action_id,
                                   document={'action_id': action.action_id, 'kind': action.kind.value,
                                             'position_id': p.position_id, 'time_ms': bar.open_ms},
-                                  policy=action.policy, reasons=('applied',))
+                                  policy=action.policy,
+                                  reasons=('applied', 'reconciled_after_network_error') if venue_applied
+                                  else ('applied',))
         if action.kind is ActionKind.TIGHTEN_STOP and action.new_stop is not None:
             p.stop = action.new_stop
             if (bar.open - p.stop) * direction(p.side) <= 0:  # the new stop is already through the open
+                p.flag('stop_through_open_at_action_application')
                 self._exit(p, p.open_quantity, bar.open, 'stop_gap' if bar.open != p.stop else 'stop', bar.open_ms,
                            self.rates.stop, intrabar=False)
         elif action.kind is ActionKind.ADJUST_TARGET and action.new_target is not None:
@@ -538,7 +587,7 @@ class _VariantSimulator:
     def _market_close_at_open(self, p: _Position, bar: Bar) -> None:
         if p.closed_ms is not None:
             return
-        reason = p.pending_close
+        reason = p.pending_close if p.pending_close is not None and bar.open_ms >= p.pending_close_ms else None
         if reason is None and bar.open_ms - p.entry_ms >= p.candidate.max_holding_ms:
             reason = 'max_holding'
         if reason is not None:
@@ -546,56 +595,84 @@ class _VariantSimulator:
 
     def _fill_entry(self, pending: _PendingEntry, bar: Bar) -> None:
         candidate, admission = pending.candidate, pending.admission
+        side = candidate.header.side
+        assert side is not None and admission.quantity is not None
         clock = Clock(observed_ms=bar.open_ms, available_ms=bar.open_ms, decision_ms=bar.open_ms)
         header = dataclasses.replace(candidate.header, clock=clock, portfolio_id=self.portfolio_id)
         order = {'candidate_id': candidate.candidate_id, 'client_order_id': admission.decision_id,
-                 'side': candidate.header.side.value if candidate.header.side else None,
-                 'quantity': wire_decimal(admission.quantity or ZERO), 'type': 'ioc_limit',
+                 'side': side.value, 'quantity': wire_decimal(admission.quantity), 'type': 'ioc_limit',
                  'limit_price': wire_decimal(admission.price_reference), 'time_ms': bar.open_ms,
                  'attached_stop': wire_decimal(candidate.initial_stop_price)}
+        view = self._view(clock, exclude=pending)
+        # Pre-send checks: only what is known before the order leaves (review R2-F1). A refused order is never sent.
+        not_sent = [code for code, failed in (('kill_switch_active', view.kill_switch),
+                                              ('equity_non_positive', view.equity <= 0)) if failed]
+        if not_sent:
+            self._refuse(bar.open_ms, 'order', candidate.candidate_id, not_sent + ['order_not_sent'], header)
+            return
         failure = self._take_failure(candidate.candidate_id, None)
         if failure is not None and failure.kind is FailureKind.ORDER_REJECTED:
             self.audit.record_private(header=header, event=AuditEvent.ORDER, kind='order', document=order,
                                       subject_id=admission.decision_id, reasons=('entry_order_rejected',))
             self._refuse(bar.open_ms, 'order', candidate.candidate_id, ['entry_order_rejected'], header)
             return
-        if failure is not None and failure.kind is FailureKind.NETWORK_ERROR and not failure.filled_on_venue:
+        network = failure is not None and failure.kind is FailureKind.NETWORK_ERROR
+        if network and failure is not None and not failure.filled_on_venue:
             self.audit.record_private(header=header, event=AuditEvent.ORDER, kind='order', document=order,
                                       subject_id=admission.decision_id,
                                       reasons=('entry_network_error', 'reconciled_not_filled'))
             self._refuse(bar.open_ms, 'order', candidate.candidate_id,
                          ['entry_network_error', 'reconciled_not_filled'], header)
             return
-        view = self._view(clock, exclude=pending)
-        fill = self.gate.admit_fill(admission, candidate, bar.open, view)
-        self._record_decision(fill)
-        if fill.verdict is RiskVerdict.REJECT:
-            self._refuse(bar.open_ms, 'fill', candidate.candidate_id, fill.reasons, header)
-            return
-        assert fill.quantity is not None
-        order_reasons = ['entry_order_placed']
-        if failure is not None and failure.kind is FailureKind.NETWORK_ERROR:
-            order_reasons += ['entry_network_error', 'reconciled_filled_on_venue']
+        # The venue: an IOC limit at the collar fills at the open unless the open is beyond the collar. An IOC limit
+        # never fills beyond its price, whatever the injected venue truth says.
+        filled = (bar.open - admission.price_reference) * direction(side) <= 0
+        order_reasons = ['entry_order_placed'] + (['entry_network_error'] if network else [])
+        if not filled:
+            order_reasons += ['ioc_not_filled_beyond_collar'] + (['reconciled_not_filled'] if network else [])
+        elif network:
+            order_reasons += ['reconciled_filled_on_venue']
         self.audit.record_private(header=header, event=AuditEvent.ORDER, kind='order', document=order,
                                   subject_id=admission.decision_id, reasons=tuple(order_reasons))
+        fill = self.gate.admit_fill(admission, candidate, bar.open, view)
+        self._record_decision(fill)
+        if not filled:
+            self._refuse(bar.open_ms, 'fill', candidate.candidate_id, fill.reasons, header)
+            return
+        quantity, cv = admission.quantity, candidate.header.instrument.contract_value
         p = _Position(position_id=derived_id('pos', self.portfolio_id, candidate.fingerprint()), candidate=candidate,
                       admission=admission, fill=fill, entry_ms=bar.open_ms, entry_price=bar.open,
-                      initial_quantity=fill.quantity, open_quantity=fill.quantity,
+                      initial_quantity=quantity, open_quantity=quantity,
                       stop=candidate.initial_stop_price, target=candidate.initial_target_price,
-                      nominal_risk=fill.risk_amount, protected=True, mfe=bar.open, mae=bar.open)
-        if failure is not None and failure.kind is FailureKind.NETWORK_ERROR:
+                      nominal_risk=admission.risk_amount,
+                      fill_risk=self.gate.risk_of(side, bar.open, candidate.initial_stop_price, quantity, cv,
+                                                  candidate.max_holding_ms),
+                      protected=True, mfe=bar.open, mae=bar.open)
+        if network:
             p.flag('reconciled_after_network_error')
         if failure is not None and failure.kind is FailureKind.PROTECTION_FAILED:
-            p.protected, p.pending_close = False, 'fail_safe_unprotected'
+            p.protected, p.pending_close, p.pending_close_ms = False, 'fail_safe_unprotected', bar.open_ms + 1
             p.flag('protection_failed')
-        costs = leg_costs(fill.quantity * p.inst.contract_value, bar.open, self.rates.entry)
+        if self.kill_switch_ms is not None and self.flatten_on_kill_switch and p.pending_close is None:
+            # filled before a kill switch decided later in time but processed earlier (bar latency): flatten it too
+            p.pending_close, p.pending_close_ms = 'kill_switch_flatten', self.kill_switch_ms
+        costs = leg_costs(quantity * cv, bar.open, self.rates.entry)
         p.fees, p.spread, p.slippage = costs['fee'], costs['spread'], costs['slippage']
         self.cash -= costs['fee'] + costs['spread'] + costs['slippage']
         self.positions[p.position_id] = p
+        if fill.verdict is RiskVerdict.REJECT:
+            p.flag('fill_recheck_failed')
+            for reason in fill.reasons:
+                p.flag('fill_recheck.' + reason)
         self.audit.record_private(header=header, event=AuditEvent.FILL, kind='fill', subject_id=p.position_id,
                                   document={**order, 'position_id': p.position_id, 'price': wire_decimal(bar.open),
                                             'fee': wire_decimal(costs['fee']), 'protected': p.protected},
                                   reasons=tuple(p.flags) or ('filled',))
+        if fill.verdict is RiskVerdict.REJECT:
+            # Venue truth: the position exists. The re-check failed (filled through the stop, or the limits fail at
+            # the current equity): a reduce-only fail-safe market close at once, at the same open.
+            self._exit(p, p.open_quantity, bar.open, 'fill_recheck_failed', bar.open_ms, self.rates.close,
+                       intrabar=False)
 
     # ------------------------------------------------------------------------------------------ the bar
     def _intrabar(self, p: _Position, bar: Bar) -> None:
@@ -680,8 +757,8 @@ class _VariantSimulator:
             mark = self.marks.get(observation.inst_id, bar_open if bar_open is not None else p.entry_price)
             per_unit = funding_cashflow(p.side, ONE, mark, observation.rate)
             cv = p.inst.contract_value
-            if per_unit < 0:
-                amount = per_unit * high * cv
+            if per_unit < 0:  # adverse funding, scaled in the pessimistic scenario (credits are not)
+                amount = per_unit * high * cv * self.funding_scale
             else:
                 amount = per_unit * low * cv if exposure == 'certain' else ZERO
             if exposure == 'ambiguous' or low != high:
@@ -757,7 +834,8 @@ class _VariantSimulator:
         self.kill_switch_ms = decision_ms
         for p in self._open():
             if self.flatten_on_kill_switch and p.pending_close is None:
-                p.pending_close = 'kill_switch_flatten'
+                # executed at the first open at or after the kill-switch decision, never before it (review R2-F6)
+                p.pending_close, p.pending_close_ms = 'kill_switch_flatten', decision_ms
         if self.instruments:
             inst = self.instruments[sorted(self.instruments)[0]]
             source = next(c for c in self.candidates if c.header.instrument == inst).header

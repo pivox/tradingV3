@@ -14,6 +14,17 @@ or ``CRITERION_MET``. Secondary tests are always computed and published, but the
 verdict is ``CRITERION_MET`` (serial gatekeeping), with Holm over the four. Nothing here ranks comparisons by their
 result, and no verdict word means "profitable" or "validated": on synthetic or development data the report says so.
 
+Attribution (added at review R1-F1/R1-F2). A rejected secondary is not an attribution. S1 (B1 - B0) mixes the
+ranking value of the scorer with the effect of abstaining (B1 trades fewer candidates: under a negative-mean
+generator a coin-flip abstainer "beats" B0), and S2-S4 mix the exit rule with exposure and turnover. Without
+pre-declared matched controls (a random-abstention reference B0m with B1's acceptance rate over K lottery seeds, an
+exposure-matched static control), the hypotheses H3-A, H3-B and H3-C are therefore reported as
+``rejects_null_attribution_not_identified`` even when every test rejects; and serial gatekeeping on B3 cannot give
+the separate answers the mission asks for. Both are documented blockers (H3-INDEPENDENT-REVIEWS.md).
+
+Minimum information (review R1-F9): the effective-block guard applies to both primary series (P1 and P2, the
+binding one), and a secondary test whose series has too few effective blocks is not confirmatory.
+
 Seeds: each comparison's bootstrap seed is derived from the plan seed and the comparison id, so a result does not
 depend on the order of the calls.
 """
@@ -30,6 +41,12 @@ from .plan import DESCRIPTIVE_VS_CASH, PRIMARY_COMPONENTS, SECONDARY_FAMILY, Com
 from .records import CostScenario, VariantRun
 
 VERDICTS = ('INSUFFICIENT_EVIDENCE', 'CRITERION_NOT_MET', 'CRITERION_MET_GUARDS_FAILED', 'CRITERION_MET')
+#: Why no hypothesis can be attributed yet, whatever the tests say (reviews R1-F1, R1-F2).
+ATTRIBUTION_BLOCKERS = {
+    'H3-A_scoring': ('R1-F1_no_matched_random_abstention_control',),
+    'H3-B_adaptive': ('R1-F1_no_exposure_matched_static_control',),
+    'H3-C_combination': ('R1-F1_no_matched_abstention_or_exposure_control',),
+}
 FACTORIAL = (Variant.B0, Variant.B1, Variant.B2, Variant.B3)
 
 
@@ -122,7 +139,7 @@ def _instrument_net(run: VariantRun) -> dict[str, Decimal]:
 
 
 def guards(runs: Mapping[Variant, VariantRun], plan: StatisticalPlan, delta: Sequence[float],
-           pessimistic: Mapping[Variant, VariantRun] | None) -> dict:
+           pessimistic: Mapping[Variant, VariantRun] | None, absolute: Sequence[float] | None = None) -> dict:
     g = plan.guards
     b3, b0 = runs[Variant.B3], runs[Variant.B0]
     out: dict[str, dict] = {}
@@ -166,12 +183,16 @@ def guards(runs: Mapping[Variant, VariantRun], plan: StatisticalPlan, delta: Seq
               and worst3 is not None and worst3 >= g.worst_trade_floor_r)
     out['extreme_losses'] = {'passed': passed, 'es_b3_r': es3, 'es_b0_r': es0, 'worst_b3_r': worst3,
                              'reason': 'guard_passed' if passed else 'guard_tail_worse'}
-    # Minimum information.
+    # Minimum information, on both primary series (review R1-F9: P2, B3 against cash, carries the market regime and
+    # is the binding component in the power study).
     ess = st.effective_sample_size(delta) if delta else None
+    absolute = list(absolute) if absolute is not None else comparison_series(runs, PRIMARY_COMPONENTS[1], plan.block_ms)
+    ess_abs = st.effective_sample_size(absolute) if absolute else None
     passed = (len(delta) >= g.min_blocks and ess is not None and ess >= g.min_effective_blocks
+              and ess_abs is not None and ess_abs >= g.min_effective_blocks
               and len(b3.trades) >= g.min_trades_b3)
     out['minimum_information'] = {'passed': passed, 'blocks': len(delta), 'effective_blocks': ess,
-                                  'b3_trades': len(b3.trades),
+                                  'effective_blocks_absolute': ess_abs, 'b3_trades': len(b3.trades),
                                   'reason': 'guard_passed' if passed else 'guard_insufficient_information'}
     return out
 
@@ -207,7 +228,7 @@ def evaluate(runs: Mapping[Variant, VariantRun], plan: StatisticalPlan, *,
     primary_tests = {c.comparison_id: _test(series[c.comparison_id], plan, c.comparison_id, plan.alpha_primary)
                      for c in PRIMARY_COMPONENTS}
     primary_met = all(t['rejected'] for t in primary_tests.values())
-    guard_results = guards(runs, plan, delta, pessimistic)
+    guard_results = guards(runs, plan, delta, pessimistic, series[PRIMARY_COMPONENTS[1].comparison_id])
     if not guard_results['minimum_information']['passed']:
         verdict = 'INSUFFICIENT_EVIDENCE'
     elif not primary_met:
@@ -223,13 +244,22 @@ def evaluate(runs: Mapping[Variant, VariantRun], plan: StatisticalPlan, *,
     for key, test in secondary_tests.items():
         test['p_holm'] = adjusted[key]
         rejects = adjusted[key] <= plan.alpha_secondary
-        test['status'] = (('secondary_rejects_null' if rejects else 'secondary_does_not_reject_null')
-                          if confirmatory else 'secondary_exploratory_only_primary_not_met')
-    def supported(*keys: str) -> str:
+        ess_k = st.effective_sample_size(series[key]) if series[key] else None
+        test['effective_blocks'] = ess_k
+        if not confirmatory:
+            test['status'] = 'secondary_exploratory_only_primary_not_met'
+        elif ess_k is None or ess_k < plan.guards.min_effective_blocks:
+            test['status'] = 'secondary_insufficient_effective_blocks'
+        else:
+            test['status'] = 'secondary_rejects_null' if rejects else 'secondary_does_not_reject_null'
+
+    def supported(hypothesis: str, *keys: str) -> str:
         if not confirmatory:
             return 'not_confirmatory'
-        return 'supported' if all(secondary_tests[k]['status'] == 'secondary_rejects_null' for k in keys) \
-            else 'not_supported'
+        if not all(secondary_tests[k]['status'] == 'secondary_rejects_null' for k in keys):
+            return 'not_supported'
+        # every test rejects, but the effect is not attributable without matched controls (R1-F1)
+        return 'rejects_null_attribution_not_identified' if ATTRIBUTION_BLOCKERS[hypothesis] else 'supported'
     interaction = [b3 - b2 - b1 + b0 for b3, b2, b1, b0 in zip(
         *(mt.block_returns(runs[v], plan.block_ms) for v in (Variant.B3, Variant.B2, Variant.B1, Variant.B0)))]
     descriptive = {'interaction_b3_b2_b1_b0': _two_sided_interval(interaction, plan, 'interaction')}
@@ -245,8 +275,11 @@ def evaluate(runs: Mapping[Variant, VariantRun], plan: StatisticalPlan, *,
         'guards': guard_results,
         'secondary': {'gatekeeping': 'confirmatory_only_if_verdict_criterion_met', 'multiplicity': 'holm',
                       'alpha_family': plan.alpha_secondary, 'tests': secondary_tests},
-        'hypotheses': {'H3-A_scoring': supported('scoring'), 'H3-B_adaptive': supported('adaptation'),
-                       'H3-C_combination': supported('adaptation_after_scoring', 'scoring_with_adaptation')},
+        'hypotheses': {'H3-A_scoring': supported('H3-A_scoring', 'scoring'),
+                       'H3-B_adaptive': supported('H3-B_adaptive', 'adaptation'),
+                       'H3-C_combination': supported('H3-C_combination', 'adaptation_after_scoring',
+                                                     'scoring_with_adaptation')},
+        'attribution_blockers': {k: list(v) for k, v in ATTRIBUTION_BLOCKERS.items()},
         'descriptive': descriptive,
         'dependence': {'primary_difference': dependence_diagnostics(delta),
                        'b3_trades': trade_clustering(runs[Variant.B3], plan.block_ms),

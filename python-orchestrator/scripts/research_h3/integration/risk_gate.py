@@ -5,9 +5,12 @@ position size or to let an adaptive action change a position. Scoring never reac
 adaptive action never changes a position without it.
 
 Entry admission (``admit_entry``), in order:
-1. structural refusals: missing or non-protective stop, score for another candidate or a NO_TRADE score, candidate
-   from the future or older than ``max_candidate_age_ms``, settlement currency different from the portfolio's,
-   kill switch, non-positive equity, instrument already open or pending (or occupancy unknown: fail closed);
+1. structural refusals: missing or non-protective stop, stop or target off the tick grid (a venue would round them,
+   possibly away from the price, above the certified risk: review R2-F7), score for another candidate or a NO_TRADE
+   score, a scored variant (B1/B3) without a score or a score-blind variant (B0/B2) with one (``score_missing``,
+   ``score_not_expected``: review R2-F8), candidate from the future or older than ``max_candidate_age_ms``,
+   settlement currency different from the portfolio's, kill switch, non-positive equity, instrument already open or
+   pending (or occupancy unknown: fail closed);
 2. sizing, aligned with ``CanonicalRiskEngine``: the budget is ``min(0.5 % x equity, 1 % x equity - open risk)``,
    divided by the cost-inclusive loss of one contract at the stop (gross + entry and stop fees, spreads, slippage +
    adverse funding provision), floored to the lot size; then capped by leverage 1x (portfolio notional <= equity)
@@ -23,13 +26,18 @@ it; the simulator measures that excess separately and never clips it.
 
 Fill re-check (``admit_fill``): the entry quantity is fixed at admission; a fill beyond the collar is refused (the
 IOC limit would not fill), and at the actual fill price the limits are checked again against the current equity.
-A refused fill opens no position.
+A fill the venue made cannot be undone: when the re-check refuses a filled order (through the stop, or limits at the
+current equity), the simulator closes the position at once (``fill_recheck_failed``) instead of dropping it
+(review R2-F1). The R unit of a trade is the admission's ``risk_amount`` (at the collar, before the fill).
 
 Action validation (``validate_action``): the action must be for this exact ``PositionState`` (state fingerprint),
 for an open position, not already applied; a stop only tightens (strictly, on the tick grid, still protective
 against the last price); a target stays beyond the last price on the profit side; a partial close is on the lot grid,
 >= min size, strictly partial and leaves >= min size; the portfolio's open risk and notional never increase. With the
-kill switch on, only HOLD, TIGHTEN_STOP, PARTIAL_CLOSE and FULL_CLOSE are admitted.
+kill switch on, only HOLD, TIGHTEN_STOP, PARTIAL_CLOSE and FULL_CLOSE are admitted. This is a research rule, not
+TradingV3's: in production a kill switch makes ``OkxDemoWriteGate`` refuse every write, protective ones included
+(only the observability and max-notional reasons exempt protective writes), so only the venue-side stop protects an
+open position (review R2-F6; owner decision recorded in H3-DECISION.md).
 
 Position guard (defence in depth, added at integration): the gate can be given the adaptive engine's position-level
 checker (``adaptive.guards.check_action`` bound to its ``GuardParams``) as ``action_guard``, with a JSON-ready
@@ -37,7 +45,7 @@ checker (``adaptive.guards.check_action`` bound to its ``GuardParams``) as ``act
 and adds every guard violation as ``guard.<code>``, so an action is admitted only when both agree. The guard is
 injected (this module has no dependency on the adaptive package), and without it the gate and its fingerprint are
 unchanged. With the guard, the kill switch admits only HOLD and FULL_CLOSE (the guard's rule), stricter than the gate
-alone.
+alone, and still looser than production, which refuses every write under the kill switch.
 
 Idempotency: the same candidate (same fingerprint) for the same portfolio always returns the same decision object
 (same ``decision_id``); a different candidate reusing a candidate id is refused. The same action (same idempotency
@@ -57,7 +65,7 @@ from typing import Any
 from ..contracts import (
     H3_LIMITS, ONE, ZERO, ActionKind, AdaptiveAction, ContractError, CostModel, H3Limits, Header,
     OpportunityCandidate, OpportunityScore, PolicyRef, PortfolioView, PositionState, PositionStatus, RiskDecision,
-    RiskSubject, RiskVerdict, ScoreVerdict, Side, stop_is_protective, stop_tightens,
+    RiskSubject, RiskVerdict, ScoreVerdict, Side, Variant, stop_is_protective, stop_tightens,
 )
 from .costs import (
     CostRates, ExecutionAssumptions, config_fingerprint, cost_rates, derived_id, direction, entry_collar_price,
@@ -65,6 +73,7 @@ from .costs import (
 )
 
 RISK_DEFINITION = 'cost_inclusive_stop_loss.v1'
+SCORED_VARIANTS = (Variant.B1, Variant.B3)
 _RISK_REDUCING = (ActionKind.HOLD, ActionKind.TIGHTEN_STOP, ActionKind.PARTIAL_CLOSE, ActionKind.FULL_CLOSE)
 GUARD_REASON_PREFIX = 'guard.'
 
@@ -81,7 +90,7 @@ class H3RiskConfig:
     limits: H3Limits = H3_LIMITS
     max_candidate_age_ms: int | None = None
     policy_id: str = 'h3-risk-gate'
-    policy_version: str = '0.1.0'
+    policy_version: str = '0.2.0'   # 0.2.0: tick-grid and score/variant checks, fill-time venue truth (reviews)
 
     def __post_init__(self) -> None:
         if self.limits != H3_LIMITS:
@@ -192,6 +201,15 @@ class H3RiskGate:
             reasons.append('stop_missing')
         elif side is None or not stop_is_protective(side, entry, stop):
             reasons.append('stop_not_protective')
+        elif not on_grid(stop, inst.tick_size):
+            reasons.append('stop_not_on_tick')
+        target = getattr(candidate, 'initial_target_price', None)
+        if target is not None and not on_grid(target, inst.tick_size):
+            reasons.append('target_not_on_tick')
+        if score is None and portfolio.variant in SCORED_VARIANTS:
+            reasons.append('score_missing')
+        elif score is not None and portfolio.variant not in SCORED_VARIANTS:
+            reasons.append('score_not_expected')
         if score is not None:
             if score.candidate_id != candidate.candidate_id:
                 reasons.append('score_candidate_mismatch')

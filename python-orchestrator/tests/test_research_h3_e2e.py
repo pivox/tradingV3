@@ -184,8 +184,15 @@ def test_risk_caps_are_never_exceeded(result):
                 assert decision.open_risk_after <= D('0.01') * decision.equity
                 assert decision.leverage_after <= 1
         for trade in raw.trades:
+            # review R2-F4: R is the admission's risk at the collar, fixed before the fill; the fill-time risk is
+            # recorded apart and never larger for a fill inside the collar
+            admission = next(d for d in raw.risk_decisions if d.decision_id == trade.admission_decision_id)
             fill = next(d for d in raw.risk_decisions if d.decision_id == trade.fill_decision_id)
-            assert trade.nominal_risk == fill.risk_amount <= D('0.005') * fill.equity
+            assert trade.nominal_risk == admission.risk_amount <= D('0.005') * admission.equity
+            if fill.verdict is c.RiskVerdict.ADMIT:
+                assert trade.fill_risk == fill.risk_amount <= trade.nominal_risk
+            else:  # venue truth: a filled entry refused by the re-check is closed at once, never dropped
+                assert trade.exit_reason == 'fill_recheck_failed' and trade.exit_ms == trade.entry_ms
 
 
 def test_stops_are_never_widened_and_only_adaptive_variants_move_them(result):
@@ -251,13 +258,16 @@ def test_trade_translation_conventions(result):
             assert trade.decision_ms < trade.entry_ms               # fills at a bar open after the decision
 
 
-def test_pessimistic_scenario_scales_spread_and_slippage_in_gate_and_simulator(result):
+def test_pessimistic_scenario_scales_every_cost_component_in_gate_and_simulator(result):
     base = e2e.gate_factory(CostScenario.BASE, GuardParams())()
     pessimistic = e2e.gate_factory(CostScenario.PESSIMISTIC, GuardParams())()
     m = e2e.COST_MODEL.pessimistic_multiplier
     assert pessimistic.rates.entry.slippage == base.rates.entry.slippage * m
     assert pessimistic.rates.stop.spread == base.rates.stop.spread * m
-    assert pessimistic.rates.entry.fee == base.rates.entry.fee     # fees are contractual (D's rule)
+    # review R1-F10: fees and the adverse funding provision are scaled too, as the pre-registration states
+    assert pessimistic.rates.entry.fee == base.rates.entry.fee * m
+    assert pessimistic.rates.target.fee == base.rates.target.fee * m
+    assert pessimistic.rates.funding_provision_rate == base.rates.funding_provision_rate * m
     path = result.paths['fixture_model']
     for variant in path.runs:
         assert path.pessimistic_runs[variant].cost_scenario is CostScenario.PESSIMISTIC
@@ -373,3 +383,34 @@ def test_two_runs_are_identical(result):
             assert other.runs[variant].fingerprint() == run.fingerprint()
             assert other.raw[variant].audit.head_fingerprint() == path.raw[variant].audit.head_fingerprint()
         assert other.book_journal.head_fingerprint() == path.book_journal.head_fingerprint()
+
+
+# ------------------------------------------------------------------------------------- review responses (e2e)
+
+def test_review_r1_f3_capacity_free_labels_cover_the_book(result):
+    check = result.report['capacity_free_labels']
+    assert check['candidates'] == len(result.book.candidates) == len(result.labels)
+    b0_traded = len(result.paths['fixture_model'].runs[c.Variant.B0].trades)
+    assert check['labelled'] > b0_traded                      # capacity no longer selects the labelled sample
+    assert check['rank_ic_blocks']['capacity_free'] > check['rank_ic_blocks']['b0_labels']
+    assert sum(check['refused_alone'].values()) == check['candidates'] - check['labelled']
+
+
+def test_review_r1_f11_no_false_fill_realism_finding_on_exits(result):
+    for entry in result.report['paths'].values():
+        for counts in entry['convention_checks']['fill_realism_findings'].values():
+            assert 'fill_exit_outside_bar_range' not in counts and 'fill_exit_no_bar' not in counts
+
+
+def test_review_r2_f5_action_induced_gap_exits_are_published_per_variant(result):
+    variants = result.report['paths']['fixture_model']['variants']
+    for name, summary in variants.items():
+        assert 'refusal_reasons' in summary and summary['action_application_gap_exits'] >= 0
+        if name in ('B0', 'B1'):
+            assert summary['action_application_gap_exits'] == 0     # static exits never move a stop
+
+
+def test_review_r1_f1_hypotheses_are_never_reported_supported(result):
+    comparison = result.paths['fixture_model'].comparison
+    assert comparison is not None and 'supported' not in comparison['hypotheses'].values()
+    assert set(comparison['attribution_blockers']) == set(comparison['hypotheses'])

@@ -8,12 +8,22 @@ Rules (``check_use``):
 - consumed (or consumed-equivalent: same underlying price paths over the same period read on another product) data
   may serve development only, and only after the owner's explicit consent; never validation, holdout or
   prospective confirmation;
-- reserved data (fwd-okx-r1 W0-W2 and, for H3, any OKX price data of 2026-10-14 to 2026-10-31) are never read;
+- reserved data (fwd-okx-r1 W0-W2 and, for H3, any OKX price data of 2026-10-14 to 2026-10-31, widened at review
+  R1-F7 to any crypto price data of any venue over the same days: cross-venue paths of the same underlyings are the
+  same paths) are never read;
 - missing data cannot be used;
 - prospective data (collected on the target product after a freeze) is the only admissible confirmation;
 - possibly-independent data exist only off the target market (Binance, Hyperliquid, Kraken): at most development or
   transferability statistics, never a confirmation of an OKX Europe X-Perp claim.
 Conclusion: ``independent_historical_validation()`` returns INDEPENDENT_DATA_NOT_AVAILABLE.
+
+Review R1-F7 (2026-10-16). The rules above are checked by dataset id only: ``Provenance`` carries no underlying and
+no time window, so two datasets with different ids covering the same underlyings over the same days pass as
+independent. Until schema v2 adds (underlying set, venue/product, [start, end)) to ``Provenance`` and the training
+window to ``ModelManifest`` (an overlap rule in ``check_use`` and in the B1/B3 readiness), the table is made
+conservative instead: off-target windows that cover the consumed 2023-2026 paths are ``consumed_equivalent``, and
+the 2026-10-14..31 quarantine covers every venue. The id-only check remains a documented blocker of any
+non-synthetic run.
 """
 from __future__ import annotations
 
@@ -117,10 +127,16 @@ REGISTRY: tuple[DatasetEntry, ...] = (
     _binance('binance-h1-sb-listings', 'klines 1m/1h/1d + funding', '240 listings, index, controls',
              'events 2023-09-16 to 2026-07-03', 'H1 S_B Gate 1 and Gate 2',
              (R + 'H1-SB-GATE1-RESULT.md', R + 'H1-GATE2-RESULT.md')),
-    _binance('binance-other-intraday', 'intraday klines, ticks, OI metrics',
-             'symbols and weeks outside every list above', '2019 onwards',
-             'unread per the documents (not exhaustively proven)', (R + 'RESEARCH-CAMPAIGN-STATUS.md',),
-             DatasetStatus.POSSIBLY_INDEPENDENT),
+    _binance('binance-other-intraday-2019-2022', 'intraday klines, ticks, OI metrics',
+             'symbols and weeks outside every list above (top-50 daily paths 2020-2023 were read by regime-r2)',
+             '2019 to 2022-12-31', 'unread per the documents (not exhaustively proven)',
+             (R + 'RESEARCH-CAMPAIGN-STATUS.md',), DatasetStatus.POSSIBLY_INDEPENDENT),
+    _binance('binance-other-intraday-2023-to-2026-10-13', 'intraday klines, ticks, OI metrics',
+             'symbols and weeks outside every list above', '2023-01-01 to 2026-10-13',
+             'never read itself; the same underlyings over the same period were read through OKX USDT swaps '
+             '(193 series) and the Binance lists above (review R1-F7)',
+             (R + 'RESEARCH-CAMPAIGN-STATUS.md', P + 'research-swing-v2-okx-2026-10-14.md'),
+             DatasetStatus.CONSUMED_EQUIVALENT),
     DatasetEntry('okx-swap-swingv2-2023-2026', 'okx_global_usdt_swap', 'klines 1m + funding', '193 series (363 families)',
                  '2023-01 to 2026-10-12T16Z', 'swing v2 OKX (#500)', C, DEV, 'OKX market-data terms not documented',
                  (P + 'research-swing-v2-okx-2026-10-14.md', R + 'RESEARCH-CAMPAIGN-STATUS.md')),
@@ -146,9 +162,15 @@ REGISTRY: tuple[DatasetEntry, ...] = (
     DatasetEntry('okx-any-2026-10-14-to-2026-10-31', 'okx_all_products', 'any price data', 'all instruments',
                  '2026-10-14 to 2026-10-31', 'H3 calendar quarantine around fwd-okx-r1 (same price paths)',
                  DatasetStatus.RESERVED, H3Use.NEVER, 'not documented', (R + 'RESEARCH-CAMPAIGN-STATUS.md',)),
+    DatasetEntry('any-venue-2026-10-14-to-2026-10-31', 'all_venues', 'any crypto price data (klines, ticks, books, '
+                 'funding)', 'all instruments of every venue', '2026-10-14 to 2026-10-31',
+                 'H3 quarantine widened across venues at review R1-F7 (same underlyings, same paths as W0-W2)',
+                 DatasetStatus.RESERVED, H3Use.NEVER, 'n/a', (R + 'H3-INDEPENDENT-REVIEWS.md',)),
     DatasetEntry('okx-xperp-metadata', TARGET_MARKET, 'instrument specs, tickers, one funding and book snapshot',
-                 '160 crypto X-Perps', '2026-10-14/15 snapshots', 'H1 X-Perp audit, H2 prerequisites (no returns)',
-                 C, DEV, 'not documented',
+                 '160 crypto X-Perps', '2026-10-14/15 snapshots',
+                 'H1 X-Perp audit, H2 prerequisites (no returns); its tickers, funding and book snapshot are price '
+                 'data inside the quarantine (review R1-F7): never used by H3; specs to be re-fetched after 10-31',
+                 DatasetStatus.RESERVED, H3Use.NEVER, 'not documented',
                  (R + 'H1-XPERP-LISTING-INVENTORY.md', R + 'TRADABLE-INSTRUMENT-UNIVERSE.md')),
     DatasetEntry('okx-xperp-history-2026-03-30-to-2026-10-12', TARGET_MARKET,
                  'klines 1m (history-candles) + funding history', '160 crypto X-Perps (29 >= 1 M USD/day)',
@@ -165,12 +187,15 @@ REGISTRY: tuple[DatasetEntry, ...] = (
                  'OKX terms to be checked before capture', (R + 'H1-NEXT-DECISION.md', R + 'RESEARCH-ELIGIBILITY-GATES.md')),
     DatasetEntry('okx-europe-spot', 'okx_europe_spot', 'any', 'EUR/USDC pairs', 'unknown', 'nobody',
                  DatasetStatus.MISSING, H3Use.NOT_AVAILABLE, 'not verified', (R + 'TRADABLE-INSTRUMENT-UNIVERSE.md',)),
-    DatasetEntry('hyperliquid-public', 'hyperliquid_perp', 'API candles, S3 books and fills', 'USDC perps',
-                 'archive', 'unread except run15', DatasetStatus.POSSIBLY_INDEPENDENT, H3Use.STATISTICS_ONLY_OFF_TARGET,
-                 'not documented', (R + 'FRANCE-EXCHANGE-ELIGIBILITY.md', R + 'TRADABLE-INSTRUMENT-UNIVERSE.md')),
-    DatasetEntry('kraken-futures-public', 'kraken_futures', 'public history', 'perpetuals',
-                 'EEA product since 2025-05-20', 'unread', DatasetStatus.POSSIBLY_INDEPENDENT,
-                 H3Use.STATISTICS_ONLY_OFF_TARGET, 'not verified', (R + 'H2-FEASIBILITY-REVIEW.md',)),
+    DatasetEntry('hyperliquid-public-to-2026-10-13', 'hyperliquid_perp', 'API candles, S3 books and fills',
+                 'USDC perps', 'archive to 2026-10-13',
+                 'unread except run15; the same underlyings over the same period were read on OKX swaps and Binance '
+                 '(review R1-F7)', DatasetStatus.CONSUMED_EQUIVALENT, DEV, 'not documented',
+                 (R + 'FRANCE-EXCHANGE-ELIGIBILITY.md', R + 'TRADABLE-INSTRUMENT-UNIVERSE.md')),
+    DatasetEntry('kraken-futures-public-to-2026-10-13', 'kraken_futures', 'public history', 'perpetuals',
+                 'EEA product 2025-05-20 to 2026-10-13',
+                 'unread; the same underlyings over the same period were read on OKX swaps and Binance (review R1-F7)',
+                 DatasetStatus.CONSUMED_EQUIVALENT, DEV, 'not verified', (R + 'H2-FEASIBILITY-REVIEW.md',)),
     DatasetEntry('coinbase-eea-history', 'coinbase_eea', 'history', 'perpetual-style futures', 'since 2026-03',
                  'unread, availability unverified', DatasetStatus.MISSING, H3Use.NOT_AVAILABLE, 'not verified',
                  (R + 'TRADABLE-INSTRUMENT-UNIVERSE.md',)),

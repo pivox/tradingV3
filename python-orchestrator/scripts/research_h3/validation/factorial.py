@@ -13,6 +13,14 @@ By construction:
 - B1 and B3 receive the scored entries: TRADE_CANDIDATE scores in the scorer's rank order; NO_TRADE candidates are
   refusals at the ``score`` stage.
 
+By check, before any variant runs (added at review R2-F3): every factory-built risk gate exposes a ``policy``
+(``PolicyRef``) equal to the expected risk policy, the same for the four variants; under BASE costs the expected
+policy is ``manifest.risk_policy``, and a PESSIMISTIC replay must name its own (``risk_policy=``), so no variant can
+run under a looser gate without the harness refusing it; the B1/B3 readiness verdict of the scoring model
+(``scoring.model.scored_variant_readiness``) must be given and empty whenever the manifest names a non-synthetic
+dataset (and must be empty when given); every candidate's and snapshot's provenance must be one of
+``manifest.datasets``.
+
 By check, after every variant run: the run reports the same candidate book and market fingerprints, the same
 candidate ids, its own variant and portfolio id; the book and market fingerprints recomputed from the shared objects
 are unchanged (no variant mutated a shared input). The test suite adds the behavioural proofs: running the variants
@@ -33,9 +41,9 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 from ..contracts import (
-    H3_LIMITS, Bar, CandidateProvider, CostModel, ExperimentManifest, FeatureSnapshot, FundingObservation, H3Limits,
-    ManagementPolicy, ModelManifest, OpportunityCandidate, OpportunityScore, OpportunityScorer, Quote, RiskGate,
-    ScoreVerdict, Variant, canonical_json, sha256_text,
+    H3_LIMITS, Bar, CandidateProvider, CostModel, DataLabel, ExperimentManifest, FeatureSnapshot, FundingObservation,
+    H3Limits, ManagementPolicy, ModelManifest, OpportunityCandidate, OpportunityScore, OpportunityScorer, PolicyRef,
+    Quote, RiskGate, ScoreVerdict, Variant, canonical_json, sha256_text,
 )
 from .records import CostScenario, RefusalRecord, RefusalStage, VariantRun
 
@@ -298,6 +306,28 @@ class FactorialResult:
     candidate_book_fingerprint: str
     market_fingerprint: str
     order: tuple[Variant, ...]
+    risk_policy: PolicyRef | None = None
+
+
+def _check_inputs(manifest: ExperimentManifest, book: CandidateBook, cost_scenario: CostScenario,
+                  risk_policy: PolicyRef | None, scored_readiness: Sequence[str] | None) -> PolicyRef:
+    """Review R2-F3: the risk policy, the B1/B3 readiness and the data provenance of what is about to run."""
+    if cost_scenario is CostScenario.PESSIMISTIC and risk_policy is None:
+        raise FactorialError('factorial_pessimistic_risk_policy_required')
+    expected = manifest.risk_policy if risk_policy is None else risk_policy
+    if cost_scenario is CostScenario.BASE and expected != manifest.risk_policy:
+        raise FactorialError('factorial_manifest_risk_policy_mismatch')
+    real = any(p.label is not DataLabel.SYNTHETIC for p in manifest.datasets)
+    if scored_readiness is None and real:
+        raise FactorialError('factorial_scored_readiness_required')
+    if scored_readiness:
+        raise FactorialError('factorial_scored_variants_not_ready')
+    datasets = set(manifest.datasets)
+    if any(c.header.provenance not in datasets for c in book.candidates):
+        raise FactorialError('factorial_candidate_provenance_not_in_manifest')
+    if any(s.header.provenance not in datasets for s in book.snapshots):
+        raise FactorialError('factorial_snapshot_provenance_not_in_manifest')
+    return expected
 
 
 def _check_manifest(manifest: ExperimentManifest, book: CandidateBook, static_policy: ManagementPolicy,
@@ -319,10 +349,15 @@ def run_factorial(*, manifest: ExperimentManifest, book: CandidateBook, market: 
                   adaptive_policy: ManagementPolicy, risk_gate_factory: Callable[[], RiskGate],
                   simulator_factory: Callable[[], VariantSimulator], start_ms: int, end_ms: int,
                   cost_scenario: CostScenario = CostScenario.BASE,
-                  order: Sequence[Variant] = FACTORIAL) -> FactorialResult:
+                  order: Sequence[Variant] = FACTORIAL, risk_policy: PolicyRef | None = None,
+                  scored_readiness: Sequence[str] | None = None) -> FactorialResult:
+    """``risk_policy``: the risk policy every gate must carry (default ``manifest.risk_policy``; required for a
+    PESSIMISTIC replay). ``scored_readiness``: the scoring model's B1/B3 readiness reasons (empty when runnable);
+    required as soon as the manifest names a non-synthetic dataset."""
     if tuple(sorted(order, key=lambda v: v.value)) != FACTORIAL:
         raise FactorialError('factorial_order_not_a_permutation')
     _check_manifest(manifest, book, static_policy, adaptive_policy, model)
+    expected_risk = _check_inputs(manifest, book, cost_scenario, risk_policy, scored_readiness)
     book_fp, market_fp = book.fingerprint(), market.fingerprint()
     if market_fp != market.fingerprint_at_construction:
         raise FactorialError('factorial_shared_input_mutated')
@@ -335,6 +370,8 @@ def run_factorial(*, manifest: ExperimentManifest, book: CandidateBook, market: 
         gate, simulator = risk_gate_factory(), simulator_factory()
         if any(gate is g for g in gates) or any(simulator is s for s in simulators):
             raise FactorialError('factorial_component_shared_between_variants')
+        if getattr(gate, 'policy', None) != expected_risk:
+            raise FactorialError('factorial_gate_risk_policy_mismatch')
         gates.append(gate)
         simulators.append(simulator)
         portfolio_id = portfolio_id_for(manifest.experiment_id, variant)
@@ -361,4 +398,4 @@ def run_factorial(*, manifest: ExperimentManifest, book: CandidateBook, market: 
         runs[variant] = run
         specs[variant] = spec
     return FactorialResult(runs=runs, specs=specs, scores=scores, candidate_book_fingerprint=book_fp,
-                           market_fingerprint=market_fp, order=tuple(order))
+                           market_fingerprint=market_fp, order=tuple(order), risk_policy=expected_risk)

@@ -45,8 +45,11 @@ class ExecutionAssumptions:
     - ``target_fill`` 'trade_through': a resting target fills only when the bar trades strictly beyond it. The
       research portfolio simulator fills on touch; 'touch' is kept for cross-tests only. Trade-through is the
       conservative choice and avoids favouring policies that move targets closer (B2/B3).
-    - ``pessimistic``: when true, spread and slippage (uncertain estimates) are multiplied by
-      ``CostModel.pessimistic_multiplier``; fees are contractual and are not scaled.
+    - ``pessimistic``: when true, every cost component is multiplied by ``CostModel.pessimistic_multiplier``: fees,
+      spread, slippage, the adverse funding provision (here) and adverse funding cash flows (in the simulator), as the
+      pre-registration and the factorial harness state. Until review R1-F10 fees were not scaled (D's original rule:
+      fees are contractual); the stricter reading was adopted so that the pessimistic guard is the one
+      pre-registered.
     - ``mmr_proxy_rate`` 0.005 and ``liquidation_fee_rate`` 0.001: DRAFT synthetic proxies, the same orders of
       magnitude as the research portfolio simulator's fixtures; at 1x they only matter for a short after a ~+99 % move.
     - ``entry_collar_rate`` 0.001: DRAFT. The entry is an IOC limit at reference x (1 +/- collar) on the tick grid;
@@ -116,7 +119,7 @@ def cost_rates(cost_model: CostModel, assumptions: ExecutionAssumptions) -> Cost
     slippage = cost_model.slippage_rate * scale
 
     def fee(role: str) -> Decimal:
-        return cost_model.maker_fee_rate if role == 'maker' else cost_model.taker_fee_rate
+        return (cost_model.maker_fee_rate if role == 'maker' else cost_model.taker_fee_rate) * scale
 
     def market(role: str) -> LegRates:
         return LegRates(fee=fee(role), spread=spread, slippage=slippage)
@@ -124,7 +127,7 @@ def cost_rates(cost_model: CostModel, assumptions: ExecutionAssumptions) -> Cost
     return CostRates(entry=market(assumptions.entry_role), stop=market(assumptions.stop_role),
                      target=LegRates(fee=fee(assumptions.target_role), spread=ZERO, slippage=ZERO),
                      close=market(assumptions.close_role),
-                     funding_provision_rate=assumptions.funding_provision_rate,
+                     funding_provision_rate=assumptions.funding_provision_rate * scale,
                      funding_interval_ms=assumptions.funding_interval_ms)
 
 

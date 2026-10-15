@@ -110,8 +110,19 @@ def _bar_at(bars: Sequence[Bar], ms: int) -> Bar | None:
     return ending
 
 
+def _bars_at_boundary(bars: Sequence[Bar], ms: int) -> list[Bar]:
+    """Bars an exit stamped at ``ms`` may belong to: the bar containing it and, when ``ms`` is a bar boundary, the
+    bar ending there. The simulator stamps an intrabar exit (stop, target) at its bar's ``close_ms`` and an exit at an
+    open at that bar's ``open_ms``; both instants are the same boundary (exit-time convention fixed at review R1-F11,
+    backlog #14). Before, the bar ending there was ignored and every intrabar exit gave a false finding."""
+    return [b for b in bars if b.open_ms <= ms < b.close_ms or b.close_ms == ms]
+
+
 def fill_realism_findings(trades: Sequence[TradeRecord], bars_by_inst: Mapping[str, Sequence[Bar]],
                           volume_share: Decimal = VOLUME_SHARE_DRAFT) -> list[dict]:
+    """Entries fill at a bar open (the bar containing the entry instant). An exit on a bar boundary is realistic when
+    its price is inside the range of the bar ending there (an intrabar fill) or of the bar starting there (a fill at
+    the open)."""
     findings = []
     for t in trades:
         bars = bars_by_inst.get(t.inst_id, ())
@@ -119,14 +130,18 @@ def fill_realism_findings(trades: Sequence[TradeRecord], bars_by_inst: Mapping[s
             better = t.exit_price > t.final_stop_price if t.side is Side.LONG else t.exit_price < t.final_stop_price
             if better:
                 findings.append({'candidate_id': t.candidate_id, 'reason': 'fill_stop_better_than_stop'})
-        for label, ms, price in (('entry', t.entry_ms, t.entry_price), ('exit', t.exit_ms, t.exit_price)):
-            bar = _bar_at(bars, ms)
-            if bar is None:
-                findings.append({'candidate_id': t.candidate_id, 'reason': f'fill_{label}_no_bar'})
-            elif not bar.low <= price <= bar.high:
-                findings.append({'candidate_id': t.candidate_id, 'reason': f'fill_{label}_outside_bar_range'})
-            elif label == 'entry' and bar.volume_quote > 0 and t.notional_at_entry > volume_share * bar.volume_quote:
-                findings.append({'candidate_id': t.candidate_id, 'reason': 'fill_size_above_volume_share'})
+        bar = _bar_at(bars, t.entry_ms)
+        if bar is None:
+            findings.append({'candidate_id': t.candidate_id, 'reason': 'fill_entry_no_bar'})
+        elif not bar.low <= t.entry_price <= bar.high:
+            findings.append({'candidate_id': t.candidate_id, 'reason': 'fill_entry_outside_bar_range'})
+        elif bar.volume_quote > 0 and t.notional_at_entry > volume_share * bar.volume_quote:
+            findings.append({'candidate_id': t.candidate_id, 'reason': 'fill_size_above_volume_share'})
+        candidates = _bars_at_boundary(bars, t.exit_ms)
+        if not candidates:
+            findings.append({'candidate_id': t.candidate_id, 'reason': 'fill_exit_no_bar'})
+        elif not any(b.low <= t.exit_price <= b.high for b in candidates):
+            findings.append({'candidate_id': t.candidate_id, 'reason': 'fill_exit_outside_bar_range'})
     return findings
 
 

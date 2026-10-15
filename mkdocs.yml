@@ -151,6 +151,8 @@ nav:
           - "H3 — risk and execution": research/H3-RISK-AND-EXECUTION.md
           - "H3 — pre-registration (DRAFT, not frozen)": research/H3-PREREGISTRATION-DRAFT.md
           - "H3 — implementation plan (DRAFT)": research/H3-IMPLEMENTATION-PLAN.md
+          - "H3 — independent reviews": research/H3-INDEPENDENT-REVIEWS.md
+          - "H3 — decision": research/H3-DECISION.md
       - "Research eligibility gates M1–M5": research/RESEARCH-ELIGIBILITY-GATES.md
       - "État des campagnes de recherche (2026-10-15)": research/RESEARCH-CAMPAIGN-STATUS.md
       - "Diagnostic infrastructure H2 (disque, swap) 2026-10-15": research/RESEARCH-INFRA-DIAGNOSTIC.md

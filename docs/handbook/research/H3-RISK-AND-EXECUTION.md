@@ -37,8 +37,12 @@ Candidate Provider ──► Opportunity Scoring ──► Risk Admission ──
 
 **How the separations are enforced in code (not only by convention):**
 
-- **Positions come only from the gate.** `run_variant` opens a position only from an ADMIT `RiskDecision` issued by
-  the gate, followed by an ADMIT from `admit_fill` at the actual fill price.
+- **Positions come only from the gate.** `run_variant` sends an order only for an ADMIT `RiskDecision` issued by
+  the gate, and only when the kill switch is off and the equity positive at the open. Since review R2-F1 a filled
+  order is venue truth: when `admit_fill` refuses it at the actual fill price (through the stop, or limits at the
+  current equity), the position is closed at once by a reduce-only fail-safe (`fill_recheck_failed`) instead of being
+  dropped, and the ORDER is journalled before the re-check. The R unit of the trade is the admission's
+  `risk_amount` (at the collar, before the fill: review R2-F4); the fill-time risk is kept as `fill_risk`.
 - **Scores are inputs to the gate, not orders.** The gate refuses a candidate with a NO_TRADE score or a score for
   another candidate. A score never changes the size (tested).
 - **The policy only returns a value.** `PositionState` is a frozen copy built from bars with
@@ -139,8 +143,13 @@ and the research portfolio simulator. Consequences:
 - a partial close is on the lot grid, at least `min_size`, strictly partial, and leaves at least `min_size`;
 - open risk and notional never increase. This is checked again even though the contract already forbids it.
 
-Under the kill switch only HOLD, TIGHTEN_STOP, PARTIAL_CLOSE and FULL_CLOSE pass. This mirrors the OKX demo gate,
-where protective writes are allowed and entry and take-profit writes are not.
+Under the kill switch only HOLD, TIGHTEN_STOP, PARTIAL_CLOSE and FULL_CLOSE pass. **Correction (independent review
+R2-F6, 2026-10-16):** this is a research rule and does *not* mirror the OKX demo gate. In TradingV3 a kill switch adds
+`kill_switch_enabled` (`DemoTradingSafetyPolicyEvaluator`), and `OkxDemoWriteGate` exempts protective writes only
+from the observability and max-notional reasons, so every write is refused under the kill switch, reduce-only closes
+included: only the venue-side stop protects an open position. Whether H3 keeps closes allowed under the kill switch,
+or models them as refused, is an owner decision ([H3-DECISION.md](H3-DECISION.md)). Since the review, a kill-switch
+flatten executes only at an open at or after the kill-switch decision.
 
 **Fail closed.** The gate refuses with `portfolio_occupancy_unknown` when it cannot know which instruments are open
 (no `open_instruments` given while positions exist).

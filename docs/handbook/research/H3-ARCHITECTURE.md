@@ -30,6 +30,11 @@ the question yet, for three reasons:
   [H3-DATA-ELIGIBILITY.md](H3-DATA-ELIGIBILITY.md)), and the test procedure is not validated
   (`procedure_validated = False`).
 
+Two independent reviews (2026-10-16) found further blockers in the design itself (attribution without matched
+controls, execution timing, data independence checked by id only) and several defects in the code, most of them now
+fixed: [H3-INDEPENDENT-REVIEWS.md](H3-INDEPENDENT-REVIEWS.md). The status and the proposed next protocol are in
+[H3-DECISION.md](H3-DECISION.md).
+
 ## 2. Components
 
 All code lives under `python-orchestrator/scripts/research_h3/`. It uses the standard library only (Decimal
@@ -92,7 +97,7 @@ candidate book and the market stream, both fingerprinted and checked unchanged a
   pure-Python statistics on weekly portfolio blocks: circular block bootstrap, self-normalised and batch-means tests,
   effective sample size, Ljung-Box and design effect. These are in `validation/stats.py` and cross-checked.
 
-**Added.** The five packages above, 6 test modules (343 tests), 8 H3 pages and this nav group. At integration, three
+**Added.** The five packages above, 7 test modules (368 tests after the reviews), 10 H3 pages and this nav group. At integration, three
 changes were made to agent code, each with an unchanged default:
 
 - `run_variant(entry_priority=...)`. D's simulator ordered the candidates of one instant by id, so the scorer's rank
@@ -136,7 +141,7 @@ in `tests/test_research_h3_e2e.py`.
 | Convention | Status |
 |---|---|
 | Costs single-sourced | The adapter refuses a gate whose `CostModel` is not the spec's. The simulator charges the costs the gate sized for. |
-| `pessimistic_multiplier` | Applied under `CostScenario.PESSIMISTIC` through `ExecutionAssumptions.pessimistic`, with the scenario cross-checked. **Divergence:** D scales spread and slippage only (fees are contractual), while C's harness docstring says "every cost component". Backlog. |
+| `pessimistic_multiplier` | Applied under `CostScenario.PESSIMISTIC` through `ExecutionAssumptions.pessimistic`, with the scenario cross-checked. **Aligned at review R1-F10:** fees, spread, slippage, the funding provision and adverse funding cash flows are all scaled, as C's harness and the pre-registration state (D first scaled spread and slippage only). |
 | Mark-to-market at block edges | D marks every bar boundary, so every block edge on the bar grid is a mark (tested). The last point is the wallet after the end-of-data closes. |
 | One gate and one simulator per variant | Enforced by `run_factorial`. The adapter also refuses being run twice. |
 | MFE/MAE post-fill | Holds: D fills at a bar open, so the entry bar is entirely post-fill. Clarified in the `PositionState` docstring. |
@@ -144,9 +149,10 @@ in `tests/test_research_h3_e2e.py`.
 | Entry priority | Was lost (D ordered by id). Fixed with `entry_priority`; rank order at the gate is tested. |
 | Funding sign, gap excess, R | Translated: C's `funding` (paid > 0) = -D's cash flow; `gap_excess` = D's `loss_beyond_nominal`; `initial_risk` = D's cost-inclusive nominal risk. |
 | Scorer costs vs simulator costs | **Divergence, documented.** A's `cost_r` assumes taker on both legs plus the observed quote spread. D charges a maker fee on a resting target and a flat half-spread (`ExecutionAssumptions`). In the example the scorer's cost is the higher of the two (synthetic). A's training label is GROSS R over the gross stop distance (`validation_adapter.gross_r_label`), not C's `r_multiple` (net over cost-inclusive risk). |
-| B's guard in D's gate | Wired as defence in depth: `guards.check_action` is injected, D's checks are kept, and violations are added as `guard.<code>`. The guard identity is part of the risk `PolicyRef`. One semantic difference: with the guard, a kill switch admits only HOLD/FULL_CLOSE (B, mirroring `OkxDemoWriteGate`), while D alone also admits TIGHTEN/PARTIAL. The stricter rule wins; the owner decides. |
-| Intrabar exit time | **Finding.** D stamps an intrabar exit at the bar's `close_ms`. C's fill-realism check assigns that instant to the next bar, which gives false `fill_exit_outside_bar_range` findings. Backlog. |
-| Execution timing | **Finding.** An entry decided after a boundary (latency > 0) fills at the next bar open, a full 1-hour bar after its reference price. In the example the 10 bp IOC collar refuses about 40 % of fills (synthetic). This needs a protocol decision (sub-bar execution, or a reference price at the fill). |
+| B's guard in D's gate | Wired as defence in depth: `guards.check_action` is injected, D's checks are kept, and violations are added as `guard.<code>`. The guard identity is part of the risk `PolicyRef`. One semantic difference: with the guard, a kill switch admits only HOLD/FULL_CLOSE (B), while D alone also admits TIGHTEN/PARTIAL. The stricter rule wins. **Correction (review R2-F6):** neither mirrors TradingV3, where `OkxDemoWriteGate` refuses every write under the kill switch, reduce-only closes included; the owner decides the H3 rule. |
+| Intrabar exit time | **Fixed at review (R1-F11).** D stamps an intrabar exit at the bar's `close_ms`; C's fill-realism check now accepts an exit on a boundary when its price lies in the bar ending there or the bar starting there. The false `fill_exit_outside_bar_range` findings are gone (tested). |
+| Execution timing | **Documented blocker (R1-F6, R2-F5).** An entry or an adaptive action decided after a boundary (latency > 0) runs at the next bar open, a full 1-hour bar after its decision. In the example the 10 bp IOC collar refuses about 43 % of entry attempts and every B2/B3 gap exit is action-induced (synthetic). Refusal reasons and action-induced gap exits are now published per variant; the rule itself is an owner decision (sub-bar execution, or a reference price at the fill). |
+| Fill re-check and R | **Fixed at review (R2-F1, R2-F4).** A filled order is venue truth: a fill refused by the re-check is closed at once (`fill_recheck_failed`, C's `ExitReason.FAIL_SAFE`), never dropped, and the ORDER is journalled first. The R unit is the admission's risk at the collar, fixed before the fill. |
 
 ## 6. End-to-end synthetic example
 
@@ -209,18 +215,22 @@ Everything else waits for a schema 2.
 | 4 | Unit of `PositionState.volatility` | B | Today producers set None; the state classifier can only use "known or not" |
 | 5 | Protection status (live / replacing / absent) on `PositionState` | B | A stop replacement on OKX is cancel-then-place (`TpSlTwoTargetsService`): the policy must see an unprotected window; D tracks it privately |
 | 6 | Failed-attempt count / retry budget on `PositionState` | B | A failed modification is invisible to the policy today |
-| 7 | Numeric half-spread and funding provision in `CostModel` (CR-1), and one rule for `pessimistic_multiplier` (fees scaled or not) | D (+ integrator) | Today in `ExecutionAssumptions`; the scorer and the simulator do not share one spread source; D and C state different multiplier scopes |
+| 7 | Numeric half-spread and funding provision in `CostModel` (CR-1) | D (+ integrator) | Today in `ExecutionAssumptions`; the scorer and the simulator do not share one spread source. The multiplier scope was settled at review R1-F10 (every component) |
 | 8 | `PortfolioView.open_instruments` (CR-2) | D | Occupancy is passed beside the view; without it the gate fails closed |
 | 9 | Order type and limit price on `RiskDecision` (CR-3) | D | The IOC collar price is carried as `price_reference` |
 | 10 | Portfolio-level audit header (CR-4) | D | Kill-switch and data-refusal records borrow an instrument header |
 | 11 | Validation records (`TradeRecord`, `RefusalRecord`, `EquityPoint`, `VariantRun`) in `contracts` | C | They cross the validation/integration seam (the adapter) |
 | 12 | `ExperimentManifest.statistical_plan_fingerprint` and the prospective window | C | Bind an experiment to its plan and to its data window |
-| 13 | `ExitReason` values for fail-safe close, gap and liquidation proxy | integrator | `fail_safe_unprotected` maps to KILL_SWITCH; stop, gap and liquidation share STOP |
-| 14 | One intrabar exit-time convention (or an `exit_bar_open_ms` field) | integrator | Section 5: false fill-realism findings |
+| 13 | `ExitReason` values for gap and liquidation proxy | integrator | `FAIL_SAFE` was added to C's records at review (fail-safe and fill re-check closes); stop, gap and liquidation still share STOP |
+| 14 | ~~One intrabar exit-time convention~~ | integrator | Settled at review R1-F11 (boundary rule in `fill_realism_findings`); an explicit `exit_bar_open_ms` field would still be cleaner |
 | 15 | An execution-timing rule (sub-bar fill or a reference price at fill time) | integrator | Section 5: next-bar-open fills against a 10 bp collar |
 | 16 | Kill-switch action semantics (D: risk-reducing; B: HOLD/FULL_CLOSE) | integrator | Two rules exist; the guard makes the stricter win |
 | 17 | Gross stop distance on the trade record (the scorer's label unit) | integrator | A's label is gross R; C's `r_multiple` is net over cost-inclusive risk |
 | 18 | Per-settlement funding lines on D's `Trade` | integrator | `funding_events` is recomputed with C's rule; D's boundary handling (adverse-possible charged) is not visible |
+| 19 | A stable intent key for adaptive actions (position, kind, intent sequence) as client order id, and an unresolved-order status on `PositionState` | review R2-F2 | The action id derives from the state snapshot, so a retried close gets a new id and cannot be deduplicated on a venue. The simulator now honours the venue truth of an action's network error; a live port needs the key (and live modification stays forbidden, B4) |
+| 20 | Underlying set, venue/product and `[start, end)` on `Provenance`; training window and standardisation cutoff on `ModelManifest`; an (underlying x time) overlap rule in `registry.check_use` and the B1/B3 readiness | review R1-F7 | Independence is checked by dataset id only; the registry was made conservative meanwhile |
+| 21 | Scenario-specific risk policies in `ExperimentManifest`, and `risk_policy_fingerprint` on `VariantRun` | review R2-F3 | `run_factorial` now checks every gate against the manifest's (BASE) or a declared (PESSIMISTIC) risk policy; the pessimistic policy is not yet anchored in the manifest |
+| 22 | Matched-control variants (B0m random abstention, exposure-matched static) in the `Variant` enum | review R1-F1 | Needed to attribute S1-S4; `Variant` is a wire enum |
 
 ## 8. Parallel organisation
 
@@ -246,25 +256,29 @@ resolved by renaming the dossiers to the candidate-source dossiers **CS-FUND, CS
 They answer "which explicit economic hypothesis feeds the common candidate generator"; they are not H3
 sub-hypotheses.
 
-The independent reviews and the decision record are separate pages, to be added by a later step.
+The independent reviews and the decision record are separate pages:
+[H3-INDEPENDENT-REVIEWS.md](H3-INDEPENDENT-REVIEWS.md) and [H3-DECISION.md](H3-DECISION.md).
 
 ## 9. Code digest
 
 **Method.** Take every file under `python-orchestrator/scripts/research_h3/`, excluding `__pycache__` and `*.pyc`.
 Build the sorted list of `[path relative to python-orchestrator, sha256 hex of the file bytes]`, serialise it as
 canonical JSON (keys sorted, no whitespace), and take `"sha256:" + sha256(that JSON)`. The function is
-`scripts.research_h3.e2e.code_digest()`; the example's `ExperimentManifest.code_digest` is that value. The digest
-covers 39 files.
+`scripts.research_h3.e2e.code_digest()`; the example's `ExperimentManifest.code_digest` is that value.
 
-**Value at the integration commit:**
+**Value at the integration commit `c10a2a2b`** (39 files):
 `sha256:ba4b13227413643843d6a0b9acd2b96c6f2d56ddbf4deb9062329aec79855a36`.
+
+**Value after the review responses** (40 files, `integration/label_replay.py` added):
+`sha256:b3814531a127d82475b405ef51b5f4bdd1821a73b0cdc2112aee2b1023ee8500`.
 
 ## 10. Checks run at integration
 
-- **Tests.** `tests/test_research_h3_*.py`: 343 passed, 0 failed (Python 3.12.3; CI runs 3.11). This includes 19
-  e2e tests.
+- **Tests.** `tests/test_research_h3_*.py`: 343 passed, 0 failed at integration; **368 passed, 0 failed after the
+  review responses** (Python 3.12.3; CI runs 3.11), including 23 e2e tests and the new
+  `test_research_h3_reviews.py`.
 - **Python 3.11 grammar.** Every file under `research_h3` and every H3 test module parses with
-  `feature_version=(3, 11)` (44 files).
+  `feature_version=(3, 11)` (44 files at integration, 46 after the reviews).
 - **Golden vectors.** `python -m scripts.research_h3.scoring.parity` prints `golden vectors: OK`.
 - **Docs.** `mkdocs build --strict` passes.
 - **Runtime untouched.** The diff against `origin/main` lists only new H3 files and the `mkdocs.yml` nav. No runtime

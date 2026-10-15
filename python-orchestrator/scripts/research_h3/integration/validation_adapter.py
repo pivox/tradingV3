@@ -9,9 +9,9 @@ Conventions the two sides assumed, checked or translated here (H3-ARCHITECTURE.m
 - costs are single-sourced in D's gate: ``spec.risk_gate`` must be an ``H3RiskGate`` whose ``CostModel`` is exactly
   ``spec.cost_model``; the simulator charges what the gate sized for;
 - cost scenario: under ``CostScenario.PESSIMISTIC`` the gate's ``ExecutionAssumptions.pessimistic`` must be true (and
-  false under BASE), so ``CostModel.pessimistic_multiplier`` scales spread and slippage in the simulator and in the
-  sizing alike. Fees are contractual and are not scaled (D's rule); the factorial docstring's "every cost component"
-  is the stricter wording, recorded as a divergence in the schema v2 backlog;
+  false under BASE), so ``CostModel.pessimistic_multiplier`` scales fees, spread, slippage and adverse funding in the
+  simulator and in the sizing alike, as the factorial docstring and the pre-registration state (aligned at review
+  R1-F10; before, D left fees unscaled);
 - entry order: ``spec.entries`` priorities (scorer rank for B1/B3, seeded lottery for B0/B2) are passed to the
   simulator as ``entry_priority``, so the risk budget is spent in that order;
 - the period: bars with ``start_ms <= open_ms`` and ``close_ms <= end_ms``, settlements with
@@ -20,7 +20,8 @@ Conventions the two sides assumed, checked or translated here (H3-ARCHITECTURE.m
   bar grid. The curve gets a first point (``start_ms``, initial equity) and its last point (``end_ms``) is the
   wallet after the end-of-data closes, with no open position;
 - trades: funding sign flips (D: cash flow, positive received; C: positive paid); ``gap_excess`` is D's
-  ``loss_beyond_nominal``; ``initial_risk`` is D's cost-inclusive nominal risk at the fill; ``exit_price`` is the last
+  ``loss_beyond_nominal``; ``initial_risk`` is D's nominal risk, the admission's cost-inclusive risk at the collar
+  (fixed before the fill, review R2-F4); ``exit_price`` is the last
   exit fill; ``funding_events`` counts settlements with ``entry_ms < funding_ms <= exit_ms`` (C's coverage rule);
 - refusals: one record per candidate that did not trade (entry refusal -> RISK, order or fill refusal -> EXECUTION,
   end of data -> EXPIRED), plus the harness's score-stage refusals unchanged. Action-level refusals stay in D's
@@ -43,13 +44,15 @@ from ..validation.records import (
 from .risk_gate import H3RiskGate
 from .simulator import FailurePlan, Refusal, Trade, VariantRunResult, run_variant
 
-#: D exit reasons -> C exit reasons. ``fail_safe_unprotected`` (a forced market close after a failed stop attachment)
-#: has no C value in schema v1; it maps to KILL_SWITCH, the other safety close (schema v2 backlog).
+#: D exit reasons -> C exit reasons. The safety closes ``fail_safe_unprotected`` (stop not attached, or lost in a
+#: cancel-then-place replacement) and ``fill_recheck_failed`` (a filled entry refused by the re-check at its fill
+#: price) map to FAIL_SAFE, added at review (until then the first mapped to KILL_SWITCH). Stop, gap and liquidation
+#: proxy still share STOP (schema v2 backlog #13).
 EXIT_REASONS: dict[str, ExitReason] = {
     'stop': ExitReason.STOP, 'stop_gap': ExitReason.STOP, 'liquidation_proxy': ExitReason.STOP,
     'target': ExitReason.TARGET, 'max_holding': ExitReason.TIME_EXPIRY, 'full_close': ExitReason.ADAPTIVE_CLOSE,
-    'kill_switch_flatten': ExitReason.KILL_SWITCH, 'fail_safe_unprotected': ExitReason.KILL_SWITCH,
-    'end_of_data': ExitReason.END_OF_DATA,
+    'kill_switch_flatten': ExitReason.KILL_SWITCH, 'fail_safe_unprotected': ExitReason.FAIL_SAFE,
+    'fill_recheck_failed': ExitReason.FAIL_SAFE, 'end_of_data': ExitReason.END_OF_DATA,
 }
 _EXPIRY_REASONS = ('after_end_of_data', 'end_of_data_pending_entry')
 _CANDIDATE_STAGES = {'entry': RefusalStage.RISK, 'order': RefusalStage.EXECUTION, 'fill': RefusalStage.EXECUTION}

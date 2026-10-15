@@ -50,8 +50,8 @@ def cand(entry='100', stop='99', target=None, *, side=LONG, decision_ms=T0 + H, 
 
 
 def view(equity='500', cash=None, open_risk='0', open_notional='0', ids=(), kill=False, decision_ms=T0 + H,
-         pid='pf-B0', quote='USDC'):
-    return c.PortfolioView(portfolio_id=pid, variant=c.Variant.B0, quote_ccy=quote, clock=s.clock(decision_ms),
+         pid='pf-B0', quote='USDC', variant=c.Variant.B0):
+    return c.PortfolioView(portfolio_id=pid, variant=variant, quote_ccy=quote, clock=s.clock(decision_ms),
                            equity=D(equity), cash=D(cash or equity), open_risk=D(open_risk),
                            open_notional=D(open_notional), open_position_ids=tuple(ids), kill_switch=kill)
 
@@ -191,11 +191,17 @@ def test_score_gating_and_structural_refusals():
                                   status=c.ScoreStatus.UNESTIMATED, verdict=verdict, expected_net_r=None,
                                   p_stop=None, tail_loss_r=None, uncertainty=D('1'), data_quality=D('1'),
                                   utility=None, rank=None, reasons=reasons)
-    assert gate().admit_entry(cand(), score(c.ScoreVerdict.NO_TRADE), view()).reasons == ('score_verdict_no_trade',)
-    assert gate().admit_entry(cand(), score(c.ScoreVerdict.NO_TRADE, cid='x'), view()).reasons == (
+    b1 = view(pid='pf-B1', variant=c.Variant.B1)
+    assert gate().admit_entry(cand(), score(c.ScoreVerdict.NO_TRADE), b1).reasons == ('score_verdict_no_trade',)
+    assert gate().admit_entry(cand(), score(c.ScoreVerdict.NO_TRADE, cid='x'), b1).reasons == (
         'score_candidate_mismatch',)
-    scored = gate().admit_entry(cand(), score(c.ScoreVerdict.TRADE_CANDIDATE, reasons=()), view())
+    scored = gate().admit_entry(cand(), score(c.ScoreVerdict.TRADE_CANDIDATE, reasons=()), b1)
     assert scored.quantity == gate().admit_entry(cand(), None, view()).quantity  # a score never changes the size
+    # review R2-F8: a scored portfolio never admits an unscored candidate; a score-blind one never receives a score
+    assert gate().admit_entry(cand(), None, b1).reasons == ('score_missing',)
+    assert gate().admit_entry(cand(), None, view(pid='pf-B3', variant=c.Variant.B3)).reasons == ('score_missing',)
+    assert gate().admit_entry(cand(), score(c.ScoreVerdict.TRADE_CANDIDATE, reasons=()), view()).reasons == (
+        'score_not_expected',)
     assert gate().admit_entry(cand(decision_ms=T0 + 2 * H), None, view()).reasons == ('candidate_from_future',)
     assert gate(max_candidate_age_ms=0).admit_entry(cand(decision_ms=T0), None, view()).reasons == (
         'candidate_stale',)
@@ -608,7 +614,11 @@ def test_tradingcore_map_matches_the_contracts_and_the_php_sources():
     for row in tm.FIELD_MAP:
         if row.php_class is not None:
             source = (root / tm.PHP_CLASSES[row.php_class]).read_text()
-            assert re.search(r'\$' + row.php_field + r'\b', source), row
+            # review R2-F11: this research test reads PHP sources; a failure here means a TradingCore property was
+            # renamed or removed, not that production is broken: update the research map, not the PHP
+            assert re.search(r'\$' + row.php_field + r'\b', source), (
+                f'H3 research map out of date: ${row.php_field} not found in {tm.PHP_CLASSES[row.php_class]}; '
+                'update FIELD_MAP in python-orchestrator/scripts/research_h3/integration/tradingcore_map.py', row)
     for gap in tm.BLOCKING_GAPS:
         assert all((root / path).exists() for path in gap.evidence), gap.gap_id
     assert {'GAP-XPERP', 'GAP-STOP-REPLACE', 'GAP-ADAPTIVE-TRANSITIONS'} <= set(tm.gap_ids())

@@ -9,6 +9,8 @@ Fake/Paper Execution -> Adaptive Management -> Risk Validation -> Audit. In this
 - ``audit``: ``AuditJournal`` (``contracts.AuditSink``), append-only hash chain per experiment and variant;
 - ``candidates``: ``SyntheticCandidateProvider`` (``contracts.CandidateProvider``), no economic claim;
 - ``tradingcore_map``: H3 contract fields -> PHP canonical DTO fields, and the blocking gaps.
+- ``label_replay``: ``capacity_free_labels``, every candidate replayed alone for capacity-free labels (added at
+  review R1-F3);
 - ``validation_adapter``: ``RunVariantSimulator``, ``run_variant`` behind the validation harness's ``VariantSimulator``
   protocol (added at integration; imported explicitly, not re-exported, so this package does not import ``validation``).
 

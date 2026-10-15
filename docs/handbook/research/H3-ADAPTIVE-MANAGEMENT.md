@@ -322,6 +322,16 @@ where it is modelled as atomic and labelled as an assumption.
 A pessimistic simulation variant in which every TIGHTEN_STOP fails is a useful bound: V1 then reduces to the static
 stop plus its partial and full closes.
 
+**After the independent review (2026-10-16).** The non-atomic case is now injectable in the simulator:
+`FailureKind.REPLACE_CANCELLED_PLACE_FAILED` cancels the old stop, fails the new one, leaves the position unprotected
+for the bar (counted at full notional) and closes it by the fail-safe at the next open (R2-F12). Two further review
+findings concern this policy as measured: the simulator feeds `LiquidityStatus.UNKNOWN`, so with
+`defer_partial_unless_liquidity_normal` the partial-close branch never fires and B2/B3 measure a **trail-and-target
+policy only** (R2-F9); and every adaptive action applies one bar after its decision at hourly bars, so a trail
+validated against a one-hour-old close can become a gap exit at the next open (R2-F5, counted per trade as
+`stop_through_open_at_action_application`). Both are recorded in
+[H3-INDEPENDENT-REVIEWS.md](H3-INDEPENDENT-REVIEWS.md).
+
 **Prerequisites before any live use** (owner decisions, none started here):
 
 - either an amend-in-place endpoint confirmed for the target product (OKX Europe X-Perps), with a test showing that

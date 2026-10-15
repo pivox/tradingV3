@@ -3,10 +3,13 @@ verdict also requires the economic test (B1 - B0, ``compare``), and reports ``ra
 the ranking looks good but the portfolio does not improve.
 
 Labels. The outcome of a candidate is its net R under the static reference management (B0 policy), produced by a
-consistent replay of that candidate: never the best exit seen afterwards. ``join_scores_outcomes`` takes it from a
-B0 run; a candidate B0 did not trade (risk budget, execution) has no label and is counted as ``unlabelled`` (a
-capacity-free label replay with the B0 policy removes that selection; the simulator owns it). A score must be known
-before the trade it labels: a score decided after the entry is refused.
+consistent replay of that candidate: never the best exit seen afterwards. ``join_scores_labels`` takes it from the
+capacity-free replay (``integration.label_replay``, added at review R1-F3): every candidate replayed alone, so its
+label does not depend on the portfolio's capacity or on the other candidates. This is the label source of the C4
+checks and of any training. ``join_scores_outcomes`` takes it from a B0 run; there a candidate B0 did not trade (risk
+budget, execution) has no label and is counted as ``unlabelled`` (222 of 273 in the synthetic example, so the
+per-instant rank test cannot run): use it for the economic translation only. A score must be known before the trade
+it labels: a score decided after the entry is refused.
 
 Groups fixed without future data. Bucket edges come from ``walkforward.FrozenEdges``: either fixed a priori in the
 protocol, or fitted on training rows only and applied to rows decided at or after the fit cutoff.
@@ -68,6 +71,30 @@ def join_scores_outcomes(scores: Sequence[OpportunityScore], label_run: VariantR
             p_stop=None if score.p_stop is None else float(score.p_stop),
             realised_r=None if trade is None else float(trade.r_multiple),
             stopped=None if trade is None else trade.exit_reason is ExitReason.STOP))
+    return rows
+
+
+def join_scores_labels(scores: Sequence[OpportunityScore],
+                       labels: Mapping[str, tuple[float | None, bool | None]]) -> list[ScoredOutcome]:
+    """Join scores with capacity-free labels (added at review R1-F3): ``labels`` maps every candidate id to
+    (realised R, stopped) from a replay of that candidate alone (``integration.label_replay``), so the label of a
+    candidate does not depend on the portfolio's capacity or on the other candidates. This is the label source the
+    DRAFT protocol requires for training and for the C4 checks; ``join_scores_outcomes`` (B0 labels) stays for the
+    economic translation only. Every scored candidate must have an entry (a refused replay maps to (None, None))."""
+    seen = set()
+    rows = []
+    for score in scores:
+        if score.candidate_id in seen:
+            raise ScoringCheckError('scoring_duplicate_score')
+        seen.add(score.candidate_id)
+        if score.candidate_id not in labels:
+            raise ScoringCheckError('scoring_label_missing_for_candidate')
+        realised, stopped = labels[score.candidate_id]
+        rows.append(ScoredOutcome(
+            candidate_id=score.candidate_id, decision_ms=score.header.clock.decision_ms,
+            inst_id=score.header.instrument.inst_id, status=score.status, verdict=score.verdict,
+            value=_score_value(score), p_stop=None if score.p_stop is None else float(score.p_stop),
+            realised_r=realised, stopped=stopped))
     return rows
 
 

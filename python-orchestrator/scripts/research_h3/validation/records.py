@@ -37,6 +37,10 @@ class ExitReason(str, enum.Enum):
     ADAPTIVE_CLOSE = 'adaptive_close'    # FULL_CLOSE action of the management policy
     KILL_SWITCH = 'kill_switch'
     END_OF_DATA = 'end_of_data'
+    # Added at review (R2-F1, R2-F12; schema v2 backlog #13): a reduce-only market close forced by a safety rule, not
+    # by a policy: the stop could not be attached or was lost in a cancel-then-place replacement, or a filled entry
+    # failed the risk re-check at its fill price (venue truth: closed at once, never dropped).
+    FAIL_SAFE = 'fail_safe'
 
 
 class RefusalStage(str, enum.Enum):
@@ -103,7 +107,10 @@ class TradeRecord(Contract):
         for count in (self.funding_events, self.partial_exits, self.actions_applied):
             if isinstance(count, bool) or count < 0:
                 raise ContractError('validation_trade_count_invalid')
-        if not stop_is_protective(self.side, self.entry_price, self.initial_stop_price):
+        if not stop_is_protective(self.side, self.entry_price, self.initial_stop_price) and not (
+                self.exit_reason is ExitReason.FAIL_SAFE and self.exit_ms == self.entry_ms):
+            # The only exception: an entry the venue filled through its stop (a gap at the fill), closed at once by
+            # the fail-safe at its fill instant; the trade exists and its costs are counted (review R2-F1).
             raise ContractError('validation_trade_stop_not_protective')
         if not stop_not_wider(self.side, self.initial_stop_price, self.final_stop_price):
             raise ContractError('validation_trade_stop_widened')

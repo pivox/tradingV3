@@ -54,6 +54,7 @@ from .integration import (
     AuditJournal, ExecutionAssumptions, H3RiskConfig, H3RiskGate, SyntheticCandidateProvider, VariantRunResult,
     synthetic_snapshot,
 )
+from .integration.label_replay import CandidateLabel, capacity_free_labels, label_mapping
 from .integration.validation_adapter import RunVariantSimulator, gross_r_label
 from .scoring import ScoringEngine, build_snapshot, reference_null_manifest, scored_variant_readiness
 from .scoring.features import derived_features
@@ -61,6 +62,7 @@ from .scoring.fixtures import synthetic_fixture_manifest
 from .synthetic import DRAFT_PROTOCOL, HOUR_MS, SYNTHETIC_PROVENANCE, T0_MS
 from .validation import adaptive_checks
 from .validation import metrics as mt
+from .validation import scoring_checks
 from .validation.compare import evaluate
 from .validation.factorial import (
     ADAPTIVE, CandidateBook, DecisionInput, FactorialResult, MarketStream, VariantSpec, build_candidate_book,
@@ -345,6 +347,7 @@ class E2EResult:
     data_refusals: tuple[DataRefusal, ...]
     paths: dict[str, PathResult]
     report: dict[str, Any]
+    labels: dict[str, CandidateLabel] = field(default_factory=dict)
 
 
 def _manifest(experiment_id: str, book: CandidateBook, model: ModelManifest, static: StaticPolicy,
@@ -452,10 +455,14 @@ def run_e2e() -> E2EResult:
     raw_by_scenario: dict[CostScenario, dict[Variant, VariantRunResult]] = {}
     for scenario in (CostScenario.BASE, CostScenario.PESSIMISTIC):
         simulators = _SimulatorFactory()
+        make_gate = gate_factory(scenario, adaptive.guard_params)
+        # review R2-F3: the harness checks every gate against the declared risk policy (the manifest's under BASE
+        # costs, the pessimistic gate's own under PESSIMISTIC) and needs the B1/B3 readiness verdict
         results[scenario] = run_factorial(
             manifest=manifest, book=book, market=market, scorer=scorer, model=fixture, static_policy=static,
-            adaptive_policy=adaptive, risk_gate_factory=gate_factory(scenario, adaptive.guard_params),
-            simulator_factory=simulators, start_ms=start_ms, end_ms=end_ms, cost_scenario=scenario)
+            adaptive_policy=adaptive, risk_gate_factory=make_gate, simulator_factory=simulators,
+            start_ms=start_ms, end_ms=end_ms, cost_scenario=scenario, risk_policy=make_gate().policy,
+            scored_readiness=readiness)
         raw_by_scenario[scenario] = simulators.results()
     base, pessimistic = results[CostScenario.BASE], results[CostScenario.PESSIMISTIC]
     comparison = evaluate(base.runs, E2E_PLAN, manifest=manifest, pessimistic=pessimistic.runs)
@@ -464,7 +471,11 @@ def run_e2e() -> E2EResult:
                                         raw_by_scenario[CostScenario.PESSIMISTIC],
                                         _book_journal(manifest.experiment_id, book, refusals, base.scores),
                                         comparison, ())
-    result = E2EResult(market=market, book=book, data_refusals=refusals, paths=paths, report={})
+    # review R1-F3: capacity-free labels, every candidate replayed alone under the static (B0) policy
+    labels = capacity_free_labels(book.candidates, market.bars, policy=static, funding=market.funding,
+                                  gate_factory=gate_factory(CostScenario.BASE, adaptive.guard_params),
+                                  quote_ccy=QUOTE_CCY, experiment_id='h3-e2e-label-replay')
+    result = E2EResult(market=market, book=book, data_refusals=refusals, paths=paths, report={}, labels=labels)
     result.report = build_report(result)
     return result
 
@@ -513,8 +524,14 @@ def _run_summary(run: VariantRun, raw: VariantRunResult) -> dict[str, Any]:
     summary = mt.summarize(run, block_ms=E2E_PLAN.block_ms, top_trades_share=E2E_PLAN.guards.top_trades_share,
                            tail_quantile=E2E_PLAN.guards.tail_quantile,
                            stability_periods=E2E_PLAN.guards.stability_periods)
+    raw_summary = raw.summary()
     return {'label': LABEL, 'run_fingerprint': run.fingerprint(), 'trades': len(run.trades),
             'refusals_by_stage': _status_counts([r.stage.value for r in run.refusals]),
+            # reviews R1-F6 / R2-F5: refusal reasons (collar refusals included) and action-induced gap exits are
+            # published per variant, because the execution-timing convention can select trades
+            'refusal_reasons': _status_counts([x for r in run.refusals for x in r.reasons]),
+            'action_application_gap_exits': raw_summary['action_application_gap_exits'],
+            'fail_safe_closes': raw_summary['fail_safe_closes'],
             'exit_reasons': _status_counts([t.exit_reason.value for t in run.trades]),
             'synthetic_net_pnl': wire_decimal(run.net_pnl), 'synthetic_metrics': summary,
             'risk': risk_checks(raw), 'stops': stop_checks(raw),
@@ -549,6 +566,33 @@ def cost_convention_check(path: PathResult, book: CandidateBook) -> dict[str, An
                     'flat half-spread; R = gross stop distance in both columns'}
 
 
+def label_check(result: E2EResult) -> dict[str, Any]:
+    """Capacity-free labels against B0 labels (review R1-F3). Descriptive, synthetic."""
+    labels = result.labels
+    if not labels:
+        return {'status': 'not_computed'}
+    per_instant: dict[int, int] = {}
+    for label in labels.values():
+        if label.traded:
+            per_instant[label.decision_ms] = per_instant.get(label.decision_ms, 0) + 1
+    out: dict[str, Any] = {
+        'label': LABEL, 'candidates': len(labels), 'labelled': sum(1 for x in labels.values() if x.traded),
+        'refused_alone': _status_counts([x.refusal_reasons[0] for x in labels.values() if not x.traded]),
+        'instants_with_3_or_more_labels': sum(1 for n in per_instant.values() if n >= 3)}
+    path = result.paths.get('fixture_model')
+    if path is not None:
+        start, _ = experiment_period()
+        rows = scoring_checks.join_scores_labels(path.scores, label_mapping(labels))
+        b0_rows = scoring_checks.join_scores_outcomes(path.scores, path.runs[Variant.B0])
+        rank = scoring_checks.rank_ic_test(rows, start_ms=start, block_ms=E2E_PLAN.block_ms, alpha=0.05,
+                                           procedure=E2E_PLAN.test_procedure, resamples=E2E_PLAN.resamples)
+        b0_rank = scoring_checks.rank_ic_test(b0_rows, start_ms=start, block_ms=E2E_PLAN.block_ms, alpha=0.05,
+                                              procedure=E2E_PLAN.test_procedure, resamples=E2E_PLAN.resamples)
+        out['rank_ic_blocks'] = {'capacity_free': rank['n'], 'b0_labels': b0_rank['n']}
+        out['b0_unlabelled'] = scoring_checks.abstention(b0_rows)['unlabelled']
+    return out
+
+
 def build_report(result: E2EResult) -> dict[str, Any]:
     report: dict[str, Any] = {
         'schema': 'h3.e2e_report/1', 'label': LABEL,
@@ -560,6 +604,7 @@ def build_report(result: E2EResult) -> dict[str, Any]:
         'data_refusals': {'count': len(result.data_refusals),
                           'reasons': _status_counts([r for x in result.data_refusals for r in x.reasons[:1]])},
         'paths': {},
+        'capacity_free_labels': label_check(result),
     }
     for name, path in result.paths.items():
         entry: dict[str, Any] = {

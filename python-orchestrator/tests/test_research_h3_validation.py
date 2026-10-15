@@ -291,7 +291,10 @@ def test_strong_combined_effect_meets_the_primary_criterion_with_guards():
     result = cp.evaluate(runs, FAST_PLAN, pessimistic=pessimistic)
     assert result['primary']['met'] and result['verdict'] == 'CRITERION_MET', result['guards']
     assert result['secondary']['tests']['adaptation_after_scoring']['status'] == 'secondary_rejects_null'
-    assert result['hypotheses']['H3-C_combination'] == 'supported'
+    # review R1-F1: every test rejects, yet the effect cannot be attributed without matched controls
+    assert result['hypotheses']['H3-C_combination'] == 'rejects_null_attribution_not_identified'
+    assert 'supported' not in result['hypotheses'].values()
+    assert result['attribution_blockers']['H3-A_scoring'] == ['R1-F1_no_matched_random_abstention_control']
     assert result['evidence'] == 'unlabelled_not_evidence'
 
 
@@ -536,6 +539,8 @@ class AdaptivePolicy:
 
 
 class StubRiskGate:
+    policy = RISK_REF
+
     def admit_entry(self, candidate, score, portfolio):
         inst, entry, equity = candidate.header.instrument, candidate.entry_reference_price, portfolio.equity
         per_contract = candidate.stop_distance * inst.contract_value
@@ -732,7 +737,7 @@ def run(world, *, scorer=None, order=cp.FACTORIAL, scenario=CostScenario.BASE, s
                             scorer=scorer or StubScorer(), model=MODEL, static_policy=StaticPolicy(),
                             adaptive_policy=AdaptivePolicy(), risk_gate_factory=risk_gate_factory,
                             simulator_factory=simulator_factory, start_ms=START, end_ms=END, cost_scenario=scenario,
-                            order=order)
+                            order=order, risk_policy=RISK_REF)
 
 
 def test_generator_is_called_once_per_decision_before_any_variant(world, base):
@@ -1014,7 +1019,8 @@ def test_power_cells_are_deterministic_and_respond_to_the_effect():
 
 def test_registry_rules_and_conclusion():
     assert rg.independent_historical_validation() == rg.INDEPENDENT_DATA_NOT_AVAILABLE
-    for window in ('fwd-okx-r1-w0', 'fwd-okx-r1-w1', 'fwd-okx-r1-w2', 'okx-any-2026-10-14-to-2026-10-31'):
+    for window in ('fwd-okx-r1-w0', 'fwd-okx-r1-w1', 'fwd-okx-r1-w2', 'okx-any-2026-10-14-to-2026-10-31',
+                   'any-venue-2026-10-14-to-2026-10-31', 'okx-xperp-metadata'):
         with pytest.raises(rg.RegistryError, match='registry_dataset_reserved'):
             rg.check_use(window, c.DataLabel.DEVELOPMENT, owner_consent=True)
     with pytest.raises(rg.RegistryError, match='registry_development_only'):
@@ -1025,7 +1031,13 @@ def test_registry_rules_and_conclusion():
         rg.check_use('okx-swap-h2-2022-2026', c.DataLabel.DEVELOPMENT)
     assert rg.check_use('okx-swap-h2-2022-2026', c.DataLabel.DEVELOPMENT, owner_consent=True) == 'registry_use_allowed'
     with pytest.raises(rg.RegistryError, match='registry_not_target_market'):
-        rg.check_use('binance-other-intraday', c.DataLabel.VALIDATION)
+        rg.check_use('binance-other-intraday-2019-2022', c.DataLabel.VALIDATION)
+    # review R1-F7: off-target windows over the consumed 2023-2026 paths are consumed-equivalent
+    for consumed in ('binance-other-intraday-2023-to-2026-10-13', 'hyperliquid-public-to-2026-10-13',
+                     'kraken-futures-public-to-2026-10-13'):
+        assert rg.entry(consumed).status is rg.DatasetStatus.CONSUMED_EQUIVALENT
+        with pytest.raises(rg.RegistryError, match='registry_development_only'):
+            rg.check_use(consumed, c.DataLabel.VALIDATION)
     with pytest.raises(rg.RegistryError, match='registry_prospective_only'):
         rg.check_use('okx-xperp-prospective', c.DataLabel.VALIDATION)
     assert rg.check_use('okx-xperp-prospective', c.DataLabel.PROSPECTIVE) == 'registry_use_allowed'

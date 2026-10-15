@@ -76,8 +76,9 @@ Fixed for every variant:
 - **Confirmation: prospective only** (`INDEPENDENT_DATA_NOT_AVAILABLE` for historical data).
   - X-Perp 1m candles, funding and top-of-book quotes, captured after the freeze, from 2026-11-02 at the earliest
     (DRAFT), never inside 2026-10-14 → 2026-10-31.
-  - The duration is fixed before the start: at least 26 weekly blocks (DRAFT floor, §7). §8 shows that one to two
-    years are needed for level control under persistent dependence and for useful power. With a 2026-11-02 start,
+  - The duration is fixed before the start: at least 26 weekly blocks (DRAFT floor, §7). §8 suggests that one to two
+    years may be needed for level control under persistent dependence and for useful power; the independent review
+    (R1-F4, R1-F5, §12) found that the studies cannot yet support a window choice in either direction. With a 2026-11-02 start,
     26 weeks run to early May 2027 and 104 weeks to late October 2028.
   - Nothing is fitted on prospective data.
 - **The four variants replay the captured data in simulation.** No order is placed, demo included.
@@ -173,10 +174,10 @@ Computed by `validation/metrics.py` and published together; per-trade performanc
 | Incremental value of each engine | S1-S4 after Holm, gatekept | family α = 0.05 | Answers H3-A, H3-B and H3-C separately, without inflating the primary error. |
 | Confidence intervals | one-sided 95 % lower bounds for P1, P2 and S1-S4; two-sided 90 % for descriptives | the plan's procedure | The bound, not the point estimate, carries the decision. |
 | Stability | mean B3 - B0 > 0 in ≥ 3 of 4 chronological quarters of the period | 3 of 4 | "Durablement": an effect confined to one quarter is an episode, not a durable improvement. |
-| Pessimistic costs | full replay at `pessimistic_multiplier` (fees, spread, slippage, adverse funding × 2); point estimates of B3 - B0 and of B3 net both > 0 | multiplier 2 | The X-Perp cost model is unverified (fee tier, book depth). A result that disappears when costs double is fragile. |
+| Pessimistic costs | full replay at `pessimistic_multiplier` (fees, spread, slippage, adverse funding × 2); point estimates of B3 - B0 and of B3 net both > 0 | multiplier 2 | The X-Perp cost model is unverified (fee tier, book depth). A result that disappears when costs double is fragile. Since review R1-F10 the simulator scales all four components as written here (before, fees were not scaled). |
 | Extreme losses | ES5 % of B3 trade R ≥ ES5 % of B0 - 0.25 R; no B3 trade below -2 R | 0.25 R; -2 R | Adaptation and selection must not buy expectancy with tail risk. At 1x leverage with a protective stop, a loss beyond 2 R points to a gap, fill or model failure that must be examined. |
 | Concentration | B3 - B0 > 0 without its top-contributing instrument; B3 net > 0 without its top 5 % trades | 5 % | Same rule as H1/H2 (G7): no dependence on a few trades or one instrument. |
-| Minimum independent observations | ≥ 26 weekly blocks; effective blocks of B3 - B0 ≥ 13; ≥ 100 B3 trades | 26; 13; 100 | 26 weekly blocks (half a year) is an a-priori floor, not a sufficient size: §8 shows that under persistent regime dependence no tested procedure keeps its level below about 104 blocks. 13 effective blocks allows at most a halving of information by autocorrelation. 100 trades is the floor already used across the campaign. |
+| Minimum independent observations | ≥ 26 weekly blocks; effective blocks of B3 - B0 ≥ 13; ≥ 100 B3 trades | 26; 13; 100 | 26 weekly blocks (half a year) is an a-priori floor, not a sufficient size: §8 found no procedure that passes the acceptance rule under persistent regime dependence, but that rule is itself too noisy to say how many blocks are needed (§12, R1-F5). Since review R1-F9 the effective-block floor also applies to B3 against cash (P2), and a secondary with fewer effective blocks is not confirmatory. 13 effective blocks allows at most a halving of information by autocorrelation. 100 trades is the floor already used across the campaign. |
 | Economic threshold | none beyond "> 0 net of pessimistic costs" | — | No a-priori effect size can be defended without a generator. The owner may set a minimum economic effect (e.g. covering operating costs) before the freeze; §8 shows which effects the design can detect. |
 
 The guards can only turn a met primary criterion into a not-met verdict, so they add no false positive. They are
@@ -257,7 +258,11 @@ Reading:
 - Both candidates are far better behaved than the bootstrap. Outside `strong_cluster_t3` they stay close to the
   limit from n = 26.
 - Under strong, persistent clustering they exceed it until about two years of weekly blocks. Even at 104 weeks the
-  intersection-union null gives 0.080 for both, against a limit of 0.075.
+  intersection-union null gives 0.080 for both, against a limit of 0.075. **Caveat (review R1-F5):** 0.080 is 32
+  rejections out of 400 panels, 95 % interval about [0.053, 0.107]; and the rule takes the maximum over 12 to 36
+  cells, so a procedure of exact size 0.05 fails it in 13 to 34 % of studies. These figures do not show that about
+  104 weeks are needed; the study must be re-run with Monte Carlo precision (about 4,000 panels per cell, or a
+  multiplicity-adjusted upper confidence bound) and the realistic DGP of §12 before any window is chosen.
 - The rule therefore leaves the procedure unvalidated. **Owner decision:** choose a procedure, and either accept a
   longer window or rule `strong_cluster_t3` implausible on stated grounds. A new rule is then written and run; this
   study does not make that choice.
@@ -314,16 +319,19 @@ Artifacts: `tradingV3-private/research/20261015T2230Z-h3-architecture/c-validati
 1. The candidate generator and its economic hypothesis (§2).
 2. α for the primary components and the secondary family (DRAFT 0.05 one-sided each).
 3. **The primary test procedure** (no procedure is validated, §8). Choose among `sn_gaussian`, `batch_t` or another
-   procedure. Then either accept a window of about two years, or rule `strong_cluster_t3` implausible on stated
-   grounds. A new synthetic rule must then validate the choice before the freeze.
-4. The block length (DRAFT one week) and the minimum number of blocks (DRAFT floor 26; §8 shows that validity under
-   persistent dependence needs about 104).
+   procedure. Then either accept a longer window, or rule `strong_cluster_t3` implausible on stated grounds. A new
+   synthetic rule, with stated Monte Carlo precision and the realistic DGP of §12, must then validate the choice
+   before the freeze.
+4. The block length (DRAFT one week) and the minimum number of blocks (DRAFT floor 26; how many blocks validity
+   needs under persistent dependence is not established, §12 R1-F5).
 5. The guard values (§7): stability 3 of 4, pessimistic multiplier 2, tail tolerance 0.25 R and floor -2 R, top 5 %,
    effective blocks 13, 100 trades.
 6. Whether to add a minimum economic effect to P1 or P2 (none by default).
 7. The prospective window: start (≥ 2026-11-02, DRAFT) and duration (≥ 26 weeks; see §8.3 for power).
 8. Whether consumed historical data may be used for development (consent per dataset, `H3-DATA-ELIGIBILITY.md`).
-9. The label replay for scoring checks: a capacity-free B0-policy replay (recommended) or B0's portfolio trades.
+9. ~~The label replay for scoring checks: a capacity-free B0-policy replay (recommended) or B0's portfolio trades.~~
+   **No longer a choice (review R1-F3):** labels for training and for the C4 checks come only from the capacity-free
+   replay (`integration.label_replay`, implemented); B0's portfolio trades serve the economic translation only.
 10. Bootstrap resamples (DRAFT 9,999; only for `cbb_percentile`) and seed (DRAFT 20261015).
 
 ## 11. Freeze checklist
@@ -342,3 +350,48 @@ The checklist covers the generator, the engines and fingerprints, the data, the 
 - [ ] Code digest of `scripts/research_h3/` recorded; the synthetic test suite is green.
 - [ ] This document is renamed to `PREREGISTRATION-H3.md`, then hashed and committed before any prospective data are
       read.
+
+## 12. Amendments after the independent reviews (2026-10-16)
+
+Two independent reviews (quantitative methodology R1, CTO / risk / security R2) were answered in
+[H3-INDEPENDENT-REVIEWS.md](H3-INDEPENDENT-REVIEWS.md). The points below change or qualify this DRAFT. None is
+frozen; each item is a condition of any freeze.
+
+- **Attribution needs matched controls (R1-F1, blocker).** S1 (B1 - B0) mixes ranking skill with abstention: under
+  a negative-mean generator a coin-flip scorer that abstains 60 % of the time is reported significant in most
+  synthetic panels. The protocol must add a pre-declared random-abstention reference B0m (per decision instant, a
+  seeded random subset of the book with B1's acceptance count, over K lottery seeds) and define S1 = B1 - B0m; and an
+  exposure-matched static control for S2-S4. Until then `compare.evaluate` reports every hypothesis as
+  `rejects_null_attribution_not_identified` at best, never `supported`.
+- **Separate answers need their own alpha (R1-F2, blocker).** Serial gatekeeping on B3 makes H3-A and H3-B
+  unconfirmable on their own. The owner chooses a multiplicity procedure that gives them their own alpha (e.g. a
+  graphical or fallback procedure, or Holm over {S1, S2, B3 vs cash}), and keeps the intersection-union test with P2
+  as the gate of any economic decision.
+- **Labels (R1-F3, fixed).** Capacity-free replay, see §10 item 9.
+- **Power and size must be re-studied (R1-F4, R1-F5, blockers).** The power DGP assumed that B0 and B3 trade the same
+  candidates; in the example they share 11 of 51. The re-run must go through the real mechanics (simulator, gate,
+  capacity, abstention), with a negative μ0, partial overlap, at most one candidate per week and multi-week holds,
+  and report size and power of P1, P2, the IUT and S1-S4, with Monte Carlo precision.
+- **Execution timing (R1-F6, R2-F5, blocker).** At hourly bars with latency, entries and adaptive actions run one full
+  bar after their decision; the 10 bp collar then refuses about 43-45 % of entry attempts (synthetic), selecting trades on the
+  price path after the decision, and every B2/B3 gap exit in the example is action-induced. The owner chooses the
+  rule (sub-bar fills at the decision, or re-anchoring the reference at the fill) before any label exists. Refusal
+  reasons and action-induced gap exits are published per variant meanwhile.
+- **Pessimistic costs (R1-F10, fixed).** Fees, spread, slippage and adverse funding are all scaled.
+- **Cash comparator (R1-F10).** A 0 % cash comparator is lenient towards B3, not conservative. The owner pre-declares
+  a cash yield, or B3 is reported against a stated risk-free rate descriptively.
+- **Measured adaptive policy (R2-F9).** The simulator provides no liquidity status (UNKNOWN), and `AdaptivePolicyV1`
+  defers partial closes unless liquidity is NORMAL: the policy measured by B2/B3 is **trail and target only**. A
+  result may not be described as testing partial closes unless a liquidity status is pre-declared and fed.
+- **Stop-replacement sensitivity (R2-F12).** A DRAFT sensitivity scenario is added: a per-modification failure rate
+  of the cancel-then-place replacement (`REPLACE_CANCELLED_PLACE_FAILED`, the position unprotected for one bar), the
+  rate to be set by the owner a priori.
+- **Data independence (R1-F7).** The cross-venue quarantine and consumed-equivalence of `H3-DATA-ELIGIBILITY.md`;
+  the (underlying x time) overlap rule waits for schema v2 (blocker).
+- **Development multiplicity (R1-F12, blocker for a freeze).** The `TrialLedger` must become an append-only,
+  hash-chained file whose head is fingerprinted in the manifest, and B0/B2 must be evaluated over K pre-declared
+  lottery seeds.
+- **Candidate source (R1-F8, blocker).** No source on the table supports the factorial; the feature catalogue must
+  be versioned to the chosen generator, and its cross-sectional relative-return features (the closed CS-XMOM family)
+  dropped or justified against gate M4.
+

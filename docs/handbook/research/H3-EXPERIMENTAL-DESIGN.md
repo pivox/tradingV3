@@ -96,7 +96,13 @@ A run is accounted for in exact Decimal (`records`):
 - **H3-C.** It is supported only if S3 and S4 both reject: the combination beats each engine alone. The interaction
   contrast is published with its interval but is never a claim, because super-additivity is not the owner's
   question.
-- **Cash.** Interest on idle capital is not modelled; this is conservative for the comparator.
+- **Cash.** Interest on idle capital is not modelled. **Correction (review R1-F10):** a 0 % comparator is easier to
+  beat than a yield-bearing one, so this choice is lenient towards B3, not conservative. The owner pre-declares a cash
+  yield before the freeze, or B3 is reported against a stated risk-free rate descriptively.
+- **Attribution (review R1-F1, R1-F2).** A rejected S1-S4 is not an attribution: S1 mixes ranking skill with
+  abstention and S2-S4 mix the exit rule with exposure. Without matched controls `compare.evaluate` reports a
+  rejected hypothesis as `rejects_null_attribution_not_identified`, never `supported`
+  ([H3-INDEPENDENT-REVIEWS.md](H3-INDEPENDENT-REVIEWS.md)).
 - **Passive exposure.** It holds the universe's instruments in the generator's direction at 1x for the whole period,
   with the same fees and funding (`comparators.passive_pnl_path`, `basket_pnl_path`). It is computed only when every
   candidate has the same side and the product can be held continuously. A two-sided or market-neutral generator has
@@ -151,8 +157,10 @@ several weeks. The unit of analysis is therefore the **time block** (DRAFT: one 
 
 - **Labels.** A candidate's label is its net R under the static reference management (the B0 policy), from a
   consistent replay of that candidate. It is never the best exit seen afterwards.
-  - Candidates that B0 did not trade (capacity) are `unlabelled` and counted. A capacity-free label replay with the
-    B0 policy removes this selection; it is a simulator duty.
+  - Candidates that B0 did not trade (capacity) are `unlabelled` and counted. Since review R1-F3 the capacity-free
+    label replay exists (`integration.label_replay.capacity_free_labels`, joined by
+    `scoring_checks.join_scores_labels`): every candidate is replayed alone, so its label does not depend on capacity.
+    It is the only label source for training and for these checks; B0's trades serve the economic translation only.
   - A score decided after its trade's entry is refused.
 - **Calibration.**
   - Predicted vs realised net R per bucket.
