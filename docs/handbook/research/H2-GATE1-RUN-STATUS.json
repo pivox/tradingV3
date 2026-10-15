@@ -1,0 +1,76 @@
+{
+  "study": "H2 Gate 1 effect study (Amendment A1)",
+  "kind": "run status, not a result: the protocol's summary file h2-gate1-result.json does not exist",
+  "status": "events_aborted_by_guard_no_output",
+  "verdict": null,
+  "label": "development; OKX archive already consumed at the candle level; not an independent validation",
+  "protocol": {
+    "path": "docs/handbook/research/PREREGISTRATION-H2-GATE1.md",
+    "frozen_at": "2026-10-15T15:57:04Z",
+    "body_sha256": "0ec71c563a6247464765fd0696ceb193d60d980e97d93d6f53d0565940d8bf20",
+    "code_sha256": "e8c087a1a1ee105c81d2f9f06d79b966f1db52a43ffd293860e1a8f6c8c41904",
+    "runtime": "python 3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0], numpy 2.5.4"
+  },
+  "decisions": {
+    "g4_rule": "point_estimate",
+    "c2_caliper": "none",
+    "c2_candidates": "first_crossing",
+    "c2_pool": "three_months"
+  },
+  "owner_go": "owner go 2026-10-15: execute the H2 Gate 1 effect study once, exactly as frozen with Amendment A1 (FROZEN 2026-10-15T15:57:04Z); report the verdict even if negative; a PASS only authorises a Gate 2 proposal, never trading",
+  "run_dir": "tradingV3-private/research/20261015T1200Z-h2-gate1/run/",
+  "stages": {
+    "events": {
+      "claim": {
+        "file": "events-claim.json",
+        "sha256": "7c612faab328a8c1d5c3f2881446639b45d554d8c2821b368074406da6f1c2cd",
+        "claimed_at": "2026-10-15T16:02:02Z",
+        "inputs": {
+          "manifest-h2-okx-candles.json": "95794fdd3395d31b7adc138e318a0df5669738505e1fae524646e0df486f0d00",
+          "manifest-candles.json": "516e71839b9b8ede8a57c38fc0d0dfe7f7a0eca7549e55dc6ee8410cfe9c5d01",
+          "daily-quote-volume.json": "7c262b4424ebab5821d85640b420636a29437649fbae33bc42379ca6a41beedd",
+          "eea-futures.json": "732044a8a7ce9dd31f1025f1a501c72ee0b268ef87c30d229e444beac9c44f8d",
+          "h2_zips": 1016,
+          "swing_npz_files": 9665,
+          "swing_npz_digest": "b99f42f49e5fa421fddd6fdda0ec9186d1c3eff0cef5330c5cf33a9cabdacc22"
+        }
+      },
+      "consumption": {
+        "file": "events-consumed.json",
+        "sha256": "fa028b43c7801ac80dcda08f66fb1de65933838586223d3e48f28b65302fd642",
+        "status": "aborted_by_guard",
+        "started_at": "2026-10-15T16:03:55Z",
+        "aborted_at": "2026-10-15T16:16:33Z",
+        "reason": "guard: available memory 8306 MB, free disk 18 GB",
+        "resumptions_used": 0,
+        "resumptions_allowed": 1
+      },
+      "process": {
+        "exit_status": 3,
+        "wall_clock": "14:17.53",
+        "user_cpu_s": 733.84,
+        "max_rss_kb": 520856,
+        "fs_output_blocks": 24,
+        "log_sha256": "de2f69d0b341ee0290c58731adc60ab63422d70ed1e1469fcb1292fc55290947"
+      },
+      "output": null,
+      "computed": "nothing: the guard runs only in the data-loading step (universe.gather, events.load_closes), before events.compute; no beta, residual, z-score, event or count was computed or shown"
+    },
+    "outcomes": {
+      "claim": null,
+      "consumption": null,
+      "output": null,
+      "resumptions_allowed": 0
+    }
+  },
+  "criteria": {
+    "G1": null, "C2_match_rate": null, "G2": null, "G3": null, "G4": null, "G5": null, "G6": null, "G7": null,
+    "fail_due_to_G4_alone": null
+  },
+  "next_per_protocol": [
+    "free disk on / well above the guard floor of 20 GiB (shutil.disk_usage free // 1024**3 >= 20) and keep it there through both stages",
+    "the single allowed resumption: python -m scripts.research_h2.cli events --resume (section 12, MAX_GUARD_RESUMPTIONS events = 1)",
+    "claim --stage outcomes with the same owner_go reference, then outcomes, with no decision in between (outcomes has no resumption)"
+  ],
+  "audit": "integrity_ok true; verdict_consistent true (no verdict exists); minor wording note on the process start time (about 16:02:15Z, the 16:03:55Z of the record is written after consume re-hashes the inputs)"
+}
