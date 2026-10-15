@@ -141,6 +141,9 @@ nav:
       - "Leverage > 2x — E1 replay and analysis (NOT_INFORMATIVE)": research/LEVERAGE-GT2-E1-RESULTS.md
       - "H2 — Gate 1 pre-registration (frozen, not executed)": research/PREREGISTRATION-H2-GATE1.md
       - "Research eligibility gates M1–M5": research/RESEARCH-ELIGIBILITY-GATES.md
+      - "État des campagnes de recherche (2026-10-15)": research/RESEARCH-CAMPAIGN-STATUS.md
+      - "Diagnostic infrastructure H2 (disque, swap) 2026-10-15": research/RESEARCH-INFRA-DIAGNOSTIC.md
+      - "H1 — état et prochaine décision (2026-10-15)": research/H1-NEXT-DECISION.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 
