@@ -1,0 +1,8 @@
+c4f24f98d256b6ad5bb9043e9b1e66f8500963c120b2587d002f169b9e54aa9c  PREREGISTRATION-H2-GATE1.md body (up to '## 15. Freeze' + blank line)
+frozen_at 2026-10-15T13:56:41Z
+status FROZEN (not executed)
+commit f7c04507ecb3b215af3055098b22012ffaac5e42
+code sha256 d52c03848928cd1717385b641d1cb0dc667efb5f4376a20938d6e006f29839b1 (claim.code_digest(): canonical JSON of the sha256 of every research_h2 module plus research_swing2/okx.py and research_swing2/okx_universe.py)
+runtime python 3.12.3 numpy 2.5.4 (tradingV3-private/research/20261014T090000Z-swing-v2-runtime/bin/python)
+decisions g4_rule=point_estimate c2_caliper=none c2_candidates=first_crossing (owner 2026-10-15); k=3, horizon 3 d, leave-one-out top-30 market, G3=40 bp
+gate1_run not authorised (needs the owner's separate explicit go)
