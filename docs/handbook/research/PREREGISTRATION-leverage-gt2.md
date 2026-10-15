@@ -1,11 +1,11 @@
 # Pre-registration leverage-gt2 — theoretical leverage above 2x in tick scalping, BTC excluded (P2-B4)
 
-**Status: NOT_FROZEN — BLOCKED_ON_OWNER_DECISIONS D1–D4 (§12).** The status is read from the FROZEN line below
-§13, so the body does not change at the freeze. No sha256 is attached yet. The four decisions D1–D4 have no default:
-until the owner sets them (in this text and in `research_lev/protocol.py`), the code refuses every claim. The freeze
-also needs the owner's sign-off on the implementer choices C1–C9 and on questions A–D (§12). Freezing authorises the
-E0a census only after the owner's explicit go; E1 runs only if the E0a → E1 rule of §7 triggers it. Nothing in this
-document has been computed: no census, no replay, no outcome column has been read for this study.
+**Status: read from the FROZEN line below §13**, so the body does not change at the freeze. The owner set the four
+decisions D1–D4 on 2026-10-15 (D1 = `distinct_pair_day`, D2 = `drop`, D3 = 1, D4 = `not_charged`; §12), in this text
+and in `research_lev/protocol.py`, accepted the implementer choices C1–C9 as written (§12) and gave his questions A–D,
+mapped to the frozen metrics in §11 as a reading guide only. Freezing authorises the E0a census only after the
+owner's explicit go; E1 runs only if the E0a → E1 rule of §7 triggers it. Nothing in this document has been
+computed: no census, no replay, no outcome column has been read for this study.
 
 Inputs (private audit of 2026-10-15, read-only, `tradingV3-private/research/20261015T070000Z-scalp-leverage-audit/`):
 `00-SYNTHESE.md` (with its addendum), `01-AUDIT-FAISABILITE.md`, `02-INVENTAIRE-DONNEES.md`, `03-DEFINITION-LEVIER.md`,
@@ -38,8 +38,9 @@ expectancy, never a causal effect of leverage.
 **Estimand.** Δ_b = E[R | L_eng ∈ b] − E[R | L_eng ∈ ]1,2]], where R = net PnL / (r·E) = net_bp / (d_bp + c_bp)
 per trade at its own theoretical size. **Multiplicity (D1).** The configurations are nested (§2), so one trade
 (series, side, decision second) can be produced by several configurations of an arm. Under D1 = `distinct_pair_day`
-the expectation is over distinct trades (each once); under D1 = `copies_config_pair_day` it is over configuration
-copies, i.e. each distinct trade is weighted by the number of configurations that contain it.
+(owner's decision, 2026-10-15) the expectation is over distinct trades (each once); the alternative
+`copies_config_pair_day`, over configuration copies (each distinct trade weighted by the number of configurations
+that contain it), is published as a diagnostic only (§9).
 
 - **Primary (single contrast):** b = ]2,3], L_eng, population P2-B4, per filled trade, pooled over the frozen
   configurations of §2.
@@ -89,8 +90,9 @@ r12 §2 ran `R1|both` as "two streams run independently … one position at a ti
 owner-accepted rule of the audit (draft §4.5: one position per pair, the long and short streams merged) applies, so
 `P0-A3-K0-Z1|both` and `R1|both` are **re-defined**, not reproduced. The implementer's conflict rule (§5) makes
 `R1|both` place an order only when the band filter admits one side and refuses the other, an arbitrary selection;
-under the source semantics `R1|both` is a pure duplicate of `R1|long` ∪ `R1|short`. D2: `drop` (recommended:
-`R1|both` is removed from E0a and E1, 30 configurations) or `keep_conflict_rule`.
+under the source semantics `R1|both` is a pure duplicate of `R1|long` ∪ `R1|short`. D2 = `drop` (owner's
+decision, 2026-10-15; the alternative was `keep_conflict_rule`): `R1|both` is removed from E0a and E1, which run 30
+configurations.
 
 The r10x reference rows (`P{n}-A{3,4}-K0`) are the r10 rows 1–6 (same identifiers). The four source documents are
 under `tradingV3-private/research/20261013T121000Z-scalping-120-r10/` (r10, r10x),
@@ -212,7 +214,7 @@ One replay per configuration × pair × **arm**, an arm being (definition, band)
 
 ## 7. E0a census and the E0a → E1 trigger
 
-- **E0a** (`research_lev/census.py`): every signal second of every active configuration (31, or 30 under D2 = drop)
+- **E0a** (`research_lev/census.py`): every signal second of every active configuration (30 under D2 = drop)
   and stream, on every series, classified from its decision-time inputs only — no order, no fill, no exit, no print
   after the decision second, no pair blocking. It is an upper envelope of what E1 can admit. It counts each
   configuration's signals (nominal, `pooled`) and the **distinct** signals (series × side × decision second once,
@@ -221,8 +223,8 @@ One replay per configuration × pair × **arm**, an arm being (definition, band)
   the floor counts per band, pooled totals per definition and band, by configuration, by pair and by window, and the
   C2 tercile cut points.
 - **Trigger rule (owner decision):** for each definition, a band is triggered iff census × f_min ≥ N_min, with
-  f_min = 0.3 and N_min = 400; the census count is the distinct one under D1 = `distinct_pair_day`, the nominal one
-  under D1 = `copies_config_pair_day`. The E1 command recomputes the trigger from `e0a-census.json` and refuses to
+  f_min = 0.3 and N_min = 400; the census count is the distinct one (D1 = `distinct_pair_day`, owner's decision); the
+  nominal count is published, not used by the trigger. The E1 command recomputes the trigger from `e0a-census.json` and refuses to
   run if it differs from `e0a-trigger.json`. E1 runs, for a definition, the reference arm ]1,2] plus every triggered studied band,
   and nothing at all for that definition if ]1,2] is not triggered or no studied band is.
 
@@ -242,10 +244,11 @@ with every copy in pair × day clusters (diagnostics, §9).
 
 - **R** per trade = net_bp / (d_bp + c_bp) at slippage-grid point 0, for every arm and both definitions (every
   trade at its canonical size, §10).
-- **Decision population and clusters (D1, no default).** `distinct_pair_day` (recommended): each arm keeps every
-  distinct trade (series, side, decision second) once; N_min counts distinct filled trades; clusters = pair × UTC day
-  of the decision. `copies_config_pair_day` (the audit's original wording, accepted by the owner before the nesting
-  was identified): every configuration copy counts, in N_min too; clusters = configuration × pair × UTC day. With
+- **Decision population and clusters (D1 = `distinct_pair_day`, owner's decision 2026-10-15).** Each arm keeps
+  every distinct trade (series, side, decision second) once; N_min = 400 counts distinct filled trades; clusters =
+  pair × UTC day of the decision. The alternative `copies_config_pair_day` (the audit's original wording, accepted by
+  the owner before the nesting was identified; diagnostic only): every configuration copy counts, in N_min too;
+  clusters = configuration × pair × UTC day. With
   copies, configuration × pair × day clusters treat the copies of one trade as independent and narrow the interval
   by about √(number of copies) (tested), so this option is anti-conservative. The other combination is published as
   a diagnostic.
@@ -297,10 +300,80 @@ with every copy in pair × day clusters (diagnostics, §9).
   the Binance data licence; OKX Europe X-Perps (owner's account check 2026-10-15: isolated margin, leverage selector
   up to 50x on OKB, maker 0.02 % / taker 0.05 %, USDC margin) is feasibility context only. Ticks, contract values,
   fees, funding intervals and maximum leverage per instrument differ and are not modelled here.
-- **Funding (D4, no default).** The audit (§4.8) asks for the real rate or a declared provision. This package charges
+- **Funding (D4 = `not_charged`, owner's decision 2026-10-15).** The audit (§4.8) asks for the real rate or a
+  declared provision. This package charges
   neither; it reports the share of trades crossing a settlement on an approximate 00/08/16 UTC grid (wrong for a pair
   on a 4 h interval in 2024). D4 = `not_charged` records the owner's explicit acceptance of that (B4 holds ≤ 2 h);
-  any provision needs an amendment to the code before the freeze.
+  the share of trades crossing a settlement is published (§8). A provision would need an amendment and new code.
+
+### Owner's questions A–D: reading guide (2026-10-15)
+
+The owner's questions (his wording, 2026-10-15) and where the report answers them. This is a **reading guide only**:
+it adds no test, no criterion, no threshold and no output; every verdict comes from §9 alone. A part of a question
+that no frozen metric covers is said to be unanswered, and the report says so rather than computing something new.
+Keys are those of `e0a-census.json` (E0a) and `e1-analysis.json` (E1 analysis, per arm `arms[<definition>:<band>]`).
+
+**A. Sélection** — « combien d'opportunités sont éliminées parce que leur levier théorique est ≤ 2× ? combien
+subsistent dans chaque tranche ? existent-elles sur suffisamment de paires et de périodes pour une étude
+statistique ? »
+
+- Eliminated by a > 2x filter: the E0a distinct counts of ]0,1] and ]1,2] (`pooled_distinct`, per definition)
+  against all determinable distinct signals; indeterminables by reason (`distinct_indeterminate`), excluded from
+  every arm. In this study the ]1,2] trades are not discarded: they are the reference group, at their own size,
+  never levered up (§1, §10). In E1, the admission counters (`excluded_band` and the reasons, §5).
+- Remaining per band: E0a distinct counts per band and definition (`pooled_distinct`), nominal counts by
+  configuration, pair and window (`by_config`, `by_pair`, `by_window`), floor counts; E1 per arm `orders`, `filled`,
+  `fill_rate`, `filled_nominal`, `duplicate_trades_across_configurations` (§8).
+- Enough for a statistical study: the only frozen criteria are the E0a → E1 trigger (census × 0.3 ≥ 400, §7) and
+  N_min = 400 distinct filled trades per arm (§9, otherwise NOT_INFORMATIVE). Spread across pairs and periods: per
+  arm `by_pair`, `by_week`, `max_pair_share` (descriptive, §9); no extra threshold.
+
+**B. Performance** — « la tranche > 2× a-t-elle une meilleure espérance brute et nette que la tranche ≤ 2× ?
+l'avantage persiste-t-il après frais, spread, slippage et funding ? résiste-t-il aux changements de période, de
+paire et de volatilité ? »
+
+- Net expectancy and the decision: the primary Δ ]2,3] − ]1,2] (L_eng, per fill) and its verdict (§9); the other
+  bands through S1, S2 (L_eng) and S4–S6 (L_stop), Holm-adjusted; per arm `mean_r`, `median_r`, `win_rate`. Gross
+  expectancy: per arm `mean_gross_r` and `mean_cost_r` (descriptive; no test on gross R).
+- After costs: R is net of the 2 bp maker entry and 5 bp taker exit and uses the realistic stop execution (§5); the
+  spread enters through c and the touch prices; slippage through the grid 0/1/2/5 ticks (`slippage_grid_mean_r`,
+  `slippage_grid_label`, SIGN_STABLE / SIGN_FLIP of Δ, and the NOT_INFORMATIVE override of §5 / §9). Funding is not
+  charged (D4): only the share of trades crossing a settlement is published
+  (`settlement_crossing_share_8h_approx`), so the funding part is answered only as an exposure, not as a cost.
+- Period and pair: the descriptive robustness of the primary (`weeks_same_sign`, `max_pair_share_band`, §9) and the
+  per-pair / per-week splits. Volatility: S8 (C2, Δ within volatility × tick × liquidity strata, with
+  `support_share`) and S7 (C1). These are descriptive or Holm-tested as declared; nothing here is a replication.
+
+**C. Risque** — « impacts du levier sur la marge, les liquidations possibles, les pertes extrêmes, le drawdown et le
+capital disponible. »
+
+- Margin: the applied-leverage scenarios A_ceil / A_full × A_max ∈ {2, 10} and the count of trades refused under
+  isolated margin (`margin_refused`, §10); per arm the distribution of `leverage` (L_eng, L_stop) and `d_bp_p50`,
+  `c_bp_p50`, `cost_share_c_over_d_plus_c_p50`.
+- Possible liquidations: the analytic liquidation counters per arm, rule, A_max and MMR (`liquidated_before_exit`,
+  §10), which never change the fills.
+- Extreme losses: per arm `worst_r`, `best_r`, `share_below_minus_2r`, `stop_slippage_r` (p50, p90, max),
+  `same_second_stop_share`, `realistic_minus_frozen_r_mean` (§8), to be read against the mechanical floor (the
+  slippage in R grows as 1/(d + c)).
+- Drawdown and available capital: **not measured**. The 500-USDT portfolio replay is NOT authorised (§6), so there is
+  no equity curve, no drawdown and no capital-in-use series; the report gives per-trade and analytic measures only
+  (R at the canonical size, notional / E = L_eng, margin = notional / A) and says so.
+
+**D. Robustesse** — « concentration sur quelques paires, journées ou les 5 % meilleurs trades ? la différence
+est-elle crédible ou due à la sélection post hoc ? comparateur qui sépare levier, distance de stop et volatilité. »
+
+- Pairs: `by_pair`, `max_pair_share` and the 30 % descriptive rule (§9). Days: the decision clusters are pair × UTC
+  day, so the bootstrap interval already carries the day-to-day dependence; per-week splits (`by_week`) are
+  published. No per-day breakdown and no share of the 5 % best trades is a frozen output: those parts are
+  **unanswered** by this protocol (only `best_r` / `worst_r` per arm), and the report says so.
+- Credibility versus post hoc selection: the nature of the study (§0: exploratory, post hoc, consumed windows), the
+  prior knowledge on record (§4), Holm over the nine secondaries, the N_min and slippage overrides, the
+  multiplicity diagnostics (primary under the copies rule and with every copy in pair × day clusters, §8 / §9), the
+  configuration concentration (`max_config_share_nominal`), and §11 (what cannot be concluded). No verdict here is a
+  validation.
+- Separating leverage, stop distance and volatility: C1 (S7, same signals with the stop widened to L_eng = 1.5) and
+  C2 (S8, strata of volatility × tick × liquidity), the L_stop definition (S4–S6), the floor strata (S9 and the
+  floor splits). The ratio c/(d + c) is inseparable from L and is reported as a mechanism only (§6).
 
 ## 12. Execution, single-use claims, code, stop rules, owner decisions
 
@@ -319,11 +392,11 @@ with every copy in pair × day clusters (diagnostics, §9).
   analysis depends on E0a and E1, since it reads the C2 cut points of `e0a-census.json`). The run consumes the claim
   before any data is read, re-checking the protocol body against the FROZEN line, the code and the prerequisites,
   and refuses a second run.
-- **Resumption after a memory-guard abort (D3, no default).** This is an exception to strict single use. D3 = 0:
-  none — a stage stopped by the guard is lost and the study closes NOT_INFORMATIVE for it. D3 = 1 (implementer
-  proposal): a stage stopped by the guard or by a dead worker before writing any output (`aborted_by_guard`) may be
-  resumed once, with identical code, and the resumption is recorded; enforced by `consume`. The analysis stage has
-  no resumption in either case.
+- **Resumption after a memory-guard abort (D3 = 1, owner's decision 2026-10-15).** This is an exception to strict
+  single use: a stage (E0a or E1) stopped by the guard or by a dead worker before writing any output
+  (`aborted_by_guard`) may be resumed once, with identical code, and the resumption is recorded; enforced by
+  `consume`. The analysis is never re-run: the analysis stage has no resumption. (The alternative D3 = 0 would have
+  closed the study NOT_INFORMATIVE for a stage lost to the guard.)
 - **Resources:** `nice -n 15`, at most 2 workers, one series per worker at a time, one heavy step at a time; the
   memory guard is checked before each submission and every 0.5 s while series are in flight, and stops the run
   cleanly below 4,000 MB available; a worker that dies without returning its series (e.g. the kernel OOM killer)
@@ -339,15 +412,17 @@ with every copy in pair × day clusters (diagnostics, §9).
   defect found later is disclosed and needs an amendment, and the affected stage cannot be re-read.
 - **Stop rules:** E0a triggers nothing → E1 is not run and the study closes NOT_INFORMATIVE. Any arm under N_min →
   NOT_INFORMATIVE for that contrast.
-- **Owner decisions without a default (the code refuses every claim until they are set in
-  `research_lev/protocol.py` and in this text):**
-  - **D1 — multiplicity of nested configurations** (§1, §7, §9): `distinct_pair_day` (recommended: N_min and the E0a
-    trigger on distinct trades / signals, the estimand over distinct trades, pair × day clusters) or
-    `copies_config_pair_day` (copies count, configuration × pair × day clusters: anti-conservative, §9).
-  - **D2 — `R1|both`** (§2, §5): `drop` (recommended) or `keep_conflict_rule`.
-  - **D3 — resumption after a memory-guard abort** (above): 0 or 1.
-  - **D4 — funding** (§11): `not_charged` (explicit acceptance) or an amendment adding a provision before the freeze.
-- **Implementer choices to be confirmed at the freeze sign-off** (each outcome-free; the code implements the
+- **Owner decisions, set by the owner on 2026-10-15** (in `research_lev/protocol.py` and in this text; the code
+  refuses every claim while any of them is unset):
+  - **D1 — multiplicity of nested configurations** (§1, §7, §9): **`distinct_pair_day`** — distinct trades, N_min =
+    400 distinct filled trades per arm, the E0a trigger on the distinct census counts, the estimand over distinct
+    trades, pair × day clusters. The copies rule (`copies_config_pair_day`) stays a diagnostic only.
+  - **D2 — `R1|both`** (§2, §5): **`drop`** — `R1|both` removed, 30 configurations.
+  - **D3 — resumption after a memory-guard abort** (above): **1** — one resumption, only if the guard stops a stage
+    before any output is written; recorded; the analysis is never re-run.
+  - **D4 — funding** (§11): **`not_charged`** — B4 holds ≤ 2 h; the share of trades crossing a funding settlement is
+    published.
+- **Implementer choices, accepted by the owner as written (2026-10-15)** (each outcome-free; the code implements the
   stated version):
   - C1 every trade at its canonical size r·E/(d + c); R = net/(d + c) in the L_stop arms too; L_stop only classifies
     (§10).
@@ -361,8 +436,8 @@ with every copy in pair × day clusters (diagnostics, §9).
   - C9 A_full on the ]1,2] group moves only the analytic liquidation price (§10).
   - The slippage override of §5 / §9 is the audit's rule (§4.8) as accepted by the owner; it is listed here so the
     owner can see that a ]1,2] reference whose mean R crosses zero on the grid makes every contrast NOT_INFORMATIVE.
-- **Questions A–D** of the owner (draft §4.17 point 1) were not in the inputs. Before the freeze the owner either
-  gives them, each mapped to a named metric of §8–§10, or waives the mapping explicitly.
+- **Questions A–D** of the owner (draft §4.17 point 1): given by the owner on 2026-10-15 and mapped to the frozen
+  metrics of §7–§10 in the reading guide at the end of §11 (no new test, no new criterion).
 
 ## 13. Freeze
 

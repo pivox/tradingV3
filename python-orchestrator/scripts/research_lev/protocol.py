@@ -71,16 +71,16 @@ CONFIGURATION_IDS = tuple(item[0] for item in CONFIGURATIONS)
 # r11 also lists P{1,2,3}-A3-K0-Z1 x B4 (PREREGISTRATION-r11.md §2): identical identifiers to the r10x rows, kept once.
 ALSO_IN = {f"P{n}-A3-K0-Z1|{'short' if n == 3 else 'long'}|E1|B4": ("r11",) for n in (1, 2, 3)}
 
-# ----------------------------------------------------------------------------- owner decisions pending
-# Each of these is a frozen rule that the owner must set before the freeze (§12, decisions D1-D4).
-# While any is None, `unresolved_decisions()` is non-empty and every claim is refused.
+# ----------------------------------------------------------------------------- owner decisions (2026-10-15)
+# Frozen rules set by the owner on 2026-10-15 before the freeze (§12, decisions D1-D4).
+# If any were None, `unresolved_decisions()` would be non-empty and every claim refused.
 MULTIPLICITY_RULES = ("distinct_pair_day", "copies_config_pair_day")
-MULTIPLICITY_RULE: str | None = None  # D1; recommended "distinct_pair_day"
+MULTIPLICITY_RULE: str | None = "distinct_pair_day"  # D1 (owner 2026-10-15); the copies rule is a diagnostic only
 R1_BOTH_RULES = ("drop", "keep_conflict_rule")
-R1_BOTH_RULE: str | None = None  # D2; recommended "drop"
-MAX_GUARD_RESUMPTIONS: int | None = None  # D3; 0 (no resumption) or 1
+R1_BOTH_RULE: str | None = "drop"  # D2 (owner 2026-10-15): R1|both removed, 30 configurations
+MAX_GUARD_RESUMPTIONS: int | None = 1  # D3 (owner 2026-10-15): one resumption, only before any output is written
 FUNDING_RULES = ("not_charged",)
-FUNDING_RULE: str | None = None  # D4; "not_charged" (diagnostic only) or an amendment adding a provision
+FUNDING_RULE: str | None = "not_charged"  # D4 (owner 2026-10-15): not charged; settlement-crossing share published
 
 
 def unresolved_decisions() -> list[str]:
