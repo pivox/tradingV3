@@ -1,0 +1,6 @@
+10eaf6cb36a37ce5057f09324acee80696abda38eed6fce17f31fe7760f37d97  PREREGISTRATION-leverage-gt2.md body (up to '## 13. Freeze' + blank line)
+frozen_at 2026-10-15T10:07:48Z
+status FROZEN
+commit 79747bf2d692c8e646c758959d684f3e37017726
+code sha256 6e20c4ebb7f70dba257a57ebd6f2f1753c609368b8569b78cb1ba9a50e17ddeb (claim.code_digest(): canonical JSON of the sha256 of every research_lev and research_exec module)
+decisions D1=distinct_pair_day D2=drop D3=1 D4=not_charged (owner 2026-10-15); C1-C9 accepted

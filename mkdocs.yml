@@ -104,6 +104,7 @@ nav:
       - "Scalping Q3 V2 (scalp-q3-r2), portefeuille 500 USDT 2026-10-14": reports/research-scalp-q3-r2-portfolio-2026-10-14.md
       - "Scalping Q3 V2 (scalp-q3-r2), correction et gate 2026-10-14": reports/research-scalp-q3-r2-correction-2026-10-14.md
       - "Scalping Q3 V2 (scalp-q3-r2), validation novembre 2024": reports/research-scalp-q3-r2-validation-2026-11-2024.md
+      - "Levier théorique > 2× hors BTC (leverage-gt2) 2026-10-15": reports/research-leverage-gt2-2026-10-15.md
       - "Research landscape 2026-10": reports/research-strategy-landscape-2026-10.md
       - "Next strategy — new market hypotheses (draft)": research/research-new-market-hypotheses.md
       - "Next strategy — retained hypothesis (draft)": research/HYPOTHESIS-next-strategy.md
@@ -135,6 +136,9 @@ nav:
       - "H2 — feasibility review (France)": research/H2-FEASIBILITY-REVIEW.md
       - "H2 — setup mission: prerequisites check (not met)": research/H2-PREREQUISITES-REPORT.md
       - "H2 — Gate 1 pre-registration (DRAFT, not frozen)": research/H2-GATE1-PREREGISTRATION-DRAFT.md
+      - "Leverage > 2x — pre-registration (frozen; executed, NOT_INFORMATIVE)": research/PREREGISTRATION-leverage-gt2.md
+      - "Leverage > 2x — E0a census (run once)": research/LEVERAGE-GT2-E0A-CENSUS.md
+      - "Leverage > 2x — E1 replay and analysis (NOT_INFORMATIVE)": research/LEVERAGE-GT2-E1-RESULTS.md
       - "Research eligibility gates M1–M5": research/RESEARCH-ELIGIBILITY-GATES.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
