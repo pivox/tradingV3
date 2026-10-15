@@ -584,3 +584,5 @@ the following blank line). At the freeze, the hash, the time, the commit and the
 Status: **FROZEN, not executed** — the owner's C2 decision of 2026-10-15 is written in (§6, §10.14, §14) and
 re-simulated on synthetic panels (§9); no claim, event file or outcome exists; the single Gate 1 run is not
 authorised.
+
+FROZEN 2026-10-15T13:56:41Z body sha256 c4f24f98d256b6ad5bb9043e9b1e66f8500963c120b2587d002f169b9e54aa9c code sha256 d52c03848928cd1717385b641d1cb0dc667efb5f4376a20938d6e006f29839b1 runtime python 3.12.3 numpy 2.5.4 (tradingV3-private/research/20261014T090000Z-swing-v2-runtime/bin/python) (protocol body and code at commit f7c04507ecb3b215af3055098b22012ffaac5e42; not executed: no claim, no event file, no outcome; the single Gate 1 run needs the owner's separate go)
