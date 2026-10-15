@@ -1,12 +1,11 @@
-# H2 Gate 1 — pre-registration (status `READY_TO_FREEZE`)
+# H2 Gate 1 — pre-registration (status `FROZEN`, not executed)
 
-**This text is not frozen yet and authorises nothing.** It has no sha256. The owner's decision on C2 (2026-10-15:
+**This text is frozen (§15) and authorises nothing by itself.** The owner's decision on C2 (2026-10-15:
 first-crossing candidates, §6, §14) is written into it and was re-simulated on synthetic panels (§9); the owner
-authorised the freeze after that check. It becomes binding only when:
-
-1. it is committed and its body sha256 is written on a `FROZEN` line (§15), together with the code digest of
-   `python-orchestrator/scripts/research_h2/`;
-2. the owner gives a **separate, explicit go** for the single Gate 1 run (the claim refuses to start without it).
+authorised the freeze after that check. Its body sha256 and the code digest of
+`python-orchestrator/scripts/research_h2/` are written on the `FROZEN` line (§15) and in
+`PREREGISTRATION-H2-GATE1.sha256`. The single Gate 1 run needs a **separate, explicit go** from the owner (the claim
+refuses to start without it); at the freeze that go has not been given.
 
 It replaces `H2-GATE1-PREREGISTRATION-DRAFT.md` (the draft, kept unchanged). The owner's four choices of the draft are
 kept unchanged: **k = 3, primary horizon 3 d, market = leave-one-out equal weight of the monthly top 30, G3 = 40 bp**,
@@ -159,9 +158,11 @@ those belong to Gate 2.
 - **C2: shared shock** (the decisive control against absolute reversion).
   - Candidate hours: **first crossings** (owner decision of 2026-10-15, §14). The qualifying hours are the evaluable
     coin-hours of a member coin with |z| < 1 and |z_m| ≥ 2 (the coin's move is the market's). Per coin, in
-    chronological order, the first qualifying hour of each market episode is a candidate, and no further candidate
-    of that coin is taken during **120 h**: a qualifying hour less than 120 h after the coin's last candidate is
-    skipped and does not restart the period; one exactly 120 h after is allowed. This is the event rule of §4
+    chronological order, a qualifying hour is a candidate unless it falls less than **120 h** after the coin's last
+    candidate: then it is skipped and does not restart the period; one exactly 120 h after is allowed. An "episode"
+    is delimited by this refractory period, not by a contiguous run of qualifying hours: a run that starts inside the
+    120 h gets its candidate at its first hour at or after 120 h, and a run longer than 120 h gets a second
+    candidate. This is the event rule of §4
     (same code path, `events.first_crossings`), for symmetry with the event definition. The period is per coin, runs
     across calendar months and across the sign of R_i. The kept and suppressed candidate counts are written in the
     event file (`candidates_kept`, `candidates_suppressed_by_refractory`).
@@ -250,8 +251,10 @@ every event; the residual outcome is rescaled to sd(y). **C2 first crossings** (
 ±5 d, 95 % month-block CIs with 10,000 draws, `STATISTICAL_BLOCKER` below 80 %.
 
 The amended-C2 run is `sim/c2-first-crossing/` (`SHA256SUMS` sha256
-`9740863e45353a97ee855f71522192e7b2db5cbf513d54008161fdea9c3b0405`; `power_fc.py` `092898be…1da71`,
-`power-results.json` `310e2b8c…570f080`, `summary.md` `0917faf5…cce05`). It runs `sim_h2.power_run` unchanged with one
+`9740863e45353a97ee855f71522192e7b2db5cbf513d54008161fdea9c3b0405`; `power_fc.py`
+`092898bef07567b71a83a0d2b3dcc25e25196ebfd338523b5e53facedfc1da71`, `power-results.json`
+`310e2b8c67d0a2d0084b7b7be78a93c732ba93b3c8e385db9d65c701aea358e1`, `summary.md`
+`0917faf54cab640fdcba7674a303dbe15bf0772d2b3303cbf17779d93ecfce05`). It runs `sim_h2.power_run` unchanged with one
 substitution, the C2 pool restricted to first crossings, on the **same seeds** as the drafted-C2 run
 (`sim/power-results.json` sha256 `6d4b63a2…f6b983`, listed in `sim/SHA256SUMS` sha256 `fc5d9ffa…039cc8`): panels,
 events and C1 draws are identical, the comparison is paired. No scipy is installed in the pinned runtime, so the one
@@ -302,14 +305,29 @@ Stated accurately:
   Under the null: P(G2) ≈ 0.04, P(G5) ≈ 0.05; S1 averages −5 to +9 bp across the scenario and sd(y) cells.
 - **C2 match rate and the 80 % rule.** Over the 600 panels, the first-crossing match rate is 0.803 at its minimum (one
   t4 run), its 1st percentile 0.838, 31 runs below 0.85 and **none below 0.80** (P(`STATISTICAL_BLOCKER`) = 0.00 in
-  every cell). The pool is about 8 times smaller (§9.2), so the margin above 80 % is **thinner** than with the
-  drafted C2 (minimum 0.820, 1st percentile 0.847, 8 runs below 0.85, same panels). The module check of §9.2 gives a
+  every cell). The pool is 8 to 13 times smaller (§9.2), so the margin above 80 % is **thinner** than with the
+  drafted C2 (minimum 0.820, 1st percentile 0.847, 8 runs below 0.85, same panels); the first-crossing rate is never
+  higher than the drafted one in any of the 600 paired runs (its pool is a subset). The module check of §9.2 gives a
   minimum of 0.841 over 600 more panels. On real data (bar gaps, listings, delistings, coins absent in some months)
   the rate may be lower: a `STATISTICAL_BLOCKER` is a plausible outcome, not a negligible one.
-- **The caliper stays `none`.** The caliper rule (§10.2) was run on the all-hours pool. On the first-crossing pool a
-  caliper can only remove candidates, so its match rate is at most that of `none` in each run; `none` itself falls
-  below 90 % in 242 of the 600 runs, so no caliper could reach 90 % in every run and the rule's mechanical choice
-  remains `none`.
+- **The match rate is sensitive to the real scale of z_m.** With caliper `none` and reuse allowed, an event goes
+  unmatched only when its (month, sign) pool is empty, so the rate depends almost entirely on how often the market
+  shows |z_m| ≥ 2, and the √24 scaling of z_m is nominal (§4). A stress run on fresh synthetic panels
+  (`sim/c2-first-crossing/stress/`, `SHA256SUMS` sha256
+  `f6e42143616b3e397c6e339100a5323b8bbdf8b0c84ea4800a1eb34703cd3a91`; 100 panels per row, match rate only) gives
+  P(match rate < 80 %):
+  - at the nominal scale: 0.00 in five scenarios and 0.02 under SV + t4 R² 0.35–0.75 (minimum 0.780);
+  - with z_m 10 % smaller than nominal (24 h variance ratio 0.8): **0.26 to 0.56 per scenario** (all-hours pool on
+    the same panels: 0.12 to 0.47);
+  - with a variance ratio of 0.64: 0.90 to 1.00;
+  - with heavier Student-t3 tails at the nominal scale: 0.00 to 0.01 (p10 of the rate 0.83–0.84).
+  This risk comes mostly from the (month, sign) pool and the 80 % rule, both kept by the owner; the rule is not
+  changed.
+- **The caliper stays `none`.** The caliper rule (§10.2) was run on the all-hours pool, on its own 36 fixed seeds.
+  The first-crossing pool is a subset of the all-hours pool, so in each of those runs the first-crossing match rate
+  with any caliper is at most the all-hours rate with `none`; that rate was already below 90 % in 9 of the 36 runs,
+  so no caliper can reach 90 % in every run and the rule's mechanical choice remains `none`. (In the 600 power runs,
+  first crossings with `none` fall below 90 % in 242.)
 - **Limits of the simulation:** the simulator reimplements the rules; it is not the `research_h2` code (one common
   factor stands in for the leave-one-out top 30; the true β and the true σ are used; C1 is drawn over all hours of
   the month); bar gaps and delistings are not modelled; the effect is constant across events; the dispersion sd(y)
@@ -329,10 +347,12 @@ S2 = −117 bp on 90 normal panels).
 **Amended C2 (first crossings, owner decision of 2026-10-15).** One candidate per episode removes the episode-length
 weighting at its source. Re-checked on the **module code**: `sim/c2-first-crossing/null_module.py` runs the amended
 `research_h2.events.compute` (code digest `d52c03848928cd1717385b641d1cb0dc667efb5f4376a20938d6e006f29839b1`, the
-digest of the code committed with this text) on random-walk hourly closes over the real bar grid (45 decision months,
+digest of the code committed with this text) on random-walk hourly closes laid on the protocol's hourly time grid (no
+market data; 45 decision months,
 30 coins, the six generator scenarios of §9.1, 100 panels each, seeds 50261015 + 1000 × scenario + k) and scores
 forward 72 h hourly returns, with no effect. The drafted C2 is matched on the same panels for a paired comparison.
-Results (`null-module-results.json` sha256 `458a463c…f136e`), S2 mean ± sd over panels:
+Results (`null-module-results.json` sha256 `458a463caf4dd99559c67ea92dcd0ddf13b0cab82f6e44cc0b0c97d8cebd3bdb`), S2
+mean ± sd over panels:
 
 | Scenario | Events (median) | Candidates kept / suppressed | S2 first crossings | P(S2 > 0) | C2 y_raw (market part) | Match min / mean | S2 drafted C2 | S1 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -345,19 +365,22 @@ Results (`null-module-results.json` sha256 `458a463c…f136e`), S2 mean ± sd ov
 | All 600 panels | | | −67 ± 111 bp | 0.26 | | 0.841 min | −187 ± 125 bp | |
 
 The simulator gives the same picture on its own panels (§9.1 run, μ = 0, sd(y) 800 bp): S2 −20 ± 87 to −118 ± 104 bp
-per scenario (−55 ± 101 bp over the 600 panels; drafted C2 −112 to −284 bp), P(S2 > 0) 0.14–0.44 per scenario
-(0.31 pooled; drafted 0.04–0.08).
+per scenario (−55 ± 101 bp over the 600 panels; drafted C2 −112 to −284 bp), P(S2 > 0) 0.14–0.44 per scenario and
+0.31 pooled (drafted C2 at the same sd: 0.00–0.10 per scenario, 0.06 pooled).
 
 - **The bias is reduced by about two thirds, not removed.** Under the simulated null S2 still averages −50 to −95 bp
-  on the module code, almost entirely through the market part of the C2 outcome (+49 to +91 bp): matching inside
-  (calendar month, sign) pools with the nearest |R_i| still selects shared shocks that revert. The events' own y_raw
+  on the module code, almost entirely through the market part of the C2 outcome (+49 to +91 bp). A plausible
+  mechanism is that matching inside (calendar month, sign) pools with the nearest |R_i| still selects shared shocks
+  that revert; this was **not decomposed** (no random-pick or per-shock-weighted variant was run on the
+  first-crossing pool to separate pool weighting from size matching). The events' own y_raw
   averages −1 to +3 bp; S1 shows no bias (−7 to +3 bp).
 - **Consequence.** C2 remains **conservative under the simulated null**: it pushes against a PASS, now by about
   50–100 bp instead of 110–300 bp. Its market-dynamics component has an unknown sign on real data (a market that
   keeps moving after shared shocks inflates S2, one that reverts deflates it); the C2 decomposition (§6) reports it.
-- **Match rate.** The first-crossing pool holds about 3,000–3,800 candidates per panel instead of about 30,000; no run
-  fell below the 80 % `STATISTICAL_BLOCKER` line (0 of 600 module panels, minimum 0.841; 0 of 600 simulator panels,
-  minimum 0.803), with a thinner margin than the drafted C2 (§9.1).
+- **Match rate.** The first-crossing pool holds about 2,900–3,800 candidates per panel instead of 30,700–38,600
+  qualifying hours (8.2 times fewer under normal innovations, 13.3 times under SV + t4); no run fell below the 80 %
+  `STATISTICAL_BLOCKER` line (0 of 600 module panels, minimum 0.841; 0 of 600 simulator panels, minimum 0.803), with
+  a thinner margin than the drafted C2 and a strong sensitivity to the scale of z_m (§9.1).
 - The arbitration note's statement that "the control is unbiased" stays withdrawn.
 
 ### 9.3 Costs and the floor G3
@@ -405,8 +428,9 @@ measure profitability. G7 binds before G3 (removing the top 5 % amounts to requi
    (month, sign) cells with no shared-shock hour, so even `none` can fall below 90 % (minimum 0.833; 0.820 in the
    power runs); no synthetic run fell below the 80 % `STATISTICAL_BLOCKER` line (0 of 36 + 600), with a small
    margin under clustered volatility. The **80 % rule is counted with this caliper** (§6). This step ran on the
-   drafted all-hours pool, before the C2 amendment (§10.14); on the first-crossing pool a caliper can only lower the
-   match rate and `none` itself falls below 90 % in 242 of 600 runs, so the rule's choice stays `none` (§9.1).
+   drafted all-hours pool, before the C2 amendment (§10.14); the first-crossing pool is a subset of it, so on the
+   rule's 36 runs no caliper can exceed the all-hours `none` rate, already below 90 % in 9 of them: the rule's choice
+   stays `none` (§9.1).
 3. **Corrected power statements (§9.1).** The arbitration note's "detects 150 to 300 bp with good probability" and
    "0.55 to 0.78 at 300 bp without strong volatility clustering" are replaced by the table of §9.1, computed with the
    amended G4 and the amended C2.
@@ -438,9 +462,9 @@ measure profitability. G7 binds before G3 (removing the top 5 % amounts to requi
     bars; sample standard deviations; the refractory boundary (a trigger exactly 120 h after an event is allowed);
     S1 over events with at least one C1 outcome; the C2 match rate over the G1 sample; G6 counts positive half-years
     among those with ≥ 10 events; G7's base removal uses the largest sum of y.
-14. **C2 candidates amended to first crossings (owner, 2026-10-15).** A C2 candidate is the first hour of each
-    market episode meeting |z| < 1 and |z_m| ≥ 2 for that coin, with the same 120 h per-coin refractory period as the
-    events (§6). Everything else of C2 is unchanged: same calendar month, same sign of R_i, nearest |R_i|, no caliper
+14. **C2 candidates amended to first crossings (owner, 2026-10-15).** A C2 candidate is, per coin, the first hour
+    meeting |z| < 1 and |z_m| ≥ 2, then no candidate during 120 h, as for the events (§6; an episode is delimited by
+    this refractory period, not by a contiguous run of qualifying hours). Everything else of C2 is unchanged: same calendar month, same sign of R_i, nearest |R_i|, no caliper
     (§10.2), greedy chronological matching without replacement where possible, reuse counted, the 80 %
     `STATISTICAL_BLOCKER` rule. Reason: the drafted all-hours pool biased S2 against a PASS by −112 to −302 bp under
     synthetic nulls (simulator and module code); first crossings bring it to about −50 to −95 bp on the module code (§9.2) and raise P(PASS) at
@@ -499,7 +523,8 @@ first-hour C2 candidates were at first not integrated; the owner adopted first c
   market's 20-member rule and the 80 % β window; z thresholds and the refractory period (per coin, the 120 h boundary);
   closed-bar decisions and the 54-minute bar rule; latency t + 5 min, the bounded entry and exit delays and the
   truncation rule; C1 ±5 d, tercile and sign; C2 first-crossing candidates (per coin, 120 h refractory across months
-  and signs, independent of row order, spaced and deterministic on a synthetic panel, recorded as a decision); C2
+  and signs, a suppression across a month boundary, independent of row order, spaced and deterministic on a
+  synthetic panel, recorded as a decision and written in the claim with the G4 rule and the caliper); C2
   nearest size, month and sign, reuse and caliper; the 80 % rule; the amended G4 and the G4-only flag; G1, G6, G7; the CI level parameter; the module order (no hash, wrong hash, write
   once); single-use claims, resumption and the code digest; the runtime and the single owner go; the input re-check at
   consumption; a crash leaving the stage consumed; the market measured to a truncated exit; the one-sample C2
@@ -518,8 +543,11 @@ first-hour C2 candidates were at first not integrated; the owner adopted first c
 - C2 with first-crossing candidates still pushes against a PASS under the simulated null (about −50 to −95 bp on
   the module code, §9.2); its market-dynamics part has an unknown sign on real data. The gate has low power below
   about 150 bp (§9.1).
-- The first-crossing C2 pool is about 8 times smaller than the all-hours pool: the match rate stayed above 80 % in
-  every synthetic run (minimum 0.803) but with a thin margin, and real data may give a `STATISTICAL_BLOCKER` (§9.1).
+- The first-crossing C2 pool is 8 to 13 times smaller than the all-hours pool: the match rate stayed above 80 % in
+  every run of the power and module checks (minimum 0.803) but with a thin margin, and real data may give a
+  `STATISTICAL_BLOCKER` (§9.1). The rate depends on the real scale of z_m: with z_m 10 % smaller than nominal,
+  P(match rate < 80 %) is 0.26–0.56 per synthetic scenario; with heavier t3 tails 0.00–0.01; at the nominal scale
+  0.00–0.02 on fresh panels (§9.1).
 - C1's ±5 d exclusion conditions on the absence of the coin's later shocks, and does not exclude the hours near
   suppressed triggers (§6).
 - The contract value of programme bases is inferred for any minutes without quote and base volume; the swing v2
@@ -531,15 +559,20 @@ first-hour C2 candidates were at first not integrated; the owner adopted first c
 - Taken (owner, 2026-10-15): the four draft choices unchanged (k = 3, primary horizon 3 d, leave-one-out top-30
   market, G3 = 40 bp); development label; G4 amended (S2 > 0 as a point estimate is decisive, its CI published and
   not decisive); C2 caliper set by the synthetic rule (`none`); C1 ±5 d kept; data step authorised.
-- **C2 amended (owner, 2026-10-15, answer to the C2 null bias of §9.2):** C2 candidates are first crossings — the
-  first hour of each market episode meeting |z| < 1 and |z_m| ≥ 2 for that coin, with the same 120 h per-coin
-  refractory period as the events (symmetry with the event definition). Everything else of C2 unchanged (same
+- **C2 amended (owner, 2026-10-15, answer to the C2 null bias of §9.2):** C2 candidates are first crossings — per
+  coin, the first hour meeting |z| < 1 and |z_m| ≥ 2, then no candidate during the same 120 h refractory period as
+  the events (symmetry with the event definition; an episode is delimited by this period, §6). Everything else of C2 unchanged (same
   calendar month, same sign of R_i, nearest |R_i|, no caliper as chosen by the frozen rule, greedy chronological
   matching without replacement where possible, reuse counted, 80 % `STATISTICAL_BLOCKER` rule). G4 stays as amended.
   All other criteria unchanged. The owner authorised the freeze after the re-simulation and check, done on synthetic
   panels only (§9.1, §9.2: `sim/c2-first-crossing/`); **the single Gate 1 run is not authorised**.
-- Remaining steps: the freeze itself (body sha256, code digest, `FROZEN` line); then, separately, the owner's go for
-  the single Gate 1 run.
+- Freeze review corrections (2026-10-15, no decision changed): exact hashes of the cited files; the match rate's
+  sensitivity to the scale of z_m stated (§9.1, §13); the episode wording made exact (§6); pool sizes, like-for-like
+  null comparisons and the undecomposed bias mechanism (§9.2); the caliper argument on the rule's own runs (§9.1,
+  §10.2); two test assertions (§12). The `research_h2` code is unchanged, so the code digest frozen below is the one
+  that ran the module null check of §9.2 (its `events.py` docstring keeps the short "first hour of each episode",
+  which §6 now defines).
+- Remaining step: the owner's separate go for the single Gate 1 run.
 
 ## 15. Freeze
 
@@ -548,5 +581,6 @@ the following blank line). At the freeze, the hash, the time, the commit and the
 (`python -m scripts.research_h2.cli digest`) are written on a `FROZEN` line below and in
 `PREREGISTRATION-H2-GATE1.sha256`.
 
-Status: **READY_TO_FREEZE** — the owner's C2 decision of 2026-10-15 is written in (§6, §10.14, §14) and re-simulated
-on synthetic panels (§9); no sha256 yet; the Gate 1 run is not authorised.
+Status: **FROZEN, not executed** — the owner's C2 decision of 2026-10-15 is written in (§6, §10.14, §14) and
+re-simulated on synthetic panels (§9); no claim, event file or outcome exists; the single Gate 1 run is not
+authorised.

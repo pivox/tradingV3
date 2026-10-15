@@ -245,6 +245,11 @@ def test_c2_candidates_are_first_crossings_with_the_event_refractory_period():
     assert {k: v.tolist() for k, v in ev.c2_pool(table, kept).items()} == {k: v.tolist() for k, v in pools.items()}
     # the rule is the event rule: same helper, same 120 h period
     assert pr.C2_REFRACTORY_H == pr.REFRACTORY_H == 120 and pr.C2_CANDIDATES == "first_crossing"
+    # month boundary: bar 744 opens month 1; an hour of month 1 less than 120 h after a month-0 candidate is suppressed
+    edge = {"inst": np.array([2, 2, 2]), "bar": np.array([700, 744, 820]), "month": np.array([0, 1, 1]),
+            "z": np.array([0.1, 0.1, 0.1]), "z_m": np.array([2.5, -2.5, 2.5]), "R_i": np.array([0.05, -0.05, 0.05]),
+            "reason": np.zeros(3, dtype=np.int8)}
+    assert ev.c2_candidates(edge) == ([0, 2], [1])
     shuffled = {k: v[::-1].copy() for k, v in table.items()}
     n = len(rows)
     assert sorted(n - 1 - r for r in ev.c2_candidates(shuffled)[0]) == kept  # row order does not matter
@@ -438,7 +443,10 @@ def test_claims_are_single_use_and_pin_the_code(tmp_path, monkeypatch):
     out = tmp_path / "run"
     with pytest.raises(cl.ClaimError):
         cl.claim(out, "events", prereg, body, owner_go="", inputs={})
-    cl.claim(out, "events", prereg, body, owner_go="owner 2026-10-16", inputs={})
+    document = cl.claim(out, "events", prereg, body, owner_go="owner 2026-10-16", inputs={})
+    decisions = {"g4_rule": "point_estimate", "c2_caliper": "none", "c2_candidates": "first_crossing"}
+    assert document["decisions"] == decisions  # the owner's decisions are recorded with the claim
+    assert json.loads((out / "events-claim.json").read_text())["decisions"] == decisions
     with pytest.raises(cl.ClaimError):
         cl.claim(out, "events", prereg, body, owner_go="owner", inputs={})
     with pytest.raises(cl.ClaimError):
