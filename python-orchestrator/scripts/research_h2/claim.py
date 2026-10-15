@@ -194,7 +194,8 @@ def claim(out: Path, stage: str, prereg: Path, expected_sha256: str, owner_go: s
     inputs = verify_inputs() if inputs is None else inputs
     document = {"stage": stage, "claimed_at": now(), "protocol_path": str(Path(prereg).resolve()), "protocol_body_sha256": actual,
                 "code": identity, "code_sha256": code_digest(identity), "runtime": environment, "prerequisites": prerequisites, "inputs": inputs,
-                "owner_go": owner_go.strip(), "decisions": {"g4_rule": pr.G4_RULE, "c2_caliper": pr.C2_CALIPER_NAME}}
+                "owner_go": owner_go.strip(), "decisions": {"g4_rule": pr.G4_RULE, "c2_caliper": pr.C2_CALIPER_NAME,
+                                                          "c2_candidates": pr.C2_CANDIDATES}}
     _write_exclusive(target, document)
     return document
 

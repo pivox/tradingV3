@@ -225,9 +225,60 @@ def test_c2_pool_requires_idiosyncratic_calm_and_market_move():
     assert {k: v.tolist() for k, v in ev.c2_pool(table).items()} == {(0, True): [0]}
 
 
+def test_c2_candidates_are_first_crossings_with_the_event_refractory_period():
+    # coin 0: an episode at bars 10-12, a new qualifying stretch at 14 (inside the refractory period: suppressed),
+    # bar 129 (119 h after 10: suppressed), bar 130 (exactly 120 h: a new candidate, in the next month), bar 131 (suppressed).
+    # coin 1 qualifies at bar 11 while coin 0 is refractory: the period is per coin. Bar 20 of coin 1 is not evaluable.
+    rows = [(0, 10, 0, 0.5, 2.5, 0.10), (0, 11, 0, 0.2, 3.0, 0.11), (0, 12, 0, 0.3, 2.1, 0.12), (0, 13, 0, 0.3, 1.5, 0.12),
+            (0, 14, 0, 0.1, -2.2, -0.09), (0, 129, 0, 0.4, 2.0, 0.08), (0, 130, 1, 0.4, 2.0, 0.07), (0, 131, 1, 0.4, 2.0, 0.07),
+            (1, 11, 0, -0.9, 2.4, 0.05), (1, 20, 0, 0.0, 2.4, 0.05)]
+    inst, bar, month, z, z_m, r_i = (np.array(c) for c in zip(*rows))
+    reason = np.zeros(len(rows), dtype=np.int8)
+    reason[9] = 3
+    table = {"inst": inst, "bar": bar, "month": month, "z": z.astype(float), "z_m": z_m.astype(float), "R_i": r_i.astype(float),
+             "reason": reason}
+    kept, suppressed = ev.c2_candidates(table)
+    assert kept == [0, 6, 8]
+    assert suppressed == [1, 2, 4, 5, 7]
+    pools = ev.c2_pool(table)
+    assert {k: v.tolist() for k, v in pools.items()} == {(0, True): [0, 8], (1, True): [6]}
+    assert {k: v.tolist() for k, v in ev.c2_pool(table, kept).items()} == {k: v.tolist() for k, v in pools.items()}
+    # the rule is the event rule: same helper, same 120 h period
+    assert pr.C2_REFRACTORY_H == pr.REFRACTORY_H == 120 and pr.C2_CANDIDATES == "first_crossing"
+    shuffled = {k: v[::-1].copy() for k, v in table.items()}
+    n = len(rows)
+    assert sorted(n - 1 - r for r in ev.c2_candidates(shuffled)[0]) == kept  # row order does not matter
+
+
+def test_c2_first_crossings_on_a_synthetic_panel_are_spaced_and_deterministic():
+    closes, _ = synthetic_closes(seed=11)
+    months = ["2023-03", "2023-04"]
+    table = ev.build_table(closes, {m: sorted(COINS) for m in months}, months)
+    kept, suppressed = ev.c2_candidates(table)
+    assert kept and suppressed and ev.c2_candidates(table) == (kept, suppressed)
+    with np.errstate(invalid="ignore"):
+        qualifying = set(np.flatnonzero((table["reason"] == 0) & (np.abs(table["z"]) < 1) & (np.abs(table["z_m"]) >= 2)).tolist())
+    assert set(kept) | set(suppressed) == qualifying and not set(kept) & set(suppressed)
+    by_coin = {}
+    for row in kept:
+        by_coin.setdefault(int(table["inst"][row]), []).append(int(table["bar"][row]))
+    for bars in by_coin.values():
+        assert bars == sorted(bars) and all(b - a >= pr.C2_REFRACTORY_H for a, b in zip(bars, bars[1:]))
+    for row in suppressed:  # each suppressed hour lies within 120 h after a kept candidate of its coin
+        bars = np.array(by_coin[int(table["inst"][row])])
+        gap = int(table["bar"][row]) - bars
+        assert np.any((gap > 0) & (gap < pr.C2_REFRACTORY_H))
+
+
 def test_caliper_rule_is_the_simulation_choice():
     assert pr.C2_CALIPER_NAME == "none" and pr.caliper() is None
     assert pr.CALIPER_RULE_SHA256 == "3753964e537cf5ebda76f425e4b3e5b0651807674b33b4f6e9d1a1aaec5ce372"
+
+
+def test_c2_candidate_rule_is_a_recorded_decision(monkeypatch):
+    assert pr.unresolved_decisions() == []
+    monkeypatch.setattr(pr, "C2_CANDIDATES", "all_hours")
+    assert any("C2 candidates" in item for item in pr.unresolved_decisions())
 
 
 # ----------------------------------------------------------------------------- latency and outcome prices
@@ -482,6 +533,16 @@ def test_event_document_is_deterministic():
     second = ev.compute(closes, universe_doc(), [MONTH])
     assert hashlib.sha256(ev.canonical(first)).hexdigest() == hashlib.sha256(ev.canonical(second)).hexdigest()
     assert first["sensitivities"]["btc_market"] is not None
+    assert first["c2"]["candidates"] == "first_crossing" and first["c2"]["refractory_h"] == pr.C2_REFRACTORY_H
+    assert first["parameters"]["C2_CANDIDATES"] == "first_crossing"
+    assert first["c2"]["candidates_kept"] == sum(first["c2"]["pool_sizes"].values())
+    controls = {}
+    for record in first["events"]:
+        if record["c2"] is not None:
+            controls.setdefault(record["c2"]["inst"], set()).add(record["c2"]["bar"])
+    for bars in controls.values():  # matched controls are first crossings: 120 h apart per coin
+        ordered = sorted(bars)
+        assert all(b - a >= pr.C2_REFRACTORY_H for a, b in zip(ordered, ordered[1:]))
     for record in first["events"]:
         assert pr.DECISION_FROM_MS <= record["decision_ms"] < pr.DECISION_TO_MS
         if record["c2"] is not None:

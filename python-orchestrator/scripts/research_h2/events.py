@@ -3,10 +3,11 @@ BEFORE any outcome is computed.
 
 No event quantity reads a price after the decision hour t: every quantity uses hourly bars closing at or before t
 (the β / σ window ends at t - 24 h). The C1 and C2 control hours are chosen here too, so the outcome module only
-measures. Each C2 candidate's own z and z_m are decision-time quantities, but the pool is built after the fact over
-the whole calendar month, so which control an event gets depends on the candidate hours that occur later in the month
-(the pool-weighting mechanism of §9.2). C1 likewise excludes hours within ±120 h of the coin's events, later ones
-included (§6).
+measures. C2 candidates are first crossings (owner decision of 2026-10-15): the first hour of each shared-shock
+episode of a coin, then a 120 h per-coin refractory period, as for the events. Whether an hour is a candidate depends
+only on that hour and the coin's earlier hours, but the matching is done after the fact over the whole calendar month,
+so which control an event gets still depends on candidate hours later in the month (§9.2). C1 likewise excludes hours
+within ±120 h of the coin's events, later ones included (§6).
 """
 
 from __future__ import annotations
@@ -143,33 +144,49 @@ def build_table(closes: Mapping[str, np.ndarray], months_universe: Mapping[str, 
     return table
 
 
+def first_crossings(table: Mapping[str, np.ndarray], mask: np.ndarray, refractory: int) -> tuple[list[int], list[int]]:
+    """Rows of `mask` kept as first crossings: per coin, in chronological order, a row is kept unless it falls less
+    than `refractory` hours after the coin's last kept row (then it is suppressed and does not restart the period).
+    Returns (kept rows, suppressed rows), both in (instrument id, hour) order."""
+    rows = np.flatnonzero(mask)
+    rows = rows[np.lexsort((table["bar"][rows], table["inst"][rows]))]
+    kept, suppressed = [], []
+    last: dict[int, int] = {}
+    for row in rows:
+        inst, bar = int(table["inst"][row]), int(table["bar"][row])
+        if inst in last and bar - last[inst] < refractory:
+            suppressed.append(int(row))
+            continue
+        last[inst] = bar
+        kept.append(int(row))
+    return kept, suppressed
+
+
 def detect(table: Mapping[str, np.ndarray], k: float) -> tuple[list[int], list[int]]:
     """Trigger |z| >= k and |z_m| <= 1 on evaluable coin-hours; first crossing per coin, then no event for that coin
     during REFRACTORY_H hours. Returns (event rows, suppressed trigger rows), chronological per coin."""
     with np.errstate(invalid="ignore"):
         trig = (table["reason"] == 0) & (np.abs(table["z"]) >= k) & (np.abs(table["z_m"]) <= pr.ZM_MAX)
-    events, suppressed = [], []
-    last: dict[int, int] = {}
-    for row in np.flatnonzero(trig):
-        inst, bar = int(table["inst"][row]), int(table["bar"][row])
-        if inst in last and bar - last[inst] < pr.REFRACTORY_H:
-            suppressed.append(int(row))
-            continue
-        last[inst] = bar
-        events.append(int(row))
-    return events, suppressed
+    return first_crossings(table, trig, pr.REFRACTORY_H)
 
 
 def _sign_positive(value: float) -> bool:
     return bool(value > 0)
 
 
-def c2_pool(table: Mapping[str, np.ndarray]) -> dict[tuple[int, bool], np.ndarray]:
-    """Shared-shock candidates: every evaluable coin-hour with |z| < 1 and |z_m| >= 2, keyed by (month, R_i > 0),
-    rows sorted by (bar, instrument) so ties go to the earliest hour, then the lowest instrument id."""
+def c2_candidates(table: Mapping[str, np.ndarray]) -> tuple[list[int], list[int]]:
+    """Shared-shock first crossings (owner decision of 2026-10-15): evaluable coin-hours with |z| < 1 and |z_m| >= 2;
+    per coin the first hour of each episode, then no candidate for that coin during C2_REFRACTORY_H hours (the event
+    rule). Returns (candidate rows, refractory-suppressed rows)."""
     with np.errstate(invalid="ignore"):
         mask = (table["reason"] == 0) & (np.abs(table["z"]) < pr.C2_Z_MAX) & (np.abs(table["z_m"]) >= pr.C2_ZM_MIN)
-    rows = np.flatnonzero(mask)
+    return first_crossings(table, mask, pr.C2_REFRACTORY_H)
+
+
+def c2_pool(table: Mapping[str, np.ndarray], candidates: list[int] | None = None) -> dict[tuple[int, bool], np.ndarray]:
+    """The C2 candidates (`c2_candidates`) keyed by (month, R_i > 0), rows sorted by (bar, instrument) so ties go to
+    the earliest hour, then the lowest instrument id."""
+    rows = np.array(c2_candidates(table)[0] if candidates is None else candidates, dtype=np.int64)
     rows = rows[np.lexsort((table["inst"][rows], table["bar"][rows]))]
     pools: dict[tuple[int, bool], list[int]] = defaultdict(list)
     for row in rows:
@@ -280,7 +297,8 @@ def compute(closes: Mapping[str, np.ndarray], universe: Mapping, months: list[st
     months_universe = {m: universe["months"][m]["universe"] for m in months}
     table = build_table(closes, months_universe, months, "loo")
     events, suppressed = detect(table, pr.K)
-    pools = c2_pool(table)
+    candidates, candidates_suppressed = c2_candidates(table)
+    pools = c2_pool(table, candidates)
     c2 = match_c2(table, events, pools, pr.caliper())
     c1 = select_c1(table, events)
     near_suppressed = _c1_near_suppressed(table, c1, events, suppressed)
@@ -319,7 +337,9 @@ def compute(closes: Mapping[str, np.ndarray], universe: Mapping, months: list[st
                        "refractory_suppressed": [{"inst": str(table["instruments"][table["inst"][r]]), "bar": int(table["bar"][r]),
                                                   "z": float(table["z"][r])} for r in suppressed]},
         "events_per_hour": {str(k): v for k, v in sorted(per_hour.items())},
-        "c2": {"caliper": pr.C2_CALIPER_NAME, "pool_sizes": pool_sizes, "matched": matched,
+        "c2": {"caliper": pr.C2_CALIPER_NAME, "candidates": pr.C2_CANDIDATES, "refractory_h": pr.C2_REFRACTORY_H,
+               "candidates_kept": len(candidates), "candidates_suppressed_by_refractory": len(candidates_suppressed),
+               "pool_sizes": pool_sizes, "matched": matched,
                "reused": sum(1 for r in records if r["c2"] is not None and r["c2"]["reuse"]),
                "match_rate_at_selection": matched / len(records) if records else None},
         "c1": {"events_without_control": sum(1 for r in records if not r["c1"]["bars"]),
@@ -341,7 +361,7 @@ def _minimal(table: Mapping[str, np.ndarray], rows: list[int]) -> list[dict]:
 
 def _parameters() -> dict:
     names = ("K", "K_SENSITIVITY", "ZM_MAX", "REFRACTORY_H", "BETA_WINDOW_H", "BETA_LAG_H", "BETA_MIN_SHARE", "SHOCK_H",
-             "BAR_MIN_MINUTES", "MIN_MARKET_MEMBERS", "C2_Z_MAX", "C2_ZM_MIN", "C2_CALIPER_NAME", "C1_PER_EVENT",
+             "BAR_MIN_MINUTES", "MIN_MARKET_MEMBERS", "C2_Z_MAX", "C2_ZM_MIN", "C2_CANDIDATES", "C2_REFRACTORY_H", "C2_CALIPER_NAME", "C1_PER_EVENT",
              "C1_EXCLUSION_H", "SEED", "DECISION_FROM_MS", "DECISION_TO_MS", "DATA_END_MS", "GRID_START_MS")
     return {name: getattr(pr, name) for name in names}
 

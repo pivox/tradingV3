@@ -95,6 +95,10 @@ PRIMARY_HORIZON_H = 72
 # ----------------------------------------------------------------------------- controls (§6)
 C2_Z_MAX = 1.0
 C2_ZM_MIN = 2.0
+# Owner decision of 2026-10-15: candidates are first crossings (first hour of each episode of a coin meeting |z| < 1
+# and |z_m| >= 2), with the events' per-coin refractory period; every other C2 rule unchanged.
+C2_CANDIDATES = "first_crossing"
+C2_REFRACTORY_H = REFRACTORY_H
 C2_CALIPERS = {"none": None, "50": 0.50, "35": 0.35, "25": 0.25}
 C2_CALIPER_NAME: str | None = "none"  # set by the synthetic rule CALIPER-RULE.md (sha256 CALIPER_RULE_SHA256)
 C2_MIN_MATCH = 0.80
@@ -133,4 +137,6 @@ def unresolved_decisions() -> list[str]:
         out.append("G4 rule (point estimate or CI lower bound)")
     if C2_CALIPER_NAME not in C2_CALIPERS:
         out.append("C2 size caliper")
+    if C2_CANDIDATES != "first_crossing":
+        out.append("C2 candidates (first crossings, owner decision of 2026-10-15)")
     return out
