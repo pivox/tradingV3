@@ -10,6 +10,7 @@ Packages (one owner each, joined only through ``contracts``):
 - ``adaptive``: adaptive position management (agent B).
 - ``validation``: B0/B1/B2/B3 experimental framework, metrics, power (agent C).
 - ``integration``: risk admission, simulated execution, audit, mapping to TradingCore (agent D).
+- ``e2e``: the end-to-end synthetic example wiring all of them (integrator); ``python -m scripts.research_h3.e2e``.
 
 Nothing here places orders, reads secrets, reads market data or depends on the Symfony or Temporal runtime.
 Docs: docs/handbook/research/H3-*.md.

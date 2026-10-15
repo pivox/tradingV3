@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import functools
 import hashlib
 import json
 import math
@@ -302,13 +303,19 @@ def _coerce(tp: Any, value: Any, *, wire: bool) -> Any:
     raise ContractError('h3_field_type_unsupported')
 
 
+@functools.lru_cache(maxsize=None)
+def _type_hints(cls: type) -> dict[str, Any]:
+    """Resolved field annotations of a contract class, computed once per class (read-only: never mutate)."""
+    return typing.get_type_hints(cls)
+
+
 class Contract:
     """Frozen, canonical, fingerprintable value. Subclasses are frozen dataclasses with a ``SCHEMA`` id."""
 
     SCHEMA: ClassVar[str] = ''
 
     def __post_init__(self) -> None:
-        hints = typing.get_type_hints(type(self))
+        hints = _type_hints(type(self))
         for f in dataclasses.fields(self):  # type: ignore[arg-type]
             object.__setattr__(self, f.name, _coerce(hints[f.name], getattr(self, f.name), wire=False))
         self._validate()
@@ -333,7 +340,7 @@ class Contract:
             raise ContractError('h3_wire_document_invalid')
         if document.get('schema') != cls.SCHEMA:
             raise ContractError('h3_schema_mismatch')
-        hints = typing.get_type_hints(cls)
+        hints = _type_hints(cls)
         names = [f.name for f in dataclasses.fields(cls)]  # type: ignore[arg-type]
         if set(document) - {'schema'} != set(names):
             raise ContractError('h3_wire_fields_mismatch')
@@ -583,7 +590,12 @@ class Bar(Contract):
 
 @dataclass(frozen=True)
 class Quote(Contract):
-    """Top of book at ``observed_ms``, received at ``available_ms``."""
+    """Top of book at ``observed_ms``, received at ``available_ms``.
+
+    ``bid`` and ``ask`` are prices per unit of the base. ``bid_size`` and ``ask_size`` are in the venue's own size
+    unit; schema 1 does not normalise them (contracts or base units) and no schema-1 computation reads them, so they
+    are informational only (schema v2 backlog: fix the unit).
+    """
 
     SCHEMA: ClassVar[str] = 'h3.quote/1'
     inst_id: str
@@ -812,9 +824,14 @@ class PositionState(Contract):
     """Observable state of one open (or just closed) simulated position at ``header.clock.decision_ms``.
 
     Prices are per unit of the base, quantities in contracts. ``mfe_price`` / ``mae_price`` are the most favourable
-    / adverse prices seen since entry up to ``observed_ms`` (entry included). ``initial_risk_amount`` is the R unit
-    in quote currency. ``funding_paid`` is positive when paid. ``open_risk_total`` is the portfolio's open risk
-    including this position; ``risk_budget_remaining`` = H3 total limit x equity - open_risk_total.
+    / adverse prices seen since entry up to ``observed_ms`` (entry included), built from post-fill observations only:
+    the fill price and what traded after the fill; an extreme of the entry bar that may precede the fill must be
+    excluded (the H3 simulator fills at a bar open, so its whole entry bar is post-fill). ``initial_risk_amount`` is
+    the R unit in quote currency: the H3 risk gate's cost-inclusive nominal loss at the initial stop. ``funding_paid``
+    is positive when paid. ``open_risk_total`` is the portfolio's open risk including this position;
+    ``risk_budget_remaining`` = H3 total limit x equity - open_risk_total. ``volatility`` has no fixed unit in schema
+    1: producers set it to None until schema v2 fixes one, and consumers may use only whether it is known.
+    ``actions_applied`` lists the ids of actions really applied to the position, never refused or failed ones.
     """
 
     SCHEMA: ClassVar[str] = 'h3.position_state/1'
@@ -952,7 +969,8 @@ class AdaptiveAction(Contract):
 
 @dataclass(frozen=True)
 class RiskDecision(Contract):
-    """Risk gate verdict on an entry or an adaptive action. Amounts in the portfolio quote currency.
+    """Risk gate verdict on an entry or an adaptive action. Amounts in the portfolio quote currency; the H3 gate's
+    ``risk_amount`` is cost-inclusive (gross loss at the stop + fees, spread, slippage and a funding provision).
 
     ``risk_amount`` is the nominal loss at the stop of the subject position after the decision (0 when it is closed);
     ``open_risk_*`` and ``notional_*`` are portfolio totals. An ADMIT that breaks the rules cannot be constructed:
@@ -1101,7 +1119,13 @@ class ModelManifest(Contract):
 
 @dataclass(frozen=True)
 class CostModel(Contract):
-    """Execution costs applied identically to the four variants. Rates are fractions (0.0005 = 5 bp)."""
+    """Execution costs applied identically to the four variants. Rates are fractions (0.0005 = 5 bp) of the notional
+    of one execution leg. ``spread_model`` and ``funding_model`` are identifiers only: schema 1 carries no numeric
+    half-spread or funding provision (the integration package holds them in ``ExecutionAssumptions``).
+    ``pessimistic_multiplier`` is applied by the simulator, and by the sizing that must match it, under the
+    pessimistic cost scenario; the schema-1 implementation scales spread and slippage and leaves the contractual fees
+    unscaled.
+    """
 
     SCHEMA: ClassVar[str] = 'h3.cost_model/1'
     maker_fee_rate: Decimal

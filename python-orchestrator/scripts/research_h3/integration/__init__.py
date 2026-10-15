@@ -9,6 +9,8 @@ Fake/Paper Execution -> Adaptive Management -> Risk Validation -> Audit. In this
 - ``audit``: ``AuditJournal`` (``contracts.AuditSink``), append-only hash chain per experiment and variant;
 - ``candidates``: ``SyntheticCandidateProvider`` (``contracts.CandidateProvider``), no economic claim;
 - ``tradingcore_map``: H3 contract fields -> PHP canonical DTO fields, and the blocking gaps.
+- ``validation_adapter``: ``RunVariantSimulator``, ``run_variant`` behind the validation harness's ``VariantSimulator``
+  protocol (added at integration; imported explicitly, not re-exported, so this package does not import ``validation``).
 
 Scores never reach an order without ``H3RiskGate.admit_entry``; adaptive actions never change a position without
 ``H3RiskGate.validate_action``. Research prototype: synthetic data only, no order, no exchange, no secret, no

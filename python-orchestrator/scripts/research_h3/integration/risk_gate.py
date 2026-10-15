@@ -31,6 +31,14 @@ against the last price); a target stays beyond the last price on the profit side
 >= min size, strictly partial and leaves >= min size; the portfolio's open risk and notional never increase. With the
 kill switch on, only HOLD, TIGHTEN_STOP, PARTIAL_CLOSE and FULL_CLOSE are admitted.
 
+Position guard (defence in depth, added at integration): the gate can be given the adaptive engine's position-level
+checker (``adaptive.guards.check_action`` bound to its ``GuardParams``) as ``action_guard``, with a JSON-ready
+``action_guard_identity`` that is folded into the risk ``PolicyRef`` fingerprint. The gate keeps all its own checks
+and adds every guard violation as ``guard.<code>``, so an action is admitted only when both agree. The guard is
+injected (this module has no dependency on the adaptive package), and without it the gate and its fingerprint are
+unchanged. With the guard, the kill switch admits only HOLD and FULL_CLOSE (the guard's rule), stricter than the gate
+alone.
+
 Idempotency: the same candidate (same fingerprint) for the same portfolio always returns the same decision object
 (same ``decision_id``); a different candidate reusing a candidate id is refused. The same action (same idempotency
 key) returns the same decision. The caller must still refuse to apply a decision id twice (the simulator does).
@@ -41,7 +49,7 @@ TradingCore (``CanonicalRiskEngine``, ``CanonicalPortfolioAdmissionEngine``); se
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -58,6 +66,10 @@ from .costs import (
 
 RISK_DEFINITION = 'cost_inclusive_stop_loss.v1'
 _RISK_REDUCING = (ActionKind.HOLD, ActionKind.TIGHTEN_STOP, ActionKind.PARTIAL_CLOSE, ActionKind.FULL_CLOSE)
+GUARD_REASON_PREFIX = 'guard.'
+
+#: A position-level action checker: violated invariants as reason codes, empty when admissible.
+ActionGuard = Callable[[AdaptiveAction, PositionState], Sequence[str]]
 
 
 @dataclass(frozen=True)
@@ -84,9 +96,13 @@ class H3RiskConfig:
                 'risk_definition': RISK_DEFINITION, 'policy_id': self.policy_id,
                 'policy_version': self.policy_version}
 
-    def policy_ref(self) -> PolicyRef:
+    def policy_ref(self, action_guard_identity: Mapping[str, Any] | None = None) -> PolicyRef:
+        """The risk policy identity. A position guard, when the gate has one, is part of it."""
+        document = self.to_wire()
+        if action_guard_identity is not None:
+            document['action_guard'] = dict(action_guard_identity)
         return PolicyRef(policy_id=self.policy_id, policy_version=self.policy_version,
-                         policy_fingerprint=config_fingerprint(self.to_wire()))
+                         policy_fingerprint=config_fingerprint(document))
 
     @property
     def rates(self) -> CostRates:
@@ -96,9 +112,13 @@ class H3RiskConfig:
 class H3RiskGate:
     """Stateful only for idempotency (decisions already given, per portfolio); otherwise a pure function."""
 
-    def __init__(self, config: H3RiskConfig) -> None:
+    def __init__(self, config: H3RiskConfig, *, action_guard: ActionGuard | None = None,
+                 action_guard_identity: Mapping[str, Any] | None = None) -> None:
+        if (action_guard is None) != (action_guard_identity is None):
+            raise ContractError('h3_risk_action_guard_identity_required')
         self.config = config
-        self.policy: PolicyRef = config.policy_ref()
+        self.action_guard = action_guard
+        self.policy: PolicyRef = config.policy_ref(action_guard_identity)
         self.rates: CostRates = config.rates
         self._entries: dict[tuple[str, str], tuple[str, RiskDecision]] = {}
         self._fills: dict[tuple[str, str, Decimal], RiskDecision] = {}
@@ -350,6 +370,8 @@ class H3RiskGate:
                 reasons.append('partial_close_not_partial')
             elif state.open_quantity - quantity < inst.min_size:
                 reasons.append('remaining_below_min_size')
+        if self.action_guard is not None:
+            reasons.extend(GUARD_REASON_PREFIX + code for code in self.action_guard(action, state))
         return reasons
 
     def _decide_action(self, action: AdaptiveAction, state: PositionState, portfolio: PortfolioView) -> RiskDecision:

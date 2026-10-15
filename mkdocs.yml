@@ -142,6 +142,15 @@ nav:
       - "Leverage > 2x — E1 replay and analysis (NOT_INFORMATIVE)": research/LEVERAGE-GT2-E1-RESULTS.md
       - "H2 — Gate 1 pre-registration (frozen; executed once, FAIL)": research/PREREGISTRATION-H2-GATE1.md
       - "H2 — closure decision (H2_GATE1_FAIL_CLOSED)": research/H2-CLOSURE-DECISION.md
+      - "H3 — opportunity scoring & adaptive management":
+          - "H3 — architecture (DRAFT)": research/H3-ARCHITECTURE.md
+          - "H3-A — opportunity scoring (DRAFT)": research/H3-OPPORTUNITY-SCORING.md
+          - "H3-B — adaptive management (DRAFT)": research/H3-ADAPTIVE-MANAGEMENT.md
+          - "H3 — experimental design B0–B3": research/H3-EXPERIMENTAL-DESIGN.md
+          - "H3 — data eligibility": research/H3-DATA-ELIGIBILITY.md
+          - "H3 — risk and execution": research/H3-RISK-AND-EXECUTION.md
+          - "H3 — pre-registration (DRAFT, not frozen)": research/H3-PREREGISTRATION-DRAFT.md
+          - "H3 — implementation plan (DRAFT)": research/H3-IMPLEMENTATION-PLAN.md
       - "Research eligibility gates M1–M5": research/RESEARCH-ELIGIBILITY-GATES.md
       - "État des campagnes de recherche (2026-10-15)": research/RESEARCH-CAMPAIGN-STATUS.md
       - "Diagnostic infrastructure H2 (disque, swap) 2026-10-15": research/RESEARCH-INFRA-DIAGNOSTIC.md

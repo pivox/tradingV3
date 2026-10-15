@@ -319,7 +319,8 @@ class _VariantSimulator:
                  candidates: Sequence[OpportunityCandidate], policy: ManagementPolicy, gate: H3RiskGate,
                  scores: Mapping[str, OpportunityScore] | None, funding: Sequence[FundingObservation],
                  initial_equity: Decimal, quote_ccy: str, failures: FailurePlan, kill_switch_at_ms: int | None,
-                 flatten_on_kill_switch: bool, audit: AuditJournal | None) -> None:
+                 flatten_on_kill_switch: bool, audit: AuditJournal | None,
+                 entry_priority: Mapping[str, int] | None = None) -> None:
         if initial_equity <= 0:
             raise ContractError('h3_sim_initial_equity_invalid')
         self.experiment_id, self.variant, self.portfolio_id = experiment_id, variant, check_id(portfolio_id)
@@ -340,7 +341,13 @@ class _VariantSimulator:
             inst = candidate.header.instrument
             if self.instruments.setdefault(inst.inst_id, inst) != inst:
                 raise ContractError('h3_sim_instrument_conflict')
-        self.candidates = sorted(candidates, key=lambda c: (c.header.clock.decision_ms, c.candidate_id))
+        priority = dict(entry_priority or {})
+        if entry_priority is not None and (set(priority) != {c.candidate_id for c in candidates}
+                                           or any(isinstance(v, bool) or not isinstance(v, int) or v < 0
+                                                  for v in priority.values())):
+            raise ContractError('h3_sim_entry_priority_invalid')
+        self.candidates = sorted(candidates, key=lambda c: (c.header.clock.decision_ms,
+                                                            priority.get(c.candidate_id, 0), c.candidate_id))
         seen: set[tuple[str, int]] = set()
         for observation in funding:
             key = (observation.inst_id, observation.funding_ms)
@@ -851,12 +858,18 @@ def run_variant(*, experiment_id: str, variant: Variant, portfolio_id: str, bars
                 scores: Mapping[str, OpportunityScore] | None = None, funding: Sequence[FundingObservation] = (),
                 initial_equity: Decimal = H3_LIMITS.reference_equity, quote_ccy: str = 'USDC',
                 failures: FailurePlan = FailurePlan(), kill_switch_at_ms: int | None = None,
-                flatten_on_kill_switch: bool = False, audit: AuditJournal | None = None) -> VariantRunResult:
+                flatten_on_kill_switch: bool = False, audit: AuditJournal | None = None,
+                entry_priority: Mapping[str, int] | None = None) -> VariantRunResult:
     """Replay one variant portfolio. The gate's cost model and assumptions are the simulator's: one source of truth
     for the costs charged and the costs sized for. ``candidates`` are that variant's (already selected) candidates;
-    ``scores`` (by candidate id) are passed to the gate, which refuses a NO_TRADE score."""
+    ``scores`` (by candidate id) are passed to the gate, which refuses a NO_TRADE score.
+
+    ``entry_priority`` (candidate id -> rank, 0 first; added at integration) orders the candidates of one decision
+    instant before they reach ``admit_entry``: the scorer's rank for B1/B3, the seeded lottery for B0/B2. It matters
+    because the total risk budget admits only a few positions at a time. When given, it must cover exactly the
+    candidates. Without it the order is the candidate id, as before."""
     return _VariantSimulator(experiment_id=experiment_id, variant=variant, portfolio_id=portfolio_id, bars=bars,
                              candidates=candidates, policy=policy, gate=gate, scores=scores, funding=funding,
                              initial_equity=initial_equity, quote_ccy=quote_ccy, failures=failures,
                              kill_switch_at_ms=kill_switch_at_ms, flatten_on_kill_switch=flatten_on_kill_switch,
-                             audit=audit).run()
+                             audit=audit, entry_priority=entry_priority).run()
