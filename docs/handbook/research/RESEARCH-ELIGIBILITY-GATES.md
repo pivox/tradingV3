@@ -72,5 +72,5 @@ Status today (`FRANCE-EXCHANGE-ELIGIBILITY.md`):
 | Work | Status |
 |---|---|
 | **H1** | M1 pending (X-Perps account); M2 partial (new-token X-Perps about 4 per month, thin); M3 failed historically (no X-Perp history), prospective only. → `H1_EXECUTION_MARKET_UNVERIFIED`, paused. |
-| **H2** | M1 pending (same account check); M2 plausible (29 liquid X-Perps); M3 = OKX global archive for development, prospective X-Perp validation. → Feasible after M1. |
+| **H2** | M1 partial: the owner confirmed the X-Perps account on 2026-10-15, API access unverified. M2 plausible but not established (29 liquid X-Perps, no InstrumentSpec). M3 = OKX global archive for development (14 of the 29 liquid X-Perp bases not on disk), prospective X-Perp validation. No pre-registration, Gate 1 not run. → `PREREQUISITES_NOT_MET` for the setup mission (`H2-PREREQUISITES-REPORT.md`). |
 | **`fwd-okx-r1`** (running, frozen) | Tests OKX global USDT swaps, a product a French account cannot trade. It is left untouched; its result informs the underlying behaviour only. |
