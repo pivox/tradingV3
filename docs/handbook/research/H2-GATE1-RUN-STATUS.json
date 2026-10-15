@@ -1,9 +1,11 @@
 {
   "study": "H2 Gate 1 effect study (Amendment A1)",
-  "kind": "run status, not a result: the protocol's summary file h2-gate1-result.json does not exist",
-  "status": "events_aborted_by_guard_no_output",
-  "verdict": null,
+  "kind": "run status; the protocol's summary file h2-gate1-result.json is committed byte for byte as H2-GATE1-RESULT.json",
+  "status": "complete",
+  "verdict": "FAIL",
+  "fail_due_to_G4_alone": false,
   "label": "development; OKX archive already consumed at the candle level; not an independent validation",
+  "authorises": "nothing: no Gate 2 proposal (pooled or per side), never trading; both stages consumed, any rerun needs a written amendment",
   "protocol": {
     "path": "docs/handbook/research/PREREGISTRATION-H2-GATE1.md",
     "frozen_at": "2026-10-15T15:57:04Z",
@@ -18,6 +20,7 @@
     "c2_pool": "three_months"
   },
   "owner_go": "owner go 2026-10-15: execute the H2 Gate 1 effect study once, exactly as frozen with Amendment A1 (FROZEN 2026-10-15T15:57:04Z); report the verdict even if negative; a PASS only authorises a Gate 2 proposal, never trading",
+  "owner_confirmation_after_guard_stop": "2026-10-15 about 18:39 Paris: \"Check sur l'espace disque et continue\" (the single events resumption, then outcomes, as frozen)",
   "run_dir": "tradingV3-private/research/20261015T1200Z-h2-gate1/run/",
   "stages": {
     "events": {
@@ -35,42 +38,110 @@
           "swing_npz_digest": "b99f42f49e5fa421fddd6fdda0ec9186d1c3eff0cef5330c5cf33a9cabdacc22"
         }
       },
-      "consumption": {
-        "file": "events-consumed.json",
-        "sha256": "fa028b43c7801ac80dcda08f66fb1de65933838586223d3e48f28b65302fd642",
+      "first_attempt": {
         "status": "aborted_by_guard",
         "started_at": "2026-10-15T16:03:55Z",
         "aborted_at": "2026-10-15T16:16:33Z",
         "reason": "guard: available memory 8306 MB, free disk 18 GB",
-        "resumptions_used": 0,
-        "resumptions_allowed": 1
-      },
-      "process": {
+        "consumption_sha256_at_abort": "fa028b43c7801ac80dcda08f66fb1de65933838586223d3e48f28b65302fd642",
         "exit_status": 3,
         "wall_clock": "14:17.53",
         "user_cpu_s": 733.84,
         "max_rss_kb": 520856,
         "fs_output_blocks": 24,
-        "log_sha256": "de2f69d0b341ee0290c58731adc60ab63422d70ed1e1469fcb1292fc55290947"
+        "log_sha256": "de2f69d0b341ee0290c58731adc60ab63422d70ed1e1469fcb1292fc55290947",
+        "output": null
       },
-      "output": null,
-      "computed": "nothing: the guard runs only in the data-loading step (universe.gather, events.load_closes), before events.compute; no beta, residual, z-score, event or count was computed or shown"
+      "resumption": {
+        "command": "nice -n 15 <runtime>/bin/python -m scripts.research_h2.cli events --resume",
+        "process_started": "2026-10-15T16:40:49Z",
+        "recorded_at": "2026-10-15T16:41:19Z",
+        "resumptions_used": 1,
+        "resumptions_allowed": 1,
+        "pre_start_free_disk_gb": 77,
+        "pre_start_available_memory_mb": 8197,
+        "exit_status": 0,
+        "wall_clock": "15:43.47",
+        "user_cpu_s": 911.08,
+        "sys_cpu_s": 13.66,
+        "max_rss_kb": 535404,
+        "log_sha256": "204988c900b19cdec8c5c292c7359dca6e14c23cc4a92411c642892ac4a6a7d5"
+      },
+      "consumption": {
+        "file": "events-consumed.json",
+        "sha256": "c01dc3752e292e25514a9adf22d7cd83da9fa0c0ed886ed53d20ba51a4f5c5c1",
+        "status": "complete",
+        "finished_at": "2026-10-15T16:56:33Z"
+      },
+      "output": {
+        "h2-events.json": "b537fde8aec07091a8892c28d4d48f4632c5f365c075da92924ac0360bcc380e"
+      }
     },
     "outcomes": {
-      "claim": null,
-      "consumption": null,
-      "output": null,
-      "resumptions_allowed": 0
+      "claim": {
+        "file": "outcomes-claim.json",
+        "sha256": "c9e560330d8a545bb1c11c2ef682a2bb936885e3ef91261ee6c2e36a47c05e71",
+        "claimed_at": "2026-10-15T16:57:13Z",
+        "prerequisite_h2_events_sha256": "b537fde8aec07091a8892c28d4d48f4632c5f365c075da92924ac0360bcc380e"
+      },
+      "process": {
+        "command": "nice -n 15 <runtime>/bin/python -m scripts.research_h2.cli outcomes",
+        "process_started": "2026-10-15T16:57:19Z",
+        "exit_status": 0,
+        "wall_clock": "14:11.91",
+        "user_cpu_s": 823.65,
+        "sys_cpu_s": 14.24,
+        "max_rss_kb": 537128,
+        "log_sha256": "afbca2148ae93f7e6e6c93137bb2be203ed28d001bd858198b2b44f9e66d2e4f"
+      },
+      "consumption": {
+        "file": "outcomes-consumed.json",
+        "sha256": "2649c55d4fdfc8d1696554034f2e508427a0b2c0d52ce42ab739ba164c652fdb",
+        "status": "complete",
+        "started_at": "2026-10-15T16:57:43Z",
+        "finished_at": "2026-10-15T17:11:30Z",
+        "resumptions_allowed": 0
+      },
+      "output": {
+        "h2-outcomes.json": "60e413e3e3a0e87f8659d25861a598fd6182bef5daab03a1cd9384e93ef7825a",
+        "h2-gate1-result.json": "f046728c0b187655f6a614a8744b6d54a4b7dd5e81f282e2acfcd0745a03c67c"
+      }
     }
   },
-  "criteria": {
-    "G1": null, "C2_match_rate": null, "G2": null, "G3": null, "G4": null, "G5": null, "G6": null, "G7": null,
-    "fail_due_to_G4_alone": null
+  "monitor": {
+    "file": "monitor-resume.log",
+    "sha256": "1fe8c5445cc147f2f7ef273edeab5bbea4c6aab57a45f43914a7ba6d69caabef",
+    "entries": 19,
+    "from": "2026-10-15T16:40:44Z",
+    "to": "2026-10-15T17:11:40Z",
+    "free_disk_gb_min": 77,
+    "available_memory_mb_min": 7963,
+    "available_memory_mb_max": 8485,
+    "swap_free_mb_min": 0,
+    "guard_tripped": false
+  },
+  "result_file": "docs/handbook/research/H2-GATE1-RESULT.json",
+  "criteria_primary_3d_pooled_bp": {
+    "G1": {"events": 890, "bases": 113, "months": 45, "pass": true},
+    "C2_match_rate": {"value": 1.0, "matched": 890, "statistical_blocker": false},
+    "G2": {"mean_y": -9.0, "ci95": [-90.6, 67.8], "pass": false},
+    "G3": {"mean_y": -9.0, "floor": 40, "pass": false},
+    "G4": {"s2": -6.8, "ci95_not_decisive": [-161.1, 158.3], "pass": false},
+    "G5": {"s1": -45.0, "s1_events": 732, "ci95": [-145.7, 56.8], "pass": false},
+    "G6": {"positive_half_years": 5, "qualifying_half_years": 7, "pass": true},
+    "G7": {"without_top5pct": -125.2, "trimmed_events": 45, "without_top_base": -17.5, "top_base": "SATS", "pass": false},
+    "mean_y_raw": -15.0,
+    "failed_gates": ["G2", "G3", "G4", "G5", "G7"],
+    "fail_due_to_G4_alone": false
+  },
+  "sides_3d_bp": {
+    "long": {"events": 165, "mean_y": -177.3, "ci95": [-376.6, -4.9], "verdict": "INSUFFICIENT_EVIDENCE", "excluded_from_gate2": true},
+    "short": {"events": 725, "mean_y": 29.3, "ci95": [-49.5, 110.3], "verdict": "FAIL", "failed_gates": ["G2", "G3", "G5", "G7"], "excluded_from_gate2": false}
   },
   "next_per_protocol": [
-    "free disk on / well above the guard floor of 20 GiB (shutil.disk_usage free // 1024**3 >= 20) and keep it there through both stages",
-    "the single allowed resumption: python -m scripts.research_h2.cli events --resume (section 12, MAX_GUARD_RESUMPTIONS events = 1)",
-    "claim --stage outcomes with the same owner_go reference, then outcomes, with no decision in between (outcomes has no resumption)"
+    "FAIL: no Gate 2 proposal is authorised, pooled or per side; trading is never authorised by Gate 1",
+    "both stages are consumed (events with its single resumption, outcomes without resumption); any rerun needs a written amendment reported as such, and could no longer be confirmatory on this archive",
+    "the continuation of H2 is the owner's decision"
   ],
-  "audit": "integrity_ok true; verdict_consistent true (no verdict exists); minor wording note on the process start time (about 16:02:15Z, the 16:03:55Z of the record is written after consume re-hashes the inputs)"
+  "audit": "integrity_ok true; verdict_consistent true; minor wording notes (CPU times were user only; the final 'monitor stopped' entry was left out of the description), both corrected in the report"
 }
