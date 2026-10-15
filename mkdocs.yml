@@ -132,8 +132,9 @@ nav:
       - "H2 — feasibility review (France)": research/H2-FEASIBILITY-REVIEW.md
       - "H2 — setup mission: prerequisites check (not met)": research/H2-PREREQUISITES-REPORT.md
       - "H2 — Gate 1 pre-registration (DRAFT, not frozen)": research/H2-GATE1-PREREGISTRATION-DRAFT.md
-      - "Leverage > 2x — pre-registration (frozen; E0a run)": research/PREREGISTRATION-leverage-gt2.md
+      - "Leverage > 2x — pre-registration (frozen; executed, NOT_INFORMATIVE)": research/PREREGISTRATION-leverage-gt2.md
       - "Leverage > 2x — E0a census (run once)": research/LEVERAGE-GT2-E0A-CENSUS.md
+      - "Leverage > 2x — E1 replay and analysis (NOT_INFORMATIVE)": research/LEVERAGE-GT2-E1-RESULTS.md
       - "Research eligibility gates M1–M5": research/RESEARCH-ELIGIBILITY-GATES.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
