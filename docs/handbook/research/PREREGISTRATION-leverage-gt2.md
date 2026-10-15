@@ -444,4 +444,7 @@ est-elle crédible ou due à la sélection post hoc ? comparateur qui sépare le
 The body above this line is hashed (sha256 over the file content up to and including the line "## 13. Freeze" and
 the following blank line); the hash, the code digest (`claim.code_digest()`), the time and the git commit go to
 `PREREGISTRATION-leverage-gt2.sha256` and to a `FROZEN <time> body sha256 <hash> code sha256 <digest>` line below,
-before any claim. Status until then: **NOT_FROZEN — BLOCKED_ON_OWNER_DECISIONS D1–D4**.
+before any claim. Status: **FROZEN** (owner decisions D1–D4 set and C1–C9 accepted on 2026-10-15; not executed:
+no claim, census, replay or outcome yet).
+
+FROZEN 2026-10-15T10:07:48Z body sha256 10eaf6cb36a37ce5057f09324acee80696abda38eed6fce17f31fe7760f37d97 code sha256 6e20c4ebb7f70dba257a57ebd6f2f1753c609368b8569b78cb1ba9a50e17ddeb (protocol body and code at commit 79747bf2d692c8e646c758959d684f3e37017726)
