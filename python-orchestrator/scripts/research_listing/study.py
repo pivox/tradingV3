@@ -59,9 +59,10 @@ class Series:
         self.ts, self.close = ts[keep], close[keep]
 
     @classmethod
-    def load(cls, tape: Path, inst: str, hourly: bool = False) -> "Series | None":
-        """``hourly``: keep only the last candle of each hour (enough for prices at hour marks; small in memory)."""
-        files = sorted((tape / "klines" / inst).glob("*.npz"))
+    def load(cls, tape: Path, inst: str, hourly: bool = False, subdir: str = "klines") -> "Series | None":
+        """``hourly``: keep only the last candle of each hour (enough for prices at hour marks; small in memory).
+        ``subdir``: ``klines`` (1-minute) or ``klines1h`` (Binance hourly archives, S_B)."""
+        files = sorted((tape / subdir / inst).glob("*.npz"))
         if not files:
             return None
         parts = [np.load(p) for p in files]
@@ -275,7 +276,7 @@ def summarize_values(values: list[float]) -> dict:
             "p_negative": sum(x < 0 for x in values) / len(values), "p_below_minus_10pct": sum(x < -0.10 for x in values) / len(values)}
 
 
-def outcomes(prepared: Path, tape: Path, out: Path) -> dict:
+def outcomes(prepared: Path, tape: Path, out: Path, control_subdir: str = "klines", set_label: str = "S_A (OKX)") -> dict:
     if out.exists():
         raise SystemExit("outcomes refused: the output exists (one read per set)")
     doc = json.loads(prepared.read_text())
@@ -283,7 +284,7 @@ def outcomes(prepared: Path, tape: Path, out: Path) -> dict:
 
     def series_of(inst: str) -> Series | None:  # index and controls: hourly resolution
         if inst not in cache:
-            cache[inst] = Series.load(tape, inst, hourly=True)
+            cache[inst] = Series.load(tape, inst, hourly=True, subdir=control_subdir)
         return cache[inst]
 
     results = []
@@ -370,7 +371,7 @@ def outcomes(prepared: Path, tape: Path, out: Path) -> dict:
             screen[f"{label}_{stat}_mean_negative"] = v.get("n", 0) > 0 and v["mean"] < 0
             screen[f"{label}_{stat}_median_negative"] = v.get("n", 0) > 0 and v["median"] < 0
     verdict = "S_A_SCREEN_PASS" if all(screen.values()) else "S_A_SCREEN_FAIL"
-    document = {"stage": "outcomes", "set": "S_A (OKX)", "written_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    document = {"stage": "outcomes", "set": set_label, "prepared_path": str(prepared), "written_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "screen_checks": screen, "verdict": verdict, "report": report, "events": results}
     out.write_text(json.dumps(document, indent=1, default=lambda v: None))
     return {"verdict": verdict, "checks": screen}
