@@ -105,6 +105,7 @@ nav:
       - "Scalping Q3 V2 (scalp-q3-r2), correction et gate 2026-10-14": reports/research-scalp-q3-r2-correction-2026-10-14.md
       - "Scalping Q3 V2 (scalp-q3-r2), validation novembre 2024": reports/research-scalp-q3-r2-validation-2026-11-2024.md
       - "Levier théorique > 2× hors BTC (leverage-gt2) 2026-10-15": reports/research-leverage-gt2-2026-10-15.md
+      - "H2 Gate 1 (étude d'effet), verdict FAIL 2026-10-15": reports/research-h2-gate1-2026-10-15.md
       - "Research landscape 2026-10": reports/research-strategy-landscape-2026-10.md
       - "Next strategy — new market hypotheses (draft)": research/research-new-market-hypotheses.md
       - "Next strategy — retained hypothesis (draft)": research/HYPOTHESIS-next-strategy.md
@@ -139,7 +140,8 @@ nav:
       - "Leverage > 2x — pre-registration (frozen; executed, NOT_INFORMATIVE)": research/PREREGISTRATION-leverage-gt2.md
       - "Leverage > 2x — E0a census (run once)": research/LEVERAGE-GT2-E0A-CENSUS.md
       - "Leverage > 2x — E1 replay and analysis (NOT_INFORMATIVE)": research/LEVERAGE-GT2-E1-RESULTS.md
-      - "H2 — Gate 1 pre-registration (frozen, not executed)": research/PREREGISTRATION-H2-GATE1.md
+      - "H2 — Gate 1 pre-registration (frozen; executed once, FAIL)": research/PREREGISTRATION-H2-GATE1.md
+      - "H2 — closure decision (H2_GATE1_FAIL_CLOSED)": research/H2-CLOSURE-DECISION.md
       - "Research eligibility gates M1–M5": research/RESEARCH-ELIGIBILITY-GATES.md
       - "État des campagnes de recherche (2026-10-15)": research/RESEARCH-CAMPAIGN-STATUS.md
       - "Diagnostic infrastructure H2 (disque, swap) 2026-10-15": research/RESEARCH-INFRA-DIAGNOSTIC.md

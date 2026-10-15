@@ -286,6 +286,95 @@ def test_c2_candidate_rule_is_a_recorded_decision(monkeypatch):
     assert any("C2 candidates" in item for item in pr.unresolved_decisions())
 
 
+def _window_table():
+    """Four calendar months (2023-01..04) of candidates and events; R_i signs and sizes chosen by hand."""
+    # row: (inst, bar, month index, R_i)
+    rows = [(0, 10, 0, 0.10), (1, 800, 1, 0.20), (2, 1500, 2, 0.30), (3, 2200, 3, 0.40), (4, 820, 1, -0.20),  # candidates 0-4
+            (5, 20, 0, 0.31), (6, 2210, 3, 0.11), (7, 900, 1, 0.29), (8, 1510, 2, 0.21), (9, 30, 0, -0.19)]  # events 5-9
+    inst, bar, month, r_i = (np.array(c) for c in zip(*rows))
+    table = {"inst": inst, "bar": bar, "month": month, "R_i": r_i.astype(float),
+             "months": np.array(["2023-01", "2023-02", "2023-03", "2023-04"])}
+    pools = {}
+    for row in range(5):
+        pools.setdefault((int(month[row]), bool(r_i[row] > 0)), []).append(row)
+    return table, {k: np.array(v) for k, v in pools.items()}
+
+
+def test_c2_pool_window_is_three_calendar_months_clipped_to_the_period():
+    table, pools = _window_table()
+    assert pr.C2_POOL == "three_months" and pr.c2_pool_half_width() == 1 and pr.C2_POOLS == {"month": 0, "three_months": 1}
+    assert ev.pool_months(table, 0, 1) == [0, 1]  # first month of the period: M and M+1
+    assert ev.pool_months(table, 1, 1) == [0, 1, 2]
+    assert ev.pool_months(table, 3, 1) == [2, 3]  # last month: M-1 and M
+    assert ev.pool_months(table, 2, 0) == [2]
+    gap = dict(table, months=np.array(["2023-01", "2023-03", "2023-04", "2023-05"]))
+    assert ev.pool_months(gap, 1, 1) == [1, 2]  # 2023-01 is two calendar months before 2023-03: outside the window
+    # events in chronological order: 5 (Jan, +0.31), 9 (Jan, -0.19), 7 (Feb, +0.29), 8 (Mar, +0.21), 6 (Apr, +0.11);
+    # results are returned in the order of the argument [5, 6, 7, 8, 9]
+    matches = ev.match_c2(table, [5, 6, 7, 8, 9], pools, None)
+    assert matches[0] == {"row": 1, "reuse": False}  # Jan event: Jan and Feb candidates only (Feb 0.20 nearest; Mar 0.30 out)
+    assert matches[4] == {"row": 4, "reuse": False}  # same sign only: the one negative candidate, in February
+    assert matches[2] == {"row": 2, "reuse": False}  # Feb event 0.29: the March candidate 0.30 is inside its window
+    assert matches[3] == {"row": 3, "reuse": False}  # Mar event 0.21: Feb 0.20 and Mar 0.30 used, Apr 0.40 unused
+    assert matches[1] == {"row": 2, "reuse": True}  # Apr event: window Mar-Apr, both used: the nearer one is reused
+    # month-only (v1) on the same table: the Jan events cannot reach February
+    month_only = ev.match_c2(table, [5, 6, 7, 8, 9], pools, None, half_width=0)
+    assert month_only == [{"row": 0, "reuse": False}, {"row": 3, "reuse": False}, {"row": 1, "reuse": False},
+                          {"row": 2, "reuse": False}, None]
+    assert ev.match_c2(table, [5, 6, 7, 8, 9], pools, None) == matches  # deterministic
+
+
+def test_c2_three_month_matching_is_without_replacement_across_months():
+    table, pools = _window_table()
+    # The Jan event takes Feb 0.20 and the Feb event takes Mar 0.30 (its window reaches March): the Mar event (0.21) finds
+    # both used and takes the unused Apr 0.40, and the Apr event finds every candidate of its window (Mar, Apr) used: a
+    # counted reuse of the nearer one.
+    chain = ev.match_c2(table, [5, 7, 8, 6], pools, None)
+    assert chain == [{"row": 1, "reuse": False}, {"row": 2, "reuse": False}, {"row": 3, "reuse": False}, {"row": 2, "reuse": True}]
+    # without the Jan event, Feb 0.20 stays free for the Mar event, and the Apr event gets Apr 0.40 unused
+    assert ev.match_c2(table, [7, 8, 6], pools, None) == [{"row": 2, "reuse": False}, {"row": 1, "reuse": False}, {"row": 3, "reuse": False}]
+    # a caliper is applied over the whole window
+    assert ev.match_c2(table, [6], pools, 0.25) == [None]  # 0.11: nothing within ±25 % in Mar-Apr
+
+
+def test_c2_pool_amendment_is_a_recorded_decision(monkeypatch):
+    assert pr.unresolved_decisions() == []
+    assert pr.C2_POOL_RULE_SHA256 == "192beca2577808eb1bcb98d1c4b9363c83ea35f2a46671700df11e7668bdc893"
+    monkeypatch.setattr(pr, "C2_POOL", "month")
+    assert any("C2 matching pool" in item for item in pr.unresolved_decisions())
+    monkeypatch.setattr(pr, "C2_POOL", None)
+    assert any("C2 matching pool" in item for item in pr.unresolved_decisions())
+    with pytest.raises(ValueError):
+        pr.c2_pool_half_width()
+
+
+def test_c2_three_month_pool_on_a_synthetic_panel(monkeypatch):
+    months = ["2023-03", "2023-04", "2023-05"]
+    closes, _ = synthetic_closes(seed=5)
+    document = ev.compute(closes, universe_doc(months=months), months)
+    assert hashlib.sha256(ev.canonical(document)).hexdigest() == hashlib.sha256(ev.canonical(ev.compute(closes, universe_doc(months=months), months))).hexdigest()
+    number = {m: k for k, m in enumerate(months)}
+    matched = [r for r in document["events"] if r["c2"] is not None]
+    assert matched and document["c2"]["matched"] == len(matched)
+    for record in matched:
+        assert abs(number[record["c2"]["month"]] - number[record["month"]]) <= 1
+        assert (record["c2"]["R_i"] > 0) == (record["R_i"] > 0) and abs(record["c2"]["z"]) < 1 <= 2 <= abs(record["c2"]["z_m"])
+    assert document["c2"]["matched_outside_event_month"] == sum(r["c2"]["month"] != r["month"] for r in matched)
+    controls = {}
+    for record in matched:  # matched controls are first crossings: 120 h apart per coin
+        controls.setdefault(record["c2"]["inst"], set()).add(record["c2"]["bar"])
+    for bars in controls.values():
+        ordered = sorted(bars)
+        assert all(b - a >= pr.C2_REFRACTORY_H for a, b in zip(ordered, ordered[1:]))
+    # the month-only pool is a subset of the window: the three-month match rate is never lower
+    monkeypatch.setattr(pr, "C2_POOL", "month")
+    month_only = ev.compute(closes, universe_doc(months=months), months)
+    assert month_only["c2"]["matched_outside_event_month"] == 0 and month_only["c2"]["pool_half_width_months"] == 0
+    assert all(r["c2"] is None or r["c2"]["month"] == r["month"] for r in month_only["events"])
+    assert document["c2"]["matched"] >= month_only["c2"]["matched"]
+    assert [r["id"] for r in document["events"]] == [r["id"] for r in month_only["events"]]  # the events do not depend on C2
+
+
 # ----------------------------------------------------------------------------- latency and outcome prices
 def test_entry_is_the_close_at_t_plus_5_min_within_15_min_and_exit_has_a_bounded_delay():
     t = pr.DECISION_FROM_MS
@@ -444,7 +533,7 @@ def test_claims_are_single_use_and_pin_the_code(tmp_path, monkeypatch):
     with pytest.raises(cl.ClaimError):
         cl.claim(out, "events", prereg, body, owner_go="", inputs={})
     document = cl.claim(out, "events", prereg, body, owner_go="owner 2026-10-16", inputs={})
-    decisions = {"g4_rule": "point_estimate", "c2_caliper": "none", "c2_candidates": "first_crossing"}
+    decisions = {"g4_rule": "point_estimate", "c2_caliper": "none", "c2_candidates": "first_crossing", "c2_pool": "three_months"}
     assert document["decisions"] == decisions  # the owner's decisions are recorded with the claim
     assert json.loads((out / "events-claim.json").read_text())["decisions"] == decisions
     with pytest.raises(cl.ClaimError):
@@ -544,6 +633,8 @@ def test_event_document_is_deterministic():
     assert first["c2"]["candidates"] == "first_crossing" and first["c2"]["refractory_h"] == pr.C2_REFRACTORY_H
     assert first["parameters"]["C2_CANDIDATES"] == "first_crossing"
     assert first["c2"]["candidates_kept"] == sum(first["c2"]["pool_sizes"].values())
+    assert first["c2"]["pool"] == "three_months" and first["c2"]["pool_half_width_months"] == 1
+    assert first["parameters"]["C2_POOL"] == "three_months" and first["c2"]["matched_outside_event_month"] == 0
     controls = {}
     for record in first["events"]:
         if record["c2"] is not None:
@@ -554,7 +645,8 @@ def test_event_document_is_deterministic():
     for record in first["events"]:
         assert pr.DECISION_FROM_MS <= record["decision_ms"] < pr.DECISION_TO_MS
         if record["c2"] is not None:
-            assert record["c2"]["month"] == record["month"] and (record["c2"]["R_i"] > 0) == (record["R_i"] > 0)
+            assert record["c2"]["month"] == record["month"]  # one decision month: the window is clipped to it
+            assert (record["c2"]["R_i"] > 0) == (record["R_i"] > 0)
             assert abs(record["c2"]["z"]) < 1 <= 2 <= abs(record["c2"]["z_m"])
         assert all(abs(b - record["bar"]) > pr.C1_EXCLUSION_H for b in record["c1"]["bars"])
     assert isinstance(first["c1"]["draws_within_120h_of_a_suppressed_trigger"], int)
