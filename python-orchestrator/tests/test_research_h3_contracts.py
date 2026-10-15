@@ -108,6 +108,34 @@ def test_wire_refuses_floats_and_unknown_fields():
 
 # ------------------------------------------------------------------------------------------------ time / lookahead
 
+def bar(**overrides):
+    base = dict(inst_id='SYN-USD-SYNTH', interval_ms=s.HOUR_MS, open_ms=s.T0_MS, close_ms=s.T0_MS + s.HOUR_MS,
+                available_ms=s.T0_MS + s.HOUR_MS + 1000, is_closed=True, open=D('100'), high=D('101'), low=D('99'),
+                close=D('100.5'), volume_quote=D('1000'))
+    base.update(overrides)
+    return c.Bar(**base)
+
+
+def test_bar_is_usable_only_closed_and_available():
+    b = bar()
+    assert not b.usable_at(s.T0_MS + s.HOUR_MS)          # closed but not yet received
+    assert b.usable_at(s.T0_MS + s.HOUR_MS + 1000)
+    assert not bar(is_closed=False, available_ms=s.T0_MS + 10).usable_at(s.T0_MS + 2 * s.HOUR_MS)
+    with pytest.raises(c.ContractError, match='h3_bar_available_before_close'):
+        bar(available_ms=s.T0_MS + 10)
+    with pytest.raises(c.ContractError, match='h3_bar_ohlc_inconsistent'):
+        bar(high=D('100.2'))
+    with pytest.raises(c.ContractError, match='h3_bar_time_invalid'):
+        bar(close_ms=s.T0_MS + 1)
+
+
+def test_quote_and_funding_shapes():
+    with pytest.raises(c.ContractError, match='h3_quote_invalid'):
+        c.Quote(inst_id='X', observed_ms=1, available_ms=2, bid=D('2'), ask=D('1'), bid_size=D('1'), ask_size=D('1'))
+    with pytest.raises(c.ContractError, match='h3_funding_time_invalid'):
+        c.FundingObservation(inst_id='X', funding_ms=10, available_ms=9, rate=D('0.0001'))
+
+
 def test_clock_refuses_lookahead_order():
     with pytest.raises(c.ContractError, match='h3_clock_lookahead'):
         c.Clock(observed_ms=10, available_ms=5, decision_ms=20)

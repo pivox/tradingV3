@@ -544,6 +544,85 @@ def stop_not_wider(side: Side, reference_stop: Decimal, stop: Decimal) -> bool:
     return stop >= reference_stop if side is Side.LONG else stop <= reference_stop
 
 
+# ---------------------------------------------------------------------------------------------------- market data
+
+@dataclass(frozen=True)
+class Bar(Contract):
+    """One OHLCV bar. ``close_ms`` is exclusive (= open_ms + interval_ms). A bar may be used by a decision only when
+    ``is_closed`` and ``available_ms <= decision_ms``; ``available_ms`` includes the publication/receipt latency."""
+
+    SCHEMA: ClassVar[str] = 'h3.bar/1'
+    inst_id: str
+    interval_ms: int
+    open_ms: int
+    close_ms: int
+    available_ms: int
+    is_closed: bool
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume_quote: Decimal
+
+    def _validate(self) -> None:
+        check_id(self.inst_id)
+        for value in (self.open_ms, self.close_ms, self.available_ms):
+            _ms(value, 'h3_bar_time_invalid')
+        if self.interval_ms <= 0 or self.close_ms != self.open_ms + self.interval_ms:
+            raise ContractError('h3_bar_time_invalid')
+        if self.is_closed and self.available_ms < self.close_ms:
+            raise ContractError('h3_bar_available_before_close')
+        if min(self.open, self.high, self.low, self.close) <= 0 or self.volume_quote < 0:
+            raise ContractError('h3_bar_price_invalid')
+        if not (self.low <= min(self.open, self.close) and max(self.open, self.close) <= self.high):
+            raise ContractError('h3_bar_ohlc_inconsistent')
+
+    def usable_at(self, decision_ms: int) -> bool:
+        return self.is_closed and self.available_ms <= decision_ms
+
+
+@dataclass(frozen=True)
+class Quote(Contract):
+    """Top of book at ``observed_ms``, received at ``available_ms``."""
+
+    SCHEMA: ClassVar[str] = 'h3.quote/1'
+    inst_id: str
+    observed_ms: int
+    available_ms: int
+    bid: Decimal
+    ask: Decimal
+    bid_size: Decimal
+    ask_size: Decimal
+
+    def _validate(self) -> None:
+        check_id(self.inst_id)
+        _ms(self.observed_ms, 'h3_quote_time_invalid')
+        _ms(self.available_ms, 'h3_quote_time_invalid')
+        if self.observed_ms > self.available_ms:
+            raise ContractError('h3_quote_time_invalid')
+        if self.bid <= 0 or self.ask < self.bid or min(self.bid_size, self.ask_size) < 0:
+            raise ContractError('h3_quote_invalid')
+
+
+@dataclass(frozen=True)
+class FundingObservation(Contract):
+    """A funding settlement: ``rate`` is the fraction paid by longs to shorts at ``funding_ms`` (negative: shorts
+    pay). ``available_ms`` is when the settled rate was known."""
+
+    SCHEMA: ClassVar[str] = 'h3.funding_observation/1'
+    inst_id: str
+    funding_ms: int
+    available_ms: int
+    rate: Decimal
+
+    def _validate(self) -> None:
+        check_id(self.inst_id)
+        _ms(self.funding_ms, 'h3_funding_time_invalid')
+        _ms(self.available_ms, 'h3_funding_time_invalid')
+        if self.available_ms < self.funding_ms:
+            raise ContractError('h3_funding_time_invalid')
+
+
 # ------------------------------------------------------------------------------------------------------- features
 
 @dataclass(frozen=True)
@@ -1134,6 +1213,6 @@ class AuditSink(Protocol):
 
 CONTRACTS: tuple[type[Contract], ...] = (
     H3Limits, Clock, InstrumentRef, Provenance, ProtocolRef, ModelRef, PolicyRef, SnapshotRef, Header, NamedValue,
-    FeatureValue, FeatureSnapshot, OpportunityCandidate, OpportunityScore, PortfolioView, PositionState,
+    Bar, Quote, FundingObservation, FeatureValue, FeatureSnapshot, OpportunityCandidate, OpportunityScore, PortfolioView, PositionState,
     AdaptiveAction, RiskDecision, DecisionAudit, ModelManifest, CostModel, ExperimentManifest,
 )
