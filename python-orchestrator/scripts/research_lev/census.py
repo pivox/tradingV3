@@ -1,11 +1,17 @@
 """E0a — pre-fill census of the P2-B4 signals by leverage band (PREREGISTRATION-leverage-gt2.md §7).
 
-Every signal second of every frozen configuration, on every pair-window series, classified from
+Every signal second of every active configuration, on every pair-window series, classified from
 its decision-time inputs only (`engine.decision_inputs`): no order is simulated, no fill, no
 exit, no print after the decision second is read, and no pair blocking is applied (an upper
 envelope of what E1 can admit). Counts per configuration x pair x window x stream, under L_eng
-and L_stop, by band, with the indeterminable reasons, the floor strata, and the pooled terciles
-of the C2 stratum inputs (volatility, tick size, liquidity), which E1 then uses unchanged.
+and L_stop, by band, with the indeterminable reasons and the floor strata.
+
+The configurations are nested, so one signal (series, side, decision second) can belong to many
+of them. The census therefore also counts the DISTINCT signals of each series (the union of
+every configuration's streams, each (side, second) once): `pooled_distinct`. The E0a → E1
+trigger uses the nominal (`pooled`) or the distinct counts according to the owner's decision D1
+(`protocol.MULTIPLICITY_RULE`). The C2 tercile cut points are computed over the distinct
+determinable signals (outcome-free) and used unchanged by the analysis.
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ from ..research_exec.screen import parse_configuration
 from ..research_exec.tick import signal_mask
 from .engine import OK, decision_inputs
 from .leverage import ARM_BANDS, BAND_NAMES, DEFINITIONS, INDETERMINATE_REASONS, REF_BAND, STUDIED_BANDS, assert_admissible, band_index
+from . import protocol as pr
 from .protocol import F_MIN, N_MIN, STRATA_AXES
 
 POLICY = Policy("E1", "B4", ttl_us=SETUP_TTL_US)
@@ -42,12 +49,16 @@ def classify(data: SeriesData, side: int, seconds: np.ndarray) -> dict:
 
 
 def census_series(data: SeriesData, name: str, configurations: tuple[str, ...]) -> dict:
+    """{"configs": {identifier: {side: counts}}, "distinct": {side: counts of the union}}."""
     assert_admissible(name)
-    parts = {}
+    parts, union = {}, {1: [], -1: []}
     for identifier in configurations:
         streams = streams_of(identifier, data.features)
-        parts[identifier] = {str(side): classify(data, side, seconds) for side, seconds in streams.items()}
-    return parts
+        parts[identifier] = {str(side): {k: v for k, v in classify(data, side, seconds).items() if k != "strata"} for side, seconds in streams.items()}
+        for side, seconds in streams.items():
+            union[side].append(np.asarray(seconds, dtype=np.int64))
+    distinct = {str(side): classify(data, side, np.unique(np.concatenate(items)) if items else np.zeros(0, dtype=np.int64)) for side, items in union.items()}
+    return {"configs": parts, "distinct": distinct}
 
 
 def _empty_bands() -> dict:
@@ -64,16 +75,26 @@ def aggregate(series_parts: list[tuple[str, dict]]) -> dict:
     by_window: dict[str, dict] = {}
     rows = []
     samples = {axis: [] for axis in STRATA_AXES}
-    signals = 0
-    for name, parts in series_parts:
+    signals = distinct_signals = 0
+    pooled_distinct = {definition: _empty_bands() for definition in DEFINITIONS}
+    distinct_reasons = dict.fromkeys(INDETERMINATE_REASONS, 0)
+    for name, series in series_parts:
         _venue, pair, window = name.split(":")
-        for identifier, streams in parts.items():
+        for side, item in series["distinct"].items():
+            distinct_signals += item["signals"]
+            for reason, count in item["reasons"].items():
+                distinct_reasons[reason] += count
+            for axis in STRATA_AXES:
+                samples[axis].append(np.asarray(item["strata"][axis], dtype=np.float64))
+            for definition in DEFINITIONS:
+                for band in BAND_NAMES:
+                    pooled_distinct[definition][band]["total"] += item[definition][band]["total"]
+                    pooled_distinct[definition][band]["floor"] += item[definition][band]["floor"]
+        for identifier, streams in series["configs"].items():
             for side, item in streams.items():
                 signals += item["signals"]
                 for reason, count in item["reasons"].items():
                     reasons[reason] += count
-                for axis in STRATA_AXES:
-                    samples[axis].append(np.asarray(item["strata"][axis], dtype=np.float64))
                 row = {"config": identifier, "pair": pair, "window": window, "side": int(side), "signals": item["signals"], "reasons": item["reasons"]}
                 for definition in DEFINITIONS:
                     row[definition] = {band: dict(item[definition][band]) for band in BAND_NAMES}
@@ -89,7 +110,15 @@ def aggregate(series_parts: list[tuple[str, dict]]) -> dict:
         values = values[np.isfinite(values)]
         terciles[axis] = [float(q) for q in np.quantile(values, (1 / 3, 2 / 3))] if values.size else None
     return {"signals": signals, "indeterminate": reasons, "pooled": pooled, "by_config": by_config, "by_pair": by_pair, "by_window": by_window, "rows": rows,
-            "strata_terciles": terciles, "strata_population": "pooled determinable census signals (all configurations, both definitions share them)"}
+            "distinct_signals": distinct_signals, "distinct_indeterminate": distinct_reasons, "pooled_distinct": pooled_distinct,
+            "strata_terciles": terciles, "strata_population": "distinct determinable census signals (each series x side x decision second once; both definitions share them)"}
+
+
+def trigger_counts(census: dict, rule: str | None = None) -> dict:
+    """The pooled counts the E0a → E1 rule reads under decision D1: distinct signals for
+    `distinct_pair_day`, nominal (one count per configuration) for `copies_config_pair_day`."""
+    rule = pr.multiplicity_rule() if rule is None else rule
+    return census["pooled_distinct"] if rule == "distinct_pair_day" else census["pooled"]
 
 
 def trigger(pooled: dict, n_min: int = N_MIN, f_min: float = F_MIN) -> dict:

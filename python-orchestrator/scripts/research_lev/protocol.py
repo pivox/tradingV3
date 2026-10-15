@@ -8,12 +8,30 @@ entry cites its source section. `screen.build_grid` of each protocol must contai
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..research_exec.screen import R8_SYMBOLS
 from .leverage import ARM_BANDS, DEFINITIONS, PRIMARY_BAND, REF_BAND, is_excluded_symbol
 
 STUDY = "leverage-gt2"
 PREREG_FILE = "PREREGISTRATION-leverage-gt2.md"
 FREEZE_MARKER = "## 13. Freeze"
+
+# Frozen locations (§12): the CLI refuses any other protocol file, hash file, output directory or
+# input. Tests monkeypatch these constants; nothing else may change them.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PREREG_PATH = REPO_ROOT / "docs" / "handbook" / "research" / PREREG_FILE
+SHA256_PATH = PREREG_PATH.with_suffix(".sha256")
+PRIVATE_RESEARCH = Path("/home/haythem/workspace/perso/tradingV3-private/research")
+OUT_DIR = PRIVATE_RESEARCH / "20261015T090000Z-leverage-gt2"
+TAPE_DIR = PRIVATE_RESEARCH / "20261013T121000Z-tape-binance-r10"
+INSTRUMENTS_PATH = PRIVATE_RESEARCH / "20261013T121000Z-scalping-120-r10" / "instrument-assumptions-r10.json"
+# sha256 of the inputs, recorded before any read (file hashes only; no tape content is read).
+INPUT_SHA256 = {
+    "instruments": "cd940cffdd1212ff76c399917536e871ed0bfeed8733fa2bb74a7e5dc0b6fb92",
+    "manifest-aggtrades.json": "e0f1a68f40d701ec1a035c0a31e8c0f5cd93e9597a78fccebe432bb0515a4986",
+    "manifest-klines.json": "a2876b084566e4fb5e34b5c4cdfaae9a9a4aab1111b3e720f853014da569a205",
+}
 
 # Universe: the twenty r8/r10 pairs minus BTC, by name, before any computation.
 P2_SYMBOLS = tuple(symbol for symbol in R8_SYMBOLS if not is_excluded_symbol(symbol))
@@ -22,6 +40,9 @@ MIDCAPS = ("ARBUSDT", "OPUSDT", "APTUSDT", "SUIUSDT", "NEARUSDT", "TIAUSDT", "SE
 # The r10 training windows (PREREGISTRATION-r10.md §1), the only windows read here.
 WINDOWS = ("w2404", "w2405", "w2406", "w2408")
 VOLUME_THRESHOLDS = (1.1, 1.2, 1.3)  # r10x analysis 1 stacks (EXPLORATORY-r10x.md §2)
+# The 76 pair-week series (19 pairs x 4 windows, `load_binance_series` order); a run with any
+# other series list, or with a missing day, is refused before its claim is consumed.
+EXPECTED_SERIES = tuple(f"binance:{symbol}:{window}" for symbol in P2_SYMBOLS for window in WINDOWS)
 
 # (configuration id, source, citation). Exit B4 = stop 1.5 x ATR5 (floor 2 ticks), time exit 2 h,
 # taker no later than 23:59:00 UTC, no target; entry E1 with the contract's 45 s TTL.
@@ -49,6 +70,46 @@ CONFIGURATIONS: tuple[tuple[str, str, str], ...] = (
 CONFIGURATION_IDS = tuple(item[0] for item in CONFIGURATIONS)
 # r11 also lists P{1,2,3}-A3-K0-Z1 x B4 (PREREGISTRATION-r11.md §2): identical identifiers to the r10x rows, kept once.
 ALSO_IN = {f"P{n}-A3-K0-Z1|{'short' if n == 3 else 'long'}|E1|B4": ("r11",) for n in (1, 2, 3)}
+
+# ----------------------------------------------------------------------------- owner decisions pending
+# Each of these is a frozen rule that the owner must set before the freeze (§12, decisions D1-D4).
+# While any is None, `unresolved_decisions()` is non-empty and every claim is refused.
+MULTIPLICITY_RULES = ("distinct_pair_day", "copies_config_pair_day")
+MULTIPLICITY_RULE: str | None = None  # D1; recommended "distinct_pair_day"
+R1_BOTH_RULES = ("drop", "keep_conflict_rule")
+R1_BOTH_RULE: str | None = None  # D2; recommended "drop"
+MAX_GUARD_RESUMPTIONS: int | None = None  # D3; 0 (no resumption) or 1
+FUNDING_RULES = ("not_charged",)
+FUNDING_RULE: str | None = None  # D4; "not_charged" (diagnostic only) or an amendment adding a provision
+
+
+def unresolved_decisions() -> list[str]:
+    out = []
+    if MULTIPLICITY_RULE not in MULTIPLICITY_RULES:
+        out.append("D1 multiplicity of nested configurations (N_min, E0a trigger, decision clusters)")
+    if R1_BOTH_RULE not in R1_BOTH_RULES:
+        out.append("D2 R1|both under one position per pair")
+    if MAX_GUARD_RESUMPTIONS not in (0, 1):
+        out.append("D3 resumption after a memory-guard abort")
+    if FUNDING_RULE not in FUNDING_RULES:
+        out.append("D4 funding")
+    return out
+
+
+def active_configurations() -> tuple[str, ...]:
+    """The configurations E0a and E1 run: the 31 source rows, minus `R1|both` when D2 = drop."""
+    if R1_BOTH_RULE not in R1_BOTH_RULES:
+        raise ValueError("D2 (R1|both) is not decided")
+    if R1_BOTH_RULE == "drop":
+        return tuple(identifier for identifier in CONFIGURATION_IDS if identifier != "R1|both|E1|B4")
+    return CONFIGURATION_IDS
+
+
+def multiplicity_rule() -> str:
+    if MULTIPLICITY_RULE not in MULTIPLICITY_RULES:
+        raise ValueError("D1 (multiplicity of nested configurations) is not decided")
+    return MULTIPLICITY_RULE
+
 
 # Inference (owner decisions 2026-10-15).
 ALPHA = 0.05
@@ -89,4 +150,5 @@ def arm_key(definition: str, band: str) -> str:
     return f"{definition}:{band}"
 
 
-__all__ = ["ALPHA", "ARM_BANDS", "CONFIGURATIONS", "CONFIGURATION_IDS", "F_MIN", "N_MIN", "P2_SYMBOLS", "PRIMARY_BAND", "REF_BAND", "SECONDARY_TESTS", "WINDOWS", "arm_key", "arms"]
+__all__ = ["ALPHA", "ARM_BANDS", "CONFIGURATIONS", "CONFIGURATION_IDS", "EXPECTED_SERIES", "F_MIN", "N_MIN", "P2_SYMBOLS", "PRIMARY_BAND", "REF_BAND", "SECONDARY_TESTS", "WINDOWS",
+           "active_configurations", "arm_key", "arms", "multiplicity_rule", "unresolved_decisions"]
