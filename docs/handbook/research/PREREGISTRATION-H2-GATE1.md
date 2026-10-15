@@ -707,10 +707,12 @@ the following blank line). At the freeze, the hash, the time, the commit and the
 (`python -m scripts.research_h2.cli digest`) are written on a `FROZEN` line below and in
 `PREREGISTRATION-H2-GATE1.sha256`.
 
-Status: **READY_TO_REFREEZE, not executed** — Amendment A1 (owner, 2026-10-15, before any read) is written in (§6,
-§13, §14 and the section "Amendment A1") and passed its pre-declared synthetic acceptance rule (ACCEPT); no claim,
-event file or outcome exists; the single Gate 1 run is not authorised. The re-freeze writes a new `FROZEN` line
-below with the new body sha256 and the code digest of the amended code.
+Status: **FROZEN (re-frozen with Amendment A1), not executed** — Amendment A1 (owner, 2026-10-15, before any read)
+is written in (§6, §13, §14 and the section "Amendment A1") and passed its pre-declared synthetic acceptance rule
+(ACCEPT, rule sha256 `192beca2577808eb1bcb98d1c4b9363c83ea35f2a46671700df11e7668bdc893`); no claim, event file or
+outcome exists; the single Gate 1 run is not authorised.
+
+FROZEN 2026-10-15T15:57:04Z body sha256 0ec71c563a6247464765fd0696ceb193d60d980e97d93d6f53d0565940d8bf20 code sha256 e8c087a1a1ee105c81d2f9f06d79b966f1db52a43ffd293860e1a8f6c8c41904 runtime python 3.12.3 numpy 2.5.4 (tradingV3-private/research/20261014T090000Z-swing-v2-runtime/bin/python) (Amendment A1; protocol body at commit ada68770b776e9ee4a2574fd238fc67cd38abb04, code at commit a4844111b394398238f2f86a9dcc6884b0820449, unchanged since; not executed: no claim, no event file, no outcome; the single Gate 1 run needs the owner's separate go)
 
 History (v1, superseded by Amendment A1; written so that no claim reads it):
 
