@@ -71,6 +71,6 @@ Status today (`FRANCE-EXCHANGE-ELIGIBILITY.md`):
 
 | Work | Status |
 |---|---|
-| **H1** | M1 pending (X-Perps account); M2 partial (new-token X-Perps about 4 per month, thin); M3 failed historically (no X-Perp history), prospective only. → `H1_EXECUTION_MARKET_UNVERIFIED`, paused. |
-| **H2** | M1 partial: the owner confirmed the X-Perps account on 2026-10-15, API access unverified. M2 plausible but not established (29 liquid X-Perps, no InstrumentSpec). M3 = OKX global archive for development (14 of the 29 liquid X-Perp bases not on disk), prospective X-Perp validation. No pre-registration, Gate 1 not run. → `PREREQUISITES_NOT_MET` for the setup mission (`H2-PREREQUISITES-REPORT.md`). |
+| **H1** | **Closed** (2026-10-15). The historical Gate 2 (amendment A3) ran once: `GATE2_FAIL` (#508, `H1-GATE2-RESULT.md`); under v1 §17 H1 is closed. The S_B `GATE1_PASS` stays a scientific result. X-Perp audit `H1_XPERP_CONDITIONAL` (moot since the Gate 2 fail; API unverified). See `H1-NEXT-DECISION.md`. |
+| **H2** | **Closed** (2026-10-15). Gate 1 pre-registered (#510), amended (A1) and run once: `FAIL`, not due to G4 alone; the owner recorded `H2_GATE1_FAIL_CLOSED` (#511, open at the time of writing). Nothing is authorised: no Gate 2, setup or trading. See `RESEARCH-CAMPAIGN-STATUS.md`. |
 | **`fwd-okx-r1`** (running, frozen) | Tests OKX global USDT swaps, a product a French account cannot trade. It is left untouched; its result informs the underlying behaviour only. |
