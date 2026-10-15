@@ -1,11 +1,12 @@
-# H2 Gate 1 — pre-registration (status `FROZEN`, not executed)
+# H2 Gate 1 — pre-registration (status `READY_TO_REFREEZE`, Amendment A1, not executed)
 
-**This text is frozen (§15) and authorises nothing by itself.** The owner's decision on C2 (2026-10-15:
-first-crossing candidates, §6, §14) is written into it and was re-simulated on synthetic panels (§9); the owner
-authorised the freeze after that check. Its body sha256 and the code digest of
-`python-orchestrator/scripts/research_h2/` are written on the `FROZEN` line (§15) and in
-`PREREGISTRATION-H2-GATE1.sha256`. The single Gate 1 run needs a **separate, explicit go** from the owner (the claim
-refuses to start without it); at the freeze that go has not been given.
+**This text authorises nothing by itself.** It was frozen on 2026-10-15T13:56:41Z (v1, §15) with the owner's C2
+decision (first-crossing candidates, §6, §14). Before any read of H2 data, the owner amended C2 again
+(**Amendment A1**, 2026-10-15: matching pool of three calendar months M−1, M, M+1, see the section of that name
+before §15). The amendment passed its pre-declared synthetic acceptance rule (ACCEPT); the text is ready to be
+re-frozen. Until a new `FROZEN` line is written in §15, every claim is refused (the v1 line is kept as history in
+a form the claim does not read, and the code changed). The single Gate 1 run needs a **separate, explicit go** from
+the owner (the claim refuses to start without it); that go has not been given.
 
 It replaces `H2-GATE1-PREREGISTRATION-DRAFT.md` (the draft, kept unchanged). The owner's four choices of the draft are
 kept unchanged: **k = 3, primary horizon 3 d, market = leave-one-out equal weight of the monthly top 30, G3 = 40 bp**,
@@ -148,8 +149,9 @@ those belong to Gate 2.
      `h2-events.json` with its sha256 beside it. No outcome is computed there. Each control candidate's own z, z_m
      and σ_e are decision-time quantities, and whether an hour is a C2 candidate (a first crossing, §6) depends only
      on that hour and the coin's earlier hours. The selection is not: the C2 matching is done after the fact over the
-     whole calendar month, so which control an event gets depends on candidate hours later in the month (§9.2), and
-     C1 excludes hours near the coin's later events (§6).
+     calendar months M−1, M and M+1 around the event's month M (Amendment A1), so which control an event gets depends
+     on candidate hours up to the end of the following month (§9.2), and C1 excludes hours near the coin's later
+     events (§6).
   2. Only then does the outcome module read that file; it refuses to run unless the file's sha256 equals the one
      recorded when the event stage finished.
 
@@ -166,10 +168,18 @@ those belong to Gate 2.
     (same code path, `events.first_crossings`), for symmetry with the event definition. The period is per coin, runs
     across calendar months and across the sign of R_i. The kept and suppressed candidate counts are written in the
     event file (`candidates_kept`, `candidates_suppressed_by_refractory`).
-  - Unchanged from the draft: each event gets the candidate with the nearest |R_i|, with the same sign of R_i, in the
-    same calendar month, on any universe coin. Events are matched greedily in chronological order (ties: instrument
-    id); ties between candidates go to the earliest hour, then the lowest instrument id. Matching is without replacement where
-    possible: an unused candidate first, else an already used one (a reuse, counted).
+  - **Matching pool: three calendar months (Amendment A1, owner, 2026-10-15, before any read).** The pool of an event
+    whose decision hour falls in calendar month M holds the candidates of the calendar months **M−1, M and M+1**
+    (instead of M only). The window is **clipped to the decision period** (2023-01 … 2026-09): for an event of
+    2023-01 the pool is 2023-01 and 2023-02; for an event of 2026-09 it is 2026-08 and 2026-09. Candidates are
+    decision hours only (§2), so no hour outside the decision period enters a pool.
+  - Unchanged from the draft: each event gets the candidate with the nearest |R_i|, with the same sign of R_i, from
+    its pool, on any universe coin. Events are matched greedily in chronological order (ties: instrument id); ties
+    between candidates go to the earliest hour, then the lowest instrument id. Matching is without replacement where
+    possible: an unused candidate first, else an already used one (a reuse, counted). A candidate used by one event
+    counts as used for every later event whose window holds it. The control's own month (its market membership, §4,
+    §5) is the month of its own hour; the number of controls taken outside the event's month is written in the
+    event file (`matched_outside_event_month`).
   - **Size caliper: none** (§10.2): any candidate of the pool may be matched, as in the draft.
   - The C2 control's outcome uses the event's direction: y_raw(C2) = −sign(e_event) × ln(P_j(exit) / P_j(entry)) at
     the control hour, with the same latency and bounded delays.
@@ -464,7 +474,7 @@ measure profitability. G7 binds before G3 (removing the top 5 % amounts to requi
     among those with ≥ 10 events; G7's base removal uses the largest sum of y.
 14. **C2 candidates amended to first crossings (owner, 2026-10-15).** A C2 candidate is, per coin, the first hour
     meeting |z| < 1 and |z_m| ≥ 2, then no candidate during 120 h, as for the events (§6; an episode is delimited by
-    this refractory period, not by a contiguous run of qualifying hours). Everything else of C2 is unchanged: same calendar month, same sign of R_i, nearest |R_i|, no caliper
+    this refractory period, not by a contiguous run of qualifying hours). Everything else of C2 is unchanged: same calendar month (widened to M−1, M, M+1 by Amendment A1, see the section of that name), same sign of R_i, nearest |R_i|, no caliper
     (§10.2), greedy chronological matching without replacement where possible, reuse counted, the 80 %
     `STATISTICAL_BLOCKER` rule. Reason: the drafted all-hours pool biased S2 against a PASS by −112 to −302 bp under
     synthetic nulls (simulator and module code); first crossings bring it to about −50 to −95 bp on the module code (§9.2) and raise P(PASS) at
@@ -493,14 +503,14 @@ first-hour C2 candidates were at first not integrated; the owner adopted first c
 | `protocol.py` | every constant of this text, the input hashes, the frozen X-Perp list |
 | `data.py` | archive reading (H2 zips through `research_swing2.okx.convert_candles`; swing v2 npz), the data-end cut, hourly bars, daily quote volume, bounded-delay prices |
 | `universe.py` | the monthly top 30 from the archives (§3), the secondary list |
-| `events.py` | β, residual, z, trigger, refractory, exclusions, C2 first-crossing candidates, pool and matching, C1 draws; writes `h2-events.json` + sha256 |
+| `events.py` | β, residual, z, trigger, refractory, exclusions, C2 first-crossing candidates, three-month pool (Amendment A1) and matching, C1 draws; writes `h2-events.json` + sha256 |
 | `outcomes.py` | refuses without the recorded event-file hash; outcomes, controls, decomposition; the report |
 | `stats.py` | month-block bootstrap (level parameter), G1–G7, the verdict, `fail_due_to_G4_alone` |
 | `claim.py` | single-use claims and the code digest (model: `research_lev/claim.py`) |
 | `cli.py` | `digest`, `claim`, `events`, `outcomes`; fixed locations only |
 
 - **Claims.** Each stage (`events`, then `outcomes`) needs a claim, refused unless: the decisions are set (G4 rule, C2
-  caliper, C2 first-crossing candidates; recorded in the claim); an owner go is given (`--owner-go`, recorded); the
+  caliper, C2 first-crossing candidates, C2 three-month pool of Amendment A1; recorded in the claim); an owner go is given (`--owner-go`, recorded); the
   protocol's body sha256 equals the expected hash and the `FROZEN` line; the `FROZEN` line carries `code sha256 <digest>` equal to the digest of every `research_h2` module plus
   `research_swing2/okx.py` and `research_swing2/okx_universe.py`; the input hashes of §2 match (every H2 zip against
   its manifest). `outcomes` also needs the `events` stage complete with its event file unchanged and the same code.
@@ -525,7 +535,10 @@ first-hour C2 candidates were at first not integrated; the owner adopted first c
   truncation rule; C1 ±5 d, tercile and sign; C2 first-crossing candidates (per coin, 120 h refractory across months
   and signs, a suppression across a month boundary, independent of row order, spaced and deterministic on a
   synthetic panel, recorded as a decision and written in the claim with the G4 rule and the caliper); C2
-  nearest size, month and sign, reuse and caliper; the 80 % rule; the amended G4 and the G4-only flag; G1, G6, G7; the CI level parameter; the module order (no hash, wrong hash, write
+  nearest size, month and sign, reuse and caliper; the Amendment A1 window (M−1 … M+1 by calendar month, clipped at
+  the first and last month and at a calendar gap, same sign, without replacement across months, reuse counted,
+  month-only reproduced with half-width 0, deterministic, controls within ±1 month on a synthetic three-month
+  `compute`, the pool recorded as a decision checked by `unresolved_decisions()` and written in the claim); the 80 % rule; the amended G4 and the G4-only flag; G1, G6, G7; the CI level parameter; the module order (no hash, wrong hash, write
   once); single-use claims, resumption and the code digest; the runtime and the single owner go; the input re-check at
   consumption; a crash leaving the stage consumed; the market measured to a truncated exit; the one-sample C2
   decomposition; the finite-draw count; determinism of the event file; the universe rule; the volume rule against
@@ -540,14 +553,17 @@ first-hour C2 candidates were at first not integrated; the owner adopted first c
 - Development data: no independent validation (§2).
 - The X-Perp secondary list is today's list (survivorship), matched without aliases (renamed assets left out, §3).
 - Hourly β estimates are biased low against daily ones (Epps effect): the residual keeps a small market exposure.
-- C2 with first-crossing candidates still pushes against a PASS under the simulated null (about −50 to −95 bp on
-  the module code, §9.2); its market-dynamics part has an unknown sign on real data. The gate has low power below
+- C2 with first-crossing candidates still pushes against a PASS under the simulated null: about −50 to −95 bp on
+  the module code with the month-only pool (§9.2), about −25 bp over 700 module panels with the three-month pool of
+  Amendment A1 (−78 to +10 bp per scenario); its market-dynamics part has an unknown sign on real data. The gate has low power below
   about 150 bp (§9.1).
-- The first-crossing C2 pool is 8 to 13 times smaller than the all-hours pool: the match rate stayed above 80 % in
-  every run of the power and module checks (minimum 0.803) but with a thin margin, and real data may give a
-  `STATISTICAL_BLOCKER` (§9.1). The rate depends on the real scale of z_m: with z_m 10 % smaller than nominal,
-  P(match rate < 80 %) is 0.26–0.56 per synthetic scenario; with heavier t3 tails 0.00–0.01; at the nominal scale
-  0.00–0.02 on fresh panels (§9.1).
+- The first-crossing C2 pool is 8 to 13 times smaller than the all-hours pool. With the month-only pool of v1 the
+  match rate depended strongly on the real scale of z_m (P(match rate < 80 %) 0.26–0.56 per synthetic scenario with
+  z_m 10 % smaller than nominal, §9.1). Amendment A1 widens the pool to three calendar months: in its acceptance run
+  no panel fell below 80 % (minimum 0.909 over 1,400 simulator panels and 0.928 over 700 module panels, VR 0.8
+  included). Real data (bar gaps, listings, coins absent in some months) may still give a lower rate.
+- With Amendment A1 about 69 % of the matched controls come from a month adjacent to the event's month: the control
+  is a shared shock of the same sign and size up to two calendar months away, not of the same month.
 - C1's ±5 d exclusion conditions on the absence of the coin's later shocks, and does not exclude the hours near
   suppressed triggers (§6).
 - The contract value of programme bases is inferred for any minutes without quote and base volume; the swing v2
@@ -562,7 +578,7 @@ first-hour C2 candidates were at first not integrated; the owner adopted first c
 - **C2 amended (owner, 2026-10-15, answer to the C2 null bias of §9.2):** C2 candidates are first crossings — per
   coin, the first hour meeting |z| < 1 and |z_m| ≥ 2, then no candidate during the same 120 h refractory period as
   the events (symmetry with the event definition; an episode is delimited by this period, §6). Everything else of C2 unchanged (same
-  calendar month, same sign of R_i, nearest |R_i|, no caliper as chosen by the frozen rule, greedy chronological
+  calendar month (widened by Amendment A1 below), same sign of R_i, nearest |R_i|, no caliper as chosen by the frozen rule, greedy chronological
   matching without replacement where possible, reuse counted, 80 % `STATISTICAL_BLOCKER` rule). G4 stays as amended.
   All other criteria unchanged. The owner authorised the freeze after the re-simulation and check, done on synthetic
   panels only (§9.1, §9.2: `sim/c2-first-crossing/`); **the single Gate 1 run is not authorised**.
@@ -572,7 +588,101 @@ first-hour C2 candidates were at first not integrated; the owner adopted first c
   §10.2); two test assertions (§12). The `research_h2` code is unchanged, so the code digest frozen below is the one
   that ran the module null check of §9.2 (its `events.py` docstring keeps the short "first hour of each episode",
   which §6 now defines).
-- Remaining step: the owner's separate go for the single Gate 1 run.
+- **Amendment A1 (owner, 2026-10-15, before any read):** the C2 matching pool becomes the calendar months M−1, M and
+  M+1 around the event's month M, clipped to the decision period; everything else unchanged. Accepted by its
+  pre-declared synthetic rule (see the section "Amendment A1").
+- Remaining steps: the re-freeze of this amended text, then the owner's separate go for the single Gate 1 run.
+
+## Amendment A1 (owner, 2026-10-15, before any read)
+
+**Decision.** To reduce the risk of a `STATISTICAL_BLOCKER` (the month-only pool fell below the 80 % match rate in
+26–56 % of synthetic panels when z_m is 10 % smaller than nominal, §9.1), the owner amended C2 on 2026-10-15,
+**after the v1 freeze and before any read of H2 data** (no price, return, residual, z-score, event count or event
+list of H2 had been read; no claim, event file or outcome exists):
+
+- The C2 matching pool of an event whose decision hour falls in calendar month M is the first-crossing candidates
+  of the calendar months **M−1, M and M+1** (instead of M only).
+- The window is **clipped to the decision period** 2023-01 … 2026-09 (declared): for an event of 2023-01 the pool is
+  2023-01 and 2023-02; for an event of 2026-09, 2026-08 and 2026-09.
+- **Unchanged:** first-crossing candidates (|z| < 1, |z_m| ≥ 2, 120 h per-coin refractory period), same sign of
+  R_i, nearest |R_i|, caliper none, greedy chronological matching without replacement where possible (a candidate
+  used by one event is used for every later event whose window holds it), reuse counted, the 80 %
+  `STATISTICAL_BLOCKER` rule, G4 = S2 > 0 as a point estimate (decisive, CI published only), every other gate and
+  criterion, and the owner's four choices (k = 3, horizon 3 d, leave-one-out top-30 market, G3 = 40 bp).
+
+**Code.** `protocol.C2_POOL = "three_months"` (`C2_POOLS = {"month": 0, "three_months": 1}`, the half-width in
+calendar months); `events.pool_months` builds the window by calendar month (a month absent from the decision months
+is left out); `events.match_c2(..., half_width)` joins the (month, sign) pools of the window in (hour, instrument)
+order; the event file records `pool`, `pool_half_width_months` and `matched_outside_event_month`.
+`protocol.unresolved_decisions()` refuses any other pool, and each claim records `c2_pool` with the G4 rule, the
+caliper and the candidate rule. `protocol.C2_POOL_RULE_SHA256` pins the acceptance rule. Commit `a4844111`
+(code digest `e8c087a1a1ee105c81d2f9f06d79b966f1db52a43ffd293860e1a8f6c8c41904`; the digest of the committed code
+is the one to write on the re-freeze line). Tests (synthetic only, 41 green): the window and its clipping at the
+first and last month and at a calendar gap, same sign, matching without replacement across months with a counted
+reuse, half-width 0 reproducing the month-only pool, determinism, controls within ±1 calendar month on a synthetic
+three-month `compute`, the decision checked by `unresolved_decisions()` and written in the claim.
+
+**Acceptance rule, written first.** `tradingV3-private/research/20261015T1200Z-h2-gate1/sim/c2-pool-3m/ACCEPTANCE-RULE.md`,
+sha256 **`192beca2577808eb1bcb98d1c4b9363c83ea35f2a46671700df11e7668bdc893`**, hashed at 2026-10-15T14:03:23Z before
+any code or simulation of the amended pool. 14 synthetic scenarios (normal, t4 and SV + t4 innovations with both
+coin R² ranges at VR 1.0 and at VR 0.8, where z_m × √VR for the trigger and the C2 qualifying hours; Student t3 with
+both R² ranges at VR 1.0). ACCEPT if and only if (a) P(PASS | μ = 0) ≤ 0.01 in every scenario × sd(y) ∈ {500, 800,
+1,200} bp cell (≤ 1 PASS in 100 panels), (b) at most 5 of 100 gate-simulator panels and at most 2 of 50 module
+panels below an 80 % match rate in every scenario, and (c) the null bias of S2 reported (no threshold). Seeds and
+script sha256 recorded before the runs (`PRE-RUN.sha256`, 2026-10-15T14:11:44Z); no bug was found, nothing was
+re-run, the rule was not revised.
+
+**Runs** (`sim/c2-pool-3m/`, `SHA256SUMS` sha256 `5d4b78041618e6b111b5496ab0d7a4f670c48095252a474cc8daee2aa8bfb275`;
+`power_3m.py` `03e449e6…c355b`, `null_module_3m.py` `82aa538f…0dfa`, `summarize_3m.py` `fb09fd51…6299`,
+`gate-sim-results.json` `54bb39b8…e756`, `null-module-results.json` `4b4027bd…613b`, `summary.md` `8a7e676f…0096`,
+`decision.json` `8b4ca75e…a2c4`). Gate simulator: `sim_h2.power_run` unchanged with the first-crossing pool and
+the three-month window, 100 panels per scenario, each panel also run with the month-only pool on the same seed
+(paired). Module: the real `research_h2.events.compute` on random-walk closes over the protocol's hourly grid, 50
+panels per scenario, the month-only pool matched on the same table. The month-only results reproduce the earlier
+runs exactly on the shared seeds (600 simulator panels of §9.1, 800 stress match rates, 300 module panels of §9.2:
+0 differences).
+
+**Result: ACCEPT.**
+
+| | Three-month pool (A1) | Month-only pool (v1), same panels |
+|---|---|---|
+| (a) PASS at μ = 0, max per scenario × sd cell | 1 / 100 (scenario t4 R² 0.20–0.50 VR 0.8, sd 1,200); 0 in the 41 other cells | 0 / 100 |
+| (b) simulator panels < 80 %, max per scenario | 0 / 100 (min 0.909, p1 0.962) | 56 / 100 (233 of 1,400; min 0.684) |
+| (b) module panels < 80 %, max per scenario | 0 / 50 (min 0.928, p1 0.969) | 15 / 50 (54 of 700; min 0.702) |
+| Match rate, VR 1.0 (simulator min / module min) | 0.968 / 0.980 | 0.803 / 0.847 |
+| Match rate, VR 0.8 (simulator min / module min) | 0.909 / 0.928 | 0.684 / 0.702 |
+| (c) S2 at μ = 0, module, 700 panels | −25 ± 110 bp, P(S2 > 0) 0.41 | −62 ± 109 bp, 0.28 |
+| (c) S2 at μ = 0, simulator, sd 800, 1,400 panels | −26 ± 105 bp, P(S2 > 0) 0.41 | −50 ± 104 bp, 0.32 |
+| Matched controls outside the event's month (module) | 69 % | 0 % |
+
+(c) per scenario, module (mean ± sd, P(S2 > 0)): VR 1.0 normal −22 ± 79 (0.40) and +3 ± 119 (0.50), t4 −26 ± 85
+(0.32) and −22 ± 102 (0.46), SV + t4 −69 ± 122 (0.28) and −37 ± 134 (0.44); VR 0.8 normal −28 ± 95 (0.38) and
++2 ± 114 (0.54), t4 −35 ± 87 (0.28) and −12 ± 103 (0.44), SV + t4 −78 ± 138 (0.22) and −44 ± 140 (0.38); t3 +10 ± 94
+(0.60) and +3 ± 81 (0.50) bp (R² 0.35–0.75 first). Simulator at sd 800: −2 to −65 bp per scenario, P(S2 > 0)
+0.29–0.51. The null bias stays negative (against a PASS) on average and is about 40–50 % of the month-only one.
+
+P(PASS) of the gate with the three-month pool, pooled mean [min–max over scenarios]:
+
+| True effect μ | VR 1.0, sd 500 / 800 / 1,200 bp | VR 0.8, sd 500 / 800 / 1,200 bp | t3, sd 500 / 800 / 1,200 bp |
+|---:|---|---|---|
+| 0 bp | 0.00 / 0.00 / 0.00 | 0.00 / 0.00 / 0.00 [max 0.01] | 0.00 / 0.00 / 0.00 |
+| 40 bp | 0.05 / 0.02 / 0.01 | 0.04 / 0.02 / 0.01 | 0.06 / 0.01 / 0.00 |
+| 80 bp | 0.39 / 0.18 / 0.07 | 0.35 / 0.15 / 0.04 | 0.45 / 0.16 / 0.06 |
+| 150 bp | 0.84 [0.70–0.93] / 0.74 [0.66–0.83] / 0.44 [0.32–0.51] | 0.82 / 0.74 [0.71–0.77] / 0.41 | 0.94 / 0.86 / 0.51 |
+| 300 bp | 1.00 / 1.00 / 0.98 | 1.00 / 0.99 / 0.98 | 1.00 / 1.00 / 0.99 |
+
+Month-only on the same panels: at VR 1.0, 0.78 / 0.70 / 0.42 at 150 bp and 0.99 / 0.99 / 0.97 at 300 bp; at VR 0.8,
+0.47 / 0.43 / 0.24 at 150 bp and 0.61 / 0.60 / 0.59 at 300 bp (P(`STATISTICAL_BLOCKER`) 0.39 pooled, 0.26–0.56 per
+scenario, against 0.00 with the three-month pool). P(FAIL due to G4 alone) with the three-month pool: at most 0.11
+pooled (0.21 in one scenario) at 150 bp and 0.00–0.01 at 300 bp (month-only: 0.14 pooled, 0.35 in one scenario, at
+150 bp).
+
+**What it changes and what it does not.** The amendment removes most of the match-rate risk in the synthetic designs
+and halves the simulated null bias of S2; it keeps C2 conservative on average. It does not change the events, C1,
+the outcomes or any gate. The control is now drawn from up to three calendar months, so a regime change between
+adjacent months enters the comparison; this is declared as a limit (§13). The month-block bootstrap still attaches
+each control to its event's month (§7). §9.1, §9.2 and §10 describe the month-only pool of v1 and are kept as the
+record of the v1 design.
 
 ## 15. Freeze
 
@@ -581,8 +691,11 @@ the following blank line). At the freeze, the hash, the time, the commit and the
 (`python -m scripts.research_h2.cli digest`) are written on a `FROZEN` line below and in
 `PREREGISTRATION-H2-GATE1.sha256`.
 
-Status: **FROZEN, not executed** — the owner's C2 decision of 2026-10-15 is written in (§6, §10.14, §14) and
-re-simulated on synthetic panels (§9); no claim, event file or outcome exists; the single Gate 1 run is not
-authorised.
+Status: **READY_TO_REFREEZE, not executed** — Amendment A1 (owner, 2026-10-15, before any read) is written in (§6,
+§13, §14 and the section "Amendment A1") and passed its pre-declared synthetic acceptance rule (ACCEPT); no claim,
+event file or outcome exists; the single Gate 1 run is not authorised. The re-freeze writes a new `FROZEN` line
+below with the new body sha256 and the code digest of the amended code.
 
-FROZEN 2026-10-15T13:56:41Z body sha256 c4f24f98d256b6ad5bb9043e9b1e66f8500963c120b2587d002f169b9e54aa9c code sha256 d52c03848928cd1717385b641d1cb0dc667efb5f4376a20938d6e006f29839b1 runtime python 3.12.3 numpy 2.5.4 (tradingV3-private/research/20261014T090000Z-swing-v2-runtime/bin/python) (protocol body and code at commit f7c04507ecb3b215af3055098b22012ffaac5e42; not executed: no claim, no event file, no outcome; the single Gate 1 run needs the owner's separate go)
+History (v1, superseded by Amendment A1; written so that no claim reads it):
+
+- v1: `FROZEN 2026-10-15T13:56:41Z body sha256 c4f24f98d256b6ad5bb9043e9b1e66f8500963c120b2587d002f169b9e54aa9c code sha256 d52c03848928cd1717385b641d1cb0dc667efb5f4376a20938d6e006f29839b1 runtime python 3.12.3 numpy 2.5.4 (tradingV3-private/research/20261014T090000Z-swing-v2-runtime/bin/python) (protocol body and code at commit f7c04507ecb3b215af3055098b22012ffaac5e42; not executed: no claim, no event file, no outcome; the single Gate 1 run needs the owner's separate go)`
