@@ -2,7 +2,8 @@
 
 A stage (`events`, then `outcomes`) runs only after `claim` wrote `<stage>-claim.json`. A claim is refused unless:
 
-- every protocol decision is set (`protocol.unresolved_decisions()` is empty) and an owner go is given;
+- every protocol decision is set (`protocol.unresolved_decisions()` is empty: G4 rule, C2 caliper, C2 first-crossing
+  candidates, C2 three-month matching pool of Amendment A1) and an owner go is given;
 - the protocol body sha256 equals the expected hash AND the hash on the protocol's FROZEN line;
 - the FROZEN line carries `code sha256 <digest>` and the current code identity (every `research_h2` module and the
   reused `research_swing2/okx.py`, `research_swing2/okx_universe.py`) has that digest: the code is pinned to the freeze;
@@ -195,7 +196,7 @@ def claim(out: Path, stage: str, prereg: Path, expected_sha256: str, owner_go: s
     document = {"stage": stage, "claimed_at": now(), "protocol_path": str(Path(prereg).resolve()), "protocol_body_sha256": actual,
                 "code": identity, "code_sha256": code_digest(identity), "runtime": environment, "prerequisites": prerequisites, "inputs": inputs,
                 "owner_go": owner_go.strip(), "decisions": {"g4_rule": pr.G4_RULE, "c2_caliper": pr.C2_CALIPER_NAME,
-                                                          "c2_candidates": pr.C2_CANDIDATES}}
+                                                          "c2_candidates": pr.C2_CANDIDATES, "c2_pool": pr.C2_POOL}}
     _write_exclusive(target, document)
     return document
 

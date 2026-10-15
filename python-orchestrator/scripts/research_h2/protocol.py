@@ -99,6 +99,12 @@ C2_ZM_MIN = 2.0
 # and |z_m| >= 2), with the events' per-coin refractory period; every other C2 rule unchanged.
 C2_CANDIDATES = "first_crossing"
 C2_REFRACTORY_H = REFRACTORY_H
+# Amendment A1 (owner decision of 2026-10-15, before any read): the C2 matching pool of an event whose decision hour
+# falls in calendar month M holds the candidates of the calendar months M-1, M and M+1, clipped to the decision period
+# (first month: M and M+1; last month: M-1 and M). Name -> half-width of the window in calendar months.
+C2_POOLS = {"month": 0, "three_months": 1}
+C2_POOL: str | None = "three_months"
+C2_POOL_RULE_SHA256 = "192beca2577808eb1bcb98d1c4b9363c83ea35f2a46671700df11e7668bdc893"  # sim/c2-pool-3m/ACCEPTANCE-RULE.md
 C2_CALIPERS = {"none": None, "50": 0.50, "35": 0.35, "25": 0.25}
 C2_CALIPER_NAME: str | None = "none"  # set by the synthetic rule CALIPER-RULE.md (sha256 CALIPER_RULE_SHA256)
 C2_MIN_MATCH = 0.80
@@ -131,6 +137,12 @@ def caliper() -> float | None:
     return C2_CALIPERS[C2_CALIPER_NAME]
 
 
+def c2_pool_half_width() -> int:
+    if C2_POOL not in C2_POOLS:
+        raise ValueError("the C2 matching pool is not set")
+    return C2_POOLS[C2_POOL]
+
+
 def unresolved_decisions() -> list[str]:
     out = []
     if G4_RULE not in G4_RULES:
@@ -139,4 +151,6 @@ def unresolved_decisions() -> list[str]:
         out.append("C2 size caliper")
     if C2_CANDIDATES != "first_crossing":
         out.append("C2 candidates (first crossings, owner decision of 2026-10-15)")
+    if C2_POOL != "three_months":
+        out.append("C2 matching pool (calendar months M-1, M, M+1 clipped to the period, owner Amendment A1 of 2026-10-15)")
     return out

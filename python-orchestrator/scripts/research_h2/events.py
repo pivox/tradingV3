@@ -5,9 +5,10 @@ No event quantity reads a price after the decision hour t: every quantity uses h
 (the β / σ window ends at t - 24 h). The C1 and C2 control hours are chosen here too, so the outcome module only
 measures. C2 candidates are first crossings (owner decision of 2026-10-15): the first hour of each shared-shock
 episode of a coin, then a 120 h per-coin refractory period, as for the events. Whether an hour is a candidate depends
-only on that hour and the coin's earlier hours, but the matching is done after the fact over the whole calendar month,
-so which control an event gets still depends on candidate hours later in the month (§9.2). C1 likewise excludes hours
-within ±120 h of the coin's events, later ones included (§6).
+only on that hour and the coin's earlier hours, but the matching is done after the fact over a pool of three calendar
+months (M-1, M, M+1 around the event's month M, clipped to the decision period: Amendment A1 of 2026-10-15), so which
+control an event gets depends on candidate hours up to a month after the event's month (§9.2). C1 likewise excludes
+hours within ±120 h of the coin's events, later ones included (§6).
 """
 
 from __future__ import annotations
@@ -185,7 +186,7 @@ def c2_candidates(table: Mapping[str, np.ndarray]) -> tuple[list[int], list[int]
 
 def c2_pool(table: Mapping[str, np.ndarray], candidates: list[int] | None = None) -> dict[tuple[int, bool], np.ndarray]:
     """The C2 candidates (`c2_candidates`) keyed by (month, R_i > 0), rows sorted by (bar, instrument) so ties go to
-    the earliest hour, then the lowest instrument id."""
+    the earliest hour, then the lowest instrument id. `match_c2` joins the pools of the months of an event's window."""
     rows = np.array(c2_candidates(table)[0] if candidates is None else candidates, dtype=np.int64)
     rows = rows[np.lexsort((table["inst"][rows], table["bar"][rows]))]
     pools: dict[tuple[int, bool], list[int]] = defaultdict(list)
@@ -194,23 +195,54 @@ def c2_pool(table: Mapping[str, np.ndarray], candidates: list[int] | None = None
     return {key: np.array(value, dtype=np.int64) for key, value in pools.items()}
 
 
-def match_c2(table: Mapping[str, np.ndarray], events: list[int], pools: Mapping[tuple[int, bool], np.ndarray], caliper: float | None) -> list[dict | None]:
-    """Greedy, events in chronological order (ties: instrument id): the nearest |R_i| in the event's (month, sign)
-    pool, within the caliper; an unused candidate first, else an already used one (a counted reuse); else no match."""
+def _calendar_numbers(table: Mapping[str, np.ndarray]) -> np.ndarray | None:
+    """Calendar month number (year * 12 + month - 1) of each month index of the table; None when the table carries no
+    month labels (then the month indices are taken as consecutive calendar months)."""
+    if "months" not in table:
+        return None
+    return np.array([int(m[:4]) * 12 + int(m[5:7]) - 1 for m in (str(x) for x in table["months"])], dtype=np.int64)
+
+
+def pool_months(table: Mapping[str, np.ndarray], month: int, half_width: int) -> list[int]:
+    """Month indices of the C2 window of an event of month index `month`: the calendar months within ±half_width of
+    its calendar month that belong to the table's months (the decision period), ascending. Clipped: at the first month
+    of the period the window is M, M+1; at the last, M-1, M; a calendar month absent from the table is left out."""
+    numbers = _calendar_numbers(table)
+    if numbers is None:
+        return [m for m in range(month - half_width, month + half_width + 1) if m >= 0]
+    own = numbers[month]
+    return [int(k) for k in np.flatnonzero(np.abs(numbers - own) <= half_width)]
+
+
+def match_c2(table: Mapping[str, np.ndarray], events: list[int], pools: Mapping[tuple[int, bool], np.ndarray], caliper: float | None,
+             half_width: int | None = None) -> list[dict | None]:
+    """Greedy, events in chronological order (ties: instrument id): the nearest |R_i| among the candidates of the same
+    sign of R_i in the event's window of calendar months (M-1, M, M+1 by Amendment A1, `half_width` 1, clipped to the
+    period; `half_width` 0 is the month-only pool of the v1 freeze), within the caliper; an unused candidate first, else
+    an already used one (a counted reuse); else no match. A candidate used by one event is used for every later event
+    whose window holds it. Candidate ties go to the earliest hour, then the lowest instrument id."""
+    width = pr.c2_pool_half_width() if half_width is None else int(half_width)
     used = {key: np.zeros(rows.size, dtype=bool) for key, rows in pools.items()}
     order = sorted(events, key=lambda r: (int(table["bar"][r]), int(table["inst"][r])))
     result: dict[int, dict | None] = {}
+    windows: dict[int, list[int]] = {}
     for row in order:
         r_e = float(table["R_i"][row])
-        key = (int(table["month"][row]), _sign_positive(r_e))
-        pool = pools.get(key)
-        if pool is None or pool.size == 0:
+        sign = _sign_positive(r_e)
+        month = int(table["month"][row])
+        if month not in windows:
+            windows[month] = pool_months(table, month, width)
+        keys = [(m, sign) for m in windows[month] if (m, sign) in pools and pools[(m, sign)].size]
+        if not keys:
             result[row] = None
             continue
+        # months ascending and each pool sorted by (bar, instrument): the concatenation is in (bar, instrument) order
+        pool = np.concatenate([pools[key] for key in keys])
+        taken = np.concatenate([used[key] for key in keys])
         size = np.abs(table["R_i"][pool])
         distance = np.abs(size - abs(r_e))
         ok = np.ones(pool.size, dtype=bool) if caliper is None else (np.abs(size / abs(r_e) - 1.0) <= caliper + 1e-12)
-        candidates = ok & ~used[key]
+        candidates = ok & ~taken
         reuse = False
         if not candidates.any():
             candidates, reuse = ok, True
@@ -218,8 +250,12 @@ def match_c2(table: Mapping[str, np.ndarray], events: list[int], pools: Mapping[
             result[row] = None
             continue
         pick = int(np.flatnonzero(candidates)[np.argmin(distance[candidates])])
-        used[key][pick] = True
-        chosen = int(pool[pick])
+        for key in keys:
+            if pick < used[key].size:
+                used[key][pick] = True
+                break
+            pick -= used[key].size
+        chosen = int(pools[key][pick])
         result[row] = {"row": chosen, "reuse": reuse}
     return [result[row] for row in events]
 
@@ -299,7 +335,7 @@ def compute(closes: Mapping[str, np.ndarray], universe: Mapping, months: list[st
     events, suppressed = detect(table, pr.K)
     candidates, candidates_suppressed = c2_candidates(table)
     pools = c2_pool(table, candidates)
-    c2 = match_c2(table, events, pools, pr.caliper())
+    c2 = match_c2(table, events, pools, pr.caliper(), pr.c2_pool_half_width())
     c1 = select_c1(table, events)
     near_suppressed = _c1_near_suppressed(table, c1, events, suppressed)
     records = []
@@ -328,6 +364,7 @@ def compute(closes: Mapping[str, np.ndarray], universe: Mapping, months: list[st
     per_hour = Counter(Counter(r["decision_ms"] for r in records).values())
     pool_sizes = {f"{table['months'][m]}|{'+' if s else '-'}": int(v.size) for (m, s), v in sorted(pools.items())}
     matched = sum(1 for r in records if r["c2"] is not None)
+    outside = sum(1 for r in records if r["c2"] is not None and r["c2"]["month"] != r["month"])
     return {
         "schema": "h2-gate1-events.v1",
         "parameters": _parameters(),
@@ -339,7 +376,9 @@ def compute(closes: Mapping[str, np.ndarray], universe: Mapping, months: list[st
         "events_per_hour": {str(k): v for k, v in sorted(per_hour.items())},
         "c2": {"caliper": pr.C2_CALIPER_NAME, "candidates": pr.C2_CANDIDATES, "refractory_h": pr.C2_REFRACTORY_H,
                "candidates_kept": len(candidates), "candidates_suppressed_by_refractory": len(candidates_suppressed),
-               "pool_sizes": pool_sizes, "matched": matched,
+               "pool": pr.C2_POOL, "pool_half_width_months": pr.c2_pool_half_width(),
+               "pool_window": "calendar months M-1, M, M+1 around the event's month M, clipped to the decision months",
+               "pool_sizes": pool_sizes, "matched": matched, "matched_outside_event_month": outside,
                "reused": sum(1 for r in records if r["c2"] is not None and r["c2"]["reuse"]),
                "match_rate_at_selection": matched / len(records) if records else None},
         "c1": {"events_without_control": sum(1 for r in records if not r["c1"]["bars"]),
@@ -361,7 +400,7 @@ def _minimal(table: Mapping[str, np.ndarray], rows: list[int]) -> list[dict]:
 
 def _parameters() -> dict:
     names = ("K", "K_SENSITIVITY", "ZM_MAX", "REFRACTORY_H", "BETA_WINDOW_H", "BETA_LAG_H", "BETA_MIN_SHARE", "SHOCK_H",
-             "BAR_MIN_MINUTES", "MIN_MARKET_MEMBERS", "C2_Z_MAX", "C2_ZM_MIN", "C2_CANDIDATES", "C2_REFRACTORY_H", "C2_CALIPER_NAME", "C1_PER_EVENT",
+             "BAR_MIN_MINUTES", "MIN_MARKET_MEMBERS", "C2_Z_MAX", "C2_ZM_MIN", "C2_CANDIDATES", "C2_REFRACTORY_H", "C2_POOL", "C2_CALIPER_NAME", "C1_PER_EVENT",
              "C1_EXCLUSION_H", "SEED", "DECISION_FROM_MS", "DECISION_TO_MS", "DATA_END_MS", "GRID_START_MS")
     return {name: getattr(pr, name) for name in names}
 
