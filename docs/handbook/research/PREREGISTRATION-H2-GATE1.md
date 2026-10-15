@@ -1,12 +1,13 @@
-# H2 Gate 1 — pre-registration (status `READY_TO_REFREEZE`, Amendment A1, not executed)
+# H2 Gate 1 — pre-registration (status `FROZEN`, re-frozen with Amendment A1, not executed)
 
-**This text authorises nothing by itself.** It was frozen on 2026-10-15T13:56:41Z (v1, §15) with the owner's C2
-decision (first-crossing candidates, §6, §14). Before any read of H2 data, the owner amended C2 again
-(**Amendment A1**, 2026-10-15: matching pool of three calendar months M−1, M, M+1, see the section of that name
-before §15). The amendment passed its pre-declared synthetic acceptance rule (ACCEPT); the text is ready to be
-re-frozen. Until a new `FROZEN` line is written in §15, every claim is refused (the v1 line is kept as history in
-a form the claim does not read, and the code changed). The single Gate 1 run needs a **separate, explicit go** from
-the owner (the claim refuses to start without it); that go has not been given.
+**This text is frozen (§15) and authorises nothing by itself.** It was first frozen on 2026-10-15T13:56:41Z (v1,
+kept as history in §15) with the owner's C2 decision (first-crossing candidates, §6, §14). Before any read of H2
+data, the owner amended C2 (**Amendment A1**, 2026-10-15: matching pool of three calendar months M−1, M, M+1, see
+the section of that name before §15). The amendment passed its pre-declared synthetic acceptance rule (ACCEPT) and
+the amended text was re-frozen: its body sha256 and the code digest of `python-orchestrator/scripts/research_h2/`
+are written on the new `FROZEN` line (§15) and in `PREREGISTRATION-H2-GATE1.sha256`. The single Gate 1 run needs a
+**separate, explicit go** from the owner (the claim refuses to start without it); at the re-freeze that go has not
+been given.
 
 It replaces `H2-GATE1-PREREGISTRATION-DRAFT.md` (the draft, kept unchanged). The owner's four choices of the draft are
 kept unchanged: **k = 3, primary horizon 3 d, market = leave-one-out equal weight of the monthly top 30, G3 = 40 bp**,
@@ -155,7 +156,7 @@ those belong to Gate 2.
   2. Only then does the outcome module read that file; it refuses to run unless the file's sha256 equals the one
      recorded when the event stage finished.
 
-## 6. Controls (same universe, months, horizons and measurement)
+## 6. Controls (same universe, horizons and measurement; C2 pool of three calendar months, Amendment A1)
 
 - **C2: shared shock** (the decisive control against absolute reversion).
   - Candidate hours: **first crossings** (owner decision of 2026-10-15, §14). The qualifying hours are the evaluable
@@ -249,6 +250,10 @@ The sample is the events with a defined 3-d y and y_raw.
   validation would be prospective on X-Perps.
 
 ## 9. Power, costs and what a result means (synthetic, describes the design, changes nothing)
+
+> **Note (Amendment A1).** §9.1 and §9.2 describe the v1 month-only C2 pool and are kept as the record of the v1
+> design; the C2 pool is superseded by Amendment A1 (calendar months M−1, M, M+1), whose synthetic results are in
+> the section "Amendment A1".
 
 ### 9.1 Power of the frozen gate (amended C2)
 
@@ -404,6 +409,9 @@ measure profitability. G7 binds before G3 (removing the top 5 % amounts to requi
 500–1,200 bp).
 
 ## 10. Changes from the draft
+
+> **Note (Amendment A1).** This list records the v1 design, with the month-only C2 pool; the C2 pool is superseded
+> by Amendment A1 (calendar months M−1, M, M+1, see the section of that name).
 
 1. **G4 amended (owner, 2026-10-15).** G4 becomes "S2 > 0 as a point estimate" and is decisive; its 95 % CI is
    published, not decisive. G2, G5, G6 and G7 remain decisive as drafted. A FAIL due to G4 alone is flagged in the
@@ -591,7 +599,7 @@ first-hour C2 candidates were at first not integrated; the owner adopted first c
 - **Amendment A1 (owner, 2026-10-15, before any read):** the C2 matching pool becomes the calendar months M−1, M and
   M+1 around the event's month M, clipped to the decision period; everything else unchanged. Accepted by its
   pre-declared synthetic rule (see the section "Amendment A1").
-- Remaining steps: the re-freeze of this amended text, then the owner's separate go for the single Gate 1 run.
+- Remaining step: the owner's separate go for the single Gate 1 run (this amended text is re-frozen, §15).
 
 ## Amendment A1 (owner, 2026-10-15, before any read)
 
@@ -649,7 +657,8 @@ runs exactly on the shared seeds (600 simulator panels of §9.1, 800 stress matc
 | (a) PASS at μ = 0, max per scenario × sd cell | 1 / 100 (scenario t4 R² 0.20–0.50 VR 0.8, sd 1,200); 0 in the 41 other cells | 0 / 100 |
 | (b) simulator panels < 80 %, max per scenario | 0 / 100 (min 0.909, p1 0.962) | 56 / 100 (233 of 1,400; min 0.684) |
 | (b) module panels < 80 %, max per scenario | 0 / 50 (min 0.928, p1 0.969) | 15 / 50 (54 of 700; min 0.702) |
-| Match rate, VR 1.0 (simulator min / module min) | 0.968 / 0.980 | 0.803 / 0.847 |
+| Match rate, VR 1.0, scenarios 1–6 (simulator min / module min) | 0.968 / 0.980 | 0.803 / 0.847 |
+| Match rate, VR 1.0, Student t3 scenarios 13–14 (simulator min / module min) | 0.963 / 0.977 | 0.793 / 0.772 (1 panel < 80 % in each run) |
 | Match rate, VR 0.8 (simulator min / module min) | 0.909 / 0.928 | 0.684 / 0.702 |
 | (c) S2 at μ = 0, module, 700 panels | −25 ± 110 bp, P(S2 > 0) 0.41 | −62 ± 109 bp, 0.28 |
 | (c) S2 at μ = 0, simulator, sd 800, 1,400 panels | −26 ± 105 bp, P(S2 > 0) 0.41 | −50 ± 104 bp, 0.32 |
@@ -660,6 +669,13 @@ runs exactly on the shared seeds (600 simulator panels of §9.1, 800 stress matc
 +2 ± 114 (0.54), t4 −35 ± 87 (0.28) and −12 ± 103 (0.44), SV + t4 −78 ± 138 (0.22) and −44 ± 140 (0.38); t3 +10 ± 94
 (0.60) and +3 ± 81 (0.50) bp (R² 0.35–0.75 first). Simulator at sd 800: −2 to −65 bp per scenario, P(S2 > 0)
 0.29–0.51. The null bias stays negative (against a PASS) on average and is about 40–50 % of the month-only one.
+The module VR 0.8 panels reuse the seeds of the VR 1.0 panels (`PRE-RUN.sha256`): they run on the same
+random-walk closes with z_m rescaled, so the 700 pooled module panels come from 400 distinct generated series.
+Over those 400 distinct series (scenarios 1–6 and 13–14) the module S2 at μ = 0 is −20 ± 106 bp, P(S2 > 0) 0.44
+(month-only −56 ± 105 bp, 0.29). The per-scenario checks of (b) are unaffected. G4 is therefore less
+conservative than under v1 (null bias about halved, mean positive in 4 of 14 module scenarios); a null in which
+the shared shocks themselves revert was not simulated. The single μ = 0 PASS (seed 70264074, scenario 10, sd
+1,200) was a `STATISTICAL_BLOCKER` under the month-only pool (match 0.773).
 
 P(PASS) of the gate with the three-month pool, pooled mean [min–max over scenarios]:
 
