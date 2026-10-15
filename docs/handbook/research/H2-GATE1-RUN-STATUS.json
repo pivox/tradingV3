@@ -143,5 +143,23 @@
     "both stages are consumed (events with its single resumption, outcomes without resumption); any rerun needs a written amendment reported as such, and could no longer be confirmatory on this archive",
     "the continuation of H2 is the owner's decision"
   ],
-  "audit": "integrity_ok true; verdict_consistent true; minor wording notes (CPU times were user only; the final 'monitor stopped' entry was left out of the description), both corrected in the report"
+  "audit": "integrity_ok true; verdict_consistent true; minor wording notes (CPU times were user only; the final 'monitor stopped' entry was left out of the description), both corrected in the report",
+  "closure": {
+    "status": "H2_GATE1_FAIL_CLOSED",
+    "date": "2026-10-15",
+    "decided_by": "owner",
+    "recorded_from": "owner message in the Claude Code orchestration session, 2026-10-15T19:00:27Z (mission 'TradingV3 — Clôture H2 et reprise de H1 après Gate 1'); confirmed 2026-10-15T19:05:53Z",
+    "owner_decision_text": "Décision explicite : Clôturer H2 dans sa formulation actuelle. […] Enregistrer : H2_GATE1_FAIL_CLOSED […] Décision finale : H2 : CLOSE.",
+    "owner_confirmation_text": "laisser terminer les quatre travaux, conserver H1 et H2 clôturées, puis examiner les éventuelles propositions H3 avant d'autoriser une nouvelle campagne.",
+    "consequences": [
+      "no H2 Gate 2 for this protocol",
+      "no H2 setup",
+      "no H2 trading or trading engine",
+      "no new H2 holdout prepared to rescue this candidate",
+      "all H2 results, negative ones included, stay consultable",
+      "the H2 data read by this run are consumed for any future confirmatory use (development only)"
+    ],
+    "short_side": "exploratory observation only (+29.3 bp, FAIL on G2, G3, G5, G7), never a validated candidate",
+    "document": "docs/handbook/research/H2-CLOSURE-DECISION.md"
+  }
 }

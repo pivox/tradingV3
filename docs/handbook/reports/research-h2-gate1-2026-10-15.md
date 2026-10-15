@@ -299,3 +299,21 @@ Les chiffres du présent rapport ont en outre été relus contre `h2-gate1-resul
   au-dessus de 7,9 Go et le garde-fou n'a jamais été déclenché.
 - **Lecture descriptive hors protocole** : l'écart-type de y (§8) a été calculé après le verdict, pour situer le
   résultat dans le tableau de puissance ; il ne sert à aucune décision.
+
+## 12. Addendum après verdict (audit de clôture, 2026-10-15)
+
+Cet addendum n'altère aucun chiffre ni aucun verdict ci-dessus. Les §2 à §11 restent tels que rapportés.
+
+- **Clôture.** Le propriétaire a décidé `H2_GATE1_FAIL_CLOSED` le 2026-10-15 (message de 19:00:27Z, confirmé à
+  19:05:53Z). La « suite de H2 » laissée ouverte au §9 est donc tranchée. Voir
+  [`H2-CLOSURE-DECISION.md`](../research/H2-CLOSURE-DECISION.md) et le champ `closure` de `H2-GATE1-RUN-STATUS.json`.
+- **Cause de la chute du disque (§2).** Le §2 la disait « non identifiée ». Un diagnostic Linux en lecture seule,
+  fait après le verdict, l'attribue à une écriture d'environ 36 Gio liée à une activité personnelle sans rapport avec la recherche, sur le même disque (≈ 15:58Z → 16:18Z). H2 n'a écrit que 24 blocs. L'autre session locale (nettoyage de fichiers personnels) n'a fait que supprimer des fichiers après l'arrêt : c'est elle qui a rendu l'espace. L'outil et l'auteur exacts ne sont pas prouvés. La synthèse se trouve dans
+  `RESEARCH-INFRA-DIAGNOSTIC.md` (branche `claude/research-status-2026-10-15`). La version détaillée est conservée hors
+  du dépôt public.
+- **`nice` lors de la première tentative (§2, §11).** La commande chronométrée enregistrée dans le journal de la
+  première tentative (`events.log`, sha256 `de2f69d0…0947`) ne contient pas `nice -n 15`. Pour cette tentative,
+  l'usage de `nice` est donc **NON PROUVÉ**. C'est sans effet : elle n'a produit aucune sortie. Pour la reprise et pour
+  `outcomes`, `nice -n 15` est bien attesté par leurs journaux.
+- **Journal de la première tentative.** Il n'est conservé que dans un répertoire temporaire de session, pas dans
+  `run/`.

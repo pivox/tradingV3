@@ -140,7 +140,8 @@ nav:
       - "Leverage > 2x — pre-registration (frozen; executed, NOT_INFORMATIVE)": research/PREREGISTRATION-leverage-gt2.md
       - "Leverage > 2x — E0a census (run once)": research/LEVERAGE-GT2-E0A-CENSUS.md
       - "Leverage > 2x — E1 replay and analysis (NOT_INFORMATIVE)": research/LEVERAGE-GT2-E1-RESULTS.md
-      - "H2 — Gate 1 pre-registration (frozen, not executed)": research/PREREGISTRATION-H2-GATE1.md
+      - "H2 — Gate 1 pre-registration (frozen; executed once, FAIL)": research/PREREGISTRATION-H2-GATE1.md
+      - "H2 — closure decision (H2_GATE1_FAIL_CLOSED)": research/H2-CLOSURE-DECISION.md
       - "Research eligibility gates M1–M5": research/RESEARCH-ELIGIBILITY-GATES.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
