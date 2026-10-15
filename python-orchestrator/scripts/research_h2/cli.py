@@ -7,7 +7,9 @@
     python -m scripts.research_h2.cli outcomes
 
 Run under `nice -n 15`; the guard stops the run when available memory falls below MIN_AVAILABLE_MB or the free disk
-below MIN_FREE_DISK_GB (an `events` run stopped before writing may be resumed once with `--resume`).
+below MIN_FREE_DISK_GB (an `events` run stopped before writing may be resumed once with `--resume`). Any other
+failure is recorded as `crashed`; the stage stays consumed. One owner go covers both stages: the outcomes claim takes
+the events claim's reference and runs with no further decision.
 """
 
 from __future__ import annotations
@@ -55,6 +57,9 @@ def _run(stage: str, resume: bool, body) -> int:
         cl.abort(pr.OUT_DIR, stage, str(stop))
         print(str(stop), file=sys.stderr)
         return 3
+    except BaseException as error:  # the stage stays consumed: no resumption, a rerun needs a written amendment
+        cl.crash(pr.OUT_DIR, stage, f"{type(error).__name__}: {error}")
+        raise
     cl.finish(pr.OUT_DIR, stage)
     return 0
 

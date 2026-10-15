@@ -1,9 +1,12 @@
 """Event module (§4, §6 selection): residual shocks, exclusions and the control hours, written with their sha256
 BEFORE any outcome is computed.
 
-Nothing in this module reads a price after the decision hour t: every quantity uses hourly bars closing at or before
-t (the β / σ window ends at t - 24 h). The C1 and C2 control hours are chosen here too, from decision-time
-quantities only, so the outcome module only measures.
+No event quantity reads a price after the decision hour t: every quantity uses hourly bars closing at or before t
+(the β / σ window ends at t - 24 h). The C1 and C2 control hours are chosen here too, so the outcome module only
+measures. Each C2 candidate's own z and z_m are decision-time quantities, but the pool is built after the fact over
+the whole calendar month, so which control an event gets depends on the candidate hours that occur later in the month
+(the pool-weighting mechanism of §9.2). C1 likewise excludes hours within ±120 h of the coin's events, later ones
+included (§6).
 """
 
 from __future__ import annotations
@@ -207,7 +210,8 @@ def match_c2(table: Mapping[str, np.ndarray], events: list[int], pools: Mapping[
 def select_c1(table: Mapping[str, np.ndarray], events: list[int]) -> list[dict]:
     """Same coin, decision hours of the same month, evaluable, no event of that coin within ±C1_EXCLUSION_H hours,
     same σ_e tercile (terciles of the coin's evaluable hours in the month) and same sign of R_m; up to
-    C1_PER_EVENT hours drawn without replacement (generator seeded with (SEED, event index))."""
+    C1_PER_EVENT hours drawn without replacement (generator seeded with (SEED, event id); the event id is the event's
+    index in detection order, i.e. events numbered in (instrument id, hour) order)."""
     by_coin: dict[int, list[int]] = defaultdict(list)
     for row in events:
         by_coin[int(table["inst"][row])].append(int(table["bar"][row]))
@@ -232,6 +236,23 @@ def select_c1(table: Mapping[str, np.ndarray], events: list[int]) -> list[dict]:
         picked = eligible if eligible.size <= pr.C1_PER_EVENT else np.sort(rng.choice(eligible, pr.C1_PER_EVENT, replace=False))
         out.append({"rows": [int(r) for r in picked], "eligible": int(eligible.size)})
     return out
+
+
+def _c1_near_suppressed(table: Mapping[str, np.ndarray], c1: list[dict], events: list[int], suppressed: list[int]) -> int:
+    """C1 draws within ±C1_EXCLUSION_H hours of a refractory-suppressed trigger of the same coin (reported: C1
+    excludes only the hours around events, §6)."""
+    by_coin: dict[int, np.ndarray] = {}
+    for row in suppressed:
+        inst = int(table["inst"][row])
+        by_coin[inst] = np.append(by_coin.get(inst, np.zeros(0, dtype=np.int64)), int(table["bar"][row]))
+    total = 0
+    for row, control in zip(events, c1):
+        bars = by_coin.get(int(table["inst"][row]))
+        if bars is None or not control["rows"]:
+            continue
+        drawn = table["bar"][np.array(control["rows"], dtype=np.int64)]
+        total += int(np.any(np.abs(drawn[:, None] - bars[None, :]) <= pr.C1_EXCLUSION_H, axis=1).sum())
+    return total
 
 
 def _record(table: Mapping[str, np.ndarray], row: int) -> dict:
@@ -262,6 +283,7 @@ def compute(closes: Mapping[str, np.ndarray], universe: Mapping, months: list[st
     pools = c2_pool(table)
     c2 = match_c2(table, events, pools, pr.caliper())
     c1 = select_c1(table, events)
+    near_suppressed = _c1_near_suppressed(table, c1, events, suppressed)
     records = []
     for index, (row, match, control) in enumerate(zip(events, c2, c1)):
         record = {"id": index, **_record(table, row)}
@@ -301,7 +323,8 @@ def compute(closes: Mapping[str, np.ndarray], universe: Mapping, months: list[st
                "reused": sum(1 for r in records if r["c2"] is not None and r["c2"]["reuse"]),
                "match_rate_at_selection": matched / len(records) if records else None},
         "c1": {"events_without_control": sum(1 for r in records if not r["c1"]["bars"]),
-               "events_with_fewer_than_20": sum(1 for r in records if len(r["c1"]["bars"]) < pr.C1_PER_EVENT)},
+               "events_with_fewer_than_20": sum(1 for r in records if len(r["c1"]["bars"]) < pr.C1_PER_EVENT),
+               "draws_within_120h_of_a_suppressed_trigger": near_suppressed},
         "sensitivities": sensitivities,
     }
 

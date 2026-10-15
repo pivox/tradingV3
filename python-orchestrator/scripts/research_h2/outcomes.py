@@ -5,7 +5,9 @@ Prices: the entry is the first 1-minute close in [t + 5 min, t + 20 min]; the ex
 with T = t + 5 min + h. A coin's own exit falls back to its last close before T when there is none (delisting or gap,
 counted as `truncated`). The market return over [t_e, T] is the equal-weight mean, over the other members of the
 decision month M(t), of their log return between the same two bounded closes (no fallback), with at least
-MIN_MARKET_MEMBERS members; for the BTC sensitivity it is BTC's return. β is the one frozen at t.
+MIN_MARKET_MEMBERS members; for the BTC sensitivity it is BTC's return. When the coin's exit is truncated at a close
+time T' < T, the market (and BTC) is measured to T' instead (exit = first close in [T', T' + 60 min]), so the residual
+compares the same interval. β is the one frozen at t.
 """
 
 from __future__ import annotations
@@ -75,20 +77,37 @@ def _queries(document: Mapping) -> tuple[dict[str, set], dict[str, set], dict[st
 
 
 class Measured:
-    """Own returns (with truncation) and market matrices (without), per horizon."""
+    """Own returns (with truncation) and market matrices (without), per horizon; and the market measured to the
+    actual exit time of the truncated own returns."""
 
     def __init__(self):
-        self.own: dict[tuple[str, int, int], tuple[float, bool]] = {}
+        self.own: dict[tuple[str, int, int], tuple[float, bool, int]] = {}
         self.btc_plain: dict[tuple[int, int], float] = {}
+        self.btc_truncated: dict[tuple[int, int], float] = {}
         self.market: dict[str, dict] = {}
+        self.market_truncated: dict[str, dict] = {}
 
     def own_return(self, inst: str, decision_ms: int, horizon: int) -> tuple[float, bool]:
-        return self.own.get((inst, decision_ms, horizon), (math.nan, False))
+        ret, cut, _ = self.own.get((inst, decision_ms, horizon), (math.nan, False, -1))
+        return ret, cut
 
-    def market_return(self, month: str, decision_ms: int, horizon: int, exclude: str) -> tuple[float, int]:
-        entry = self.market[month]
-        column = entry["column"][decision_ms]
-        values = entry["returns"][horizon][:, column]
+    def own_exit_ms(self, inst: str, decision_ms: int, horizon: int) -> int | None:
+        """The actual exit close time of a truncated own return, None otherwise."""
+        _, cut, exit_ms = self.own.get((inst, decision_ms, horizon), (math.nan, False, -1))
+        return int(exit_ms) if cut else None
+
+    def btc_return(self, decision_ms: int, horizon: int, exit_ms: int | None = None) -> float:
+        if exit_ms is not None:
+            return self.btc_truncated.get((decision_ms, exit_ms), math.nan)
+        return self.btc_plain.get((decision_ms, horizon), math.nan)
+
+    def market_return(self, month: str, decision_ms: int, horizon: int, exclude: str, exit_ms: int | None = None) -> tuple[float, int]:
+        if exit_ms is not None:
+            entry = self.market_truncated[month]
+            values = entry["returns"][:, entry["column"][(decision_ms, exit_ms)]]
+        else:
+            entry = self.market[month]
+            values = entry["returns"][horizon][:, entry["column"][decision_ms]]
         keep = np.isfinite(values) & (np.array(entry["members"]) != exclude)
         count = int(keep.sum())
         return (float(values[keep].mean()) if count >= pr.MIN_MARKET_MEMBERS else math.nan), count
@@ -112,8 +131,8 @@ def measure(document: Mapping, load: Callable[[str], dict], guard: Callable[[], 
             times = np.array(sorted(own[inst]), dtype=np.int64)
             for h in pr.HORIZONS_H:
                 result = dt.entry_exit(prices, times, h, truncate=True)
-                for t, r, cut in zip(times, result["ret"], result["truncated"]):
-                    measured.own[(inst, int(t), h)] = (float(r), bool(cut))
+                for t, r, cut, when in zip(times, result["ret"], result["truncated"], result["exit_ms"]):
+                    measured.own[(inst, int(t), h)] = (float(r), bool(cut), int(when))
                 if inst == pr.BTC:
                     plain = dt.entry_exit(prices, times, h, truncate=False)
                     for t, r in zip(times, plain["ret"]):
@@ -125,7 +144,50 @@ def measure(document: Mapping, load: Callable[[str], dict], guard: Callable[[], 
             times = np.array(entry["times"], dtype=np.int64)
             for h in pr.HORIZONS_H:
                 entry["returns"][h][row] = dt.entry_exit(prices, times, h, truncate=False)["ret"]
+    _measure_truncated(document, measured, members, load, guard)
     return measured
+
+
+def _measure_truncated(document: Mapping, measured: Measured, members: Mapping[str, list[str]], load: Callable[[str], dict],
+                       guard: Callable[[], None] | None) -> None:
+    """Second pass, only when some own return was truncated: the market (or BTC) from the same entry to the coin's
+    actual exit close time."""
+    queries: dict[str, set] = defaultdict(set)
+    btc_queries: set = set()
+
+    def note(inst: str, decision_ms: int, month: str, btc: bool = False) -> None:
+        for h in pr.HORIZONS_H:
+            exit_ms = measured.own_exit_ms(inst, decision_ms, h)
+            if exit_ms is not None:
+                (btc_queries if btc else queries[month]).add((decision_ms, exit_ms))
+
+    for record in document["events"]:
+        note(record["inst"], record["decision_ms"], record["month"])
+        if record["c2"] is not None:
+            note(record["c2"]["inst"], record["c2"]["decision_ms"], record["c2"]["month"])
+    for name, rows in document["sensitivities"].items():
+        for record in rows or []:
+            note(record["inst"], record["decision_ms"], record["month"], btc=name == "btc_market")
+    for month, pairs in queries.items():
+        ordered = sorted(pairs)
+        measured.market_truncated[month] = {"members": members[month], "column": {p: k for k, p in enumerate(ordered)}, "pairs": ordered,
+                                            "returns": np.full((len(members[month]), len(ordered)), np.nan)}
+    needed = sorted({inst for month in queries for inst in members[month]} | ({pr.BTC} if btc_queries else set()))
+    for inst in needed:
+        if guard is not None:
+            guard()
+        minutes = load(inst)
+        prices = dt.Prices(minutes["ts_s"], minutes["close"])
+        for month, entry in measured.market_truncated.items():
+            if inst not in entry["members"]:
+                continue
+            times = np.array([p[0] for p in entry["pairs"]], dtype=np.int64)
+            targets = np.array([p[1] for p in entry["pairs"]], dtype=np.int64)
+            entry["returns"][entry["members"].index(inst)] = dt.market_leg(prices, times, targets)
+        if inst == pr.BTC and btc_queries:
+            pairs = sorted(btc_queries)
+            values = dt.market_leg(prices, np.array([p[0] for p in pairs], dtype=np.int64), np.array([p[1] for p in pairs], dtype=np.int64))
+            measured.btc_truncated.update({p: float(v) for p, v in zip(pairs, values)})
 
 
 def _finite(value: float) -> float | None:
@@ -140,7 +202,8 @@ def outcomes(document: Mapping, measured: Measured) -> dict:
                "month": record["month"], "half": record["half"], "side": record["side"], "secondary": record["secondary"], "h": {}}
         for h in pr.HORIZONS_H:
             raw, cut = measured.own_return(record["inst"], record["decision_ms"], h)
-            market, members = measured.market_return(record["month"], record["decision_ms"], h, record["inst"])
+            market, members = measured.market_return(record["month"], record["decision_ms"], h, record["inst"],
+                                                     measured.own_exit_ms(record["inst"], record["decision_ms"], h))
             y_raw = -s * raw
             y = -s * (raw - record["beta"] * market)
             c1 = [-s * measured.own_return(record["inst"], int(dt.bar_close_ms(b)), h)[0] for b in record["c1"]["bars"]]
@@ -148,7 +211,8 @@ def outcomes(document: Mapping, measured: Measured) -> dict:
             if record["c2"] is not None:
                 other = record["c2"]
                 raw_c, _ = measured.own_return(other["inst"], other["decision_ms"], h)
-                market_c, _ = measured.market_return(other["month"], other["decision_ms"], h, other["inst"])
+                market_c, _ = measured.market_return(other["month"], other["decision_ms"], h, other["inst"],
+                                                     measured.own_exit_ms(other["inst"], other["decision_ms"], h))
                 c2 = -s * raw_c
                 c2_market = -s * other["beta"] * market_c
             row["h"][str(h)] = {"y": _finite(y), "y_raw": _finite(y_raw), "market_part": _finite(-s * record["beta"] * market),
@@ -169,10 +233,11 @@ def outcomes(document: Mapping, measured: Measured) -> dict:
             entry = {"base": record["base"], "month": record["month"], "half": record["half"], "side": record["side"], "h": {}}
             for h in pr.HORIZONS_H:
                 raw, _ = measured.own_return(record["inst"], record["decision_ms"], h)
+                exit_ms = measured.own_exit_ms(record["inst"], record["decision_ms"], h)
                 if name == "btc_market":
-                    market = measured.btc_plain.get((record["decision_ms"], h), math.nan)
+                    market = measured.btc_return(record["decision_ms"], h, exit_ms)
                 else:
-                    market, _ = measured.market_return(record["month"], record["decision_ms"], h, record["inst"])
+                    market, _ = measured.market_return(record["month"], record["decision_ms"], h, record["inst"], exit_ms)
                 entry["h"][str(h)] = {"y": _finite(-s * (raw - record["beta"] * market)), "y_raw": _finite(-s * raw)}
             out.append(entry)
         sensitivity_rows[name] = out
@@ -191,14 +256,22 @@ def _observations(rows, horizon: int, keep=lambda r: True) -> list[dict]:
 
 
 def _decomposition(rows, horizon: int) -> dict:
-    cells = [row["h"][str(horizon)] for row in rows if row["h"][str(horizon)]["y"] is not None]
-    events_market = [c["market_part"] for c in cells if c["market_part"] is not None]
-    c2_total = [c["c2"] for c in cells if c["c2"] is not None]
-    c2_market = [c["c2_market_part"] for c in cells if c["c2"] is not None and c["c2_market_part"] is not None]
+    """Each split is computed on one sample: the events with both y_raw and a market part (G1 sample), and among their
+    matched C2 controls those with both a raw outcome and a market part. The C2 mean over every matched control with
+    an outcome (the S2 term) is reported beside it."""
+    cells = [row["h"][str(horizon)] for row in rows
+             if row["h"][str(horizon)]["y"] is not None and row["h"][str(horizon)]["y_raw"] is not None]
+    pairs = [(c["c2"], c["c2_market_part"]) for c in cells if c["c2"] is not None and c["c2_market_part"] is not None]
     mean = st._mean
-    return {"events_y_raw": mean([c["y_raw"] for c in cells]), "events_market_part": mean(events_market),
-            "c2_y_raw": mean(c2_total), "c2_market_part": mean(c2_market),
-            "c2_residual_part": (mean(c2_total) - mean(c2_market)) if c2_total and c2_market else None}
+    events_raw = mean([c["y_raw"] for c in cells])
+    events_market = mean([c["market_part"] for c in cells])
+    c2_raw = mean([a for a, _ in pairs])
+    c2_market = mean([b for _, b in pairs])
+    return {"events": len(cells), "events_y_raw": events_raw, "events_market_part": events_market,
+            "events_residual_part": (events_raw - events_market) if cells else None,
+            "c2_controls": len(pairs), "c2_y_raw": c2_raw, "c2_market_part": c2_market,
+            "c2_residual_part": (c2_raw - c2_market) if pairs else None,
+            "c2_y_raw_all_matched": mean([c["c2"] for c in cells if c["c2"] is not None])}
 
 
 def _reported_only(result: dict) -> dict:

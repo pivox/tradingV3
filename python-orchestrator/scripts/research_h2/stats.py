@@ -3,7 +3,9 @@
 `research_swing2.stats.month_block_ci` returns a fixed 90 % interval (quantiles 5-95); the protocol needs 95 %, so
 the bootstrap here takes the level as a parameter. Blocks are the calendar months (UTC) of the decision hour; one
 draw resamples the months present with replacement; each interval uses its own generator seeded with SEED, so a
-result does not depend on the order of the calls.
+result does not depend on the order of the calls. A draw whose resample holds no observation of a sample gives a
+non-finite statistic and is dropped; the number of finite draws behind each interval is reported (`ci_finite_draws`)
+and an interval resting on fewer than `draws` is flagged (`ci_incomplete`).
 """
 
 from __future__ import annotations
@@ -26,34 +28,39 @@ def _draw_counts(blocks: int, draws: int, seed: int) -> np.ndarray:
     return counts
 
 
-def _quantiles(values: np.ndarray, level: float) -> list[float] | None:
+def _quantiles(values: np.ndarray, level: float) -> tuple[list[float] | None, int]:
     values = values[np.isfinite(values)]
     if values.size == 0:
-        return None
+        return None, 0
     tail = (1.0 - level) / 2.0
-    return [float(np.quantile(values, tail)), float(np.quantile(values, 1.0 - tail))]
+    return [float(np.quantile(values, tail)), float(np.quantile(values, 1.0 - tail))], int(values.size)
+
+
+def _out(result: tuple[list[float] | None, int], details: bool):
+    return result if details else result[0]
 
 
 def block_ci(months: Sequence[str], values: Sequence[float], level: float = pr.CI_LEVEL, draws: int = pr.BOOTSTRAP_DRAWS,
-             seed: int = pr.SEED) -> list[float] | None:
-    """Interval of the mean of `values` (one per observation, its month in `months`)."""
+             seed: int = pr.SEED, details: bool = False):
+    """Interval of the mean of `values` (one per observation, its month in `months`); with `details`, (interval,
+    number of finite draws)."""
     months = np.asarray(months)
     values = np.asarray(values, dtype=np.float64)
     keep = np.isfinite(values)
     months, values = months[keep], values[keep]
     labels, index = np.unique(months, return_inverse=True)
     if labels.size < 2:
-        return None
+        return _out((None, 0), details)
     sums = np.bincount(index, values, labels.size)
     sizes = np.bincount(index, None, labels.size).astype(np.float64)
     counts = _draw_counts(labels.size, draws, seed)
     with np.errstate(invalid="ignore", divide="ignore"):
         means = (counts @ sums) / (counts @ sizes)
-    return _quantiles(means, level)
+    return _out(_quantiles(means, level), details)
 
 
 def block_ci_difference(months_a: Sequence[str], a: Sequence[float], months_b: Sequence[str], b: Sequence[float],
-                        level: float = pr.CI_LEVEL, draws: int = pr.BOOTSTRAP_DRAWS, seed: int = pr.SEED) -> list[float] | None:
+                        level: float = pr.CI_LEVEL, draws: int = pr.BOOTSTRAP_DRAWS, seed: int = pr.SEED, details: bool = False):
     """Interval of mean(a) - mean(b), both samples resampled by the same draw of months (a control is attached to
     the month of its event)."""
     months_a, a = np.asarray(months_a), np.asarray(a, dtype=np.float64)
@@ -62,14 +69,14 @@ def block_ci_difference(months_a: Sequence[str], a: Sequence[float], months_b: S
     months_a, a, months_b, b = months_a[ka], a[ka], months_b[kb], b[kb]
     labels = np.unique(np.concatenate((months_a, months_b)))
     if labels.size < 2:
-        return None
+        return _out((None, 0), details)
     ia, ib = np.searchsorted(labels, months_a), np.searchsorted(labels, months_b)
     sa, na = np.bincount(ia, a, labels.size), np.bincount(ia, None, labels.size).astype(np.float64)
     sb, nb = np.bincount(ib, b, labels.size), np.bincount(ib, None, labels.size).astype(np.float64)
     counts = _draw_counts(labels.size, draws, seed)
     with np.errstate(invalid="ignore", divide="ignore"):
         diff = (counts @ sa) / (counts @ na) - (counts @ sb) / (counts @ nb)
-    return _quantiles(diff, level)
+    return _out(_quantiles(diff, level), details)
 
 
 def _mean(values) -> float | None:
@@ -94,18 +101,23 @@ def evaluate(observations: Sequence[dict], level: float = pr.CI_LEVEL, draws: in
     mean_y = _mean(y)
     out: dict = {"events": n, "bases": len(bases), "months": len(set(months)), "mean_y": mean_y, "mean_y_raw": _mean(y_raw),
                  "ci_level": level, "draws": draws}
-    out["ci_y"] = block_ci(months, y, level, draws) if n else None
+    out["ci_y"], finite_y = block_ci(months, y, level, draws, details=True) if n else (None, 0)
     # S1 (C1): per event, y_raw minus the mean of its C1 controls with a defined outcome.
     d1 = [(o["month"], o["y_raw"] - _mean(o["c1"])) for o in obs if _mean(o["c1"]) is not None]
     out["s1"] = _mean([d for _, d in d1])
     out["s1_events"] = len(d1)
-    out["ci_s1"] = block_ci([m for m, _ in d1], [d for _, d in d1], level, draws) if d1 else None
+    out["ci_s1"], finite_s1 = block_ci([m for m, _ in d1], [d for _, d in d1], level, draws, details=True) if d1 else (None, 0)
     # S2 (C2): mean y_raw of the events minus the mean y_raw of the matched shared-shock controls.
     c2 = [(o["month"], o["c2"]) for o in obs if o["c2"] is not None and math.isfinite(o["c2"])]
     out["c2_matched"] = len(c2)
     out["c2_match_rate"] = len(c2) / n if n else None
     out["s2"] = (out["mean_y_raw"] - _mean([v for _, v in c2])) if c2 and n else None
-    out["ci_s2"] = block_ci_difference(months, y_raw, [m for m, _ in c2], [v for _, v in c2], level, draws) if c2 else None
+    out["ci_s2"], finite_s2 = (block_ci_difference(months, y_raw, [m for m, _ in c2], [v for _, v in c2], level, draws, details=True)
+                               if c2 else (None, 0))
+    out["ci_finite_draws"] = {"y": finite_y, "s1": finite_s1, "s2": finite_s2}
+    out["ci_incomplete"] = {k: v["ci"] is not None and v["finite"] < draws for k, v in
+                            {"y": {"ci": out["ci_y"], "finite": finite_y}, "s1": {"ci": out["ci_s1"], "finite": finite_s1},
+                             "s2": {"ci": out["ci_s2"], "finite": finite_s2}}.items()}
     # Half-years (7 periods) and robustness.
     halves = {}
     for h in range(7):

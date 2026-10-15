@@ -8,11 +8,13 @@ A stage (`events`, then `outcomes`) runs only after `claim` wrote `<stage>-claim
   reused `research_swing2/okx.py`, `research_swing2/okx_universe.py`) has that digest: the code is pinned to the freeze;
 - the inputs have the hashes recorded in the protocol (manifests, every H2 zip against its manifest, the digest of
   the swing v2 npz files, the X-Perp list);
-- for `outcomes`: the code equals the one of the `events` claim, the `events` stage is complete and its event file
-  still has the sha256 recorded when it finished.
+- for `outcomes`: the code, the runtime (Python and numpy versions) and the owner go equal those of the `events`
+  claim (one go covers both stages), the `events` stage is complete and its event file still has the sha256 recorded
+  when it finished.
 
-`consume` is the first call of a run, before any data is read; it creates `<stage>-consumed.json` exclusively, so a
-second run is refused. Only an `events` run that the memory/disk guard stopped before it wrote any output may be
+`consume` is the first call of a run, before any data is read; it re-checks the protocol, the code, the runtime, the
+prerequisites and the input hashes, then creates `<stage>-consumed.json` exclusively, so a second run is refused. A
+run that fails for any other reason than the guard is recorded as `crashed` and stays consumed. Only an `events` run that the memory/disk guard stopped before it wrote any output may be
 resumed, at most `MAX_GUARD_RESUMPTIONS["events"]` times; `outcomes` has no resumption.
 """
 
@@ -22,6 +24,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -80,6 +83,13 @@ def code_identity() -> dict[str, str]:
 def code_digest(identity: dict[str, str] | None = None) -> str:
     identity = code_identity() if identity is None else identity
     return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def runtime() -> dict[str, str]:
+    """The interpreter and numpy versions: the C1 draws, the bootstrap draws and the quantiles depend on numpy."""
+    import numpy
+
+    return {"python": sys.version, "numpy": numpy.__version__}
 
 
 def swing_npz_identity(tape: Path | None = None) -> dict[str, str]:
@@ -169,21 +179,29 @@ def claim(out: Path, stage: str, prereg: Path, expected_sha256: str, owner_go: s
         raise ClaimError(f"{stage}: a consumption record exists without its claim — refused")
     actual = _check_protocol(stage, prereg, expected_sha256)
     identity = code_identity()
+    environment = runtime()
     if stage != "events":
         first = out / "events-claim.json"
-        if not first.exists() or json.loads(first.read_text()).get("code") != identity:
+        previous = json.loads(first.read_text()) if first.exists() else {}
+        if previous.get("code") != identity:
             raise ClaimError(f"{stage}: the code differs from the code of the events claim")
+        if previous.get("runtime") != environment:
+            raise ClaimError(f"{stage}: the runtime {environment} differs from the events claim's {previous.get('runtime')}")
+        if previous.get("owner_go") != owner_go.strip():
+            raise ClaimError(f"{stage}: one owner go covers both stages — give the events claim's reference "
+                             f"({previous.get('owner_go')!r})")
     prerequisites = _check_prerequisites(out, stage)
     inputs = verify_inputs() if inputs is None else inputs
     document = {"stage": stage, "claimed_at": now(), "protocol_path": str(Path(prereg).resolve()), "protocol_body_sha256": actual,
-                "code": identity, "code_sha256": code_digest(identity), "prerequisites": prerequisites, "inputs": inputs,
+                "code": identity, "code_sha256": code_digest(identity), "runtime": environment, "prerequisites": prerequisites, "inputs": inputs,
                 "owner_go": owner_go.strip(), "decisions": {"g4_rule": pr.G4_RULE, "c2_caliper": pr.C2_CALIPER_NAME}}
     _write_exclusive(target, document)
     return document
 
 
-def consume(out: Path, stage: str, resume: bool = False) -> dict:
-    """First call of a run, before any data is read."""
+def consume(out: Path, stage: str, resume: bool = False, verify=None) -> dict:
+    """First call of a run, before any data is read. `verify` re-hashes the inputs (default `verify_inputs`)."""
+    verify = verify_inputs if verify is None else verify
     out = Path(out)
     claimed = out / f"{stage}-claim.json"
     if not claimed.exists():
@@ -192,6 +210,10 @@ def consume(out: Path, stage: str, resume: bool = False) -> dict:
     _check_protocol(stage, Path(document["protocol_path"]), document["protocol_body_sha256"])
     if document["code"] != code_identity():
         raise ClaimError(f"{stage}: the code changed since the claim")
+    if document.get("runtime") != runtime():
+        raise ClaimError(f"{stage}: the runtime {runtime()} differs from the claim's {document.get('runtime')}")
+    if verify() != document["inputs"]:
+        raise ClaimError(f"{stage}: the inputs changed since the claim")
     for name, digest in document["prerequisites"].items():
         if sha256_file(out / name) != digest:
             raise ClaimError(f"{stage}: prerequisite {name} changed since the claim")
@@ -228,6 +250,11 @@ def finish(out: Path, stage: str) -> dict:
 
 def abort(out: Path, stage: str, reason: str) -> dict:
     return _update(out, stage, status="aborted_by_guard", reason=reason, aborted_at=now())
+
+
+def crash(out: Path, stage: str, reason: str) -> dict:
+    """Any failure other than the guard: the stage stays consumed (no resumption; a rerun needs a written amendment)."""
+    return _update(out, stage, status="crashed", reason=reason, crashed_at=now())
 
 
 def events_sha256(out: Path) -> str:

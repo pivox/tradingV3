@@ -197,3 +197,14 @@ def entry_exit(prices: Prices, decision_ms: np.ndarray, horizon_h: int, truncate
     with np.errstate(invalid="ignore", divide="ignore"):
         ret = np.log(exit_ / entry)
     return {"ret": ret, "entry": entry, "exit": exit_, "entry_ms": entry_ms, "exit_ms": exit_ms, "truncated": truncated}
+
+
+def market_leg(prices: Prices, decision_ms: np.ndarray, target_ms: np.ndarray) -> np.ndarray:
+    """A market member's log return from its entry close (first close in [t + 5 min, t + 20 min]) to the first close in
+    [target, target + 60 min], never truncated. Used when the coin's own exit was truncated: the market is then
+    measured to the coin's actual exit time (§5)."""
+    decision_ms = np.asarray(decision_ms, dtype=np.int64)
+    entry, _ = prices.first_in(decision_ms + pr.LATENCY_MIN * pr.MINUTE_MS, pr.ENTRY_MAX_DELAY_MIN * pr.MINUTE_MS)
+    exit_, _ = prices.first_in(np.asarray(target_ms, dtype=np.int64), pr.EXIT_MAX_DELAY_MIN * pr.MINUTE_MS)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.log(exit_ / entry)

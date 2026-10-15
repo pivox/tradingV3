@@ -259,6 +259,32 @@ def test_exit_truncates_at_the_last_close_only_for_the_coin_itself():
     assert own["truncated"][0] and own["exit"][0] == close[-1]
     market = dt.entry_exit(prices, np.array([t]), 24, truncate=False)
     assert math.isnan(market["ret"][0])
+    # The market leg can be measured to the coin's actual exit time instead of T.
+    leg = dt.market_leg(prices, np.array([t]), own["exit_ms"])
+    assert leg[0] == pytest.approx(own["ret"][0])
+
+
+def test_a_truncated_event_measures_the_market_to_its_actual_exit():
+    """A delisted coin: its residual subtracts β × the market over the same [t_e, last close] interval, not [t_e, T]."""
+    month, t = "2023-03", un._month_start_ms("2023-03") + 10 * pr.DAY_MS
+    members = [f"M{k:02d}-USDT-SWAP" for k in range(21)] + ["DEAD-USDT-SWAP"]
+    start = t // 1000 - 3600
+    opens = np.arange(start, start + 5 * 86_400, 60, dtype=np.int64)
+    path = np.where(opens < t // 1000 + 12 * 3600, 1.0, 3.0)  # the market triples after the coin's last close
+    minutes = {m: {"ts_s": opens, "close": 100.0 * path} for m in members[:-1]}
+    alive = opens < t // 1000 + 12 * 3600
+    minutes["DEAD-USDT-SWAP"] = {"ts_s": opens[alive], "close": np.linspace(100.0, 90.0, int(alive.sum()))}
+    record = {"id": 0, "inst": "DEAD-USDT-SWAP", "base": "DEAD", "decision_ms": t, "month": month, "half": 0, "side": "short",
+              "secondary": False, "e": 0.1, "beta": 1.0, "c1": {"bars": []}, "c2": None}
+    document = {"events": [record], "universe": {"months": {month: members}}, "sensitivities": {}}
+    measured = oc.measure(document, lambda inst: minutes[inst])
+    cell = oc.outcomes(document, measured)["events"][0]["h"]["72"]
+    assert cell["truncated"] and cell["market_members"] == 21
+    dead = minutes["DEAD-USDT-SWAP"]
+    raw = float(dt.entry_exit(dt.Prices(dead["ts_s"], dead["close"]), np.array([t]), 72, truncate=True)["ret"][0])
+    assert raw < 0
+    assert cell["y_raw"] == pytest.approx(-raw)
+    assert cell["y"] == pytest.approx(-raw)  # the market is flat up to the last close: nothing after it leaks in
 
 
 # ----------------------------------------------------------------------------- statistics and gates
@@ -304,6 +330,29 @@ def test_g1_insufficient_evidence_and_c2_80_percent_blocker():
     assert blocked["c2_match_rate"] < 0.8 and blocked["verdict"] == "STATISTICAL_BLOCKER"
 
 
+def test_ci_reports_its_finite_draws():
+    obs = _observations()
+    result = st.evaluate(obs, draws=300)
+    assert result["ci_finite_draws"] == {"y": 300, "s1": 300, "s2": 300} and not any(result["ci_incomplete"].values())
+    sparse = _observations()
+    for o in sparse:
+        o["c2"] = None
+    sparse[0]["c2"], sparse[1]["c2"] = 0.01, 0.02  # two months only: many resamples hold no C2 control
+    result = st.evaluate(sparse, draws=300)
+    assert result["ci_finite_draws"]["s2"] < 300 and result["ci_incomplete"]["s2"]
+
+
+def test_c2_decomposition_uses_one_sample_per_split():
+    def cell(c2, part):
+        return {"h": {str(h): {"y": 0.01, "y_raw": 0.02, "market_part": 0.005, "c2": c2, "c2_market_part": part} for h in pr.HORIZONS_H}}
+
+    rows = [cell(0.03, 0.01), cell(0.05, None)]  # the second control has no market part
+    split = oc._decomposition(rows, 72)
+    assert split["c2_controls"] == 1 and split["c2_y_raw"] == pytest.approx(0.03)
+    assert split["c2_residual_part"] == pytest.approx(0.02) and split["c2_y_raw_all_matched"] == pytest.approx(0.04)
+    assert split["events_residual_part"] == pytest.approx(0.015)
+
+
 def test_g6_half_years_and_g7_robustness():
     obs = _observations(mean=0.0, sd=0.001)
     obs[0]["y"] = 10.0  # one outlier carries the mean
@@ -343,21 +392,61 @@ def test_claims_are_single_use_and_pin_the_code(tmp_path, monkeypatch):
         cl.claim(out, "events", prereg, body, owner_go="owner", inputs={})
     with pytest.raises(cl.ClaimError):
         cl.claim(out, "outcomes", prereg, body, owner_go="owner", inputs={})  # events not complete
-    cl.consume(out, "events")
+    same = lambda: {}  # noqa: E731 - the inputs recorded by the claim (no real file is hashed)
     with pytest.raises(cl.ClaimError):
-        cl.consume(out, "events")  # a second read is refused
+        cl.consume(out, "events", verify=lambda: {"changed": 1})  # inputs re-checked at consumption
+    cl.consume(out, "events", verify=same)
+    with pytest.raises(cl.ClaimError):
+        cl.consume(out, "events", verify=same)  # a second read is refused
     cl.abort(out, "events", "guard")
-    cl.consume(out, "events", resume=True)  # one resumption, nothing written yet
+    cl.consume(out, "events", resume=True, verify=same)  # one resumption, nothing written yet
     cl.abort(out, "events", "guard")
     with pytest.raises(cl.ClaimError):
-        cl.consume(out, "events", resume=True)
+        cl.consume(out, "events", resume=True, verify=same)
     _ = ev.write({"events": []}, out)
     cl.finish(out, "events")
     assert cl.events_sha256(out) == hashlib.sha256((out / ev.EVENTS_FILE).read_bytes()).hexdigest()
-    cl.claim(out, "outcomes", prereg, body, owner_go="owner", inputs={})
-    cl.consume(out, "outcomes")
     with pytest.raises(cl.ClaimError):
-        cl.consume(out, "outcomes", resume=True)  # no resumption for outcomes
+        cl.claim(out, "outcomes", prereg, body, owner_go="another go", inputs={})  # one go covers both stages
+    cl.claim(out, "outcomes", prereg, body, owner_go="owner 2026-10-16", inputs={})
+    cl.consume(out, "outcomes", verify=same)
+    with pytest.raises(cl.ClaimError):
+        cl.consume(out, "outcomes", resume=True, verify=same)  # no resumption for outcomes
+
+
+def test_claims_record_the_runtime_and_outcomes_refuse_another_one(tmp_path, monkeypatch):
+    prereg = tmp_path / "PRE.md"
+    body = _frozen_prereg(prereg)
+    out = tmp_path / "run"
+    document = cl.claim(out, "events", prereg, body, owner_go="go", inputs={})
+    assert document["runtime"] == cl.runtime() and "numpy" in document["runtime"]
+    cl.consume(out, "events", verify=lambda: {})
+    ev.write({"events": []}, out)
+    cl.finish(out, "events")
+    monkeypatch.setattr(cl, "runtime", lambda: {"python": "other", "numpy": "0.0"})
+    with pytest.raises(cl.ClaimError):
+        cl.claim(out, "outcomes", prereg, body, owner_go="go", inputs={})
+
+
+def test_a_crash_outside_the_guard_leaves_the_stage_consumed(tmp_path, monkeypatch):
+    from scripts.research_h2 import cli
+
+    prereg = tmp_path / "PRE.md"
+    body = _frozen_prereg(prereg)
+    out = tmp_path / "run"
+    monkeypatch.setattr(pr, "OUT_DIR", out)
+    monkeypatch.setattr(cl, "verify_inputs", lambda: {})
+    cl.claim(out, "events", prereg, body, owner_go="go", inputs={})
+
+    def boom():
+        raise ValueError("synthetic failure")
+
+    with pytest.raises(ValueError):
+        cli._run("events", False, boom)
+    record = json.loads((out / "events-consumed.json").read_text())
+    assert record["status"] == "crashed" and "synthetic failure" in record["reason"]
+    with pytest.raises(cl.ClaimError):
+        cl.consume(out, "events", resume=True)  # no resumption after a crash
 
 
 def test_claim_refuses_unfrozen_protocol_wrong_hash_and_other_code(tmp_path, monkeypatch):
@@ -399,6 +488,7 @@ def test_event_document_is_deterministic():
             assert record["c2"]["month"] == record["month"] and (record["c2"]["R_i"] > 0) == (record["R_i"] > 0)
             assert abs(record["c2"]["z"]) < 1 <= 2 <= abs(record["c2"]["z_m"])
         assert all(abs(b - record["bar"]) > pr.C1_EXCLUSION_H for b in record["c1"]["bars"])
+    assert isinstance(first["c1"]["draws_within_120h_of_a_suppressed_trigger"], int)
 
 
 def test_outcome_pipeline_on_synthetic_minutes(tmp_path):
@@ -495,3 +585,67 @@ def test_secondary_universe_is_the_frozen_xperp_list():
     assert len(pr.XPERP_BASES) == 160
     assert un.secondary("SOL-USDT-SWAP") and not un.secondary("LUNA-USDT-SWAP")
     assert pr.INPUT_SHA256["eea-futures.json"] == "732044a8a7ce9dd31f1025f1a501c72ee0b268ef87c30d229e444beac9c44f8d"
+
+
+def test_file_based_end_to_end_on_a_synthetic_tape(tmp_path, monkeypatch):
+    """The real-data code paths (universe.gather, events.load_closes, events.run, outcomes.run) on a SYNTHETIC tape:
+    raw zips for two programme bases, npz files and a daily-volume JSON for the other families. One decision month."""
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(pr, "UNIVERSE_MONTHS", ("2023-03", "2023-03"))
+    h2, swing = tmp_path / "h2", tmp_path / "swing"
+    rng = np.random.default_rng(11)
+    start_s = int(datetime(2022, 12, 29, tzinfo=timezone.utc).timestamp())
+    end_s = int(datetime(2023, 4, 7, tzinfo=timezone.utc).timestamp())
+    ts = np.arange(start_s, end_s, 60, dtype=np.int64)
+    market = np.cumsum(rng.standard_normal(ts.size) * 0.0007)
+    late = "SEI-USDT-SWAP"  # listed in February: read by the universe step, not eligible in March
+    programme = ["ETH-USDT-SWAP", late]
+    others = [pr.BTC] + [f"S{k:02d}-USDT-SWAP" for k in range(22)]
+    delisted = "S05-USDT-SWAP"
+    volumes = {"days": {}}
+    for k, inst in enumerate(programme + others):
+        logp = (0.7 + 0.03 * k) * market + np.cumsum(rng.standard_normal(ts.size) * 0.0008)
+        if k == 6:
+            logp[ts >= int(datetime(2023, 3, 10, tzinfo=timezone.utc).timestamp())] -= 0.2  # a coin-only shock
+        keep = rng.random(ts.size) > 0.01
+        if inst == late:
+            keep &= ts >= int(datetime(2023, 2, 1, tzinfo=timezone.utc).timestamp())
+        if inst == delisted:
+            keep &= ts < int(datetime(2023, 3, 25, tzinfo=timezone.utc).timestamp())
+        t, c = ts[keep], 50.0 * np.exp(logp[keep])
+        contracts = rng.uniform(100, 200, t.size)
+        quote = contracts * 0.01 * c
+        if inst in programme:
+            folder = h2 / "zips" / inst
+            folder.mkdir(parents=True)
+            stamp = np.array([datetime.fromtimestamp(int(x), tz=timezone.utc).strftime("%Y-%m") for x in t[::1440]])
+            for month in sorted(set(stamp)):
+                y, m = map(int, month.split("-"))
+                lo = int(datetime(y, m, 1, tzinfo=timezone.utc).timestamp())
+                hi = int(datetime(y + (m == 12), m % 12 + 1, 1, tzinfo=timezone.utc).timestamp())
+                sel = (t >= lo) & (t < hi)
+                rows = [f"{inst},{v},{v},{v},{v},{n:.6f},{q / v:.6f},{q:.6f},{int(s) * 1000},1\n"
+                        for s, v, q, n in zip(t[sel], c[sel], quote[sel], contracts[sel])]
+                (folder / f"{inst}-candlesticks-{month}.zip").write_bytes(_zip(rows))
+        else:
+            folder = swing / "klines" / inst
+            folder.mkdir(parents=True)
+            arrays = {"ts_s": t, "close": c, "volume": quote, "base_volume": quote / c, "contracts": contracts}
+            np.savez(folder / f"{inst}-1m-2022-12.npz", **arrays)
+            volumes["days"][inst] = dt.daily_quote_volume(arrays)[0]
+    (swing / pr.SWING_VOLUME).write_text(json.dumps(volumes))
+    sources = dt.Sources(h2, swing)
+    out = tmp_path / "run"
+    out.mkdir()
+    digest = ev.run(sources, out)
+    document = oc.read_events(out / ev.EVENTS_FILE, digest)
+    members = document["universe"]["months"]["2023-03"]
+    assert "ETH-USDT-SWAP" in members and late not in members and pr.BTC in members and len(members) == 24
+    assert document["universe"]["volume_notes"]["ETH-USDT-SWAP"]["ct_val_inferred"] == pytest.approx(0.01)
+    assert document["events"] and document["sensitivities"]["btc_market"] is not None
+    report = oc.run(out / ev.EVENTS_FILE, digest, sources, out)
+    assert report["verdict"] == "INSUFFICIENT_EVIDENCE" and report["primary"]["events"] > 0
+    assert (out / oc.OUTCOMES_FILE).exists() and (out / oc.RESULT_FILE).exists()
+    with pytest.raises(FileExistsError):
+        oc.run(out / ev.EVENTS_FILE, digest, sources, out)  # written once
