@@ -232,6 +232,20 @@ def test_effective_sample_size_and_dependence_diagnostics():
     assert st.runs_test([True, False] * 20)[0] > 3  # alternating outcomes: too many runs
 
 
+def test_constant_series_has_no_autocorrelation_whatever_the_float_summation():
+    # Python 3.11 sums floats naively, 3.12 with compensation: the mean of a constant series can then be off by one
+    # ulp, and the residuals' rounding noise must not read as autocorrelation (it once turned CI's verdicts into
+    # INSUFFICIENT_EVIDENCE on 3.11 only).
+    constant = [12 / 500] * 30
+    assert st.autocorrelation(constant, 1) is None
+    assert st.effective_sample_size(constant) == 30.0
+    naive = 0.0
+    for v in constant:
+        naive += v
+    residuals = [v - naive / 30 for v in constant]
+    assert st.effective_sample_size([1.0 + r for r in residuals]) == 30.0
+
+
 # ================================================================================================ metrics
 
 def test_metrics_drawdown_profit_factor_blocks_and_concentration():

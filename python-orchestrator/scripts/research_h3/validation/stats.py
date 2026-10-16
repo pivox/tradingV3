@@ -39,7 +39,7 @@ def _finite(values: Sequence[float]) -> list[float]:
 
 def mean(values: Sequence[float]) -> float | None:
     values = _finite(values)
-    return sum(values) / len(values) if values else None
+    return math.fsum(values) / len(values) if values else None
 
 
 def stdev(values: Sequence[float]) -> float | None:
@@ -47,8 +47,8 @@ def stdev(values: Sequence[float]) -> float | None:
     values = _finite(values)
     if len(values) < 2:
         return None
-    m = sum(values) / len(values)
-    return math.sqrt(sum((v - m) ** 2 for v in values) / (len(values) - 1))
+    m = math.fsum(values) / len(values)
+    return math.sqrt(math.fsum((v - m) ** 2 for v in values) / (len(values) - 1))
 
 
 # ----------------------------------------------------------------------------------------------------- bootstrap
@@ -119,7 +119,7 @@ def one_sided_bootstrap(values: Sequence[float], *, alpha: float, resamples: int
                               'stats_insufficient_observations')
     length = block_length_rule(n) if block_len is None else block_len
     means = sorted(circular_block_bootstrap_means(values, length, resamples, seed))
-    estimate = sum(values) / n
+    estimate = math.fsum(values) / n
     at_or_below_zero = sum(1 for m in means if m <= 0.0)
     p = (1 + at_or_below_zero) / (resamples + 1)
     lower = means[min(len(means) - 1, max(0, int(math.floor(alpha * resamples))))]
@@ -144,7 +144,7 @@ def batch_means(values: Sequence[float], batches: int) -> list[float]:
     out = []
     for i in range(batches):
         lo, hi = (i * n) // batches, ((i + 1) * n) // batches
-        out.append(sum(values[lo:hi]) / (hi - lo))
+        out.append(math.fsum(values[lo:hi]) / (hi - lo))
     return out
 
 
@@ -220,7 +220,7 @@ def batch_t_one_sided(values: Sequence[float], *, alpha: float, batches: int | N
         return OneSidedResult(mean(values) if values else None, None, None, alpha, n, 0, 0, 0, False,
                               'stats_insufficient_observations', 'batch_t')
     bm = batch_means(values, k)
-    m = sum(bm) / k
+    m = math.fsum(bm) / k
     sd = stdev(bm) or 0.0
     if sd == 0.0:
         p = 0.0 if m > 0 else 1.0
@@ -230,7 +230,7 @@ def batch_t_one_sided(values: Sequence[float], *, alpha: float, batches: int | N
         p = student_t_sf(m / se, k - 1)
         lower = m - student_t_ppf(1.0 - alpha, k - 1) * se
     rejected = p <= alpha
-    return OneSidedResult(sum(values) / n, lower, p, alpha, n, n // k, 0, 0, rejected,
+    return OneSidedResult(math.fsum(values) / n, lower, p, alpha, n, n // k, 0, 0, rejected,
                           'stats_rejects_null' if rejected else 'stats_does_not_reject_null', 'batch_t')
 
 
@@ -241,7 +241,7 @@ def sn_statistic(values: Sequence[float]) -> tuple[float, float] | None:
     n = len(values)
     if n < 2:
         return None
-    m = sum(values) / n
+    m = math.fsum(values) / n
     s = v = 0.0
     for x in values:
         s += x - m
@@ -297,9 +297,9 @@ def sn_one_sided(values: Sequence[float], *, alpha: float, null_draws: int = SN_
     null = sn_null_sample(n, null_draws, null_seed)
     at_or_above = len(null) - bisect.bisect_left(null, t)
     p = (1 + at_or_above) / (len(null) + 1)
-    lower = (sum(values) / n) - _upper_quantile(null, 1.0 - alpha) * scale
+    lower = (math.fsum(values) / n) - _upper_quantile(null, 1.0 - alpha) * scale
     rejected = p <= alpha
-    return OneSidedResult(sum(values) / n, lower, p, alpha, n, 0, len(null), null_seed, rejected,
+    return OneSidedResult(math.fsum(values) / n, lower, p, alpha, n, 0, len(null), null_seed, rejected,
                           'stats_rejects_null' if rejected else 'stats_does_not_reject_null', 'sn_gaussian')
 
 
@@ -326,7 +326,7 @@ def two_sided_interval(values: Sequence[float], *, procedure: str, level: float 
     tail = (1.0 - level) / 2.0
     if n < 3:
         return None
-    m = sum(values) / n
+    m = math.fsum(values) / n
     if procedure == 'cbb_percentile':
         means = sorted(circular_block_bootstrap_means(values, block_len or block_length_rule(n), resamples, seed))
         return [means[int(tail * (len(means) - 1))], means[int((1.0 - tail) * (len(means) - 1))]]
@@ -341,7 +341,7 @@ def two_sided_interval(values: Sequence[float], *, procedure: str, level: float 
         bm = batch_means(values, k)
         se = (stdev(bm) or 0.0) / math.sqrt(k)
         c = student_t_ppf(1.0 - tail, k - 1)
-        centre = sum(bm) / k
+        centre = math.fsum(bm) / k
         return [centre - c * se, centre + c * se]
     raise StatsError('stats_procedure_unknown')
 
@@ -393,12 +393,12 @@ def pearson(x: Sequence[float], y: Sequence[float]) -> float | None:
     n = len(x)
     if n < 3:
         return None
-    mx, my = sum(x) / n, sum(y) / n
-    sxx = sum((a - mx) ** 2 for a in x)
-    syy = sum((b - my) ** 2 for b in y)
+    mx, my = math.fsum(x) / n, math.fsum(y) / n
+    sxx = math.fsum((a - mx) ** 2 for a in x)
+    syy = math.fsum((b - my) ** 2 for b in y)
     if sxx == 0 or syy == 0:
         return None
-    return sum((a - mx) * (b - my) for a, b in zip(x, y)) / math.sqrt(sxx * syy)
+    return math.fsum((a - mx) * (b - my) for a, b in zip(x, y)) / math.sqrt(sxx * syy)
 
 
 def spearman(x: Sequence[float], y: Sequence[float]) -> float | None:
@@ -417,11 +417,15 @@ def autocorrelation(values: Sequence[float], lag: int) -> float | None:
     n = len(values)
     if lag < 1 or n <= lag + 1:
         return None
-    m = sum(values) / n
-    denominator = sum((v - m) ** 2 for v in values)
+    m = math.fsum(values) / n
+    # A constant series has no autocorrelation. Test it on the values, not on the residuals: the residuals of a
+    # constant series about a mean rounded to one ulp are pure rounding noise, and their "autocorrelation" is near 1.
+    if max(values) - min(values) <= 1e-12 * max(1.0, abs(m)):
+        return None
+    denominator = math.fsum((v - m) ** 2 for v in values)
     if denominator == 0:
         return None
-    return sum((values[i] - m) * (values[i + lag] - m) for i in range(n - lag)) / denominator
+    return math.fsum((values[i] - m) * (values[i + lag] - m) for i in range(n - lag)) / denominator
 
 
 def effective_sample_size(values: Sequence[float], max_lag: int | None = None) -> float | None:
@@ -463,9 +467,9 @@ def intraclass_correlation(groups: Sequence[Sequence[float]]) -> float | None:
     n = sum(len(g) for g in groups)
     if k < 2 or n <= k:
         return None
-    grand = sum(sum(g) for g in groups) / n
-    ssb = sum(len(g) * (sum(g) / len(g) - grand) ** 2 for g in groups)
-    ssw = sum(sum((v - sum(g) / len(g)) ** 2 for v in g) for g in groups)
+    grand = math.fsum(math.fsum(g) for g in groups) / n
+    ssb = math.fsum(len(g) * (math.fsum(g) / len(g) - grand) ** 2 for g in groups)
+    ssw = math.fsum(math.fsum((v - math.fsum(g) / len(g)) ** 2 for v in g) for g in groups)
     msb, msw = ssb / (k - 1), ssw / (n - k)
     n0 = (n - sum(len(g) ** 2 for g in groups) / n) / (k - 1)
     denominator = msb + (n0 - 1) * msw
@@ -502,7 +506,7 @@ def naive_iid_one_sided_p(values: Sequence[float]) -> float | None:
     sd = stdev(values)
     if sd is None or sd == 0:
         return None
-    return normal_sf((sum(values) / len(values)) / (sd / math.sqrt(len(values))))
+    return normal_sf((math.fsum(values) / len(values)) / (sd / math.sqrt(len(values))))
 
 
 # ------------------------------------------------------------------------------------------------ distributions
