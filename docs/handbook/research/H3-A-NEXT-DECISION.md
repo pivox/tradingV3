@@ -1,0 +1,106 @@
+# H3-A — status and next decision (2026-10-16)
+
+**Status: `SCORING_UNTESTABLE`** — for now, on the candidate sources examined, at a reasonable horizon.
+
+This is a statement about testability, not about scoring in general. It does not say that the score has no
+information, that every form of scoring is impossible, or that the H3 architecture is wrong. No model was trained, no
+historical return was read, nothing was validated and no profitability is claimed. Every DRAFT value stays DRAFT.
+**Nothing is launched by this page. The owner decides.**
+
+Inputs: agents A-D (integration commit `cbff09de`), the two independent reviews and the responses
+([H3-A-INDEPENDENT-REVIEWS.md](H3-A-INDEPENDENT-REVIEWS.md)), the DRAFT protocol
+([H3-A-STATISTICAL-VALIDATION-DRAFT.md](H3-A-STATISTICAL-VALIDATION-DRAFT.md)).
+
+## 1. Why not SCORING_TESTABLE
+
+SCORING_TESTABLE needs all seven conditions. Most fail:
+
+| Condition | State |
+|---|---|
+| A defensible economic source is qualified | **No.** CS-EARN is only conditional (M1 account eligibility and M2 liquidity unverified; M4 mechanism after T contested, QR-3). CS-FUND is not a scoring source; CS-UNLOCK, CS-XMOM, CS-MACRO and CS-REOPEN are rejected. |
+| Frequency allows a sufficiently powerful test | **No.** On a CS-EARN-like synthetic stream (176 events a year, upper bound), the DRAFT primary has power 0.155 at 2 years and 0.23 at 4 years at IC 0.15 (reproduced). A1 alone reaches 0.8 at about 4.7 years, A2 at about 20 years. |
+| Labels defined and representative of the target population | **Partly.** The reference static-exit label on `TECHNICALLY_ELIGIBLE` fixes the outcome-selected replay labels by definition, now enforced in the V2 contracts. Open: execution-timing rule (R1-F6), data-coverage gaps, non-capturable first bar. |
+| Matched random control works | **In synthetic nulls, yes** (BR stratified by day removes the R1-F1 confound). Open: matching on score status (QR-7), the least-favourable null (QR-6), capacity-binding cells. |
+| A valid statistical procedure exists | **No.** None validated through the real mechanics; A1 is not pinned to one statistic (QR-4); rank IC drifts above nominal at 104 weeks in dependent nulls. |
+| An independent validation path is identified | **Not secured.** The CS-EARN holdout can only be prospective; the trial ledger cannot yet detect a truncated or forked ledger without an external anchor; registry overlap rule (CR-V2-4) not applied. |
+| Data and authorisations available or future collection approved | **No.** No prospective X-Perp capture is approved and none runs. A start on 2026-11-02 is only a possibility, not a decision. Underlying-stock history is not admitted. |
+
+## 2. Why SCORING_UNTESTABLE rather than SCORING_CONDITIONAL
+
+The owner's definition of UNTESTABLE is "no defensible generator allows credible learning and validation at a
+reasonable horizon". That is the situation today:
+
+- **Only one generator is left, and it is weak where it matters.** CS-EARN's distinctive argument (the ±10 % band,
+  off-hours price discovery) acts before the decision instant T; after T the X-Perp tracks a large-cap stock, where
+  the drift is reported absent since 2006, and its side rule mirrors the closed H2 family (QR-3).
+- **The horizon is structural, not a missing measurement.** With 176-208 events a year at best, the full primary
+  stays below 0.25 power after 4 years even at a strong IC of 0.15; a non-rejection would be uninformative, which
+  the DRAFT itself (§7) classifies as "untestable on this source". The CTO reviewer's own fall-through rule (accepted
+  horizon under about 3 years → UNTESTABLE) is met by this evidence: even A1 alone needs about 4.7 years.
+- **Learning is not possible before validation.** The engine needs a CALIBRATED model; nothing may be fitted on
+  prospective data; X-Perp history is consumed or quarantined and at most four months old; underlying history is not
+  admitted. Every horizon above excludes a training period (QR-2).
+
+The CTO reviewer recommended CONDITIONAL because the prerequisites are cheap to measure; that is true of M1, M2 and
+the code items, but none of them can shorten the horizon or create training data. The disagreement is recorded.
+
+What is kept: the contracts, the BR control, the census, the trial ledger and the DRAFT protocol are reusable. They
+make a future source testable faster; they are not evidence.
+
+## 3. What would reopen H3-A (to SCORING_CONDITIONAL)
+
+Each is an owner decision or a new source, not a measurement:
+
+| Reopening route | Missing proof | How to obtain | Cost | Delay | Decision criterion |
+|---|---|---|---|---|---|
+| R-1 Admit underlying US-equity history for development (training, M4 check) and possibly a disjoint historical holdout window | Owner authorisation; registry rows `us-equity-underlying-history` (and EDGAR filing metadata); literature consumption declared | Written owner decision, then registry rows and a DRAFT amendment before any read | Owner time, low | Days | Pre-registered power ≥ 0.8 at the owner's minimum IC within the accepted horizon, with training outside the confirmation data |
+| R-2 Restate H3-A as A1 only on a pre-specified, non-fitted score | Owner acceptance; a minimum useful IC ≥ 0.15; a horizon of about 5 years accepted | Protocol amendment (DRAFT) | Owner time | Days to decide; about 5 years of collection | Power ≥ 0.8 for A1 at the declared IC within the accepted horizon |
+| R-3 Qualify a higher-frequency source with a mechanism | A source with roughly 3× CS-EARN's frequency that passes M1-M5 | Agent A style qualification from public metadata | Low | Days to weeks | M1-M5 pass and the power criterion above |
+
+If none is chosen, H3-A stays closed as untestable on the current sources.
+
+## 4. The owner's six questions
+
+1. **Is there an economically defensible source, frequent enough and compatible with 500 USDT?** No. CS-EARN is the
+   only candidate and is CONDITIONAL on M1/M2, contested on M4 after T, and at most 176-208 events a year
+   (from the issuer count; announcement dates not counted). Evidence: H3-CANDIDATE-SOURCE-QUALIFICATION.md §3-§5,
+   QR-3.
+2. **Can we show that scoring adds value beyond trading less?** In principle yes: BR stratified by decision day kept
+   size at or below nominal in every synthetic null where the naive B1 − B0 rejects 38-43 % of the time. In practice
+   not at reachable sizes (primary power 0.28 at 52 weeks on B3's stream, 0.155-0.23 at 2-4 years on a CS-EARN-like
+   stream), and matching on score status is still open. Evidence: H3-SCORING-ABSTENTION-CONTROLS.md §6, QR-1, QR-7.
+3. **Are labels representative of the evaluated candidates?** The replay labels are not (outcome-selected by the
+   fill collar; permutation p = 0.0005 on synthetic data). The reference static-exit label on the technically
+   eligible population fixes this by definition and is now enforced by the V2 contracts; the timing rule and
+   data-coverage gaps remain. Evidence: H3-LABELS-FEATURES-UNCERTAINTY-AUDIT.md §2, CTO-02, QR-8.
+4. **Are uncertainty and features correctly defined?** No. The V1 uncertainty is a heuristic (the most extreme
+   predictions get the highest confidence; `n_train` declared, not effective). The feature catalogue is not bound to
+   a generator; `xs_rel_ret_lb` is PENDING in `catalogue_v2` (EXCLUDED recommended at binding, still active in V1);
+   no CS-EARN catalogue exists and its plausible features meet closed families. Evidence: labels audit §4-§5, QR-9,
+   QR-14, CTO-06.
+5. **Can an independent protocol falsify H3-A?** A DRAFT protocol exists (A1 ∧ A2 ∧ A3, pre-declared falsification
+   readings, an explicit "underpowered" status), but it is not frozen, its A1 statistic is not pinned, and on the
+   only source a non-rejection would be uninformative for years. Evidence: DRAFT §3-§7, QR-4, QR-10.
+6. **Continue H3-A or declare it untestable for now?** Declare it untestable for now (this page), keep the
+   infrastructure, and let the owner choose whether to reopen through R-1, R-2 or R-3.
+
+## 5. One prioritised next action (not executed)
+
+**Owner decision, in writing: is underlying US-equity history (the issuers listed as OKX Europe X-Perps) admitted as
+DEVELOPMENT data for H3-A — for training and for the M4 check of CS-EARN — and may a disjoint historical window serve
+as the H3-A holdout?**
+
+- Why first: it is the only route that addresses both structural obstacles at once (no training data, QR-2; no
+  mechanism evidence after T, QR-3) and can shorten the confirmation horizon; R-2 and R-3 do not remove the training
+  obstacle.
+- What it needs to be decided: no data read, no training, no backtest. The decision is about eligibility only; any
+  later read would require registry rows, a DRAFT amendment with the literature consumption declared, and a frozen
+  protocol first.
+- Decision criterion: **No** → H3-A stays `SCORING_UNTESTABLE` on the current sources; further work goes to R-3
+  (source search) or stops. **Yes** → the coordinator drafts the registry rows and the protocol amendment (still
+  DRAFT, nothing read), and the status can be re-assessed as `SCORING_CONDITIONAL` against the prerequisites listed
+  in the integration blocker table and the reviews (M1/M2, M4, A1 statistic, BR on score status, timing rule,
+  catalogue, ledger anchor, harness migration).
+
+Nothing has been launched: no capture, no collection, no training, no backtest, no order, no change to `fwd-okx-r1`,
+Temporal, systemd, docker or production configuration. The owner decides.
