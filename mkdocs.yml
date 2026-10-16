@@ -146,6 +146,11 @@ nav:
       - "État des campagnes de recherche (2026-10-15)": research/RESEARCH-CAMPAIGN-STATUS.md
       - "Diagnostic infrastructure H2 (disque, swap) 2026-10-15": research/RESEARCH-INFRA-DIAGNOSTIC.md
       - "H1 — état et prochaine décision (2026-10-15)": research/H1-NEXT-DECISION.md
+      - "H3 — candidate sources":
+          - "Synthèse CS-FUND, CS-UNLOCK, CS-XMOM (2026-10-15)": research/H3-CANDIDATE-SOURCES-2026-10-15.md
+          - "CS-FUND — portage de funding couvert (DRAFT, non gelé)": research/H3-CS-FUND-DRAFT-PREREGISTRATION.md
+          - "CS-UNLOCK — déblocages de tokens (DRAFT, non gelé)": research/H3-CS-UNLOCK-DRAFT-PREREGISTRATION.md
+          - "CS-XMOM — momentum transversal (DRAFT, non gelé)": research/H3-CS-XMOM-DRAFT-PREREGISTRATION.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 
