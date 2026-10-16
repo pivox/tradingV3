@@ -49,6 +49,8 @@ services:
     image: postgres:13
     container_name: temporal_postgresql
     mem_limit: 512m
+    # Temporal (restart: always) waits forever for this database after a host reboot without it.
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=temporal
       - POSTGRES_PASSWORD=temporal
