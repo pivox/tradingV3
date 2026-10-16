@@ -395,3 +395,23 @@ frozen; each item is a condition of any freeze.
   be versioned to the chosen generator, and its cross-sectional relative-return features (the closed CS-XMOM family)
   dropped or justified against gate M4.
 
+
+### 12.1 Amendment note H3A-1 (H3-A testability integration, 2026-10-16; DRAFT, not frozen)
+
+This note amends the wording of the R1-F1 item above; the item itself is kept as written for the record. It changes
+nothing frozen, because nothing here is frozen.
+
+- **BR replaces B0m.** The random-abstention reference is BR, a portfolio of its own (own trajectory, own risk gate;
+  same candidates, market, costs, exit policy and limits as B0 and B1). Its budget is B1's acceptance count per
+  stratum, taken from B1's score-stage decisions (`budget_source = b1_acceptance`), never from outcomes; it runs over
+  K pre-registered seeds, every seed reported. **The primary stratification is the decision day**, not the decision
+  instant: per-instant matching is degenerate for sparse sources (one candidate per instant gives BR = B1, zero
+  power), and the global budget is oversized under dependence. Global budget and instrument stratification are
+  secondaries. See [H3-SCORING-ABSTENTION-CONTROLS.md](H3-SCORING-ABSTENTION-CONTROLS.md) §3.
+- **H3-A has its own DRAFT criterion**, outside the B3 gatekeeping: rank IC on the reference label over the
+  technically eligible population, AND B1 minus the mean BR-day portfolio, AND the halves guard
+  ([H3-A-STATISTICAL-VALIDATION-DRAFT.md](H3-A-STATISTICAL-VALIDATION-DRAFT.md) §2-§3). S1 (B1 - B0) stays a
+  secondary labelled "abstention-confounded".
+- **Code.** `validation.abstention` implements BR; `contracts_v2` carries `VariantV2.BR`, `RandomControlSpec` and
+  `ActivityBudget` with the same strata keys; `compare.evaluate` accepts the BR comparison as H3-A attribution
+  evidence and still never reports a hypothesis `supported`.

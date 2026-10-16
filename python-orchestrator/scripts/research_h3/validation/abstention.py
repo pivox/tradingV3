@@ -33,7 +33,8 @@ outcome, so it does not import future returns.
 
 On the wire: the V1 ``Variant`` enum is frozen, so a BR portfolio runs as an UNSCORED portfolio (``Variant.B0`` at
 the gate, which refuses a score for it) under its own portfolio id ``<experiment>-BR-<control_id>-s<seed>``; the
-label ``BR`` lives here (``BR_LABEL``) and in ``ControlRun``. Agent D's V2 contracts add ``BR`` properly.
+label ``BR`` lives here (``BR_LABEL``) and in ``ControlRun``. Agent D's V2 contracts add ``BR`` properly;
+``spec_to_v2`` / ``budget_to_v2`` (and back) serialise the shared interface as those contracts (integration).
 
 Nothing here trains, reads market data or places an order. Every number it produces on synthetic inputs is synthetic.
 """
@@ -50,6 +51,7 @@ from ..contracts import (
     H3_LIMITS, ZERO, ExperimentManifest, ManagementPolicy, OpportunityCandidate, OpportunityScore, PolicyRef,
     RiskGate, ScoreVerdict, Variant, canonical_json, sha256_text,
 )
+from .. import contracts_v2 as v2
 from . import metrics as mt
 from . import stats as st
 from .factorial import (
@@ -60,7 +62,8 @@ from .records import CostScenario, RefusalRecord, RefusalStage, VariantRun
 
 BR_LABEL = 'BR'
 METHODS = ('global_budget', 'stratified')
-STRATA_KEYS = ('decision_day', 'decision_ms', 'inst_id', 'side', 'score_status')
+#: Sorted; mirrored by ``contracts_v2.DECISION_TIME_STRATA`` (integration: a test pins the equality).
+STRATA_KEYS = ('decision_day', 'decision_ms', 'inst_id', 'score_status', 'side')
 BUDGET_SOURCES = ('b1_acceptance',)
 GLOBAL_STRATUM = '*'
 CONTROL_REFUSAL_REASON = 'random_abstention_control'
@@ -109,9 +112,15 @@ class RandomControlSpec:
             raise AbstentionError('abstention_stratified_needs_strata')
         if any(k not in STRATA_KEYS for k in self.strata_keys) or len(set(self.strata_keys)) != len(self.strata_keys):
             raise AbstentionError('abstention_stratum_key_not_known_at_decision')
+        # integration (H3-A testability): one canonical form shared with the V2 contracts, which require sorted keys
+        # and seeds; the key order also fixes the stratum labels, so it cannot be left free
+        if list(self.strata_keys) != sorted(self.strata_keys):
+            raise AbstentionError('abstention_strata_keys_not_sorted')
         if not self.seeds or len(set(self.seeds)) != len(self.seeds) or any(
                 isinstance(s, bool) or not isinstance(s, int) or s < 0 for s in self.seeds):
             raise AbstentionError('abstention_seeds_invalid')
+        if list(self.seeds) != sorted(self.seeds):
+            raise AbstentionError('abstention_seeds_not_sorted')
         if self.budget_source not in BUDGET_SOURCES:
             raise AbstentionError('abstention_budget_source_invalid')
 
@@ -160,6 +169,33 @@ class ActivityBudget:
     @property
     def acceptance_rate(self) -> float | None:
         return self.accepted_count / self.candidate_count if self.candidate_count else None
+
+
+# ------------------------------------------------------------------------------------- V2 contracts (integration)
+
+def spec_to_v2(spec: RandomControlSpec) -> v2.RandomControlSpec:
+    """The shared interface as the V2 contract ``contracts_v2.RandomControlSpec`` (same field names and values)."""
+    return v2.RandomControlSpec(control_id=spec.control_id, method=v2.ControlMethod(spec.method),
+                                strata_keys=spec.strata_keys, seeds=spec.seeds,
+                                budget_source=v2.BudgetSource(spec.budget_source))
+
+
+def spec_from_v2(spec: v2.RandomControlSpec) -> RandomControlSpec:
+    return RandomControlSpec(control_id=spec.control_id, method=spec.method.value, strata_keys=spec.strata_keys,
+                             seeds=spec.seeds, budget_source=spec.budget_source.value)
+
+
+def budget_to_v2(budget: ActivityBudget) -> v2.ActivityBudget:
+    """``contracts_v2.ActivityBudget``: the per-stratum mapping as sorted ``strata``, the same ``strata_keys``. Its
+    ``fingerprint()`` is the one ``VariantRunRef.activity_budget_fingerprint`` carries for a BR run."""
+    if budget.derived_from_variant != v2.VariantV2.B1.value:
+        raise AbstentionError('abstention_budget_not_from_b1')
+    return v2.ActivityBudget.from_mapping(budget.budget_id, budget.per_stratum, budget.strata_keys)
+
+
+def budget_from_v2(budget: v2.ActivityBudget) -> ActivityBudget:
+    return ActivityBudget(budget.budget_id, budget.strata_keys, budget.as_mapping(),
+                          derived_from_variant=budget.derived_from_variant.value)
 
 
 # --------------------------------------------------------------------------------------------- strata and budget

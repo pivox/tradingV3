@@ -158,7 +158,8 @@ def test_v2_schema_ids_are_versioned_unique_and_disjoint_from_v1():
 
 BUILDERS = [provenance_v2, candidate_v2, score_v2, estimated, manifest,
             lambda: m.snapshot_to_v2(snapshot_v1(), catalogue_fingerprint=CAT.catalogue_fingerprint),
-            lambda: v2.ActivityBudget.from_mapping('budget-1', {'2026-01-01': (10, 3), '2026-01-02': (8, 0)}),
+            lambda: v2.ActivityBudget.from_mapping('budget-1', {'decision_day=0': (10, 3), 'decision_day=1': (8, 0)},
+                                                     ('decision_day',)),
             lambda: COST_V2, lambda: CONTROL]
 
 
@@ -372,15 +373,24 @@ def test_random_control_spec_rules():
 
 
 def test_activity_budget_mirrors_the_shared_mapping():
-    counts = {'2026-01-02|long': (8, 0), '2026-01-01|long': (10, 3)}
-    budget = v2.ActivityBudget.from_mapping('budget-1', counts)
+    counts = {'decision_day=1|side=long': (8, 0), 'decision_day=0|side=long': (10, 3)}
+    budget = v2.ActivityBudget.from_mapping('budget-1', counts, ('decision_day', 'side'))
     assert budget.as_mapping() == counts and (budget.candidate_count, budget.accepted_count) == (18, 3)
     with pytest.raises(c.ContractError, match='h3_budget_count_invalid'):
-        v2.ActivityBudget.from_mapping('b', {'d': (2, 3)})
+        v2.ActivityBudget.from_mapping('b', {'*': (2, 3)})
     with pytest.raises(c.ContractError, match='h3_budget_not_from_b1'):
         dataclasses.replace(budget, derived_from_variant=v2.VariantV2.B0)
     with pytest.raises(c.ContractError, match='h3_budget_stratum_key_invalid'):
-        v2.ActivityBudget.from_mapping('b', {'with space': (1, 0)})
+        v2.ActivityBudget.from_mapping('b', {'decision_day=with space': (1, 0)}, ('decision_day',))
+    # integration (H3-A testability): labels follow the harness's keys; keys are decision-time, sorted, unique
+    with pytest.raises(c.ContractError, match='h3_budget_stratum_label_not_the_keys'):
+        v2.ActivityBudget.from_mapping('b', {'2026-01-01|long': (1, 0)}, ('decision_day', 'side'))
+    with pytest.raises(c.ContractError, match='h3_budget_stratum_label_not_the_keys'):
+        v2.ActivityBudget.from_mapping('b', {'all': (1, 0)})
+    with pytest.raises(c.ContractError, match='h3_budget_stratum_not_decision_time'):
+        v2.ActivityBudget.from_mapping('b', {'net_r=1': (1, 0)}, ('net_r',))
+    with pytest.raises(c.ContractError, match='h3_budget_strata_keys_not_sorted_unique'):
+        v2.ActivityBudget.from_mapping('b', {'side=long|decision_day=0': (1, 0)}, ('side', 'decision_day'))
 
 
 # ----------------------------------------------------------------------------------------- experiment manifest
@@ -480,7 +490,7 @@ def runs_for(man, *, scenario=v2.CostScenarioV2.BASE, budget=None, br_seeds=None
 
 def test_controlled_comparison_is_ready_only_with_every_preregistered_seed():
     man = manifest()
-    budget = v2.ActivityBudget.from_mapping('budget-1', {'all': (40, 12)})
+    budget = v2.ActivityBudget.from_mapping('budget-1', {'*': (40, 12)})
     assert v2.comparison_readiness(man, runs_for(man, budget=budget), budget) == ()
     pess = runs_for(man, budget=budget, scenario=v2.CostScenarioV2.PESSIMISTIC)
     assert v2.comparison_readiness(man, runs_for(man, budget=budget) + pess, budget) == ()
@@ -489,7 +499,7 @@ def test_controlled_comparison_is_ready_only_with_every_preregistered_seed():
         man, runs_for(man, budget=budget, br_seeds=(12,)), budget)
     assert 'control_seeds_not_exactly_preregistered' in v2.comparison_readiness(
         man, runs_for(man, budget=budget, br_seeds=(11, 12, 13, 14)), budget)
-    other = v2.ActivityBudget.from_mapping('budget-2', {'all': (40, 13)})
+    other = v2.ActivityBudget.from_mapping('budget-2', {'*': (40, 13)})
     assert 'activity_budget_mismatch' in v2.comparison_readiness(man, runs_for(man, budget=budget), other)
     assert 'activity_budget_missing' in v2.comparison_readiness(man, runs_for(man, budget=budget), None)
     mixed = runs_for(man, budget=budget)

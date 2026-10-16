@@ -188,11 +188,17 @@ def execution_assumptions(cost_model: CostModelV2, *, pessimistic: bool = False,
 # ----------------------------------------------------------------------------------------------------- labels
 
 def label_to_v2(label: Any, *, candidate: OpportunityCandidateV2, label_spec: LabelSpecRef,
-                available_ms: int | None) -> LabelOutcome:
+                available_ms: int | None = None) -> LabelOutcome:
     """From ``integration.label_replay.CandidateLabel``. The value is the label in ``label_spec.unit``; the exit
-    instant is not on ``CandidateLabel`` and must be given for a traded candidate (never guessed)."""
+    instant of a traded candidate is the label's ``exit_ms`` (added at integration, CR-V2-3) or, for a record
+    without it, must be given (never guessed); both given and different is refused."""
     if label.candidate_id != candidate.candidate_id or label.decision_ms != candidate.header.clock.decision_ms:
         raise MigrationError('migration_label_candidate_mismatch')
+    exit_ms = getattr(label, 'exit_ms', None)
+    if exit_ms is not None and available_ms is not None and exit_ms != available_ms:
+        raise MigrationError('migration_label_exit_time_mismatch')
+    if label.traded and available_ms is None:
+        available_ms = exit_ms
     if not label.traded:
         return LabelOutcome(candidate_id=label.candidate_id, candidate_fingerprint=candidate.fingerprint(),
                             label_spec=label_spec, decision_ms=label.decision_ms, available_ms=available_ms,

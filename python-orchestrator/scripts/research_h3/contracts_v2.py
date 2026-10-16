@@ -67,8 +67,10 @@ DESIGNS = (DESIGN_H3A_CONTROLLED, DESIGN_FACTORIAL, DESIGN_FACTORIAL_CONTROLLED)
 
 
 class Population(str, enum.Enum):
-    """Shared population names (H3-A testability brief). The scoring's target population is chosen by the labels
-    audit; the manifest records which one the scores and labels are evaluated on."""
+    """Shared population names (H3-A testability brief), the same enum ``scoring.labels`` uses. The scoring's target
+    population is chosen by the labels audit (``TECHNICALLY_ELIGIBLE``, ``scoring.labels.TARGET_POPULATION``); the
+    manifest records which one the scores and labels are evaluated on, and refuses ``EXECUTABLE`` (an
+    outcome-dependent selection)."""
 
     ALL_CANDIDATES = 'ALL_CANDIDATES'
     TECHNICALLY_ELIGIBLE = 'TECHNICALLY_ELIGIBLE'
@@ -77,10 +79,20 @@ class Population(str, enum.Enum):
 
 
 class LabelUnit(str, enum.Enum):
-    """Backlog #17: the scorer's training label is gross R, the validation trade record is net R."""
+    """Backlog #17: the scorer's training label is gross R, the validation trade record is net R.
+
+    ``net_gross_r`` (net PnL over the GROSS stop distance at the reference) is the unit of the scorer's
+    ``expected_net_r`` and of calibration checks (labels audit, ``integration.label_replay``); like ``net_r`` it
+    already contains costs, so it is never a training label of the gross head (``scoring.labels.training_target``).
+    """
 
     GROSS_R = 'gross_r'
     NET_R = 'net_r'
+    NET_GROSS_R = 'net_gross_r'
+
+
+#: Units that already contain realised costs: training the gross head on them deducts the costs twice.
+NET_LABEL_UNITS = (LabelUnit.NET_R, LabelUnit.NET_GROSS_R)
 
 
 class LabelStatus(str, enum.Enum):
@@ -102,8 +114,13 @@ class CostScenarioV2(str, enum.Enum):
     PESSIMISTIC = 'pessimistic'
 
 
-#: Strata keys known at decision time. Anything else (an outcome, a score, a label) is refused.
-DECISION_TIME_STRATA = ('decision_day', 'decision_week', 'inst_id', 'side', 'underlying', 'venue')
+#: Strata keys known at decision time. Anything else (an outcome, a score value, a label) is refused. Integration
+#: (H3-A testability): exactly the keys the abstention harness computes (``validation.abstention.STRATA_KEYS``, a test
+#: pins the equality), sorted; ``score_status`` is the eligibility state of the score, never its value. Further keys
+#: (week, underlying, venue) need the harness to compute them first.
+DECISION_TIME_STRATA = ('decision_day', 'decision_ms', 'inst_id', 'score_status', 'side')
+#: Stratum label of a global budget (no strata keys), as the abstention harness writes it.
+GLOBAL_STRATUM = '*'
 
 
 # --------------------------------------------------------------------------------------------- identity blocks
@@ -420,12 +437,16 @@ class StratumCount(Contract):
 class ActivityBudget(Contract):
     """B1's activity per stratum, taken from B1's decisions (never outcomes); BR draws the same counts.
 
-    The shared interface's mapping ``{stratum_key: (candidate_count, accepted_count)}`` is carried as
-    ``strata`` sorted by key (``from_mapping`` / ``as_mapping``); ``fingerprint()`` is the contract fingerprint.
+    The shared interface's mapping ``{stratum_label: (candidate_count, accepted_count)}`` is carried as
+    ``strata`` sorted by label (``from_mapping`` / ``as_mapping``); ``fingerprint()`` is the contract fingerprint.
+    ``strata_keys`` mirrors the abstention harness (integration, H3-A testability): the decision-time keys the
+    labels are built from, the same as the control's. Labels follow the harness's form: ``*`` for a global budget,
+    otherwise ``key=value`` per key in ``strata_keys`` order, joined by ``|``.
     """
 
     SCHEMA: ClassVar[str] = 'h3.activity_budget/2'
     budget_id: str
+    strata_keys: tuple[str, ...]
     strata: tuple[StratumCount, ...]
     derived_from_variant: VariantV2
 
@@ -435,11 +456,18 @@ class ActivityBudget(Contract):
             raise ContractError('h3_budget_not_from_b1')
         if not self.strata:
             raise ContractError('h3_budget_empty')
+        if any(key not in DECISION_TIME_STRATA for key in self.strata_keys):
+            raise ContractError('h3_budget_stratum_not_decision_time')
+        _sorted_unique(self.strata_keys, 'h3_budget_strata_keys_not_sorted_unique')
         _sorted_unique([s.stratum_key for s in self.strata], 'h3_budget_strata_not_sorted_unique')
+        for stratum in self.strata:
+            if not _label_matches_keys(stratum.stratum_key, self.strata_keys):
+                raise ContractError('h3_budget_stratum_label_not_the_keys')
 
     @classmethod
-    def from_mapping(cls, budget_id: str, counts: Mapping[str, tuple[int, int]]) -> ActivityBudget:
-        return cls(budget_id=budget_id, derived_from_variant=VariantV2.B1,
+    def from_mapping(cls, budget_id: str, counts: Mapping[str, tuple[int, int]],
+                     strata_keys: Sequence[str] = ()) -> ActivityBudget:
+        return cls(budget_id=budget_id, derived_from_variant=VariantV2.B1, strata_keys=tuple(strata_keys),
                    strata=tuple(StratumCount(stratum_key=k, candidate_count=v[0], accepted_count=v[1])
                                 for k, v in sorted(counts.items())))
 
@@ -453,6 +481,15 @@ class ActivityBudget(Contract):
     @property
     def accepted_count(self) -> int:
         return sum(s.accepted_count for s in self.strata)
+
+
+def _label_matches_keys(label: str, keys: Sequence[str]) -> bool:
+    """True when ``label`` is the abstention harness's stratum label for ``keys`` (``*`` when there is none)."""
+    if not keys:
+        return label == GLOBAL_STRATUM
+    parts = label.split('|')
+    return len(parts) == len(keys) and all(
+        part.startswith(f'{key}=') and len(part) > len(key) + 1 for part, key in zip(parts, keys))
 
 
 # ------------------------------------------------------------------------------------------------------- costs
@@ -538,6 +575,9 @@ class ModelManifestV2(Contract):
                 raise ContractError('h3_model_calibration_without_training')
             if self.label_spec is None or any(v is None for v in window):
                 raise ContractError('h3_model_calibration_identity_incomplete')
+            if self.label_spec.unit in NET_LABEL_UNITS:
+                # labels audit (H3-A testability): the engine subtracts costs from the gross head
+                raise ContractError('h3_label_unit_double_cost_deduction')
             start, end, cutoff = window
             assert start is not None and end is not None and cutoff is not None
             for value in window:
@@ -611,6 +651,9 @@ class ExperimentManifestV2(Contract):
             raise ContractError('h3_experiment_design_invalid')
         if (VariantV2.BR in self.variants) != (self.random_control is not None):
             raise ContractError('h3_experiment_random_control_mismatch')
+        if self.target_population is Population.EXECUTABLE:
+            # labels audit (H3-A testability): executability depends on the price after the decision
+            raise ContractError('h3_experiment_target_population_outcome_selected')
         if (VariantV2.B2 in self.variants) != (self.adaptive_policy is not None):
             raise ContractError('h3_experiment_adaptive_policy_mismatch')
         if self.adaptive_policy is not None and self.adaptive_policy == self.static_policy:
@@ -754,6 +797,9 @@ def comparison_readiness(manifest: ExperimentManifestV2, runs: Sequence[VariantR
             reasons.append('activity_budget_missing')
         elif any(r.activity_budget_fingerprint != budget.fingerprint() for r in br_runs):
             reasons.append('activity_budget_mismatch')
+        if budget is not None and manifest.random_control is not None \
+                and budget.strata_keys != manifest.random_control.strata_keys:
+            reasons.append('activity_budget_strata_not_the_control_strata')
     return tuple(dict.fromkeys(reasons))
 
 

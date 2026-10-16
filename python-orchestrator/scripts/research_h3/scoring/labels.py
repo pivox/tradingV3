@@ -62,16 +62,12 @@ from ..contracts import (
     H3_LIMITS, Bar, Clock, ContractError, OpportunityCandidate, PortfolioView, RiskVerdict, Side, Variant,
     stop_is_protective,
 )
+from ..contracts_v2 import Population
 
 LABEL_DEFINITION = 'h3.reference_static_exit_label/1'
 CENSUS_SCHEMA = 'h3.label_population_census/1'
-
-
-class Population(str, enum.Enum):
-    ALL_CANDIDATES = 'ALL_CANDIDATES'
-    TECHNICALLY_ELIGIBLE = 'TECHNICALLY_ELIGIBLE'
-    LABELABLE = 'LABELABLE'
-    EXECUTABLE = 'EXECUTABLE'
+# ``Population`` (imported above) is the shared enum of the V2 contracts (integration, H3-A testability): one
+# definition, the same names in the census, the labels and ``ExperimentManifestV2.target_population``.
 
 
 #: The population the scorer is applied to, and therefore the one its labels must represent.

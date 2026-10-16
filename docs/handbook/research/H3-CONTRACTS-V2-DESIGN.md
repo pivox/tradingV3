@@ -53,14 +53,14 @@ Tests: `tests/test_research_h3_contracts_v2.py` and `tests/test_research_h3_tria
 | `ProvenanceV2` (`h3.provenance/2`) | `venue`, `product`, `underlyings`, `window_start_ms`, `window_end_ms` (`[start, end)`) | `overlaps()` → `ExperimentManifestV2` (no cross-label overlap), `check_model_for_experiment` (training vs evaluation data), `ModelManifestV2` (training window inside the data) | R1-F7, #20 |
 | `GeneratorRef` (`h3.generator_ref/2`) | `generator_fingerprint` (full parameter document) | Candidate identity, manifest, ledger `generator_fingerprint` | R1-F8, R1-F12 |
 | `FeatureCatalogueRef` (`h3.feature_catalogue_ref/2`) | `catalogue_fingerprint` | `FeatureSnapshotV2`, `ModelManifestV2`, manifest, `check_model_for_experiment` (`model_catalogue_mismatch`) | #1, #2 |
-| `LabelSpecRef` (`h3.label_spec_ref/2`) | `label_id/version`, `unit` (gross_r / net_r), `label_fingerprint` | `LabelOutcome`, `ModelManifestV2` (calibration), manifest; settles the unit ambiguity | #17, R1-F3 |
+| `LabelSpecRef` (`h3.label_spec_ref/2`) | `label_id/version`, `unit` (gross_r / net_r / net_gross_r), `label_fingerprint` | `LabelOutcome`, `ModelManifestV2` (calibration), manifest; settles the unit ambiguity | #17, R1-F3 |
 | `ModelRefV2` (`h3.model_ref/2`) | `calibration`, `available_ms` | `OpportunityScoreV2` (ESTIMATED needs CALIBRATED and `available_ms <= decision_ms`), manifest (model exists before the manifest) | #1, walk-forward anti-lookahead |
 | `FeatureSnapshotV2` (`h3.feature_snapshot/2`) | `catalogue` replaces `feature_spec_id/version` | Scorer: refuses a snapshot from another catalogue content | #2 |
 | `OpportunityCandidateV2` (`h3.opportunity_candidate/2`) | `generator: GeneratorRef` replaces 3 strings | Ledger, manifest, `score.scores(candidate)` | R1-F12 |
 | `OpportunityScoreV2` (`h3.opportunity_score/2`) | `candidate_fingerprint`, `model: ModelRefV2` | Joins scores to labels, gate idempotency, model anti-lookahead | R1-F3 |
 | `LabelOutcome` (`h3.label_outcome/2`) | `status` LABELLED/ABSENT, `value` in the spec's unit, `stopped`, `available_ms` (> decision), `absence_reasons` | Label/population representativeness (LABELABLE vs evaluated); `available_ms` is the effective availability date of the label for training cutoffs. Built from `label_replay.CandidateLabel` | R1-F3 |
-| `RandomControlSpec` (`h3.random_control_spec/2`) | `control_id`, `method`, `strata_keys` (decision-time whitelist), `seeds` (sorted, unique, ≥ 1), `budget_source` = `b1_acceptance` | Manifest (BR ⇔ spec), `comparison_readiness` (every seed, no more) | R1-F1, shared interface |
-| `ActivityBudget` + `StratumCount` | `budget_id`, per-stratum `(candidate_count, accepted_count)`, `derived_from_variant` = B1 | BR draw, `VariantRunRef.activity_budget_fingerprint`, `comparison_readiness` | R1-F1, shared interface |
+| `RandomControlSpec` (`h3.random_control_spec/2`) | `control_id`, `method`, `strata_keys` (decision-time whitelist = the harness's `STRATA_KEYS`, sorted), `seeds` (sorted, unique, ≥ 1), `budget_source` = `b1_acceptance` | Manifest (BR ⇔ spec), `comparison_readiness` (every seed, no more) | R1-F1, shared interface |
+| `ActivityBudget` + `StratumCount` | `budget_id`, `strata_keys` (as the control's), per-stratum `(candidate_count, accepted_count)` with the harness's labels (`*`, or one `key=value` per key joined by a vertical bar), `derived_from_variant` = B1 | BR draw, `VariantRunRef.activity_budget_fingerprint`, `comparison_readiness` | R1-F1, shared interface |
 | `CostModelV2` (`h3.cost_model/2`) | `half_spread_rate`, `funding_provision_rate`, `funding_interval_ms` | Risk gate (via `execution_assumptions`), scorer cost, simulator: one cost source | #7, CR-1 |
 | `ModelManifestV2` (`h3.model_manifest/2`) | `catalogue`, `side`, `label_spec`, `training_start/end_ms`, `standardisation_cutoff_ms`, `available_ms` | Calibration rules, `check_model_for_experiment`, `ref()` → `ModelRefV2` | #1, #20 |
 | `ExperimentManifestV2` (`h3.experiment_manifest/2`) | `statistical_plan_fingerprint`, `variants` (3 designs), `generator`, `catalogue`, `scoring_model: ModelRefV2`, `label_spec`, `target_population`, `random_control`, `reference_lottery_seeds`, `adaptive_policy` (optional), `pessimistic_risk_policy`, `cost_model: CostModelV2`, `datasets: ProvenanceV2`, `trial_ledger_head` | Pre-registration of B0/BR/B1 and B0-B3; `comparison_readiness`; freeze conditions | #12, #21, R1-F1, R1-F12 |
@@ -298,6 +298,19 @@ data.
 `golden vectors: OK`.
 
 ## 10. Change requests and limits
+
+**Integration (2026-10-16).** Applied: the strata whitelist is exactly `validation.abstention.STRATA_KEYS`
+(`decision_day`, `decision_ms`, `inst_id`, `score_status`, `side`; week, underlying and venue wait for the harness to
+compute them); `ActivityBudget` carries `strata_keys` and checks its labels against them; `comparison_readiness`
+adds `activity_budget_strata_not_the_control_strata`; `abstention.spec_to_v2` / `budget_to_v2` (and back) round-trip
+the shared interface with identical fingerprints; `LabelUnit.NET_GROSS_R` added, and a CALIBRATED `ModelManifestV2`
+refuses a net label unit (`h3_label_unit_double_cost_deduction`, the labels audit's rule); the manifest refuses
+`EXECUTABLE` as target population (outcome-dependent); `Population` is the single enum also used by
+`scoring.labels`; CR-V2-3 is applied (`CandidateLabel.exit_ms`, used by `label_to_v2`). Tests:
+`tests/test_research_h3_a_interfaces.py`. Still open: CR-V2-1, CR-V2-2, CR-V2-4, and `LabelOutcome` for the
+reference label (its exit at the first open can precede the decision instant at bar resolution, so its
+`available_ms` needs the execution-timing rule, R1-F6).
+
 
 - **CR-V2-1 (gate).** `H3RiskGate` and `PortfolioView` should accept `VariantV2`, so BR stops borrowing B0's score
   rule; also add `open_instruments` (#8).

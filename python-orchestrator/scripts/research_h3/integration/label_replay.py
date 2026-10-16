@@ -27,7 +27,9 @@ the e2e numbers 273 / 149 / 124 stay reproducible):
   missing bar; the next open then acts as a gap). A label with gaps is flagged, not silently trusted;
 - ``net_gross_r``: net PnL over the GROSS stop distance at the reference (units x |reference - stop|), the unit of the
   scorer's ``expected_net_r``. ``net_r`` (over the cost-inclusive nominal risk) is about 20 % smaller in magnitude
-  with the e2e costs (mean ratio 0.81 on the synthetic example), so calibration checks of ``expected_net_r`` must use ``net_gross_r``, never ``net_r``.
+  with the e2e costs (mean ratio 0.81 on the synthetic example), so calibration checks of ``expected_net_r`` must use ``net_gross_r``, never ``net_r``;
+- ``exit_ms`` (integration, change request CR-V2-3): the exit instant of the replayed trade, the earliest instant the
+  outcome is known; ``migrate_v1_v2.label_to_v2`` uses it as ``LabelOutcome.available_ms``. None when not traded.
 
 Labels from this replay are EXECUTABILITY-CONDITIONED: a candidate is labelled only when its fill happens, and with
 the one-sided collar a fill depends on the price move between the reference and the fill bar (a long is refused when
@@ -71,6 +73,7 @@ class CandidateLabel:
     horizon_covered: bool | None = None      # audit addition: False = truncated by the end of the replay window
     price_path_gaps: int = 0                 # audit addition: missing bars inside the replay window
     net_gross_r: Decimal | None = None       # audit addition: net PnL / gross stop distance (expected_net_r's unit)
+    exit_ms: int | None = None               # integration addition (CR-V2-3): exit instant of the replayed trade
 
 
 def _window(bars: Sequence[Bar], candidate: OpportunityCandidate) -> list[Bar]:
@@ -127,7 +130,7 @@ def capacity_free_labels(candidates: Sequence[OpportunityCandidate], bars: Seque
                 candidate.candidate_id, decision, True, trade.realized_r, trade.gross_pnl / distance,
                 trade.exit_reason in STOP_REASONS, trade.exit_reason, (),
                 horizon_covered=trade.exit_reason != 'end_of_data', price_path_gaps=_gaps(window),
-                net_gross_r=trade.net_pnl / distance)
+                net_gross_r=trade.net_pnl / distance, exit_ms=trade.exit_ms)
         else:
             reasons = tuple(dict.fromkeys(r for refusal in result.refusals for r in refusal.reasons))
             labels[candidate.candidate_id] = CandidateLabel(candidate.candidate_id, decision, False, None, None,

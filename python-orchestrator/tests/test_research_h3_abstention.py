@@ -241,6 +241,22 @@ def test_e2e_comparison_reports_activity_and_never_claims_profit(e2e_controls):
     assert e2e_controls['label'] == 'SYNTHETIC_NOT_EVIDENCE'
 
 
+def test_integration_e2e_controls_serialise_as_v2_and_feed_compare_evaluate(e2e_controls):
+    from scripts.research_h3 import contracts_v2 as v2
+    from scripts.research_h3 import e2e
+    from scripts.research_h3.validation import compare as cp
+    for control_id, result in e2e_controls['results'].items():
+        spec, budget = ab.spec_to_v2(result.spec), ab.budget_to_v2(result.budget)
+        assert v2.RandomControlSpec.from_json(spec.canonical_json()) == spec
+        assert ab.budget_from_v2(v2.ActivityBudget.from_json(budget.canonical_json())) == result.budget
+        assert budget.strata_keys == spec.strata_keys
+        report = cp.evaluate(e2e_controls['factorial'].runs, e2e.E2E_PLAN,
+                             random_control=e2e_controls['controls'][control_id])
+        assert report['h3a_random_control']['control']['control_id'] == control_id
+        assert report['attribution_blockers']['H3-A_scoring'] == list(cp.H3A_BLOCKERS_WITH_RANDOM_CONTROL)
+        assert 'supported' not in report['hypotheses'].values()
+
+
 def test_run_random_control_refuses_a_shared_or_wrong_gate(e2e_controls):
     from scripts.research_h3 import e2e
     from scripts.research_h3.adaptive import AdaptivePolicyV1, StaticPolicy

@@ -22,6 +22,14 @@ exposure-matched static control), the hypotheses H3-A, H3-B and H3-C are therefo
 ``rejects_null_attribution_not_identified`` even when every test rejects; and serial gatekeeping on B3 cannot give
 the separate answers the mission asks for. Both are documented blockers (H3-INDEPENDENT-REVIEWS.md).
 
+Random-abstention control (integration, H3-A testability). ``evaluate`` accepts the matched BR comparison of
+``abstention.compare_b1_to_controls`` (``random_control``) as H3-A attribution evidence: it is checked against this
+B1 run and reported under ``h3a_random_control``, and the H3-A reading then says whether B1 beat its matched
+random abstention (``..._beyond_random_abstention_...``) or not (``..._abstention_not_excluded``). It never says
+``supported``: the H3-A criterion (rank IC on reference labels AND excess over BR AND the halves guard,
+H3-A-STATISTICAL-VALIDATION-DRAFT.md) is a DRAFT, it is not this factorial's gatekept S1, and its alpha is not
+allocated (R1-F2); those blockers stay listed in ``attribution_blockers``.
+
 Minimum information (review R1-F9): the effective-block guard applies to both primary series (P1 and P2, the
 binding one), and a secondary test whose series has too few effective blocks is not confirmatory.
 
@@ -33,6 +41,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
+from typing import Any
 
 from ..contracts import ZERO, DataLabel, ExperimentManifest, ProtocolStatus, Variant, wire_decimal
 from . import metrics as mt
@@ -47,6 +56,10 @@ ATTRIBUTION_BLOCKERS = {
     'H3-B_adaptive': ('R1-F1_no_exposure_matched_static_control',),
     'H3-C_combination': ('R1-F1_no_matched_abstention_or_exposure_control',),
 }
+#: What still blocks an H3-A attribution once a matched BR comparison is supplied. Never empty: ``evaluate`` cannot
+#: report H3-A ``supported`` (the DRAFT criterion lives outside this factorial and is not frozen).
+H3A_BLOCKERS_WITH_RANDOM_CONTROL = ('H3-A_draft_criterion_not_frozen_rank_ic_component_outside_factorial',
+                                    'R1-F2_h3a_alpha_not_allocated')
 FACTORIAL = (Variant.B0, Variant.B1, Variant.B2, Variant.B3)
 
 
@@ -197,6 +210,26 @@ def guards(runs: Mapping[Variant, VariantRun], plan: StatisticalPlan, delta: Seq
     return out
 
 
+def check_random_control(random_control: Mapping[str, Any], b1: VariantRun) -> dict:
+    """The H3-A attribution evidence block from ``abstention.compare_b1_to_controls``: it must describe THIS B1 run
+    (same net PnL and trade count) and carry its block-excess test; BR's own label is ``BR``, never a V1 variant."""
+    try:
+        control, test, b1_act = random_control['control'], random_control['block_excess_test'], random_control['b1']
+        identity = (b1_act['net_pnl'], b1_act['trades_executed'])
+        rejected = test['rejected']
+    except (KeyError, TypeError) as exc:
+        raise CompareError('compare_random_control_incomplete') from exc
+    if identity != (float(b1.net_pnl), len(b1.trades)):
+        raise CompareError('compare_random_control_not_this_b1')
+    if not isinstance(rejected, bool) or not control.get('seeds'):
+        raise CompareError('compare_random_control_incomplete')
+    return {'control': dict(control), 'control_fingerprint': random_control.get('control_fingerprint'),
+            'budget': random_control.get('budget'), 'block_excess_test': dict(test),
+            'p_net_pnl_vs_br': random_control.get('p_net_pnl_vs_br'), 'excess_over_br_rejects_null': rejected,
+            'reading': 'A2 component of the DRAFT H3-A criterion (selection beyond random abstention at the same '
+                       'activity); not a profit, not a validation, never H3-A supported on its own'}
+
+
 def evidence_label(manifest: ExperimentManifest | None, plan: StatisticalPlan) -> str:
     if manifest is None:
         return 'unlabelled_not_evidence'
@@ -212,9 +245,15 @@ def evidence_label(manifest: ExperimentManifest | None, plan: StatisticalPlan) -
 
 def evaluate(runs: Mapping[Variant, VariantRun], plan: StatisticalPlan, *,
              manifest: ExperimentManifest | None = None,
-             pessimistic: Mapping[Variant, VariantRun] | None = None) -> dict:
-    """The full pre-declared analysis of one B0-B3 experiment. Base-cost runs in ``runs``."""
+             pessimistic: Mapping[Variant, VariantRun] | None = None,
+             random_control: Mapping[str, Any] | None = None) -> dict:
+    """The full pre-declared analysis of one B0-B3 experiment. Base-cost runs in ``runs``. ``random_control``:
+    optional matched BR comparison of B1 (``abstention.compare_b1_to_controls``), H3-A attribution evidence."""
     check_factorial(runs)
+    h3a_control = None if random_control is None else check_random_control(random_control, runs[Variant.B1])
+    blockers = dict(ATTRIBUTION_BLOCKERS)
+    if h3a_control is not None:
+        blockers['H3-A_scoring'] = H3A_BLOCKERS_WITH_RANDOM_CONTROL
     if any(r.cost_scenario is not CostScenario.BASE for r in runs.values()):
         raise CompareError('compare_base_runs_mislabelled')
     if manifest is not None:
@@ -258,8 +297,12 @@ def evaluate(runs: Mapping[Variant, VariantRun], plan: StatisticalPlan, *,
             return 'not_confirmatory'
         if not all(secondary_tests[k]['status'] == 'secondary_rejects_null' for k in keys):
             return 'not_supported'
+        if hypothesis == 'H3-A_scoring' and h3a_control is not None:
+            # matched BR evidence: says whether abstention is excluded, never 'supported' (DRAFT criterion, R1-F2)
+            return ('rejects_null_beyond_random_abstention_criterion_not_frozen'
+                    if h3a_control['excess_over_br_rejects_null'] else 'rejects_null_abstention_not_excluded')
         # every test rejects, but the effect is not attributable without matched controls (R1-F1)
-        return 'rejects_null_attribution_not_identified' if ATTRIBUTION_BLOCKERS[hypothesis] else 'supported'
+        return 'rejects_null_attribution_not_identified' if blockers[hypothesis] else 'supported'
     interaction = [b3 - b2 - b1 + b0 for b3, b2, b1, b0 in zip(
         *(mt.block_returns(runs[v], plan.block_ms) for v in (Variant.B3, Variant.B2, Variant.B1, Variant.B0)))]
     descriptive = {'interaction_b3_b2_b1_b0': _two_sided_interval(interaction, plan, 'interaction')}
@@ -279,7 +322,8 @@ def evaluate(runs: Mapping[Variant, VariantRun], plan: StatisticalPlan, *,
                        'H3-B_adaptive': supported('H3-B_adaptive', 'adaptation'),
                        'H3-C_combination': supported('H3-C_combination', 'adaptation_after_scoring',
                                                      'scoring_with_adaptation')},
-        'attribution_blockers': {k: list(v) for k, v in ATTRIBUTION_BLOCKERS.items()},
+        'attribution_blockers': {k: list(v) for k, v in blockers.items()},
+        'h3a_random_control': h3a_control if h3a_control is not None else {'status': 'not_supplied'},
         'descriptive': descriptive,
         'dependence': {'primary_difference': dependence_diagnostics(delta),
                        'b3_trades': trade_clustering(runs[Variant.B3], plan.block_ms),

@@ -396,6 +396,25 @@ def test_review_r1_f3_capacity_free_labels_cover_the_book(result):
     assert sum(check['refused_alone'].values()) == check['candidates'] - check['labelled']
 
 
+def test_integration_label_exit_instant_and_optional_population_census(result):
+    for label in result.labels.values():
+        if label.traded:
+            assert label.exit_ms is not None and label.exit_ms > label.decision_ms
+        else:
+            assert label.exit_ms is None
+    assert 'population_census' not in result.report['capacity_free_labels']     # default report unchanged
+    census = e2e.label_check(result, census=True)['population_census']
+    counts = census['counts']
+    assert census['target_population'] == 'TECHNICALLY_ELIGIBLE'
+    assert counts['ALL_CANDIDATES'] == len(result.book.candidates)
+    assert counts['ALL_CANDIDATES'] >= counts['TECHNICALLY_ELIGIBLE'] >= counts['LABELABLE']
+    assert counts['TECHNICALLY_ELIGIBLE'] >= counts['EXECUTABLE']
+    # labels audit (synthetic example): 273 / 261 / 261 / 142, and no outcome-dependent label exclusion
+    assert (counts['ALL_CANDIDATES'], counts['TECHNICALLY_ELIGIBLE'], counts['LABELABLE'],
+            counts['EXECUTABLE']) == (273, 261, 261, 142)
+    assert census['target_label_selection_outcome_dependent'] is False
+
+
 def test_review_r1_f11_no_false_fill_realism_finding_on_exits(result):
     for entry in result.report['paths'].values():
         for counts in entry['convention_checks']['fill_realism_findings'].values():

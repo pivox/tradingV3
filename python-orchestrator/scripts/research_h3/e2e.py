@@ -57,6 +57,7 @@ from .integration import (
 from .integration.label_replay import CandidateLabel, capacity_free_labels, label_mapping
 from .integration.validation_adapter import RunVariantSimulator, gross_r_label
 from .scoring import ScoringEngine, build_snapshot, reference_null_manifest, scored_variant_readiness
+from .scoring import labels as ref_labels
 from .scoring.features import derived_features
 from .scoring.fixtures import synthetic_fixture_manifest
 from .synthetic import DRAFT_PROTOCOL, HOUR_MS, SYNTHETIC_PROVENANCE, T0_MS
@@ -566,8 +567,25 @@ def cost_convention_check(path: PathResult, book: CandidateBook) -> dict[str, An
                     'flat half-spread; R = gross stop distance in both columns'}
 
 
-def label_check(result: E2EResult) -> dict[str, Any]:
-    """Capacity-free labels against B0 labels (review R1-F3). Descriptive, synthetic."""
+def population_census(result: E2EResult) -> dict[str, Any]:
+    """The labels audit's population census on this example (``scoring.labels``): ALL_CANDIDATES,
+    TECHNICALLY_ELIGIBLE (the scoring's target), LABELABLE (reference static-exit label) and EXECUTABLE (the replay's
+    fills), with the exclusion table. Descriptive, synthetic. Not part of the default report (integration)."""
+    candidates, bars = result.book.candidates, result.market.bars
+    make_gate = gate_factory(CostScenario.BASE, AdaptivePolicyV1().guard_params)
+    data_end_ms = T0_MS + N_BARS * HOUR_MS
+    eligibility = {c.candidate_id: ref_labels.technical_eligibility(c, bars, make_gate, quote_ccy=QUOTE_CCY,
+                                                                   data_end_ms=data_end_ms) for c in candidates}
+    census = ref_labels.population_census(
+        candidates, eligibility=eligibility, reference=ref_labels.reference_labels(candidates, bars),
+        executability=result.labels, pre_candidate_refusals=[r.reasons for r in result.data_refusals])
+    return census.to_report()
+
+
+def label_check(result: E2EResult, *, census: bool = False) -> dict[str, Any]:
+    """Capacity-free labels against B0 labels (review R1-F3). Descriptive, synthetic. With ``census`` (integration,
+    labels audit change request) the population census is added under ``population_census``; the default output,
+    which the report and its tests pin, is unchanged."""
     labels = result.labels
     if not labels:
         return {'status': 'not_computed'}
@@ -590,6 +608,8 @@ def label_check(result: E2EResult) -> dict[str, Any]:
                                               procedure=E2E_PLAN.test_procedure, resamples=E2E_PLAN.resamples)
         out['rank_ic_blocks'] = {'capacity_free': rank['n'], 'b0_labels': b0_rank['n']}
         out['b0_unlabelled'] = scoring_checks.abstention(b0_rows)['unlabelled']
+    if census:
+        out['population_census'] = population_census(result)
     return out
 
 

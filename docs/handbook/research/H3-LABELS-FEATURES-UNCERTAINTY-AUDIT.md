@@ -14,7 +14,7 @@ Code: `scoring/labels.py`, `scoring/uncertainty.py`, `scoring/catalogue_v2.py` (
 | Question | Answer |
 |---|---|
 | Are the 149 capacity-free labels representative of the evaluated candidates? | **No.** All 124 unlabelled candidates are refused at the entry collar, and that refusal depends on the price path after the decision. Removing the portfolio removed the capacity selection, not the outcome selection. |
-| Target population of the scoring | `TECHNICALLY_ELIGIBLE`: every candidate that passes the checks decidable at T, in a fresh 500-USDT portfolio. |
+| Target population of the scoring | `TECHNICALLY_ELIGIBLE`: every candidate that passes the checks decidable at T, in a fresh 500-USDT portfolio. Integration: `Population` is the V2 contracts' enum, and `ExperimentManifestV2` refuses `EXECUTABLE` as target; the census is available as `e2e.label_check(result, census=True)`. |
 | Proposed label | `h3.reference_static_exit_label/1`: a gross static-exit outcome at the reference price, independent of executability. In the example it labels 261 of the 261 eligible candidates. |
 | `xs_rel_ret_lb` | Not banned automatically, but not freezable. It is the cross-sectional momentum formation signal at a 24 h lookback; used with a negative weight, it is a residual reversal (H2). The decision stays `PENDING` until a source is bound. The default is to exclude it unless it is justified for that source and passes label-free independence checks. |
 | `uncertainty` (V1) | A heuristic, `1/(1+|t|)`. It is not calibrated and it is most confident on the most extreme predictions. It is kept as is in V1, and an explicit multi-component report is added next to it. |

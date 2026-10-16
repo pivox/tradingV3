@@ -35,6 +35,9 @@ Code: `python-orchestrator/scripts/research_h3/validation/abstention.py`.
 - `portfolio_activity`, `compare_b1_to_controls`, `randomisation_p`, `block_excess_series`, `block_excess_test`:
   the comparisons.
 - `h3a_status`: the DRAFT H3-A reading. It never returns "validated" or "profitable".
+- `spec_to_v2`, `budget_to_v2`, `spec_from_v2`, `budget_from_v2` (integration): the shared interface as D's V2
+  contracts, same fingerprints both ways. Strata keys and seeds are pre-registered sorted (the key order fixes the
+  stratum labels).
 
 On the wire, the V1 `Variant` enum is frozen, so BR runs as an unscored portfolio (`Variant.B0` at the gate, which
 refuses a score for it) under its own portfolio id `<experiment>-BR-<control>-s<seed>`. The label `BR` lives in

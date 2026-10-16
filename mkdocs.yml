@@ -162,6 +162,12 @@ nav:
           - "CS-FUND — portage de funding couvert (DRAFT, non gelé)": research/H3-CS-FUND-DRAFT-PREREGISTRATION.md
           - "CS-UNLOCK — déblocages de tokens (DRAFT, non gelé)": research/H3-CS-UNLOCK-DRAFT-PREREGISTRATION.md
           - "CS-XMOM — momentum transversal (DRAFT, non gelé)": research/H3-CS-XMOM-DRAFT-PREREGISTRATION.md
+      - "H3-A — scoring testability":
+          - "Candidate-source qualification (A)": research/H3-CANDIDATE-SOURCE-QUALIFICATION.md
+          - "Scoring vs abstention: matched random controls (B)": research/H3-SCORING-ABSTENTION-CONTROLS.md
+          - "H3-A statistical validation (DRAFT, not frozen) (B, integrated)": research/H3-A-STATISTICAL-VALIDATION-DRAFT.md
+          - "Labels, features and uncertainty audit (C)": research/H3-LABELS-FEATURES-UNCERTAINTY-AUDIT.md
+          - "Contracts V2 design (D)": research/H3-CONTRACTS-V2-DESIGN.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 
