@@ -18,6 +18,23 @@ Two label units are returned, because the components use two conventions (H3-ARC
 ``net_r`` is the net PnL over the trade's nominal cost-inclusive risk fixed at admission (C's ``r_multiple``), and
 ``gross_r`` is the gross PnL over the gross stop distance at the reference price (A's training label).
 
+Audit additions (H3-A testability, agent C; additive, the existing fields and the ``traded`` rule are unchanged so
+the e2e numbers 273 / 149 / 124 stay reproducible):
+
+- ``horizon_covered``: False when the trade was closed by the end of the replay window (``end_of_data``) instead of
+  its own exit rule, i.e. a truncated label. Such a label must not be used as a full-horizon outcome;
+- ``price_path_gaps``: number of missing bars inside the replay window (the simulator cannot evaluate a stop in a
+  missing bar; the next open then acts as a gap). A label with gaps is flagged, not silently trusted;
+- ``net_gross_r``: net PnL over the GROSS stop distance at the reference (units x |reference - stop|), the unit of the
+  scorer's ``expected_net_r``. ``net_r`` (over the cost-inclusive nominal risk) is about 20 % smaller in magnitude
+  with the e2e costs (mean ratio 0.81 on the synthetic example), so calibration checks of ``expected_net_r`` must use ``net_gross_r``, never ``net_r``.
+
+Labels from this replay are EXECUTABILITY-CONDITIONED: a candidate is labelled only when its fill happens, and with
+the one-sided collar a fill depends on the price move between the reference and the fill bar (a long is refused when
+the price rose by more than the collar). They are therefore not representative of the technically eligible
+candidates the scorer is applied to; ``scoring.labels`` defines the target population and a reference label that does
+not depend on executability (``H3-LABELS-FEATURES-UNCERTAINTY-AUDIT.md``).
+
 What it does not fix. The execution-timing convention (an entry fills at the first open after the decision, one bar
 after its reference price with a latency > 0) applies to the labels exactly as to the portfolio runs; it remains a
 documented blocker (reviews R1-F6 and R2-F5).
@@ -51,6 +68,9 @@ class CandidateLabel:
     stopped: bool | None
     exit_reason: str | None
     refusal_reasons: tuple[str, ...]
+    horizon_covered: bool | None = None      # audit addition: False = truncated by the end of the replay window
+    price_path_gaps: int = 0                 # audit addition: missing bars inside the replay window
+    net_gross_r: Decimal | None = None       # audit addition: net PnL / gross stop distance (expected_net_r's unit)
 
 
 def _window(bars: Sequence[Bar], candidate: OpportunityCandidate) -> list[Bar]:
@@ -62,6 +82,15 @@ def _window(bars: Sequence[Bar], candidate: OpportunityCandidate) -> list[Bar]:
     interval = rows[first].interval_ms
     horizon = decision + candidate.max_holding_ms + 2 * interval
     return [b for b in rows[first:] if b.open_ms <= horizon]
+
+
+def _gaps(window: Sequence[Bar]) -> int:
+    """Missing bars between consecutive bars of the window (bars are assumed to share one interval)."""
+    missing = 0
+    for a, b in zip(window, window[1:]):
+        if b.open_ms > a.close_ms:
+            missing += (b.open_ms - a.close_ms) // a.interval_ms
+    return missing
 
 
 def capacity_free_labels(candidates: Sequence[OpportunityCandidate], bars: Sequence[Bar], *,
@@ -96,21 +125,31 @@ def capacity_free_labels(candidates: Sequence[OpportunityCandidate], bars: Seque
             distance = abs(candidate.entry_reference_price - candidate.initial_stop_price) * units
             labels[candidate.candidate_id] = CandidateLabel(
                 candidate.candidate_id, decision, True, trade.realized_r, trade.gross_pnl / distance,
-                trade.exit_reason in STOP_REASONS, trade.exit_reason, ())
+                trade.exit_reason in STOP_REASONS, trade.exit_reason, (),
+                horizon_covered=trade.exit_reason != 'end_of_data', price_path_gaps=_gaps(window),
+                net_gross_r=trade.net_pnl / distance)
         else:
             reasons = tuple(dict.fromkeys(r for refusal in result.refusals for r in refusal.reasons))
             labels[candidate.candidate_id] = CandidateLabel(candidate.candidate_id, decision, False, None, None,
-                                                            None, None, reasons or ('not_traded',))
+                                                            None, None, reasons or ('not_traded',),
+                                                            price_path_gaps=_gaps(window))
     return labels
 
 
-def label_mapping(labels: Mapping[str, CandidateLabel], unit: str = 'net_r') -> dict[str, tuple[float | None,
-                                                                                                 bool | None]]:
-    """``{candidate_id: (realised R, stopped)}`` for ``validation.scoring_checks.join_scores_labels``."""
-    if unit not in ('net_r', 'gross_r'):
+def label_mapping(labels: Mapping[str, CandidateLabel], unit: str = 'net_r', *,
+                  full_horizon_only: bool = False) -> dict[str, tuple[float | None, bool | None]]:
+    """``{candidate_id: (realised R, stopped)}`` for ``validation.scoring_checks.join_scores_labels``.
+
+    ``unit``: ``net_r`` (default, unchanged), ``gross_r``, or ``net_gross_r`` (the unit of ``expected_net_r``; use it
+    for calibration checks). With ``full_horizon_only`` a truncated label (``horizon_covered`` False) or a label
+    with missing bars maps to (None, None)."""
+    if unit not in ('net_r', 'gross_r', 'net_gross_r'):
         raise ContractError('h3_label_unit_unknown')
     out: dict[str, tuple[float | None, bool | None]] = {}
     for cid, label in labels.items():
         value = getattr(label, unit)
+        if full_horizon_only and (label.horizon_covered is False or label.price_path_gaps):
+            out[cid] = (None, None)
+            continue
         out[cid] = (None if value is None else float(value), label.stopped)
     return out
