@@ -104,3 +104,91 @@ as the H3-A holdout?**
 
 Nothing has been launched: no capture, no collection, no training, no backtest, no order, no change to `fwd-okx-r1`,
 Temporal, systemd, docker or production configuration. The owner decides.
+
+## 6. Owner decision 2026-10-16 and re-assessment (appended 2026-10-16; sections 1-5 above are unchanged history)
+
+**Decision recorded.** The owner gave a **limited GO** for the documentary preparation of US-equity history of the
+X-Perp underlyings: registry rows, a DRAFT amendment and a research plan. The GO excludes every return read,
+collection, paid acquisition, calibration, optimisation, historical simulation and trading operation. The verbatim
+text is in [H3-A-CS-EARN-DATA-AMENDMENT-DRAFT.md](H3-A-CS-EARN-DATA-AMENDMENT-DRAFT.md) §0.
+
+**Done under it:**
+
+- Three registry rows were added. Nothing is acquired, and the code refuses every use.
+  - `us-equity-underlying-history` (`potential_not_acquired`);
+  - `us-equity-underlying-evaluation-window` (`reserved`, mechanism evaluation, explicitly not X-Perp validation);
+  - `edgar-filing-metadata` (`potential_not_acquired`).
+- The DRAFT amendment covers four things:
+  - the licence review;
+  - EDGAR timestamps;
+  - a rule-based point-in-time universe;
+  - the windows. Development runs 2007-01-01 → 2019-03-31, the embargo one quarter, and the evaluation window
+    2019-07-01 → 2025-12-31, reserved.
+- It also sets anti-lookahead rules, the equity label, the transferability limits, an M4 assessment and a power note.
+
+**Re-assessment, on prerequisites actually satisfied, not on the authorisation (owner item 6).**
+
+| Prerequisite | State after this step |
+|---|---|
+| A defensible economic source (M4 after T, QR-3) | **Not satisfied: M4 FAIL as specified** (amendment §10). No venue mechanism acts after T. The large-cap evidence is negative or contested. The side rule mirrors the closed H2. |
+| M1 TradFi X-Perp access and API; M2 liquidity, InstrumentSpec, fees and funding | Not satisfied (unchanged) |
+| Licence of a point-in-time equity source | **Not satisfied.** No acceptable free source. The survivorship-free sources are paid or institutional. No paid acquisition is authorised. |
+| Training data (QR-2) | Not satisfied. The data is registered as potential, not acquired; the amendment is not frozen. |
+| Power at a reasonable horizon (QR-1) | **Not satisfied, and not changed by equity history** (amendment §11): primary 0.155 / 0.23 at 2 / 4 years; A1 about 4.7 years and A2 about 20 years to reach 0.8 at IC 0.15 |
+| Execution-timing rule, A1 statistic, BR on score status, CS-EARN feature catalogue, ledger anchor, harness migration | Not satisfied (unchanged) |
+| Collection approval (EDGAR metadata; prospective X-Perp capture) | Not given |
+
+**Status: `SCORING_UNTESTABLE`, unchanged.** No prerequisite in the table moved to satisfied. The new M4 assessment
+weakens the only remaining source further.
+
+**Remaining owner decisions** (detail in the amendment §12):
+
+- **D-1.** Given M4 FAIL as specified:
+  - (a) stop CS-EARN;
+  - (b) keep the frozen, development-only E-M4 equity check as the only route to CONDITIONAL, with a negative prior;
+  - (c) a new, separately declared hypothesis.
+- **D-2.** A paid data acquisition: vendor and budget.
+- **D-3.** The window and universe rules.
+- **D-4.** The crypto-coupled stratum.
+- **D-5.** EDGAR metadata collection under fair access.
+- **D-6.** The timing rule: acceptance time vs release time.
+- **D-7.** Freeze the amendment and E-M4 before any read.
+- **D-8.** M1/M2 and the minimum useful IC with an accepted horizon (unchanged).
+
+Nothing was launched.
+
+## 7. Owner decision 2026-10-16: `CS_EARN_M4_FAIL_CLOSED`
+
+The owner closes CS-EARN as currently formulated. His reasons:
+
+- the economic mechanism is not defensible enough after T;
+- statistical power is insufficient at a reasonable horizon;
+- buying historical data is not justified.
+
+Decisions, as recorded:
+
+1. **Stop CS-EARN.** No purchase, download, training, backtest, EDGAR collection or protocol freeze.
+2. **Kept as scientific history:**
+   - the registry rows (all `potential_not_acquired` or `reserved`, and refused by `check_use`);
+   - the DRAFT amendment ([H3-A-CS-EARN-DATA-AMENDMENT-DRAFT.md](H3-A-CS-EARN-DATA-AMENDMENT-DRAFT.md));
+   - the licence analysis;
+   - the review results.
+3. **H3-A stays `SCORING_UNTESTABLE`** for every source examined so far: CS-FUND, CS-UNLOCK, CS-XMOM, CS-EARN,
+   CS-MACRO and CS-REOPEN.
+4. **Unchanged:** the H1 and H2 verdicts, and the reserved fwd-okx-r1 windows.
+5. **No new hypothesis is launched automatically.** The owner wants to examine later a new economic source of
+   opportunities with these properties:
+   - frequent enough to be validated in a reasonable time;
+   - on a product really accessible from France, with 500 USDT;
+   - independent of the closed H1, H2, CS-XMOM and CS-EARN.
+
+   That needs his separate GO.
+
+**Closure conditions, as they apply to any future use of CS-EARN-like ideas:**
+
+- A post-earnings source on equity X-Perps can only come back as a **new, separately declared hypothesis**. It must
+  carry:
+  - its own mechanism after T;
+  - its own power study;
+  - a declaration that CS-EARN, H2 and this record were seen.
+- The `us-equity-*` and `edgar-filing-metadata` registry rows stay non-readable until a new owner GO changes them.

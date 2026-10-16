@@ -14,7 +14,11 @@ Rules (``check_use``):
 - missing data cannot be used;
 - prospective data (collected on the target product after a freeze) is the only admissible confirmation;
 - possibly-independent data exist only off the target market (Binance, Hyperliquid, Kraken): at most development or
-  transferability statistics, never a confirmation of an OKX Europe X-Perp claim.
+  transferability statistics, never a confirmation of an OKX Europe X-Perp claim;
+- potential (not acquired) data, registered by the owner's limited GO of 2026-10-16 for the US-equity underlyings of
+  the X-Perps and EDGAR filing metadata, cannot be used at all until a licence is checked, a DRAFT amendment
+  (H3-A-CS-EARN-DATA-AMENDMENT-DRAFT.md) is frozen and the owner gives a go; the reserved US-equity evaluation window
+  is never read, and even then would evaluate the mechanism on equities, never validate an X-Perp strategy.
 Conclusion: ``independent_historical_validation()`` returns INDEPENDENT_DATA_NOT_AVAILABLE.
 
 Review R1-F7 (2026-10-16). The rules above are checked by dataset id only: ``Provenance`` carries no underlying and
@@ -46,6 +50,7 @@ class DatasetStatus(str, enum.Enum):
     POSSIBLY_INDEPENDENT = 'possibly_independent'
     MISSING = 'missing'
     PROSPECTIVE = 'prospective'
+    POTENTIAL_NOT_ACQUIRED = 'potential_not_acquired'   # registered by an owner decision; not acquired, not read
 
 
 class H3Use(str, enum.Enum):
@@ -54,6 +59,10 @@ class H3Use(str, enum.Enum):
     NEVER = 'never'
     NOT_AVAILABLE = 'not_available'
     PROSPECTIVE_CONFIRMATION = 'prospective_confirmation'
+    # Owner decision 2026-10-16 (limited GO), US-equity underlyings of the X-Perps. Neither value authorises a read
+    # today: both need a licence check, a FROZEN amendment and the owner's go, which this module cannot see.
+    DEVELOPMENT_AFTER_LICENCE_AND_FROZEN_AMENDMENT = 'development_after_licence_and_frozen_amendment'
+    MECHANISM_EVALUATION_OFF_TARGET_NOT_XPERP_VALIDATION = 'mechanism_evaluation_off_target_not_xperp_validation'
 
 
 class RegistryError(ValueError):
@@ -207,6 +216,43 @@ REGISTRY: tuple[DatasetEntry, ...] = (
                  'not observed by H1', DatasetStatus.MISSING, H3Use.NOT_AVAILABLE, 'n/a', (R + 'H1-DATA-MANIFEST.md',)),
 )
 
+US_EQUITY_MARKET = 'us_equity_underlying'
+US_EQUITY_HISTORY_EARLIEST = '2007-01-01'          # DRAFT, by rule (amendment section 5)
+US_EQUITY_DEVELOPMENT_END = '2019-03-31'           # DRAFT: development decision dates [2007-01-01, 2019-04-01)
+US_EQUITY_EMBARGO = '2019-04-01 to 2019-06-30'     # DRAFT: one calendar quarter, >= the 5-session holding
+US_EQUITY_EVALUATION_START = '2019-07-01'          # DRAFT: last third of the span, rounded to a quarter
+US_EQUITY_HISTORY_END = '2025-12-31'               # DRAFT: before the first equity X-Perp listing (2026-06)
+AMENDMENT_DOC = R + 'H3-A-CS-EARN-DATA-AMENDMENT-DRAFT.md'
+
+REGISTRY = REGISTRY + (
+    DatasetEntry('us-equity-underlying-history', US_EQUITY_MARKET,
+                 'daily OHLCV, split-adjusted and unadjusted, corporate actions, delisting prices, permanent ids',
+                 'rule-based US-domestic common-stock universe (amendment section 4), X-Perp underlyings a later '
+                 'subset', f'decision dates {US_EQUITY_HISTORY_EARLIEST} to {US_EQUITY_DEVELOPMENT_END} (DRAFT)',
+                 'nobody: not acquired, not read; owner limited GO 2026-10-16 registers it as potential development '
+                 'data only', DatasetStatus.POTENTIAL_NOT_ACQUIRED,
+                 H3Use.DEVELOPMENT_AFTER_LICENCE_AND_FROZEN_AMENDMENT,
+                 'no acceptable source chosen; free sources fail point-in-time or terms, survivorship-free ones are '
+                 'paid (amendment section 2)', (AMENDMENT_DOC, R + 'H3-A-NEXT-DECISION.md')),
+    DatasetEntry('us-equity-underlying-evaluation-window', US_EQUITY_MARKET,
+                 'same kind as us-equity-underlying-history', 'same rule-based universe',
+                 f'decision dates {US_EQUITY_EVALUATION_START} to {US_EQUITY_HISTORY_END} (DRAFT); embargo '
+                 f'{US_EQUITY_EMBARGO} belongs to neither window',
+                 'nobody: reserved, never read; at most one out-of-training evaluation of the MECHANISM on US '
+                 'equities after a frozen protocol and the owner\'s go, explicitly NOT an independent validation of '
+                 'the X-Perp strategy', DatasetStatus.RESERVED,
+                 H3Use.MECHANISM_EVALUATION_OFF_TARGET_NOT_XPERP_VALIDATION,
+                 'same as us-equity-underlying-history', (AMENDMENT_DOC,)),
+    DatasetEntry('edgar-filing-metadata', 'sec_edgar',
+                 'filing index metadata only: form type, 8-K item codes, acceptance date-time, filing date, CIK',
+                 '10-Q, 10-K, 8-K (Item 2.02) of the universe issuers',
+                 f'{US_EQUITY_HISTORY_EARLIEST} to {US_EQUITY_HISTORY_END} (DRAFT); prospective feed only under a '
+                 'separate collection approval', 'nobody: not collected, not read',
+                 DatasetStatus.POTENTIAL_NOT_ACQUIRED, H3Use.DEVELOPMENT_AFTER_LICENCE_AND_FROZEN_AMENDMENT,
+                 'SEC: public information, may be copied or further distributed (cite SEC); fair access max 10 '
+                 'requests/s, declared User-Agent', (AMENDMENT_DOC, R + 'H3-CANDIDATE-SOURCE-QUALIFICATION.md')),
+)
+
 _BY_ID = {e.dataset_id: e for e in REGISTRY}
 
 
@@ -226,6 +272,9 @@ def check_use(dataset_id: str, label: DataLabel, *, owner_consent: bool = False)
         raise RegistryError('registry_dataset_reserved')
     if e.status is DatasetStatus.MISSING:
         raise RegistryError('registry_dataset_missing')
+    if e.status is DatasetStatus.POTENTIAL_NOT_ACQUIRED:
+        # owner limited GO 2026-10-16: registry, amendment and plan only; no read, whatever the label or consent
+        raise RegistryError('registry_dataset_not_acquired')
     if e.status is DatasetStatus.PROSPECTIVE:
         if label is not DataLabel.PROSPECTIVE:
             raise RegistryError('registry_prospective_only')
