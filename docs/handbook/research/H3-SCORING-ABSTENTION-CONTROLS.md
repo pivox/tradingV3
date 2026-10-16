@@ -131,7 +131,7 @@ halves), and `b1_absolute` (B1 net > 0, not part of H3-A).
 | p7s correlated IC .10 | 0.223 | 0.420 | 0.245 | 0.378 | 0.215 | — | 0.417 | 0.362 | **0.130** | 0.285 |
 | p8 IC flip | 0.062 | 0.068 | 0.045 | 0.005 | 0.015 | — | 0.005 | 0.010 | **0.000** | 0.060 |
 | p9 between instruments | 0.455 | 0.650 | 0.455 | 0.570 | 0.443 | **0.052** | 0.718 | 0.598 | **0.390** | 0.535 |
-| p10 IC .15 on losing gen. | 0.640 | 0.662 | 0.417 | 0.605 | 0.343 | — | 0.652 | 0.542 | **0.275** | 0.107 |
+| p10 IC .15 on losing gen. | 0.640 | 0.662 | 0.417 | 0.605 | 0.343 | — | 0.652 | 0.542 | **0.280** | 0.107 |
 
 104 weeks, 150 panels (SE 0.018): H3-A primary at 0.007 (p1), 0.040 (p6) and 0.013 (p7) under the null, and power
 0.067 (p2), **0.553 (p3)** and 0.193 (p6s). Rank IC alone has power 0.927 in p3, with size 0.073 / 0.100 / 0.127
@@ -180,6 +180,26 @@ Readings:
 - The acceptance check has its own multiplicity: about a 6.5 % chance per method of one false size failure across
   6 null cells.
 - The fixed-instrument mechanism of reading 3 is a hypothesis.
+
+**Independent reviews (2026-10-16).**
+
+- Provenance (CTO-09): the B3 numbers come from agent B's commit 6622a0c3; the CTO reviewer reproduced cell
+  G3/p6/26 bit-identically at the integration commit cbff09de. The decision script `summarize_b3.py` was written
+  19 s after the results and is not in `PRE-RUN.sha256` (its logic matches rules 1-6); `run_b3.py` submits every cell
+  up front and only stops recording past the CPU budget (no cell exceeded it, 1148 CPU-s); `PRE-RUN.sha256` hashes
+  code by absolute path in another worktree. Any later study pre-hashes its decision script, submits cells lazily
+  against the budget and pins code by commit plus repository-relative paths.
+- Transcription (QR-13): the p10 primary rate is 0.28 in `b3-results.json`; the table above said 0.275 and is
+  corrected.
+- Coverage (QR-12, QR-13): B3's outcomes ignore side, its candidate rate has no seasonality, its universe is 6
+  fixed instruments, capacity barely binds and there is no eligibility or executability. The R1-F4 re-study must use
+  a CS-EARN-like process (seasonal, side-signed market factor, about 44 instruments with listing churn, stop-bounded
+  R with gaps, binding capacity, a non-scorable share) and include a capacity-binding hold and executability
+  confound cell, with an exposure-matched excess (net per risk-day) next to d_b. The quant reviewer's probe on such
+  a stream kept sizes acceptable but found the power far lower (H3-A-STATISTICAL-VALIDATION-DRAFT.md §6).
+- Budget validation (CTO-08): the harness `ActivityBudget` now refuses what its V2 mirror refuses (unknown or unsorted
+  keys, labels that are not the keys' labels, float or bool counts) instead of truncating; `budget_to_v2` takes the
+  B1 run fingerprint the V2 readiness check requires.
 
 ## 8. Answer
 

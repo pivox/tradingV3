@@ -47,8 +47,11 @@ GEN = v2.GeneratorRef(generator_id='gen-syn', generator_version='0.1.0', hypothe
                       generator_fingerprint=sha('gen-syn-params'))
 CAT = v2.FeatureCatalogueRef(catalogue_id='h3-features', catalogue_version='0.1.0',
                              catalogue_fingerprint=sha('catalogue'))
-LABEL = v2.LabelSpecRef(label_id='capacity-free-b0', label_version='0.1.0', unit=v2.LabelUnit.GROSS_R,
-                        label_fingerprint=sha('label-spec'))
+LABEL = v2.LabelSpecRef(label_id='reference-static-exit', label_version='0.1.0', unit=v2.LabelUnit.GROSS_R,
+                        label_fingerprint=sha('label-spec'), population=v2.Population.TECHNICALLY_ELIGIBLE)
+#: the capacity-free replay label: exists only where an order filled (independent review CTO-02)
+REPLAY_LABEL = v2.LabelSpecRef(label_id='capacity-free-b0', label_version='0.1.0', unit=v2.LabelUnit.GROSS_R,
+                               label_fingerprint=sha('replay-label-spec'), population=v2.Population.EXECUTABLE)
 NULL_MODEL = v2.ModelRefV2(model_id='h3-null', model_version='0.1.0', model_fingerprint=None,
                            calibration=c.CalibrationStatus.UNCALIBRATED, available_ms=None)
 CAL_MODEL = v2.ModelRefV2(model_id='h3-fixture', model_version='0.1.0', model_fingerprint=sha('fixture-model'),
@@ -277,6 +280,14 @@ def test_model_manifest_and_model_ref_migrations():
     with pytest.raises(m.MigrationError, match='migration_datasets_not_the_v1_datasets'):
         m.model_manifest_to_v2(v1, **{**kwargs, 'training_provenance': (
             provenance_v2('dev', c.DataLabel.DEVELOPMENT),)})
+    # independent review CTO-02: an outcome-selected (replay) label never trains or calibrates a model
+    with pytest.raises(c.ContractError, match='h3_model_label_population_outcome_selected'):
+        m.model_manifest_to_v2(v1, **{**kwargs, 'label_spec': REPLAY_LABEL})
+
+
+def test_experiment_refuses_an_outcome_selected_label():
+    with pytest.raises(c.ContractError, match='h3_experiment_label_population_outcome_selected'):
+        manifest(label_spec=REPLAY_LABEL)
 
 
 def test_v1_experiment_manifest_migrates_to_the_v2_factorial():
@@ -344,12 +355,31 @@ def test_label_replay_records_migrate_with_explicit_exit_time():
     cand = candidate_v2()
     traded = CandidateLabel('cand-1', T0, True, D('-1.1'), D('-1'), True, 'stop', ())
     with pytest.raises(m.MigrationError, match='migration_missing.available_ms'):
-        m.label_to_v2(traded, candidate=cand, label_spec=LABEL, available_ms=None)
-    label = m.label_to_v2(traded, candidate=cand, label_spec=LABEL, available_ms=T0 + 5 * H)
-    assert label.value == D('-1') and label.status is v2.LabelStatus.LABELLED   # gross R: LABEL unit
+        m.label_to_v2(traded, candidate=cand, label_spec=REPLAY_LABEL, available_ms=None)
+    label = m.label_to_v2(traded, candidate=cand, label_spec=REPLAY_LABEL, available_ms=T0 + 5 * H)
+    assert label.value == D('-1') and label.status is v2.LabelStatus.LABELLED   # gross R: REPLAY_LABEL unit
     refused = CandidateLabel('cand-1', T0, False, None, None, None, None, ('fill_beyond_collar',))
-    absent = m.label_to_v2(refused, candidate=cand, label_spec=LABEL, available_ms=None)
+    absent = m.label_to_v2(refused, candidate=cand, label_spec=REPLAY_LABEL, available_ms=None)
     assert absent.absence_reasons == ('fill_beyond_collar',)
+
+
+def test_replay_labels_are_executable_conditioned_and_never_labelled_when_truncated_or_gappy():
+    """Independent review CTO-02: a replay label can only carry an EXECUTABLE spec (which no calibrated model or
+    experiment accepts), and a truncated or gappy replay label is ABSENT, never a LABELLED value."""
+    from scripts.research_h3.integration.label_replay import CandidateLabel
+    cand = candidate_v2()
+    traded = CandidateLabel('cand-1', T0, True, D('-1.1'), D('-1'), True, 'stop', ())
+    with pytest.raises(m.MigrationError, match='migration_replay_label_is_executable_conditioned'):
+        m.label_to_v2(traded, candidate=cand, label_spec=LABEL, available_ms=T0 + 5 * H)
+    truncated = CandidateLabel('cand-1', T0, True, D('0.5'), D('0.4'), False, 'end_of_data', (),
+                               horizon_covered=False, price_path_gaps=3)
+    out = m.label_to_v2(truncated, candidate=cand, label_spec=REPLAY_LABEL, available_ms=T0 + 5 * H)
+    assert out.status is v2.LabelStatus.ABSENT and out.value is None
+    assert out.absence_reasons == ('label_horizon_not_covered', 'label_price_path_gap')
+    gappy = CandidateLabel('cand-1', T0, True, D('0.5'), D('0.4'), False, 'take', (), horizon_covered=True,
+                           price_path_gaps=1)
+    assert m.label_to_v2(gappy, candidate=cand, label_spec=REPLAY_LABEL,
+                         available_ms=T0 + 5 * H).absence_reasons == ('label_price_path_gap',)
 
 
 # ---------------------------------------------------------------------------------- random control and budget
@@ -488,12 +518,28 @@ def runs_for(man, *, scenario=v2.CostScenarioV2.BASE, budget=None, br_seeds=None
     return out
 
 
+def both_scenarios(man, *, budget):
+    return runs_for(man, budget=budget) + runs_for(man, budget=budget, scenario=v2.CostScenarioV2.PESSIMISTIC)
+
+
+B1_RUN_FP = sha('B1None')   # run_fingerprint of runs_for's B1 run
+
+
 def test_controlled_comparison_is_ready_only_with_every_preregistered_seed():
     man = manifest()
-    budget = v2.ActivityBudget.from_mapping('budget-1', {'*': (40, 12)})
-    assert v2.comparison_readiness(man, runs_for(man, budget=budget), budget) == ()
+    budget = v2.ActivityBudget.from_mapping('budget-1', {'*': (40, 12)}, source_run_fingerprint=B1_RUN_FP)
+    assert v2.comparison_readiness(man, both_scenarios(man, budget=budget), budget) == ()
+    # independent review CTO-04: a base-only (or pessimistic-only) run set is not a comparison
+    assert 'cost_scenario_missing' in v2.comparison_readiness(man, runs_for(man, budget=budget), budget)
     pess = runs_for(man, budget=budget, scenario=v2.CostScenarioV2.PESSIMISTIC)
-    assert v2.comparison_readiness(man, runs_for(man, budget=budget) + pess, budget) == ()
+    assert 'cost_scenario_missing' in v2.comparison_readiness(man, pess, budget)
+    # independent reviews QR-15 / CTO-03: the budget names the B1 run it was derived from
+    unbound = v2.ActivityBudget.from_mapping('budget-1', {'*': (40, 12)})
+    assert 'activity_budget_not_bound_to_b1_run' in v2.comparison_readiness(
+        man, both_scenarios(man, budget=unbound), unbound)
+    foreign = v2.ActivityBudget.from_mapping('budget-1', {'*': (40, 12)}, source_run_fingerprint=sha('other-b1'))
+    assert 'activity_budget_not_from_this_b1_run' in v2.comparison_readiness(
+        man, both_scenarios(man, budget=foreign), foreign)
     # publishing only the best control seed, or adding one, is refused
     assert 'control_seeds_not_exactly_preregistered' in v2.comparison_readiness(
         man, runs_for(man, budget=budget, br_seeds=(12,)), budget)

@@ -9,13 +9,20 @@ hundreds of configurations and publish only the best. This ledger makes every at
 - its RESULT is a later, separate entry that names the attempt by sequence and hash: status, and the result
   document when it is legally available (see below);
 - every entry is chained: ``entry_hash = sha256(canonical JSON of seq, prev_hash, kind, recorded_ms, body)``;
-  ``verify`` recomputes the chain and refuses any rewrite, truncation, reordering, insertion or foreign file;
+  ``verify`` recomputes the chain and refuses any edit inside it (a changed, reordered, inserted or foreign
+  line, or a truncated last line). It does NOT detect, on its own, a clean truncation back to an earlier entry, a
+  fork kept from an earlier head, or a ledger rewritten from scratch under the same id (independent review CTO-01):
+  only a writer that keeps its handle open notices those (``ledger_changed_on_disk``). Detecting them needs the head
+  anchored outside the file after every confirmatory attempt and result (open item, before any freeze);
 - a published result quotes a ``PublicationClaim`` (ledger head, attempt counts of its protocol);
   ``verify_publication`` checks the claim against the ledger, so a result cannot be published without disclosing
   how many attempts its protocol consumed.
 
 Rules on data labels (H3-DATA-ELIGIBILITY.md). SYNTHETIC and DEVELOPMENT attempts are free but counted. An attempt
-on VALIDATION, HOLDOUT or PROSPECTIVE data needs a FROZEN protocol and is allowed once per (protocol id, dataset id);
+on VALIDATION, HOLDOUT or PROSPECTIVE data needs a FROZEN protocol and is allowed once per (protocol id, dataset id)
+and once per dataset content (``dataset_sha256``) across every protocol, version and dataset id (review CTO-01): a
+dataset read as confirmatory can never be used again, under any label, and a dataset already used (any label) can
+never become confirmatory;
 its result can be COMPLETED or FAILED (technical, with a reason) but never ABANDONED, so a bad confirmatory read
 cannot be withdrawn. A COMPLETED result must carry its result document ("legally available" = the attempt's protocol
 allows the read; a DRAFT protocol can only have read synthetic or development data).
@@ -154,6 +161,8 @@ class _State:
         self.results: dict[str, Entry] = {}
         self.attempts_per_protocol: dict[str, int] = {}
         self.confirmatory_reads: set[tuple[str, str]] = set()
+        self.confirmatory_shas: set[str] = set()   # dataset contents read as confirmatory, any protocol (CTO-01)
+        self.used_shas: set[str] = set()           # dataset contents used by any attempt, any label
 
     @property
     def head(self) -> Entry | None:
@@ -226,6 +235,12 @@ class _State:
         number = self.attempts_per_protocol.get(protocol.protocol_id, 0) + 1
         if b['attempt_number'] != number:
             raise LedgerError('ledger_attempt_number_mismatch')
+        shas = {d['dataset_sha256'] for d in datasets if d['dataset_sha256'] is not None}
+        if shas & self.confirmatory_shas:
+            # a confirmatory dataset's content is spent, whatever its new id, label or protocol (review CTO-01)
+            raise LedgerError('ledger_confirmatory_data_already_read')
+        confirmatory_shas = {d['dataset_sha256'] for d in datasets
+                             if DataLabel(d['label']) in CONFIRMATORY and d['dataset_sha256'] is not None}
         if label in CONFIRMATORY:
             if protocol.status is not ProtocolStatus.FROZEN:
                 raise LedgerError('ledger_confirmatory_needs_frozen_protocol')
@@ -233,7 +248,11 @@ class _State:
                      if DataLabel(d['label']) in CONFIRMATORY}
             if reads & self.confirmatory_reads:
                 raise LedgerError('ledger_confirmatory_data_already_read')
+            if confirmatory_shas & self.used_shas:
+                raise LedgerError('ledger_confirmatory_data_already_used')
             self.confirmatory_reads |= reads
+            self.confirmatory_shas |= confirmatory_shas
+        self.used_shas |= shas
         self.attempts_per_protocol[protocol.protocol_id] = number
         self.attempts[trial_id] = entry
 

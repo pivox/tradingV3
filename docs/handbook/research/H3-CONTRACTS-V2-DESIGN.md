@@ -155,13 +155,24 @@ change.
 
 **Rules enforced on write and on `verify()`.**
 
-- Sequence, chain, entry hash and monotonic time must all hold. Any rewrite, truncation, reordering, deletion,
-  replay or non-canonical line is refused.
+- Sequence, chain, entry hash and monotonic time must all hold. An edit inside the chain (rewritten, reordered,
+  deleted-in-the-middle, replayed or non-canonical line, truncated last line) is refused. **Corrected after the
+  independent review (CTO-01):** `verify()` alone does NOT detect a clean truncation back to an earlier entry, a fork
+  kept from an earlier head, or a ledger rewritten from scratch under the same id (GENESIS has no nonce); only a
+  writer that keeps its handle open notices them (next bullet). Detecting them needs the head anchored outside the
+  file after every confirmatory attempt and result (a commit in the protocol repository or a copy held by the
+  owner), with `verify_publication` requiring the anchored head. A GENESIS nonce, a lock around append and a bound
+  on `recorded_ms` against wall-clock time are also open. All are prerequisites before any confirmatory use.
 - An attempt on VALIDATION, HOLDOUT or PROSPECTIVE data needs a FROZEN protocol. It is allowed once per (protocol id,
-  dataset id) and can never be `abandoned`, so a bad confirmatory read cannot be withdrawn.
+  dataset id) and, since the independent review (CTO-01), once per dataset content (`dataset_sha256`) across every
+  protocol, version and dataset id: a confirmatory dataset's content can never be used again under any label, and a
+  dataset already used (any label) can never become confirmatory (`ledger_confirmatory_data_already_used`). The
+  (underlying × window) overlap across datasets with different content still needs the registry (CR-V2-4). A
+  confirmatory attempt can never be `abandoned`, so a bad confirmatory read cannot be withdrawn.
 - A result needs an earlier attempt, and an attempt gets at most one result.
 - The writer re-verifies the file before each append and compares it with the chain it already knows. A clean
-  truncation, or a whole chain rewritten with recomputed hashes, is therefore detected (`ledger_changed_on_disk`).
+  truncation, or a whole chain rewritten with recomputed hashes, is therefore detected (`ledger_changed_on_disk`)
+  by that writer only; a fresh `TrialLedger.open()` accepts the truncated file.
 - The ledger only creates new files (`open(..., 'x')`) and only appends to files whose first line is its own GENESIS
   entry. It cannot write into an existing registry, and the tests write only under `tmp_path`.
 
@@ -222,7 +233,7 @@ Other tests check that:
 |---|---|---|
 | `H3Limits.per_trade_risk_max` 0.005 | `CanonicalRiskPolicy::$riskRate` (budget = equity × riskRate) | mapped |
 | `H3Limits.leverage_max` 1 | `CanonicalRiskPolicy::$modeLeverageCap`; `CanonicalRiskDecision::$finalLeverage` is `int`, `max(1, …)` | mapped (1x is expressible) |
-| `H3Limits.total_risk_max` 0.01 | No per-position open-risk sum. `CanonicalPortfolioPolicy` has `dailyLossRate`, `maxConcurrentPositions` and `modeExposureRate` | gap (H3-only rule, as in V1) |
+| `H3Limits.total_risk_max` 0.01 | `CanonicalPortfolioAdmissionEngine` refuses a candidate whose stop risk exceeds min(`dailyLossRate` × equity, `dailyLossAbsoluteQuote`) minus (realised + unrealised loss + `reservedRiskQuote`, the sum of active reservations' stop risk) | partially mapped (corrected after review CTO-05): an aggregate open-risk cap exists, stricter but semantically different (daily reset, realised and unrealised losses consume the same budget); parity test still needed |
 | `CostModelV2.maker/taker_fee_rate` | `CanonicalRiskPolicy::$makerFeeRate/$takerFeeRate` | mapped |
 | `CostModelV2.half_spread_rate` | `CanonicalCostSnapshot::$entrySpreadRate/$stopSpreadRate` | derived (same rate on both legs) |
 | `CostModelV2.slippage_rate` | `CanonicalCostSnapshot::$entrySlippageRate/$stopSlippageRate` | derived (same rate on both legs) |
@@ -298,6 +309,21 @@ data.
 `golden vectors: OK`.
 
 ## 10. Change requests and limits
+
+**Independent reviews (2026-10-16).** Applied in V2: `LabelSpecRef.population` (required); a CALIBRATED
+`ModelManifestV2` and an `ExperimentManifestV2` refuse a label spec whose population is `EXECUTABLE`
+(`h3_model_label_population_outcome_selected`, `h3_experiment_label_population_outcome_selected`);
+`migrate_v1_v2.label_to_v2` accepts only an `EXECUTABLE` spec for replay labels and returns ABSENT
+(`label_horizon_not_covered`, `label_price_path_gap`) for a truncated or gappy one (CTO-02).
+`comparison_readiness` requires both cost scenarios (`cost_scenario_missing`, CTO-04) and an `ActivityBudget` bound to
+the BASE-cost B1 run it came from (`source_run_fingerprint`; `activity_budget_not_bound_to_b1_run`,
+`activity_budget_not_from_this_b1_run`; QR-15, CTO-03). The trial ledger keys confirmatory-once on the dataset
+content (CTO-01). Reported, not fixed: the abstention module and V2 still use different fingerprint schemes for the
+same spec and budget (reports quote the abstention one), and the BR evidence that `compare.evaluate` accepts is a dict
+(CTO-03); both close with the harness migration (CR-V2-1, CR-V2-2). The 1 % total cap is an admission and fill-time
+cap against current equity: after admission, a mark-to-market drawdown can leave open risk slightly above 1 % of
+marked equity (about 1.003 % in the synthetic e2e; CTO-10). Whether a running cap is required is an owner decision,
+to include in the PHP parity test.
 
 **Integration (2026-10-16).** Applied: the strata whitelist is exactly `validation.abstention.STRATA_KEYS`
 (`decision_day`, `decision_ms`, `inst_id`, `score_status`, `side`; week, underlying and venue wait for the harness to

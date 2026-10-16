@@ -34,11 +34,21 @@ ranking on labels that depend neither on the portfolio's capacity nor on executa
 | Target population | `TECHNICALLY_ELIGIBLE` (`scoring.labels.TARGET_POPULATION`; `ExperimentManifestV2.target_population`) | The scorer is applied at T to every candidate that passes the checks decidable at T, before anything about its fill is known |
 | Ranking label | `h3.reference_static_exit_label/1`, gross R at the reference price (`scoring.labels.reference_label`) | Independent of capacity, collar and fill; outcome-independent exclusions only (missing bars, calendar horizon) |
 | Rows used by A1 | `LABELABLE` ⊂ `TECHNICALLY_ELIGIBLE`, accepted only if the census (`labels.population_census`, `e2e.label_check(census=True)`) shows no outcome-dependent exclusion at the label step | Otherwise the labelled rows do not represent the target |
-| Not usable for training or A1 | The capacity-free replay labels (`integration.label_replay`) | Executability-conditioned: in the synthetic example all 124 unlabelled candidates are `fill_beyond_collar`, an outcome-dependent selection |
+| Not usable for training or A1 | The capacity-free replay labels (`integration.label_replay`) | Executability-conditioned: in the synthetic example all 124 unlabelled candidates are `fill_beyond_collar`, an outcome-dependent selection. Enforced in code since the independent reviews (CTO-02): a replay label converts to V2 only with a `LabelSpecRef.population = EXECUTABLE`, which `ModelManifestV2` (CALIBRATED) and `ExperimentManifestV2` refuse; a truncated or gappy replay label is ABSENT |
 | Calibration unit | `net_reference_r` (reference label minus the engine's ex-ante `cost_r` and `funding_cost_r`; unit `net_gross_r`) | The unit of `expected_net_r`. Never `net_r`, which is about 0.81 × in magnitude on the example |
 
 Synthetic e2e census: 273 candidates, 261 technically eligible (12 fail the calendar horizon), 261 labelable, 142
 executable. This is a property of the synthetic example, not of any market.
+
+**Census limit (independent review QR-8, open).** The census classifies exclusions by category; it does not test
+them. Data-coverage exclusions (`price_path_gap`, `no_market_data_after_decision`) are not outcome-dependent by
+construction, yet gaps on thin off-hours X-Perps can be price-correlated. The report now counts them apart
+(`target_label_data_coverage_exclusions_untested`) and sets `target_label_outcome_independence_established` only when
+there are none. Before any freeze the label must become gap-tolerant (the simulator's "worse of stop and first
+available price") or an exclusion-balance test on ex-ante proxies (pre-T volatility, reaction size) must be
+pre-registered. In the synthetic e2e the first bar after T carries about 10 % of the reference label's variance
+(corr 0.32, reviewer's figure): under next-open fills the label must be re-anchored at the first executable price
+(execution-timing rule, R1-F6).
 
 **Rank statistic (integration note, open).** `scoring_checks.rank_ic_test` ranks by `utility` (net of the
 deterministic `cost_r`) when present. Against a net label, the cost term, known ex ante, sits in both the score and
@@ -46,6 +56,15 @@ the label and can produce a positive rank IC with no predictive information. The
 score's gross prediction (the engine's `gross_r` head, in its trace; equivalently `expected_net_r` + `cost_r` +
 `funding_cost_r`, since the V1 score does not carry it) against the gross reference label; a net-utility IC is reported only next to its cost-only
 baseline (the IC of `-cost_r` alone). To be fixed in the protocol before any freeze (integration blocker table).
+
+**A1 exists as three statistics (independent review QR-4, open).** The code (`scoring_checks.rank_ic_test`) averages
+a Spearman per decision instant and drops instants with fewer than 3 candidates; the synthetic study B3 simulated a
+per-week pooled Spearman; this section describes a gross-head IC on the reference label. On a sparse source almost no
+instant has 3 candidates (B3 stream: P about 0.001), and on a CS-EARN-like stream the coded statistic has power
+0.245 / 0.375 at 2 / 4 years against 0.49 / 0.745 for the pooled one (reviewer probe, reproduced). The only
+implemented A1 path (`e2e.label_check`) still runs on replay labels. Before any freeze: one A1 function (gross head
+vs reference gross label, pooled per block, within-instrument demeaning or instrument clustering, declared minimum
+candidates per block), the e2e path switched to it, and the power study re-run on that function.
 
 ## 3. Primary criterion (DRAFT)
 
@@ -59,7 +78,12 @@ if all three hold on the confirmation sample:
 | A3 stability guard | mean block IC > 0 in each chronological half | rule, no test |
 
 A1 AND A2 is an intersection-union test: level alpha if each component has level alpha. A3 can only remove a
-rejection.
+rejection. **Caveat (independent review QR-6):** the level is set by the least-favourable null, where one component's
+null holds and the other's alternative holds. B3 measured the primary only where both nulls hold at once. A1 alone is
+above 0.075 at 104 weeks in dependent nulls, and a cost-aware utility makes A2's alternative true for free (a score
+whose gross head is noise still ranks by `-cost_r`). In that configuration the primary's size is A1's (about
+0.10-0.13). Each component's size must be validated on its own at the planned horizon and universe, and A2 measured
+against a cost-only control (B1 with a constant gross head) or on gross PnL.
 
 Why two components: A1 alone can be positive while the score carries no money (the ranking lives where the policy
 never trades, or the gain is smaller than the costs it changes); A2 alone can be positive from timing between strata
@@ -70,12 +94,19 @@ costs, capacity and executability enter there, never in A1's label.
 What the primary does NOT include: B1 or B3 net profitability (absolute performance) and B1 - B0. Both are reported
 (secondaries, §4); neither can support H3-A.
 
-**In code (integration).** `compare.evaluate(..., random_control=compare_b1_to_controls(...))` accepts the A2
-comparison as H3-A attribution evidence and reports it under `h3a_random_control`. Its H3-A reading says whether
-abstention is excluded (`rejects_null_beyond_random_abstention_criterion_not_frozen` or
-`rejects_null_abstention_not_excluded`); it can never say `supported`, because A1 lives outside the factorial
-comparison, the criterion is not frozen and the H3-A alpha is not allocated
-(`compare.H3A_BLOCKERS_WITH_RANDOM_CONTROL`).
+**In code (integration, amended after the independent reviews).** `compare.evaluate(...,
+random_control=compare_b1_to_controls(...))` accepts the A2 comparison as H3-A attribution evidence and reports it
+under `h3a_random_control`. Its reading is A2 only, independent of the B3 primary and of S1 = B1 - B0 (review QR-5):
+`a2_rejects_null_beyond_random_abstention_criterion_not_frozen` or `a2_does_not_reject_abstention_not_excluded`. It
+can never say `supported`, because A1 lives outside the factorial comparison, the criterion is not frozen and the
+H3-A alpha is not allocated (`compare.H3A_BLOCKERS_WITH_RANDOM_CONTROL`). The block is pinned (reviews QR-10,
+CTO-03): valid spec whose fingerprint matches, every pre-registered seed run once, stratified by `decision_day`, and
+the plan's alpha, procedure and block length. A hand-made dict can still pass if it is internally consistent: binding
+the evidence to the BR runs (typed result, control pre-registered in `ExperimentManifestV2`, `comparison_readiness`
+gating the call) is part of the harness migration. The authoritative H3-A reader is `abstention.h3a_status`; it
+returns `h3a_unstable_ranking` when both components reject without the stability guard, and
+`h3a_non_rejection_underpowered` for any non-rejection reading unless `powered=True` (pre-registered power >= 0.8 at
+the owner's minimum IC).
 
 ## 4. Secondaries (descriptive unless frozen into a family)
 
@@ -93,6 +124,9 @@ comparison, the criterion is not frozen and the H3-A alpha is not allocated
 
 Multiplicity: the primary is one intersection-union test (no correction needed). The secondaries 1-4 form one Holm
 family at alpha 0.05 if the owner wants any of them confirmatory; otherwise they are exploratory and labelled so.
+With K = 19 the smallest randomisation p is 1/(K+1) = 0.05, so in a Holm family of four its smallest adjusted p is
+0.20 and secondary 1 could never reject (review QR-11): K = 99 whenever a randomisation p enters a confirmatory
+family (K >= 79 for four tests at 0.05), or only the block test is used there.
 H3-A's alpha is separate from H3-B's and from the B3 economic gate (owner decision R1-F2: graphical or fallback
 procedure, or Holm over {H3-A primary, H3-B primary, B3 vs cash}).
 
@@ -102,8 +136,8 @@ procedure, or Holm over {H3-A primary, H3-B primary, B3 vs cash}).
   series, never on candidates as if independent.
 - Procedure: the same choice as for the B3 primary (`sn_gaussian` or `batch_t`); neither is validated (both exceed
   the size limit under strong clustering until about 104 blocks). The B3 study adds its own size numbers for A1 and
-  A2 (companion §6). The primary stays at or below 0.04 under every synthetic null tried, but its components drift
-  upward at 104 weeks (rank IC 0.10-0.13 in the dependent and correlated nulls).
+  A2 (companion §6). The components drift upward at 104 weeks (rank IC 0.10-0.13 in the dependent and correlated
+  nulls); the primary's low size in the nulls where both components are null is not a guarantee (§3 caveat, QR-6).
 - Instrument as a cluster: with a small fixed universe, a chance correlation between instrument-level score and
   outcome effects is constant over the sample, and time blocks do not cover it (hypothesis, companion §6 reading 3).
   Candidate remedies to pre-register: within-instrument IC, inference clustered by instrument, a larger universe.
@@ -160,6 +194,22 @@ at rho = 0.15 and a = 0.3 needs 2.4-2.9 years of candidates analytically, about 
 capacity. CS-UNLOCK (at most about 60 a year) is out of reach at any useful IC (agent A, §2.2). These are
 upper-end frequencies (every event a technically eligible candidate); the eligible share is UNKNOWN.
 
+**Horizon of the full primary on a CS-EARN-like stream (independent review QR-1, synthetic, reproduced).** The
+figures above are for A1 alone without season clustering or capacity. The quant reviewer pre-registered a probe
+(176 events a year bunched in reporting weeks, a side-signed market factor, 5-session holds, 2 slots, K = 19, 200
+panels a cell) through the unchanged `abstention_sim.evaluate_panel`; the responder reproduced cell E15_104
+bit-identically. At rho = 0.15: primary A1∧A2∧A3 power 0.155 at 2 years and 0.23 at 4 years (0.17 at 4 years with
+rho = 0.10); A1 pooled per week 0.49 / 0.745; A2 (block, by day) 0.23 / 0.30, because B1 executes about 28 trades a
+year (53 % of its acceptances; the slots bind in season). Extrapolating noncentrality with sqrt(n): A1 reaches 0.8
+at about 4.7 years and A2 at about 20 years. Sizes in the matching null at 4 years stay acceptable (A1 0.075, A2
+0.055, primary 0.005).
+
+**Training is not in these horizons (review QR-2).** The engine scores only with a CALIBRATED model (otherwise
+UNESTIMATED, NO_TRADE, and B1 accepts nothing). Nothing may be fitted on prospective data (H3-DATA-ELIGIBILITY), the
+X-Perp history is consumed or quarantined and at most four months old, and underlying-stock history is not admitted.
+A learned scorer therefore needs either admitted development history, or a second prospective window (train, freeze,
+confirm: about twice the horizon), or a pre-specified non-fitted score tested by A1 only.
+
 ## 7. What would falsify H3-A (pre-declared)
 
 On a frozen protocol and an independent sample with enough effective information (§6 at the owner's minimum
@@ -170,6 +220,9 @@ effect):
   (`h3a_ranking_without_selection_value`);
 - the stability guard fails (IC sign differs between halves): no stable ranking;
 - B1 beats B0 but not BR: abstention only (`h3a_abstention_only_no_skill_shown`), never read as skill.
+
+Each of these non-rejection readings needs the non-rejecting component's pre-registered power to be at least 0.8 at
+the owner's minimum effect; otherwise the status is `h3a_non_rejection_underpowered` (review QR-10).
 
 If the available sample cannot reach the n_eff of §6 for the owner's minimum effect, H3-A is not falsifiable on it and
 the honest status is "untestable on this source", not "rejected" and not "supported".
@@ -186,5 +239,14 @@ the honest status is "untestable on this source", not "rejected" and not "suppor
 7. Whether the secondaries form a confirmatory Holm family.
 8. The execution-timing rule (R1-F6), which the reference label must follow as a new version, and the rank statistic
    of A1 (§2).
+9. The training data (review QR-2): admit underlying-stock history for development, or accept two prospective
+   windows, or restrict H3-A to a pre-specified score tested by A1 only.
+10. The BR stratification against non-scorable candidates (review QR-7): B1 can only accept ESTIMATED, in-support
+    candidates, while BR-day draws among all candidates of the day. A non-scorable share with a different mean
+    outcome (young listings with post-listing drift, early CS-EARN events) makes A2 reject without ranking skill.
+    DRAFT proposal: stratify the primary BR by (`decision_day`, `score_status`), or draw BR only among candidates B1
+    could accept, and add a "scorable" step to the census.
+11. The acceptance rule (review QR-14): for the H3-A test, a fixed pre-registered top-quantile rule, as in B3,
+    independent of the V1 heuristic uncertainty (whose `n_train` is declared, not effective).
 
 Thresholds are not fixed until a power study through the real mechanics (R1-F4) validates them.

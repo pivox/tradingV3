@@ -75,6 +75,8 @@ H3A_STATUSES = (
     'h3a_abstention_only_no_skill_shown',
     'h3a_not_supported',
     'h3a_insufficient_information',
+    'h3a_unstable_ranking',                  # independent review QR-10: both reject, stability guard fails
+    'h3a_non_rejection_underpowered',        # QR-10: a non-rejection read without the pre-registered power
 )
 
 
@@ -144,13 +146,26 @@ class ActivityBudget:
     fingerprint: str = field(default='')
 
     def __post_init__(self) -> None:
-        items = {str(k): (int(v[0]), int(v[1])) for k, v in sorted(dict(self.per_stratum).items())}
+        # independent review CTO-08: the same checks as the V2 mirror (key whitelist, sorted keys, label form,
+        # integer counts; a float or bool count is refused, never truncated)
+        object.__setattr__(self, 'strata_keys', tuple(self.strata_keys))
+        if any(k not in STRATA_KEYS for k in self.strata_keys) or len(set(self.strata_keys)) != len(self.strata_keys):
+            raise AbstentionError('abstention_stratum_key_not_known_at_decision')
+        if list(self.strata_keys) != sorted(self.strata_keys):
+            raise AbstentionError('abstention_strata_keys_not_sorted')
+        items: dict[str, tuple[int, int]] = {}
+        for k, v in sorted(dict(self.per_stratum).items()):
+            pair = tuple(v)
+            if len(pair) != 2 or any(isinstance(x, bool) or not isinstance(x, int) for x in pair):
+                raise AbstentionError('abstention_budget_counts_invalid')
+            if not isinstance(k, str) or not v2._label_matches_keys(k, self.strata_keys):
+                raise AbstentionError('abstention_budget_stratum_label_not_the_keys')
+            items[k] = (pair[0], pair[1])
         if any(n < 0 or a < 0 or a > n for n, a in items.values()):
             raise AbstentionError('abstention_budget_counts_invalid')
         if self.derived_from_variant != 'B1':
             raise AbstentionError('abstention_budget_not_from_b1')
         object.__setattr__(self, 'per_stratum', items)
-        object.__setattr__(self, 'strata_keys', tuple(self.strata_keys))
         expected = _fp({'budget_id': self.budget_id, 'strata_keys': list(self.strata_keys),
                         'per_stratum': {k: list(v) for k, v in items.items()},
                         'derived_from_variant': self.derived_from_variant})
@@ -185,12 +200,15 @@ def spec_from_v2(spec: v2.RandomControlSpec) -> RandomControlSpec:
                              seeds=spec.seeds, budget_source=spec.budget_source.value)
 
 
-def budget_to_v2(budget: ActivityBudget) -> v2.ActivityBudget:
+def budget_to_v2(budget: ActivityBudget, source_run_fingerprint: str | None = None) -> v2.ActivityBudget:
     """``contracts_v2.ActivityBudget``: the per-stratum mapping as sorted ``strata``, the same ``strata_keys``. Its
-    ``fingerprint()`` is the one ``VariantRunRef.activity_budget_fingerprint`` carries for a BR run."""
+    ``fingerprint()`` is the one ``VariantRunRef.activity_budget_fingerprint`` carries for a BR run.
+    ``source_run_fingerprint``: the BASE-cost B1 ``VariantRunRef.run_fingerprint`` the counts come from (required by
+    ``contracts_v2.comparison_readiness``; independent reviews QR-15, CTO-03)."""
     if budget.derived_from_variant != v2.VariantV2.B1.value:
         raise AbstentionError('abstention_budget_not_from_b1')
-    return v2.ActivityBudget.from_mapping(budget.budget_id, budget.per_stratum, budget.strata_keys)
+    return v2.ActivityBudget.from_mapping(budget.budget_id, budget.per_stratum, budget.strata_keys,
+                                          source_run_fingerprint=source_run_fingerprint)
 
 
 def budget_from_v2(budget: v2.ActivityBudget) -> ActivityBudget:
@@ -470,6 +488,8 @@ def compare_b1_to_controls(b1: VariantRun, controls: RandomControlResult, *, blo
             b1_act['net_per_risk_day'] if b1_act['net_per_risk_day'] is not None else -math.inf,
             [a['net_per_risk_day'] if a['net_per_risk_day'] is not None else -math.inf for a in acts]),
         'block_excess_test': block_excess_test(excess, alpha=alpha, procedure=procedure),
+        # independent reviews QR-10 / CTO-03: what compare.evaluate pins against the plan
+        'block_ms': block_ms, 'seeds_run': sorted(c.seed for c in controls.runs),
         'reading': ('beating BR says the selection is better than random abstention at the same activity in this '
                     'sample; it does not say the strategy earns money (see b1.net_pnl) and is not a validation'),
     }
@@ -481,15 +501,24 @@ def compare_b1_to_controls(b1: VariantRun, controls: RandomControlResult, *, blo
 # ------------------------------------------------------------------------------------------ H3-A DRAFT criterion
 
 def h3a_status(*, rank_ic_rejects: bool | None, br_excess_rejects: bool | None, b1_beats_b0: bool | None,
-               ic_halves_positive: bool | None) -> str:
+               ic_halves_positive: bool | None, powered: bool | None = None) -> str:
     """DRAFT H3-A reading (H3-A-STATISTICAL-VALIDATION-DRAFT.md): the primary needs BOTH a ranking test on
     capacity-free labels (rank IC > 0) AND a dependence-robust excess over the matched random-abstention control,
     plus the stability guard (mean IC > 0 in both halves). B1 beating B0 alone is abstention, never skill.
-    Absolute profitability is a separate question (H3-C) and is not part of this status."""
+    Absolute profitability is a separate question (H3-C) and is not part of this status.
+
+    Independent review QR-10: both components rejecting with the stability guard not met is
+    ``h3a_unstable_ranking`` (never "abstention only"); and every reading that rests on a NON-rejection needs
+    ``powered=True`` (the pre-registered power of the non-rejecting component is >= 0.8 at the owner's minimum
+    useful IC, DRAFT section 7), otherwise ``h3a_non_rejection_underpowered``. This is the authoritative H3-A
+    reader; ``compare.evaluate`` only reports the A2 evidence (review QR-5)."""
     if rank_ic_rejects is None or br_excess_rejects is None:
         return 'h3a_insufficient_information'
-    if rank_ic_rejects and br_excess_rejects and ic_halves_positive:
-        return 'h3a_ranking_and_selection_beyond_abstention_draft'
+    if rank_ic_rejects and br_excess_rejects:
+        return ('h3a_ranking_and_selection_beyond_abstention_draft' if ic_halves_positive
+                else 'h3a_unstable_ranking')
+    if powered is not True:
+        return 'h3a_non_rejection_underpowered'
     if rank_ic_rejects and not br_excess_rejects:
         return 'h3a_ranking_without_selection_value'
     if br_excess_rejects and not rank_ic_rejects:

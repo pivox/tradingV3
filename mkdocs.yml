@@ -168,6 +168,8 @@ nav:
           - "H3-A statistical validation (DRAFT, not frozen) (B, integrated)": research/H3-A-STATISTICAL-VALIDATION-DRAFT.md
           - "Labels, features and uncertainty audit (C)": research/H3-LABELS-FEATURES-UNCERTAINTY-AUDIT.md
           - "Contracts V2 design (D)": research/H3-CONTRACTS-V2-DESIGN.md
+          - "H3-A — independent reviews and responses": research/H3-A-INDEPENDENT-REVIEWS.md
+          - "H3-A — status and next decision (SCORING_UNTESTABLE)": research/H3-A-NEXT-DECISION.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 

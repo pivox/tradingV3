@@ -210,24 +210,47 @@ def guards(runs: Mapping[Variant, VariantRun], plan: StatisticalPlan, delta: Seq
     return out
 
 
-def check_random_control(random_control: Mapping[str, Any], b1: VariantRun) -> dict:
+def check_random_control(random_control: Mapping[str, Any], b1: VariantRun, plan: StatisticalPlan) -> dict:
     """The H3-A attribution evidence block from ``abstention.compare_b1_to_controls``: it must describe THIS B1 run
-    (same net PnL and trade count) and carry its block-excess test; BR's own label is ``BR``, never a V1 variant."""
+    (same net PnL and trade count) and carry its block-excess test; BR's own label is ``BR``, never a V1 variant.
+
+    Independent reviews QR-10 / CTO-03: the block is also pinned to the plan and to the DRAFT primary control. Its
+    control is a valid shared-interface spec whose fingerprint is the one quoted, stratified by ``decision_day``
+    (H3-PREREGISTRATION-DRAFT.md section 12.1; a global budget is oversized under dependence), every pre-registered
+    seed was run exactly once, and the test used the plan's alpha, procedure and block length. A dict can still be
+    forged by hand: binding it to the BR runs themselves (typed result, pre-registered control in the manifest,
+    ``contracts_v2.comparison_readiness`` gating this call) is the harness migration, an open blocker."""
+    from .abstention import AbstentionError, RandomControlSpec   # local: abstention imports factorial, not compare
     try:
         control, test, b1_act = random_control['control'], random_control['block_excess_test'], random_control['b1']
         identity = (b1_act['net_pnl'], b1_act['trades_executed'])
         rejected = test['rejected']
-    except (KeyError, TypeError) as exc:
+        spec = RandomControlSpec(control['control_id'], control['method'], tuple(control['strata_keys']),
+                                 tuple(control['seeds']), control['budget_source'])
+        seeds_run, block_ms = random_control['seeds_run'], random_control['block_ms']
+        alpha, procedure = test['alpha'], test['procedure']
+    except (KeyError, TypeError, AbstentionError) as exc:
         raise CompareError('compare_random_control_incomplete') from exc
     if identity != (float(b1.net_pnl), len(b1.trades)):
         raise CompareError('compare_random_control_not_this_b1')
-    if not isinstance(rejected, bool) or not control.get('seeds'):
+    if not isinstance(rejected, bool):
         raise CompareError('compare_random_control_incomplete')
+    if random_control.get('control_fingerprint') != spec.fingerprint():
+        raise CompareError('compare_random_control_fingerprint_mismatch')
+    if list(seeds_run) != list(spec.seeds):
+        raise CompareError('compare_random_control_seeds_not_all_run_once')
+    if spec.method != 'stratified' or 'decision_day' not in spec.strata_keys:
+        raise CompareError('compare_random_control_not_the_draft_primary_control')
+    if (alpha, procedure, block_ms) != (plan.alpha_primary, plan.test_procedure, plan.block_ms):
+        raise CompareError('compare_random_control_not_the_plan')
     return {'control': dict(control), 'control_fingerprint': random_control.get('control_fingerprint'),
             'budget': random_control.get('budget'), 'block_excess_test': dict(test),
             'p_net_pnl_vs_br': random_control.get('p_net_pnl_vs_br'), 'excess_over_br_rejects_null': rejected,
+            'a1_rank_ic': 'not_part_of_this_report_read_with_abstention.h3a_status',
+            's1_b1_minus_b0': 'descriptive_only_abstention_confounded',
             'reading': 'A2 component of the DRAFT H3-A criterion (selection beyond random abstention at the same '
-                       'activity); not a profit, not a validation, never H3-A supported on its own'}
+                       'activity); not a profit, not a validation, never H3-A supported on its own; read '
+                       'independently of the B3 primary and of S1 (review QR-5)'}
 
 
 def evidence_label(manifest: ExperimentManifest | None, plan: StatisticalPlan) -> str:
@@ -250,7 +273,7 @@ def evaluate(runs: Mapping[Variant, VariantRun], plan: StatisticalPlan, *,
     """The full pre-declared analysis of one B0-B3 experiment. Base-cost runs in ``runs``. ``random_control``:
     optional matched BR comparison of B1 (``abstention.compare_b1_to_controls``), H3-A attribution evidence."""
     check_factorial(runs)
-    h3a_control = None if random_control is None else check_random_control(random_control, runs[Variant.B1])
+    h3a_control = None if random_control is None else check_random_control(random_control, runs[Variant.B1], plan)
     blockers = dict(ATTRIBUTION_BLOCKERS)
     if h3a_control is not None:
         blockers['H3-A_scoring'] = H3A_BLOCKERS_WITH_RANDOM_CONTROL
@@ -293,14 +316,15 @@ def evaluate(runs: Mapping[Variant, VariantRun], plan: StatisticalPlan, *,
             test['status'] = 'secondary_rejects_null' if rejects else 'secondary_does_not_reject_null'
 
     def supported(hypothesis: str, *keys: str) -> str:
+        if hypothesis == 'H3-A_scoring' and h3a_control is not None:
+            # matched BR evidence (A2): read on its own, never gated behind the B3 primary or the
+            # abstention-confounded S1 = B1 - B0 (DRAFT section 1; independent review QR-5); never 'supported'
+            return ('a2_rejects_null_beyond_random_abstention_criterion_not_frozen'
+                    if h3a_control['excess_over_br_rejects_null'] else 'a2_does_not_reject_abstention_not_excluded')
         if not confirmatory:
             return 'not_confirmatory'
         if not all(secondary_tests[k]['status'] == 'secondary_rejects_null' for k in keys):
             return 'not_supported'
-        if hypothesis == 'H3-A_scoring' and h3a_control is not None:
-            # matched BR evidence: says whether abstention is excluded, never 'supported' (DRAFT criterion, R1-F2)
-            return ('rejects_null_beyond_random_abstention_criterion_not_frozen'
-                    if h3a_control['excess_over_br_rejects_null'] else 'rejects_null_abstention_not_excluded')
         # every test rejects, but the effect is not attributable without matched controls (R1-F1)
         return 'rejects_null_attribution_not_identified' if blockers[hypothesis] else 'supported'
     interaction = [b3 - b2 - b1 + b0 for b3, b2, b1, b0 in zip(

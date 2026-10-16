@@ -187,9 +187,20 @@ The owner allowed at most three new sources. Each was screened against the close
 | Sufficient frequency | **Marginal.** 176–208 labelable a year. The rank-IC test needs 1.3–1.6 years at IC 0.15 and 3.0–3.5 years at IC 0.10 with DE = 1, or 2.0–2.4 and 4.5–5.3 years with DE = 1.5 (§1). The in-season clustering makes DE > 1 likely. |
 | Variability of features at T | Plausible from definitions, without data: reaction size in σ units, volume surprise, pre-event drift, same-day market move, whether the band was hit, announcement timing (before the open or after the close), funding, liquidity rank. |
 | Reproducible definition | Yes, given EDGAR timestamps and a fixed session calendar; one candidate per event. |
-| Labels computable in theory | Yes, by capacity-free replay on prospective X-Perp bars (A2). Bars inside the band and gaps at the reopen need the R1-F6 timing rule. |
+| Labels computable in theory | Yes, on prospective X-Perp bars (A2). Corrected after the independent review CTO-02: the training and A1 label is the reference static-exit label on the technically eligible population (H3-A-STATISTICAL-VALIDATION-DRAFT.md §2), not the capacity-free replay, which is executability-conditioned. Bars inside the band and gaps at the reopen need the R1-F6 timing rule. |
 | Relevant control | Yes. For scoring: BR at B1's acceptance share. For the source itself: matched non-event windows (same underlying in a non-reporting week, or another underlying the same day). |
 | Realistic power study | Yes, in the form of §1 above; it is to be re-run by agent B's procedure with a design effect for season clustering. |
+
+**Independent review QR-3 (2026-10-16), open.** T is the close of the first full regular session after the
+announcement, so the ±10 % band and the off-hours argument act before T. After T the X-Perp index follows the
+underlying large-cap stock, where Martineau (2022) finds post-earnings drift absent since 2006; the counter-evidence
+was read only through a secondary brief. The side rule (sign of the market-adjusted day-0 reaction) is short-horizon
+continuation, the mirror of H2, chosen after H2's results were seen. M1, M2 and the event count therefore cannot
+qualify CS-EARN on their own: an M4 criterion is required before any capture (a mechanism argument that holds after
+T, or a pre-registered development-only check on the listed issuers' underlying history after 2006 at 5 sessions, if
+the owner admits that history), and the side rule must be classified against the momentum and H2 families with a
+`JUSTIFIED` decision. The power figures in the "Sufficient frequency" row are for A1 alone; the full H3-A primary on
+a CS-EARN-like synthetic stream needs far longer (H3-A-STATISTICAL-VALIDATION-DRAFT.md §6).
 
 ### 3.2 Examined and rejected: CS-MACRO, scheduled macro announcements (FOMC, CPI) on BTC, ETH, SPY and QQQ X-Perps
 

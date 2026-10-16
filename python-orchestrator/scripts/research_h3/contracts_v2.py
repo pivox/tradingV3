@@ -206,13 +206,19 @@ class FeatureCatalogueRef(Contract):
 
 @dataclass(frozen=True)
 class LabelSpecRef(Contract):
-    """Label identity: which outcome, in which unit, built by which replay rule (content fingerprint)."""
+    """Label identity: which outcome, in which unit, built by which replay rule (content fingerprint), and on which
+    population its values exist (independent review CTO-02). ``population`` is ``EXECUTABLE`` for a label that only
+    exists where an order filled (the capacity-free replay, ``integration.label_replay``): that subset is selected by
+    the outcome (labels audit), so such a label can describe trades but can never train or calibrate a model
+    (``ModelManifestV2``). The reference static-exit label is defined on ``TECHNICALLY_ELIGIBLE`` / ``LABELABLE``.
+    """
 
     SCHEMA: ClassVar[str] = 'h3.label_spec_ref/2'
     label_id: str
     label_version: str
     unit: LabelUnit
     label_fingerprint: str
+    population: Population
 
     def _validate(self) -> None:
         check_id(self.label_id)
@@ -449,9 +455,15 @@ class ActivityBudget(Contract):
     strata_keys: tuple[str, ...]
     strata: tuple[StratumCount, ...]
     derived_from_variant: VariantV2
+    #: ``run_fingerprint`` of the BASE-cost B1 run whose score-stage decisions gave the counts (independent reviews
+    #: QR-15, CTO-03). Optional in the contract so a budget can be built before its B1 run is referenced;
+    #: ``comparison_readiness`` refuses a budget without it or bound to another B1 run.
+    source_run_fingerprint: str | None = None
 
     def _validate(self) -> None:
         check_id(self.budget_id)
+        if self.source_run_fingerprint is not None:
+            check_sha(self.source_run_fingerprint)
         if self.derived_from_variant is not VariantV2.B1:
             raise ContractError('h3_budget_not_from_b1')
         if not self.strata:
@@ -466,10 +478,11 @@ class ActivityBudget(Contract):
 
     @classmethod
     def from_mapping(cls, budget_id: str, counts: Mapping[str, tuple[int, int]],
-                     strata_keys: Sequence[str] = ()) -> ActivityBudget:
+                     strata_keys: Sequence[str] = (), source_run_fingerprint: str | None = None) -> ActivityBudget:
         return cls(budget_id=budget_id, derived_from_variant=VariantV2.B1, strata_keys=tuple(strata_keys),
                    strata=tuple(StratumCount(stratum_key=k, candidate_count=v[0], accepted_count=v[1])
-                                for k, v in sorted(counts.items())))
+                                for k, v in sorted(counts.items())),
+                   source_run_fingerprint=source_run_fingerprint)
 
     def as_mapping(self) -> dict[str, tuple[int, int]]:
         return {s.stratum_key: (s.candidate_count, s.accepted_count) for s in self.strata}
@@ -578,6 +591,9 @@ class ModelManifestV2(Contract):
             if self.label_spec.unit in NET_LABEL_UNITS:
                 # labels audit (H3-A testability): the engine subtracts costs from the gross head
                 raise ContractError('h3_label_unit_double_cost_deduction')
+            if self.label_spec.population is Population.EXECUTABLE:
+                # independent review CTO-02: replay labels exist only where an order filled (outcome-selected)
+                raise ContractError('h3_model_label_population_outcome_selected')
             start, end, cutoff = window
             assert start is not None and end is not None and cutoff is not None
             for value in window:
@@ -654,6 +670,9 @@ class ExperimentManifestV2(Contract):
         if self.target_population is Population.EXECUTABLE:
             # labels audit (H3-A testability): executability depends on the price after the decision
             raise ContractError('h3_experiment_target_population_outcome_selected')
+        if self.label_spec is not None and self.label_spec.population is Population.EXECUTABLE:
+            # independent review CTO-02: the experiment's label must exist on the target population
+            raise ContractError('h3_experiment_label_population_outcome_selected')
         if (VariantV2.B2 in self.variants) != (self.adaptive_policy is not None):
             raise ContractError('h3_experiment_adaptive_policy_mismatch')
         if self.adaptive_policy is not None and self.adaptive_policy == self.static_policy:
@@ -754,10 +773,11 @@ def comparison_readiness(manifest: ExperimentManifestV2, runs: Sequence[VariantR
                          budget: ActivityBudget | None) -> tuple[str, ...]:
     """Reasons the runs do not form the pre-registered controlled comparison (empty: comparable).
 
-    Per cost scenario present, every declared variant must be there, B0/B2 once per lottery seed, BR once per
-    control seed (all seeds, no more, no fewer: no seed can be picked), B1/B3 once; every run shares the same
-    candidate book and market and the risk policy the manifest anchors for its scenario; BR's budget is the given
-    B1 budget.
+    Both cost scenarios must be present (the manifest always anchors a pessimistic policy; independent review
+    CTO-04). Per scenario, every declared variant must be there, B0/B2 once per lottery seed, BR once per control
+    seed (all seeds, no more, no fewer: no seed can be picked), B1/B3 once; every run shares the same candidate book
+    and market and the risk policy the manifest anchors for its scenario; BR's budget is the given B1 budget, and
+    that budget names the BASE-cost B1 run it was derived from (independent reviews QR-15, CTO-03).
     """
     reasons: list[str] = []
     fingerprint = manifest.fingerprint()
@@ -775,6 +795,8 @@ def comparison_readiness(manifest: ExperimentManifestV2, runs: Sequence[VariantR
                        CostScenarioV2.PESSIMISTIC: manifest.pessimistic_risk_policy}
     if any(r.risk_policy != expected_policy[r.cost_scenario] for r in runs):
         reasons.append('risk_policy_not_anchored')
+    if {r.cost_scenario for r in runs} != set(CostScenarioV2):
+        reasons.append('cost_scenario_missing')
     control_seeds = manifest.random_control.seeds if manifest.random_control is not None else ()
     for scenario in sorted({r.cost_scenario for r in runs}, key=lambda s: s.value):
         scoped = [r for r in runs if r.cost_scenario is scenario]
@@ -800,6 +822,13 @@ def comparison_readiness(manifest: ExperimentManifestV2, runs: Sequence[VariantR
         if budget is not None and manifest.random_control is not None \
                 and budget.strata_keys != manifest.random_control.strata_keys:
             reasons.append('activity_budget_strata_not_the_control_strata')
+        if budget is not None:
+            b1_base = [r.run_fingerprint for r in runs
+                       if r.variant is VariantV2.B1 and r.cost_scenario is CostScenarioV2.BASE]
+            if budget.source_run_fingerprint is None:
+                reasons.append('activity_budget_not_bound_to_b1_run')
+            elif budget.source_run_fingerprint not in b1_base:
+                reasons.append('activity_budget_not_from_this_b1_run')
     return tuple(dict.fromkeys(reasons))
 
 

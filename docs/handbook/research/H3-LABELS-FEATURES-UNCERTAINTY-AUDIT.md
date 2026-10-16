@@ -291,3 +291,26 @@ model exists yet.
 - The reference label needs the owner's execution-timing rule (R1-F6) before it can be frozen. The protocol must also
   state that it is the training and evaluation label of the scorer, while executability is reported separately.
 - Whether feed outages (`price_path_gap`) are independent of prices must be checked on real data.
+
+**Independent reviews (2026-10-16).**
+
+- QR-8: the census now reports `target_label_data_coverage_exclusions_untested` (label-step exclusions of timing
+  `data_coverage`) and `target_label_outcome_independence_established`, which is True only when no exclusion is
+  outcome-dependent by category AND none is a data-coverage exclusion. The census remains a classification, not a
+  test. Open before any freeze: a gap-tolerant reference label (worse of stop and first available price) or an
+  exclusion-balance test on ex-ante proxies, and re-anchoring the label at the first executable price if fills are
+  at the next open (in the synthetic e2e the first bar carries about 10 % of the label's variance).
+- CTO-02: replay labels are now refused for training by the contracts, not only by this document (`LabelSpecRef`
+  carries a population; an `EXECUTABLE` label cannot calibrate a model; truncated or gappy replay labels migrate as
+  ABSENT).
+- CTO-06 (wording): `xs_rel_ret_lb` is `PENDING` in `catalogue_v2` (which blocks a freeze); `EXCLUDED` is the
+  recommended decision when the catalogue is bound to a generator. It is still active in the V1 catalogue, engine
+  and golden vectors, so every V1-engine B1 run (e2e, BR study) still uses it.
+- QR-9: no admissible CS-EARN feature set exists yet. The plausible features at T each meet a closed family or the
+  generator itself (pre-event drift: momentum; same-day market move: regime and `mkt_ret_lb`; volume surprise: the
+  flow family r1-r9; reaction size: the generator's own signal). A CS-EARN catalogue must be drafted and
+  fingerprinted, every feature classified against the closed families, and reaction size declared either the
+  source trigger or the scored signal, before any capture.
+- QR-14: the V1 heuristic uncertainty with a declared `n_train` drives B1's acceptance share; for the H3-A test the
+  acceptance must be a fixed pre-registered top-quantile rule until a versioned engine with a conservative effective
+  n exists.

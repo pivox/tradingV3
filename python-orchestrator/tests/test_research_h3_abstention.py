@@ -122,13 +122,13 @@ def test_randomisation_p_and_block_excess():
 
 def test_h3a_status_never_reads_abstention_as_skill():
     assert ab.h3a_status(rank_ic_rejects=False, br_excess_rejects=False, b1_beats_b0=True,
-                         ic_halves_positive=False) == 'h3a_abstention_only_no_skill_shown'
+                         ic_halves_positive=False, powered=True) == 'h3a_abstention_only_no_skill_shown'
     assert ab.h3a_status(rank_ic_rejects=True, br_excess_rejects=True, b1_beats_b0=False,
                          ic_halves_positive=False) != 'h3a_ranking_and_selection_beyond_abstention_draft'
     assert ab.h3a_status(rank_ic_rejects=True, br_excess_rejects=True, b1_beats_b0=False,
                          ic_halves_positive=True) == 'h3a_ranking_and_selection_beyond_abstention_draft'
     assert ab.h3a_status(rank_ic_rejects=True, br_excess_rejects=False, b1_beats_b0=True,
-                         ic_halves_positive=True) == 'h3a_ranking_without_selection_value'
+                         ic_halves_positive=True, powered=True) == 'h3a_ranking_without_selection_value'
     assert ab.h3a_status(rank_ic_rejects=None, br_excess_rejects=True, b1_beats_b0=True,
                          ic_halves_positive=True) == 'h3a_insufficient_information'
     for status in ab.H3A_STATUSES:
@@ -245,16 +245,24 @@ def test_integration_e2e_controls_serialise_as_v2_and_feed_compare_evaluate(e2e_
     from scripts.research_h3 import contracts_v2 as v2
     from scripts.research_h3 import e2e
     from scripts.research_h3.validation import compare as cp
+    accepted_day_control = False
     for control_id, result in e2e_controls['results'].items():
         spec, budget = ab.spec_to_v2(result.spec), ab.budget_to_v2(result.budget)
         assert v2.RandomControlSpec.from_json(spec.canonical_json()) == spec
         assert ab.budget_from_v2(v2.ActivityBudget.from_json(budget.canonical_json())) == result.budget
         assert budget.strata_keys == spec.strata_keys
-        report = cp.evaluate(e2e_controls['factorial'].runs, e2e.E2E_PLAN,
-                             random_control=e2e_controls['controls'][control_id])
+        block = e2e_controls['controls'][control_id]
+        if result.spec.method != 'stratified' or 'decision_day' not in result.spec.strata_keys:
+            # independent review QR-10: only the DRAFT primary control (BR stratified by day) is accepted
+            with pytest.raises(cp.CompareError, match='compare_random_control_not_the_draft_primary_control'):
+                cp.evaluate(e2e_controls['factorial'].runs, e2e.E2E_PLAN, random_control=block)
+            continue
+        report = cp.evaluate(e2e_controls['factorial'].runs, e2e.E2E_PLAN, random_control=block)
         assert report['h3a_random_control']['control']['control_id'] == control_id
         assert report['attribution_blockers']['H3-A_scoring'] == list(cp.H3A_BLOCKERS_WITH_RANDOM_CONTROL)
         assert 'supported' not in report['hypotheses'].values()
+        accepted_day_control = True
+    assert accepted_day_control
 
 
 def test_run_random_control_refuses_a_shared_or_wrong_gate(e2e_controls):

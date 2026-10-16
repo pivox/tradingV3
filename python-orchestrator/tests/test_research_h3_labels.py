@@ -75,11 +75,25 @@ def test_c1_census_reproduces_the_synthetic_273_149_52_and_explains_the_124(exam
     report = census.to_report()
     assert report['target_population'] == 'TECHNICALLY_ELIGIBLE'
     assert report['target_label_selection_outcome_dependent'] is False
+    assert report['target_label_data_coverage_exclusions_untested'] == 0
+    assert report['target_label_outcome_independence_established'] is True
     by_step = {(row['step'], row['category']): row for row in report['exclusions']}
     assert by_step[('generation', 'data_missing')]['count'] == 9
     assert by_step[('eligibility', 'holding_not_covered')]['timing'] == 'calendar'
     collar = by_step[('execution', 'market_constraint')]
     assert collar['outcome_dependent'] is True and collar['reason_codes'] == {'fill_beyond_collar': 119}
+
+
+def test_census_never_calls_a_data_coverage_exclusion_outcome_independent():
+    """Independent review QR-8: gaps can be price-correlated; their count is reported and blocks the claim."""
+    row = dict(decision_ms=0, inst_id='SYN-USDT', side='long', eligible=True, executable=False,
+               eligibility_reasons=(), execution_reasons=('fill_beyond_collar',))
+    census = L.PopulationCensus(rows=(L.CandidateCensus('a', labelable=True, label_reasons=(), **row),
+                                      L.CandidateCensus('b', labelable=False, label_reasons=('price_path_gap',), **row)))
+    report = census.to_report()
+    assert report['target_label_selection_outcome_dependent'] is False      # by category
+    assert report['target_label_data_coverage_exclusions_untested'] == 1
+    assert report['target_label_outcome_independence_established'] is False
 
 
 def test_c1_collar_refusal_is_outcome_dependent_selection_by_construction(example):

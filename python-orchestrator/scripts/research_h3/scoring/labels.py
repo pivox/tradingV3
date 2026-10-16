@@ -406,11 +406,21 @@ class PopulationCensus:
         return table
 
     def to_report(self) -> dict[str, Any]:
+        """``target_label_selection_outcome_dependent`` classifies exclusions by category; it is not a test.
+        Independent review QR-8: a data-coverage exclusion (``price_path_gap``, ``no_market_data_after_decision``)
+        is classified as not outcome-dependent by construction, although gaps can be price-correlated on thin
+        venues. Such exclusions are therefore counted apart, and the label's outcome-independence is established
+        only when there are none (until a balance test on ex-ante proxies exists)."""
+        table = self.exclusion_table()
+        coverage = sum(row['count'] for row in table
+                       if row['step'] == 'label' and row['timing'] == Timing.DATA_COVERAGE.value)
+        dependent = any(row['outcome_dependent'] for row in table if row['step'] == 'label')
         return {'schema': CENSUS_SCHEMA, 'label': 'SYNTHETIC_NOT_EVIDENCE_WHEN_FED_SYNTHETIC_DATA',
                 'target_population': TARGET_POPULATION.value, 'label_definition': LABEL_DEFINITION,
-                'counts': dict(self.counts), 'exclusions': self.exclusion_table(),
-                'target_label_selection_outcome_dependent': any(
-                    row['outcome_dependent'] for row in self.exclusion_table() if row['step'] == 'label')}
+                'counts': dict(self.counts), 'exclusions': table,
+                'target_label_selection_outcome_dependent': dependent,
+                'target_label_data_coverage_exclusions_untested': coverage,
+                'target_label_outcome_independence_established': not dependent and coverage == 0}
 
 
 def population_census(candidates: Sequence[OpportunityCandidate], *, eligibility: Mapping[str, Sequence[str]],

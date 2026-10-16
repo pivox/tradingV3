@@ -111,6 +111,10 @@ Entry sizing in `admit_entry` follows `CanonicalRiskEngine` step by step:
 
 1. **Budget.** `min(0.5 % x equity, 1 % x equity - open risk)`. Open risk includes the reservations of pending
    entries.
+   Independent review CTO-10 (2026-10-16): the 1 % is an admission and fill-time cap against current equity, not a
+   running invariant. After admission a mark-to-market drawdown can leave open risk slightly above 1 % of marked
+   equity (up to about 1.003 % in the synthetic e2e), with no action. Whether a running cap (no new entry above 1 % of
+   marked equity) is required is an owner decision, to include in the PHP parity test.
 2. **Loss of one contract at the stop, cost-inclusive.** Gross distance + entry fee + stop exit fee + entry and
    stop spread + entry and stop slippage + adverse funding provision. These are the components of PHP's
    `totalStopLoss`.

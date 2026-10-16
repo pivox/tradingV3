@@ -90,12 +90,27 @@ def test_br_run_reference_carries_the_v2_budget_and_readiness_checks_its_strata(
     man = CV2.manifest()   # global control 'br-global', seeds (11, 12, 13)
     spec = ab.spec_from_v2(man.random_control)
     budget = ab.activity_budget(_items(), {'cand-0-0', 'cand-1-1'}, spec.strata_keys, 'exp-syn:br-global')
-    contract = ab.budget_to_v2(budget)
-    runs = CV2.runs_for(man, budget=contract)
+    contract = ab.budget_to_v2(budget, source_run_fingerprint=CV2.B1_RUN_FP)
+    runs = CV2.both_scenarios(man, budget=contract)
     assert v2.comparison_readiness(man, runs, contract) == ()
-    by_day = ab.budget_to_v2(ab.activity_budget(_items(), {'cand-0-0'}, ('decision_day',), 'exp-syn:br-day'))
-    reasons = v2.comparison_readiness(man, CV2.runs_for(man, budget=by_day), by_day)
+    by_day = ab.budget_to_v2(ab.activity_budget(_items(), {'cand-0-0'}, ('decision_day',), 'exp-syn:br-day'),
+                             source_run_fingerprint=CV2.B1_RUN_FP)
+    reasons = v2.comparison_readiness(man, CV2.both_scenarios(man, budget=by_day), by_day)
     assert reasons == ('activity_budget_strata_not_the_control_strata',)
+
+
+def test_abstention_budget_validates_like_its_v2_mirror():
+    """Independent review CTO-08: the harness budget refuses what the V2 budget refuses, and never truncates."""
+    with pytest.raises(ab.AbstentionError, match='abstention_budget_stratum_label_not_the_keys'):
+        ab.ActivityBudget('b', ('decision_day',), {'inst_id=BTC': (3, 1)})
+    with pytest.raises(ab.AbstentionError, match='abstention_strata_keys_not_sorted'):
+        ab.ActivityBudget('b', ('side', 'decision_day'), {'side=long|decision_day=0': (3, 1)})
+    with pytest.raises(ab.AbstentionError, match='abstention_stratum_key_not_known_at_decision'):
+        ab.ActivityBudget('b', ('net_r',), {'net_r=1': (3, 1)})
+    for counts in ((3.7, 1.2), (True, 0), (3, False), (3,)):
+        with pytest.raises(ab.AbstentionError, match='abstention_budget_counts_invalid'):
+            ab.ActivityBudget('b', (), {'*': counts})
+    assert ab.ActivityBudget('b', (), {'*': (3, 1)}).per_stratum == {'*': (3, 1)}
 
 
 # ------------------------------------------------------------------------------------- populations and labels
@@ -112,7 +127,8 @@ def test_one_population_enum_and_the_target_is_technically_eligible():
 def test_label_units_agree_between_the_labels_audit_and_the_model_manifest(unit):
     """C's ``training_target`` and D's calibrated ``ModelManifestV2`` accept and refuse the same units."""
     label = v2.LabelSpecRef(label_id='h3.reference_static_exit_label', label_version='1', unit=unit,
-                            label_fingerprint=CV2.sha('reference-label'))
+                            label_fingerprint=CV2.sha('reference-label'),
+                            population=v2.Population.TECHNICALLY_ELIGIBLE)
     try:
         L.training_target('gross_r', unit.value)
         c_accepts = True
@@ -142,21 +158,24 @@ def test_replay_label_exit_instant_becomes_the_v2_availability():
     t0 = cand.header.clock.decision_ms
     traded = CandidateLabel('cand-1', t0, True, D('-1.1'), D('-1'), True, 'stop', (), horizon_covered=True,
                             net_gross_r=D('-1.05'), exit_ms=t0 + 5 * CV2.H)
-    out = m.label_to_v2(traded, candidate=cand, label_spec=CV2.LABEL)
+    out = m.label_to_v2(traded, candidate=cand, label_spec=CV2.REPLAY_LABEL)
     assert out.available_ms == t0 + 5 * CV2.H and out.value == D('-1')
-    assert m.label_to_v2(traded, candidate=cand, label_spec=CV2.LABEL, available_ms=t0 + 5 * CV2.H) == out
+    assert m.label_to_v2(traded, candidate=cand, label_spec=CV2.REPLAY_LABEL, available_ms=t0 + 5 * CV2.H) == out
     with pytest.raises(m.MigrationError, match='migration_label_exit_time_mismatch'):
-        m.label_to_v2(traded, candidate=cand, label_spec=CV2.LABEL, available_ms=t0 + 6 * CV2.H)
-    net_gross = dataclasses.replace(CV2.LABEL, unit=v2.LabelUnit.NET_GROSS_R)
+        m.label_to_v2(traded, candidate=cand, label_spec=CV2.REPLAY_LABEL, available_ms=t0 + 6 * CV2.H)
+    net_gross = dataclasses.replace(CV2.REPLAY_LABEL, unit=v2.LabelUnit.NET_GROSS_R)
     assert m.label_to_v2(traded, candidate=cand, label_spec=net_gross).value == D('-1.05')
 
 
 # ------------------------------------------------------------------------------- H3-A attribution evidence
 
-def _br_block(run, rejected):
-    return {'control': {'control_id': 'br-day', 'method': 'stratified', 'strata_keys': ['decision_day'],
-                        'seeds': [1, 2, 3], 'budget_source': 'b1_acceptance'},
-            'block_excess_test': {'rejected': rejected, 'p_value': 0.01 if rejected else 0.4},
+def _br_block(run, rejected, plan=None):
+    plan = plan or V.FAST_PLAN
+    spec = ab.RandomControlSpec('br-day', 'stratified', ('decision_day',), (1, 2, 3))
+    return {'control': spec.to_wire(), 'control_fingerprint': spec.fingerprint(), 'seeds_run': [1, 2, 3],
+            'block_ms': plan.block_ms,
+            'block_excess_test': {'rejected': rejected, 'p_value': 0.01 if rejected else 0.4,
+                                  'alpha': plan.alpha_primary, 'procedure': plan.test_procedure},
             'b1': {'net_pnl': float(run.net_pnl), 'trades_executed': len(run.trades)},
             'p_net_pnl_vs_br': 0.25}
 
@@ -177,13 +196,62 @@ def test_evaluate_accepts_br_evidence_but_never_reports_h3a_supported(rejected):
     assert result['attribution_blockers']['H3-B_adaptive'] == plain['attribution_blockers']['H3-B_adaptive']
     assert result['h3a_random_control']['excess_over_br_rejects_null'] is rejected
     assert 'supported' not in result['hypotheses'].values()
-    if plain['hypotheses']['H3-A_scoring'] == 'rejects_null_attribution_not_identified':
-        assert result['hypotheses']['H3-A_scoring'] == (
-            'rejects_null_beyond_random_abstention_criterion_not_frozen' if rejected
-            else 'rejects_null_abstention_not_excluded')
-    else:
-        assert result['hypotheses']['H3-A_scoring'] == plain['hypotheses']['H3-A_scoring']
+    # independent review QR-5: the A2 reading is never gated behind the B3 primary or S1 = B1 - B0
+    assert result['hypotheses']['H3-A_scoring'] == (
+        'a2_rejects_null_beyond_random_abstention_criterion_not_frozen' if rejected
+        else 'a2_does_not_reject_abstention_not_excluded')
+    assert result['h3a_random_control']['s1_b1_minus_b0'] == 'descriptive_only_abstention_confounded'
     assert cp.H3A_BLOCKERS_WITH_RANDOM_CONTROL
+
+
+def test_evaluate_reads_a2_even_when_the_b3_primary_fails():
+    runs = V.factorial_runs({c.Variant.B1: 3.0, c.Variant.B2: 0.0, c.Variant.B3: -3.0})
+    plain = cp.evaluate(runs, V.FAST_PLAN)
+    assert plain['verdict'] != 'CRITERION_MET' and plain['hypotheses']['H3-A_scoring'] == 'not_confirmatory'
+    result = cp.evaluate(runs, V.FAST_PLAN, random_control=_br_block(runs[c.Variant.B1], True))
+    assert result['hypotheses']['H3-A_scoring'] == 'a2_rejects_null_beyond_random_abstention_criterion_not_frozen'
+
+
+def test_evaluate_pins_the_br_evidence_to_the_plan_and_the_draft_control():
+    """Independent reviews QR-10 / CTO-03: forged or off-plan BR blocks are refused."""
+    runs = V.factorial_runs({c.Variant.B3: 1.0})
+    b1 = runs[c.Variant.B1]
+    cases = []
+    forged = _br_block(b1, True)
+    forged['control']['seeds'] = [999]
+    cases.append((forged, 'compare_random_control_fingerprint_mismatch'))
+    best_seed = _br_block(b1, True)
+    best_seed['seeds_run'] = [2]
+    cases.append((best_seed, 'compare_random_control_seeds_not_all_run_once'))
+    glob = ab.RandomControlSpec('br-glob', 'global_budget', (), (1, 2, 3))
+    global_block = _br_block(b1, True)
+    global_block.update(control=glob.to_wire(), control_fingerprint=glob.fingerprint())
+    cases.append((global_block, 'compare_random_control_not_the_draft_primary_control'))
+    wrong_alpha = _br_block(b1, True)
+    wrong_alpha['block_excess_test']['alpha'] = 0.2
+    cases.append((wrong_alpha, 'compare_random_control_not_the_plan'))
+    wrong_block = _br_block(b1, True)
+    wrong_block['block_ms'] = V.FAST_PLAN.block_ms + 1
+    cases.append((wrong_block, 'compare_random_control_not_the_plan'))
+    made_up = {'control': {'control_id': 'made-up', 'seeds': [1]}, 'block_excess_test': {'rejected': True},
+               'b1': {'net_pnl': float(b1.net_pnl), 'trades_executed': len(b1.trades)}}
+    cases.append((made_up, 'compare_random_control_incomplete'))
+    for block, code in cases:
+        with pytest.raises(cp.CompareError, match=code):
+            cp.evaluate(runs, V.FAST_PLAN, random_control=block)
+
+
+def test_h3a_status_needs_stability_and_power_before_any_non_rejection_reading():
+    """Independent review QR-10."""
+    both = dict(rank_ic_rejects=True, br_excess_rejects=True, b1_beats_b0=True)
+    assert ab.h3a_status(**both, ic_halves_positive=False) == 'h3a_unstable_ranking'
+    assert ab.h3a_status(**both, ic_halves_positive=None) == 'h3a_unstable_ranking'
+    for a1, a2, b0 in ((True, False, True), (False, True, True), (False, False, True), (False, False, False)):
+        assert ab.h3a_status(rank_ic_rejects=a1, br_excess_rejects=a2, b1_beats_b0=b0,
+                             ic_halves_positive=True) == 'h3a_non_rejection_underpowered'
+    assert ab.h3a_status(rank_ic_rejects=True, br_excess_rejects=False, b1_beats_b0=True, ic_halves_positive=True,
+                         powered=True) == 'h3a_ranking_without_selection_value'
+    assert set(ab.H3A_STATUSES) >= {'h3a_unstable_ranking', 'h3a_non_rejection_underpowered'}
 
 
 def test_evaluate_refuses_br_evidence_about_another_b1():
@@ -194,3 +262,41 @@ def test_evaluate_refuses_br_evidence_about_another_b1():
         cp.evaluate(runs, V.FAST_PLAN, random_control=block)
     with pytest.raises(cp.CompareError, match='compare_random_control_incomplete'):
         cp.evaluate(runs, V.FAST_PLAN, random_control={'b1': {}})
+
+
+# ------------------------------------------------------------------------------------- Python 3.11 compatibility
+
+def _pep701_only_fstrings(path):
+    """f-strings valid only on Python 3.12+ (PEP 701): a replacement field that reuses the outer quote, or holds a
+    backslash or a comment. ``ast.parse(feature_version=(3, 11))`` on 3.12 does not catch them (review CTO-07)."""
+    import ast
+    src = path.read_text(encoding='utf-8')
+    bad = []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        seg = ast.get_source_segment(src, node)
+        if seg is None:
+            continue
+        i = 0
+        while i < len(seg) and seg[i] not in '\'"':
+            i += 1
+        if i == len(seg):   # a nested format spec, not a string literal
+            continue
+        quote = seg[i:i + 3] if seg[i:i + 3] in ('"""', "'''") else seg[i]
+        for value in node.values:
+            if isinstance(value, ast.FormattedValue):
+                expr = ast.get_source_segment(src, value.value) or ''
+                if quote in expr or '\\' in expr or '#' in expr:
+                    bad.append(f'{path.name}:{node.lineno}')
+    return bad
+
+
+def test_no_python_312_only_fstrings_in_the_h3_research_code():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    files = sorted((root / 'scripts' / 'research_h3').rglob('*.py')) + sorted(
+        (root / 'tests').glob('test_research_h3_*.py'))
+    assert files
+    bad = [hit for path in files for hit in _pep701_only_fstrings(path)]
+    assert bad == []

@@ -191,9 +191,16 @@ def label_to_v2(label: Any, *, candidate: OpportunityCandidateV2, label_spec: La
                 available_ms: int | None = None) -> LabelOutcome:
     """From ``integration.label_replay.CandidateLabel``. The value is the label in ``label_spec.unit``; the exit
     instant of a traded candidate is the label's ``exit_ms`` (added at integration, CR-V2-3) or, for a record
-    without it, must be given (never guessed); both given and different is refused."""
+    without it, must be given (never guessed); both given and different is refused.
+
+    Independent review CTO-02: a replay label exists only where an order filled, so its spec must declare
+    ``Population.EXECUTABLE`` (which ``ModelManifestV2`` refuses for training); and a traded label whose horizon is
+    not covered or whose price path has gaps is ABSENT (``label_horizon_not_covered`` / ``label_price_path_gap``),
+    never a LABELLED value."""
     if label.candidate_id != candidate.candidate_id or label.decision_ms != candidate.header.clock.decision_ms:
         raise MigrationError('migration_label_candidate_mismatch')
+    if label_spec.population is not Population.EXECUTABLE:
+        raise MigrationError('migration_replay_label_is_executable_conditioned')
     exit_ms = getattr(label, 'exit_ms', None)
     if exit_ms is not None and available_ms is not None and exit_ms != available_ms:
         raise MigrationError('migration_label_exit_time_mismatch')
@@ -204,6 +211,15 @@ def label_to_v2(label: Any, *, candidate: OpportunityCandidateV2, label_spec: La
                             label_spec=label_spec, decision_ms=label.decision_ms, available_ms=available_ms,
                             status=LabelStatus.ABSENT, value=None, stopped=None,
                             absence_reasons=tuple(label.refusal_reasons))
+    incomplete = []
+    if getattr(label, 'horizon_covered', True) is False:
+        incomplete.append('label_horizon_not_covered')
+    if (getattr(label, 'price_path_gaps', 0) or 0) > 0:
+        incomplete.append('label_price_path_gap')
+    if incomplete:
+        return LabelOutcome(candidate_id=label.candidate_id, candidate_fingerprint=candidate.fingerprint(),
+                            label_spec=label_spec, decision_ms=label.decision_ms, available_ms=available_ms,
+                            status=LabelStatus.ABSENT, value=None, stopped=None, absence_reasons=tuple(incomplete))
     _require(available_ms=available_ms)
     value = getattr(label, label_spec.unit.value)
     _require(value=value)

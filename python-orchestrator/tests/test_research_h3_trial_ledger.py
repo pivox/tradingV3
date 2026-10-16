@@ -107,6 +107,25 @@ def test_confirmatory_data_needs_frozen_protocol_once_and_cannot_be_abandoned(tm
                          reason=None, recorded_ms=T + 2)
 
 
+def test_confirmatory_once_is_keyed_by_dataset_content_across_protocols(tmp_path):
+    """Independent review CTO-01: a holdout's content is spent once, whatever the protocol, dataset id or label."""
+    ledger = new(tmp_path)
+    attempt(ledger, 't-h1', protocol=FROZEN, datasets=(HOLD,))
+    renamed = tl.DatasetUse('okx-holdout-copy', HOLD.dataset_sha256, c.DataLabel.HOLDOUT)
+    as_dev = tl.DatasetUse('okx-dev', HOLD.dataset_sha256, c.DataLabel.DEVELOPMENT)
+    other = dataclasses.replace(FROZEN, protocol_id='p-b')
+    for trial_id, protocol, datasets in (('t-h2', other, (HOLD,)), ('t-h3', FROZEN, (renamed,)),
+                                         ('t-h4', s.DRAFT_PROTOCOL, (as_dev,))):
+        with pytest.raises(tl.LedgerError, match='ledger_confirmatory_data_already_read'):
+            attempt(ledger, trial_id, protocol=protocol, datasets=datasets, at=T + 2)
+    # a dataset already used for development can never become confirmatory
+    dev = tl.DatasetUse('binance-dev', c.sha256_text('binance-dev'), c.DataLabel.DEVELOPMENT)
+    attempt(ledger, 't-d1', protocol=FROZEN, datasets=(dev,), at=T + 3)
+    promoted = tl.DatasetUse('binance-dev-as-holdout', dev.dataset_sha256, c.DataLabel.HOLDOUT)
+    with pytest.raises(tl.LedgerError, match='ledger_confirmatory_data_already_used'):
+        attempt(ledger, 't-d2', protocol=other, datasets=(promoted,), at=T + 4)
+
+
 def _rewrite(path, mutate):
     lines = path.read_text().splitlines(keepends=True)
     path.write_text(''.join(mutate(lines)))
