@@ -1,6 +1,8 @@
 # H3-A / CS-EARN — US-equity data amendment (status `DRAFT_NOT_FROZEN`)
 
-**Status: `DRAFT_NOT_FROZEN`. No sha256. Nothing in this page is final, and nothing is authorised by it.**
+**Status: `DRAFT_NOT_FROZEN`, closed unused: `CS_EARN_M4_FAIL_CLOSED`** (owner decision 2026-10-16, recorded in
+[H3-A-NEXT-DECISION.md](H3-A-NEXT-DECISION.md) §7). No sha256. This page is kept as scientific history only. It will
+never be frozen, and nothing in it is authorised: no purchase, download, EDGAR collection, training or backtest.
 
 This page answers the owner's limited GO of 2026-10-16 (quoted in §0). It prepares the documents only:
 

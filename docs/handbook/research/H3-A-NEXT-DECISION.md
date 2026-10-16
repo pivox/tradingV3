@@ -156,3 +156,39 @@ weakens the only remaining source further.
 - **D-8.** M1/M2 and the minimum useful IC with an accepted horizon (unchanged).
 
 Nothing was launched.
+
+## 7. Owner decision 2026-10-16: `CS_EARN_M4_FAIL_CLOSED`
+
+The owner closes CS-EARN as currently formulated. His reasons:
+
+- the economic mechanism is not defensible enough after T;
+- statistical power is insufficient at a reasonable horizon;
+- buying historical data is not justified.
+
+Decisions, as recorded:
+
+1. **Stop CS-EARN.** No purchase, download, training, backtest, EDGAR collection or protocol freeze.
+2. **Kept as scientific history:**
+   - the registry rows (all `potential_not_acquired` or `reserved`, and refused by `check_use`);
+   - the DRAFT amendment ([H3-A-CS-EARN-DATA-AMENDMENT-DRAFT.md](H3-A-CS-EARN-DATA-AMENDMENT-DRAFT.md));
+   - the licence analysis;
+   - the review results.
+3. **H3-A stays `SCORING_UNTESTABLE`** for every source examined so far: CS-FUND, CS-UNLOCK, CS-XMOM, CS-EARN,
+   CS-MACRO and CS-REOPEN.
+4. **Unchanged:** the H1 and H2 verdicts, and the reserved fwd-okx-r1 windows.
+5. **No new hypothesis is launched automatically.** The owner wants to examine later a new economic source of
+   opportunities with these properties:
+   - frequent enough to be validated in a reasonable time;
+   - on a product really accessible from France, with 500 USDT;
+   - independent of the closed H1, H2, CS-XMOM and CS-EARN.
+
+   That needs his separate GO.
+
+**Closure conditions, as they apply to any future use of CS-EARN-like ideas:**
+
+- A post-earnings source on equity X-Perps can only come back as a **new, separately declared hypothesis**. It must
+  carry:
+  - its own mechanism after T;
+  - its own power study;
+  - a declaration that CS-EARN, H2 and this record were seen.
+- The `us-equity-*` and `edgar-filing-metadata` registry rows stay non-readable until a new owner GO changes them.
