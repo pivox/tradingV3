@@ -150,7 +150,7 @@ sous l'hypothèse F = I ; jamais une mesure.
 ## 3. Protocole rédigé : K8 — Contrôles et trésorerie
 
 Fichier : `tradingV3-private/research/20261016T2145Z-positive-pnl-structural/design/K8-PREREGISTRATION-DRAFT.md`
-(841 lignes, 93 236 octets, sha256 `cbf3ed9cd4bf44f0c218bad93671d4699c50f72f0632e398d37fbc6d68f2868e` au 2026-10-20 ; statut
+(841 lignes, 93 236 octets, sha256 `6abbb6cbfbf39d0512223bc9ab2d3c423f9b2301d6524744ba140ff891b76fc2 (amendé le 2026-10-20 après la revue de la PR #519 ; ancien sha256 cbf3ed9c…)` au 2026-10-20 ; statut
 `DRAFT_NOT_FROZEN`, aucun sha256 de gel). Relectures : `review/K8-quant.md` (`NEEDS_CHANGES`, 7 constats majeurs, 10 mineurs,
 aucun bloquant) et `review/K8-cto.md` (`NEEDS_CHANGES`, 8 majeurs, 10 mineurs, aucun bloquant) ; traitement constat par constat
 au §13 du brouillon (Q1–Q10, T1–T18 : tous « appliqué » sauf trois « partiel » motivés). Aucun autre protocole n'a été rédigé :
@@ -208,8 +208,9 @@ rapport** : non falsifiable en papier. Aucune p-value revendiquée.
 actual/360, impôt des deux côtés, devise de compte, ligne de change) comme annexe « contrôle » de tout K1–K7. Dès T0 et quel
 que soit le verdict : la ligne « Simple Earn USDC — descriptive, non admise, borne supérieure affichée » est inscrite dans les
 tableaux Gate 2 des K1–K7 et n'en modifie aucun verdict (le verdict T1 du 2027-02-01 est postérieur aux verdicts Gate 2 déclarés
-des K1–K5, ≈ 2027-01-04). T1 PASS : changement d'étiquette a posteriori et admissibilité pour les protocoles futurs, **expirant
-le 2027-01-31** ; information « tout parking réel > 5 USDC excède la limite de 1 % par construction ». **N'autorise jamais** :
+des K1–K5, ≈ 2027-01-04). T1 PASS : changement d'étiquette a posteriori et admissibilité pour les protocoles futurs, **valable six mois
+après le verdict T1** (au plus tard le 2027-08-01 ; le brouillon disait « expirant le 2027-01-31 », soit avant son propre
+verdict — corrigé après la revue de la PR #519) ; information « tout parking réel > 5 USDC excède la limite de 1 % par construction ». **N'autorise jamais** :
 substituer Simple Earn au SOFR comme hurdle USD ; lire le PASS comme un rendement réalisé ou une liquidité ; un avis de
 conformité MiCA ou fiscal ; une souscription, une conversion, une clé, un drapeau.
 
@@ -498,7 +499,7 @@ sur d'autres venues (Binance USDT, BitMEX, Deribit, Kraken) et d'autres période
 | `a2-spot-yield-crossvenue/NOTES.md` | `2278846e6b91f2d9bcccc14d9aceb044715379e5196078b1fb4ab5f686719518` |
 | `a3-literature/NOTES.md` | `6f1ac57ff1a51a78dc26c7ecdb4a84c43a62251fc062b4a220e6c811cae7342f` |
 | `a4-redteam/NOTES.md` | `09ae438310fb76e46b6557bf6a61fc1380bc1bf7960cdf0f9bc9ae794d461f06` (= `a4-redteam/SHA256SUMS`, 34 783 octets) |
-| `design/K8-PREREGISTRATION-DRAFT.md` | `cbf3ed9cd4bf44f0c218bad93671d4699c50f72f0632e398d37fbc6d68f2868e` (brouillon, pas un gel) |
+| `design/K8-PREREGISTRATION-DRAFT.md` | `6abbb6cbfbf39d0512223bc9ab2d3c423f9b2301d6524744ba140ff891b76fc2 (amendé le 2026-10-20 après la revue de la PR #519 ; ancien sha256 cbf3ed9c…)` (brouillon, pas un gel) |
 | `review/K8-quant.md` | `48286302fc2c467ef488d0c89017810b4d89e62e185e0d6510a993b9bb52d122` |
 | `review/K8-cto.md` | `422d0e459b87cb3048087698185479c1692e72fe7caf3be33fd995d56a79c885` |
 | `skeptics/K1..K8-{eco,ops}.md` | voir `skeptics/SHA256SUMS` (K1-ops, K2-ops, K8-eco absents de ce fichier au 2026-10-20 : à compléter par leurs auteurs) |
