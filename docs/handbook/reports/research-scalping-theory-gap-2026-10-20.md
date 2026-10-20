@@ -58,7 +58,7 @@ entrée limite 30 s), contrats versionnés `setup_contract/*/1.1.0.yaml`.
    au stress ; les cascades ont été remplacées par un proxy d'OI à 15 min ; les effets d'horloge étaient **invisibles par
    design** (contrôles appariés à l'heure) ; la capture de spread n'a jamais été mesurée là où elle existe (proxies à 1 tick).
 5. **Ce que nous avons mal lu, c'est la machine** (relecture exécution, code vérifié) : la boucle vivante **ne poste
-   probablement aucun ordre** — les conditions 1 m `order_flow_imbalance_gte` / `spread_bps_lte` exigent une preuve canonique
+   aucun ordre** (établi par le code et le journal du dernier dry-run, vérification de l'orchestrateur en en-tête) — les conditions 1 m `order_flow_imbalance_gte` / `spread_bps_lte` exigent une preuve canonique
    que seul le chemin Paper/Backtest fournit (à confirmer dans les journaux, zéro prix) ; `order_mode: 1` = limite GTC **sans
    post-only** (pas « taker ») ; stops/TP déclenchés au **mark** (pas au dernier prix) ; l'« OFI » déployé est un déséquilibre
    de **profondeur** (20 niveaux), pas de transactions ; frais internes 5/5 ; levier ×20 sur 1 m contre un plafond retail
@@ -201,8 +201,10 @@ conditions 1 m `order_flow_imbalance_gte` et `spread_bps_lte` exigent une preuve
 `TimeframeValidationService::enrichMicrostructureContext` ne la fournit pas ; le test `MicrostructureConditionsTest` fixe
 la réponse sans preuve à `passed=false`, `proof_reason=microstructure_proof_snapshot_missing` ; la condition ne lève pas,
 donc pas de repli YAML. Le `all_of` 1 m échouerait chaque minute : aucun ordre d'entrée du profil 1.1.7, avant tout effet de
-frais, de Roll ou de minute 0. **Réserve déclarée** : le fichier de `conditionTimeframeEvaluator` n'a pas été localisé
-(politique `missing_data` éventuelle) — d'où « probable », pas « établi ».
+frais, de Roll ou de minute 0. **Levée de réserve** : la relecture n'avait pas localisé le fichier de `conditionTimeframeEvaluator` et écrivait
+« probable » ; l'orchestrateur a ensuite vérifié le code (`MicrostructureProof::validate`, `StrictRuleEvaluator` seul fournisseur
+de `_input_proof`) et le journal `mtf-2026-10-13.log` (les deux conditions 1 m à `passed=false, value=null` pendant que les autres
+passent) — le résultat est **établi** (en-tête).
 *Prior.* Certain qu'il y a quelque chose à mesurer ; la seule question est laquelle des deux causes (déclencheur jamais vrai
 vs géométrie net R) domine, et combien la machine perd en plus du zéro théorique.
 *Faisabilité.* Maximale : champs texte des journaux (`order-journey*`, `mtf-runner.log` : `proof_reason`, `rulesFailed`),
@@ -473,7 +475,7 @@ verdict, omis par GAPS qui ne gardait que les listings. Fréquence et signe **UN
    puissance pour +10 pb (T2 §3.4–3.5) ; la vérification « ≥ 10 paires sur 20 » à ~8 trades par paire laisse 10–20 % de faux
    négatif même si l'effet est réel (calcul d'audit T2 §P11). La réponse jamais essayée : **élargir l'univers** plutôt
    qu'allonger les fenêtres.
-7. **Lire la machine avant de la modéliser.** La boucle vivante ne poste probablement pas (preuve microstructure absente) ;
+7. **Lire la machine avant de la modéliser.** La boucle vivante ne poste pas (preuve microstructure absente ; établi, en-tête) ;
    `order_mode` mal compris ; fees internes 5/5 contre un barème 2/5 ; OFI = profondeur, pas transactions ; stops au mark ;
    levier ×20 ; univers USDT swaps ; aucun chemin X-Perps. Le profil actif n'a **jamais** été porté tel quel (r10 a porté
    `scalping.*` à la cadence 5 min). La seule fiche vérifiable sur le code de GAPS contenait des erreurs : c'est la
@@ -491,7 +493,8 @@ verdict, omis par GAPS qui ne gardait que les listings. Fréquence et signe **UN
 
 1. **Le scalping à la minute sur états est fermé**, par la théorie (aucun payeur) et par le programme (~1 870 configurations,
    signaux = contrôles). Le profil `scalper_micro` et les contrats 1.1.0 décrivent le marché, ils ne le prédisent pas ; aucun
-   seuil ne change cela. Et la machine déployée, en l'état, ne poste probablement même pas (à confirmer, P1) ; corrigée, elle
+   seuil ne change cela. Et la machine déployée, en l'état, ne poste pas (établi par le code et le journal, en-tête ; P1 reste utile pour les
+   raisons de rejet de la certification et la durée du run) ; corrigée, elle
    paierait 6–7 pb maker/maker (ou jusqu'à 10–18 pb avec des entrées non post-only et des sorties taker) pour une espérance
    brute nulle.
 2. **Les poches rapides sont hors de portée**, et nous y sommes payeurs : la sélection adverse de 1,1–1,5 pb par jambe passive
