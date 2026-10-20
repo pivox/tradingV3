@@ -49,12 +49,13 @@ rentable.
 2. **Aucune voie non directionnelle n'est défendable comme source de PnL à 500 USDT** après les deux lectures sceptiques :
    K1 à K7 sont réfutés (scores 1,25 à 3 sur 10) ; K8 survit, mais ce n'est pas une stratégie, c'est la borne que tout le
    reste doit battre.
-3. **Ordre de grandeur honnête.** Si F = I à 100 % des règlements (plafond contractuel, jamais observé), K1 (a) rapporte
+3. **Ordre de grandeur honnête.** Si F = I à chaque règlement (cas de référence de la zone morte, **pas un plafond** : au-dessus de la zone morte F dépasse I
+   jusqu'au plafond de l'instrument, ±0,375 % BTC / ±0,75 % ETH par règlement ; F = I en continu n'a jamais été observé), K1 (a) rapporte
    232,52 × 0,0001 × 3 × 365 = 25,46 USD/an brut, 24,58 net de frais, pour 465,3 USD engagés ; la variante (c)
    auto-collatéralisée 43,12 brut / 41,62 net si le spot est admis comme marge (règle **non écrite**). Contrôles :
    SOFR 480 × 3,89 % = 18,67 USD/an ; Simple Earn USDC 500 × 3,5 % = 17,5 USD/an (indicatif, non garanti) ;
    Livret A 444,77 × 1,70 % = 7,56 EUR/an (net, certain jusqu'au 2027-01-31). Selon le funding réalisé (non lu), le PnL net annuel de (a) va de −0,9 USD
-   (F̄ = 0) à +24,6 (F̄ = I à 100 %), avec +17,7 au niveau publié par la littérature (≈ 8 %/an), soit le niveau du
+   (F̄ = 0) à +24,6 (F̄ = I, cas de référence ; au-dessus, borné par le plafond de l'instrument), avec +17,7 au niveau publié par la littérature (≈ 8 %/an), soit le niveau du
    contrôle Simple Earn ; celui de (c) de −1,5 à +41,6 (+30,0 à 8 %/an). Après impôt symétrique à 30 %, les signes ne
    changent pas ; un point de change EUR/USD (4,45 EUR) est du même ordre que ces surplus (K1-eco §4.2).
 4. **Ce que ça demande.** Bloquer ≈ 465 USD et les deux créneaux de risque pendant 12 mois (horizon honnête d'un rendement
@@ -75,9 +76,11 @@ rentable.
    des limites de risque pour une structure couverte (BRIEF §2).
 9. **Ce qui n'a pas été fait** : aucune donnée de marché lue, aucun gel, aucun ordre, aucune souscription, aucun git ;
    fwd-okx-r1 intact (§6.1).
-10. **Lecture pour un trader** : à 500 USDT, le meilleur cas de règle vaut des dizaines d'USD par an avant impôt, sous ou au
-    niveau de la trésorerie USD après impôt ; la seule question ouverte qui vaille le temps du propriétaire est
-    l'auto-collatéralisation (ligne 7), et elle se tranche sans ordre.
+10. **Lecture pour un trader** : à 500 USDT, le cas de référence (F = I à chaque règlement) vaut des dizaines d'USD par an ;
+    après impôt symétrique il dépasse la trésorerie USD de quelques USD (K1 (a) 17,2 contre SOFR 13,1 et Simple Earn 12,3 ;
+    K1 (c) ≈ 29) ; mais au niveau de funding publié par la littérature (≈ 8 %/an, pas une prévision) K1 (a) égale Simple
+    Earn **avant** impôt, pour strictement plus de risque (K1-eco §4.2–4.3). La seule question ouverte qui vaille le temps
+    du propriétaire est l'auto-collatéralisation (ligne 7), et elle se tranche sans ordre.
 
 ---
 
