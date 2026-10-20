@@ -53,6 +53,7 @@ nav:
       - Analyse migration Trading Core: technical/trading-core-migration-analysis.md
       - Plan PR canoniques Trading Core: technical/trading-core-canonical-pr-plan.md
       - "ADR-309 Mode swing de recherche": technical/adr-309-swing-research-mode.md
+      - "Architecture exécuteur fourniture de liquidité (LP)": technical/lp-executor-architecture.md
   - Graphes:
       - Piles d'execution: graphs/execution-stacks.md
   - Runbooks:
@@ -109,6 +110,11 @@ nav:
       - "Research landscape 2026-10": reports/research-strategy-landscape-2026-10.md
       - "Autres voies vers un PnL positif (desk) 2026-10-16": reports/research-positive-pnl-structural-2026-10-16.md
       - "Théorie du scalping et gaps du programme 2026-10-20": reports/research-scalping-theory-gap-2026-10-20.md
+      - "Programme LP — plan vers un PnL positif 2026-10-20": research/LP-PROGRAMME-PLAN-2026-10-20.md
+      - "Programme LP — règles transversales (gates)": research/LP-PROGRAMME-GATES.md
+      - "Programme LP — G2 mark-outs passifs (brouillon)": research/LP-G2-DRAFT-PREREGISTRATION.md
+      - "Programme LP — G4 retour post-cascade (brouillon)": research/LP-G4-DRAFT-PREREGISTRATION.md
+      - "Programme LP — desk données 2026-10-20": research/LP-DATA-DESK-2026-10-20.md
       - "Next strategy — new market hypotheses (draft)": research/research-new-market-hypotheses.md
       - "Next strategy — retained hypothesis (draft)": research/HYPOTHESIS-next-strategy.md
       - "Next strategy — DRAFT pre-registration (not frozen)": research/DRAFT-PREREGISTRATION-next-strategy.md
