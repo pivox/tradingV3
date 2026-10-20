@@ -1,4 +1,4 @@
-# État des campagnes de recherche TradingV3 (au 2026-10-15)
+# État des campagnes de recherche TradingV3 (au 2026-10-15 ; §4 complété le 2026-10-20)
 
 Cet inventaire est fait en lecture seule. Il reprend :
 
@@ -123,6 +123,7 @@ Restent non lus d'après les documents consultés (à notre connaissance, sans p
 | **Vérification API des X-Perps** | Non faite. Le conteneur PHP ne contient que des clés démo OKX EEA. Le script `tradingV3-private/tools/okx_xperp_readonly_check.py` est fourni au propriétaire ; aucune preuve qu'il ait été exécuté. | Le propriétaire. C'est la prochaine action (§5). |
 | **Écart technique X-Perps** | Le code OKX ne gère que l'USDT-SWAP : `instType=SWAP` est codé en dur et l'USDT est supposé partout. Les X-Perps sont réglés en USD avec une marge en USDC. | À traiter seulement si une hypothèse franchit ses gates. Rien n'est construit pour H1. |
 | **Questions du rapport de paysage** | Breakouts rejetés : `NOT_TESTED`. Prédiction de régime D5 : `INCONCLUSIVE` (entraînement seulement). Q3 C2-SL : `STATISTICAL_BLOCKER` (`research-scalp-q3-r2-correction-2026-10-14.md`), à ne pas rouvrir. Le rapport de paysage emploie l'ancien libellé `TECHNICAL_BLOCKER`. Cycle de vie des instruments : testé par H1, clos. Mouvements relatifs au marché : testés par H2, clos. | Le propriétaire examine les propositions H3 (`H1-NEXT-DECISION.md` §3) avant d'autoriser une campagne, en passant les gates M1–M5 dans l'ordre. |
+| **Théorie du scalping et gaps (desk 2026-10-20)** | Rapport `../reports/research-scalping-theory-gap-2026-10-20.md` : le scalping à la minute sur états est fermé par la théorie et par le programme ; ce qui reste est un programme de fourniture de liquidité événementielle à mesurer (préalables P1–P3, puis G2 mark-outs sur carnets larges, G4 cascades de liquidation, G5 horloge, G1 réversion en fournisseur sur consentement). Fait établi : le profil `scalper_micro` 1.1.7 ne peut poster aucun ordre en production (preuve microstructure absente du chemin vivant). Douze décisions du propriétaire (§6). | Le propriétaire. Rien n'est lancé. |
 | **Contrat scalping 1.2.0** | Non publié (r10, 0/96). | Aucun contrat n'est publiable en l'état. |
 
 **Aucune campagne n'autorise aujourd'hui de trading, réel ou en démo.** Les drapeaux d'exécution restent à 0.
