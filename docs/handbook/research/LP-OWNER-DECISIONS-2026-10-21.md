@@ -117,3 +117,16 @@ piste S. La réouverture exigerait une décision nouvelle (porte en dollars abso
   La valeur `LIQUIDATED` n'apparaît pas dans ces 300 trades, ce qui est attendu pour un événement rare : sa présence est vérifiée
   au fetch du protocole gelé. Fichier : `tradingV3-private/research/20261021T-dex-alternatives/dydx-schema-sample/`
   (sha256 dans `SHA256SUMS`).
+
+## D10 — Source d'indice du Gate 2 de G5 : les deux, choix sur la qualité (P-G5-10 (ii))
+
+Réponse du propriétaire, 2026-10-21 : « On essaye des deux un par un puis on décide ».
+
+- **(a)** Le canal public `index-tickers` est ajouté à la capture continue (extension de D1 au titre du §9.4 : un canal public de
+  plus, mêmes instruments, même hôte, même période).
+- **(b)** L'historique `history-index-candles` est récupéré une fois après la fin de la fenêtre du Gate 2.
+- **Règle de choix, écrite avant la capture et jamais révisée après une lecture des résultats de T01** : la source primaire est
+  (a) si sa couverture est d'au moins 98 % des minutes de la fenêtre et si, sur les minutes communes, l'écart médian absolu entre
+  (a) et (b) est inférieur ou égal à 0,5 pb ; sinon (b). Le choix est fait et haché sur les seules mesures de couverture et
+  d'accord entre séries, **avant** toute évaluation de T01. L'autre source sert de sensibilité rapportée.
+- Ce qui reste interdit : comparer les résultats de T01 obtenus avec chaque source pour choisir.
