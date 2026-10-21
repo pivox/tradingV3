@@ -14,7 +14,12 @@ convention of `scripts/research_exec/forward_okx.py`), under `<out>/<layout>/<in
 - `funding`       `ts_us`, `recv_us`, `funding_time_us`, `funding_rate`, `next_funding_time_us`,
                   `next_funding_rate`, `premium`, `sett_funding_rate`, `sett_state` (1 settled,
                   0 processing, −1 unknown), `method` (1 next_period, 0 current_period, −1 unknown),
-                  `max_rate`, `min_rate`, `interest_rate`.
+                  `max_rate`, `min_rate`, `interest_rate`;
+- `candles_1m`, `mark_1m`, `index_1m`, `funding_hist`
+                  the REST 1-minute history layouts of `g5_fetch` (`HISTORY_LAYOUTS`; one row per
+                  candle opening time or per settlement, `fetched_us` instead of `recv_us`), stored
+                  by the same segment store under `<out>/<layout>/<inst>/` — the index layout is keyed
+                  by the index id (`BTC-USD`), shared by the contracts of one underlying.
 
 Sizes stay in **contracts** (OKX `sz`); the instruments file gives `ctVal` and the loaders of
 `lp_sim` convert when a notional is needed. Every `*_us` field is microseconds UTC; `ts_us` is
@@ -81,7 +86,19 @@ FUNDING_DTYPE = np.dtype(
      ("premium", "<f8"), ("sett_funding_rate", "<f8"), ("sett_state", "<i1"), ("method", "<i1"), ("max_rate", "<f8"), ("min_rate", "<f8"), ("interest_rate", "<f8")]
 )
 
-LAYOUTS: dict[str, np.dtype] = {"trades": TRADES_DTYPE, "books5": BOOKS5_DTYPE, "liquidations": LIQUIDATIONS_DTYPE, "mark": MARK_DTYPE, "funding": FUNDING_DTYPE}
+# REST 1-minute history of the X-Perps (G5 Gate 1, `g5_fetch`; `okx-xperp-1m-history-2026-03-30..2026-10-13`): `ts_us` is the
+# candle **opening** time (OKX `ts`), `fetched_us` the local instant of the request; `confirm` 1 = completed candle. `funding_hist`
+# rows: `ts_us` = `fundingTime` (the settlement instant), `funding_rate` = predicted, `realized_rate` = actual, `method` (1 next_period,
+# 0 current_period, −1 unknown), `formula_type` (1 withRate, 0 noRate, −1 unknown).
+CANDLES_1M_DTYPE = np.dtype(
+    [("ts_us", "<i8"), ("fetched_us", "<i8"), ("open", "<f8"), ("high", "<f8"), ("low", "<f8"), ("close", "<f8"), ("vol", "<f8"), ("vol_ccy", "<f8"), ("vol_ccy_quote", "<f8"), ("confirm", "<i1")]
+)
+PX_CANDLES_1M_DTYPE = np.dtype([("ts_us", "<i8"), ("fetched_us", "<i8"), ("open", "<f8"), ("high", "<f8"), ("low", "<f8"), ("close", "<f8"), ("confirm", "<i1")])
+FUNDING_HIST_DTYPE = np.dtype([("ts_us", "<i8"), ("fetched_us", "<i8"), ("funding_rate", "<f8"), ("realized_rate", "<f8"), ("method", "<i1"), ("formula_type", "<i1")])
+
+LAYOUTS: dict[str, np.dtype] = {"trades": TRADES_DTYPE, "books5": BOOKS5_DTYPE, "liquidations": LIQUIDATIONS_DTYPE, "mark": MARK_DTYPE, "funding": FUNDING_DTYPE,
+                                "candles_1m": CANDLES_1M_DTYPE, "mark_1m": PX_CANDLES_1M_DTYPE, "index_1m": PX_CANDLES_1M_DTYPE, "funding_hist": FUNDING_HIST_DTYPE}
+HISTORY_LAYOUTS = ("candles_1m", "mark_1m", "index_1m", "funding_hist")
 # Fields identifying one record (duplicates come from reconnects and from the liquidation channel's repeated first push).
 # A key item is a field name, or `(field, column)` for one column of a vector field (`("bid_px", 0)` = best bid).
 KeyItem = str | tuple[str, int]
@@ -91,6 +108,11 @@ DEDUPE_KEYS: dict[str, tuple[KeyItem, ...]] = {
     "liquidations": ("ts_us", "side", "pos_side", "size", "bk_px"),
     "mark": ("ts_us", "mark_px"),
     "funding": ("ts_us", "funding_time_us"),
+    # One candle (or one settlement) per instant: a page fetched twice across a resume is the same row.
+    "candles_1m": ("ts_us",),
+    "mark_1m": ("ts_us",),
+    "index_1m": ("ts_us",),
+    "funding_hist": ("ts_us",),
 }
 DEFAULT_REFINALIZE_AFTER_S = 3600.0
 _SEGMENT_RE = re.compile(r"^(?P<inst>.+)-(?P<date>\d{4}-\d{2}-\d{2})\.seg(?P<index>\d{4,})\.npz$")
@@ -355,11 +377,13 @@ class _Open:
 class TapeStore:
     """Per (layout, inst, UTC day) buffers, segment files and the manifest under `out_dir`."""
 
-    def __init__(self, out_dir: Path, mode: str, source: dict | None = None, not_before: str | None = None, refinalize_after_s: float = DEFAULT_REFINALIZE_AFTER_S) -> None:
+    def __init__(self, out_dir: Path, mode: str, source: dict | None = None, not_before: str | None = None, refinalize_after_s: float = DEFAULT_REFINALIZE_AFTER_S,
+                 kind: str = "lp-xperp") -> None:
         if mode not in ("values", "counting"):
             raise ValueError(f"unknown store mode {mode}")
         self.out_dir = Path(out_dir)
         self.mode = mode
+        self.kind = kind
         self.refinalize_after_s = float(refinalize_after_s)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.out_dir / MANIFEST_NAME
@@ -376,8 +400,10 @@ class TapeStore:
             manifest = json.loads(self.manifest_path.read_text())
             if manifest.get("mode") != self.mode:
                 raise ValueError(f"{self.manifest_path}: directory holds a {manifest.get('mode')!r} tape, refusing to open it in {self.mode!r} mode")
+            if manifest.get("kind", self.kind) != self.kind:
+                raise ValueError(f"{self.manifest_path}: directory holds a {manifest.get('kind')!r} tape, refusing to open it as {self.kind!r}")
             return manifest
-        return {"kind": "lp-xperp", "version": 1, "mode": self.mode, "not_before": not_before, "source": source, "created_at": iso_now(),
+        return {"kind": self.kind, "version": 1, "mode": self.mode, "not_before": not_before, "source": source, "created_at": iso_now(),
                 "files": {}, "pending": {}, "sessions": [], "disconnects": [], "errors": []}
 
     def save_manifest(self) -> None:

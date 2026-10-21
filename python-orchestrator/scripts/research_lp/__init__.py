@@ -19,5 +19,12 @@ Modules:
                    funding, fees, unconstrained and 500 USDT portfolio readings; event intents
                    decided at the next minute (detected events) or at the arming instant (clock windows);
 - `events`         detectors;
-- `cli`            `capture`, `count`, `simulate`, `events`, `verify`.
+- `g5_fetch`       REST fetcher of the X-Perp 1-minute history for G5 Gate 1 (candles, mark, index,
+                   funding history), paginated backwards from the constant `END_EXCLUSIVE`
+                   (2026-10-14T00:00:00Z — no row at or after it is ever persisted), documented rate
+                   limits, backoff, resume through the segment store, dry run;
+- `g5_eval`        event study driven by a frozen JSON spec (clock / calendar / regime windows, signs
+                   and windows pre-declared, controls at non-event instants, day-block bootstrap, Holm,
+                   PASS / FAIL / NOT_INFORMATIVE from the spec's thresholds, descriptive reports);
+- `cli`            `capture`, `count`, `simulate`, `events`, `verify`, `g5-fetch`, `g5-eval`.
 """
