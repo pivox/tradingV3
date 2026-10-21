@@ -1,0 +1,281 @@
+{
+ "schema": "research-v2-dynamic-exits-spec.v1",
+ "spec_id": "dynamic_exits",
+ "version": "1.1.0",
+ "status": "FROZEN_FOR_EXPLORATION_RUN_1",
+ "question": "A entrees identiques (S1 5m), une sortie reevaluee a chaque cloture de barre (B stop suiveur, C sortie adaptative) ameliore-t-elle le net par rapport a la sortie fixe A ? Stop obligatoire.",
+ "document": "docs/handbook/research/DYNAMIC-EXITS-DRAFT-PREREGISTRATION.md",
+ "entry": {
+  "setup_id": "S1",
+  "configuration_template": "S1|5m|{side}|S1.T1.5",
+  "cadence": "5m",
+  "sides": [
+   "long",
+   "short"
+  ],
+  "entry_mode": "limit_through",
+  "through_ticks": 1,
+  "ttl_minutes": 5,
+  "initial_stop_atr": 1.0,
+  "atr": "ATR14 Wilder on 5m bars, value at the decision bar close",
+  "horizon_minutes": 60,
+  "horizon_anchor": "decision_close",
+  "reference_notional_usdt": 250.0,
+  "admission": "AM1: one plan per pair whatever the side; a filled plan reserves the pair until decision_close + horizon (every method is flat by then), an unfilled plan until decision_close + ttl"
+ },
+ "methods": {
+  "A": {
+   "label": "reference_fixed",
+   "stop_r": 1.0,
+   "target_r": 1.5,
+   "time_exit_minutes": 60
+  },
+  "B": {
+   "label": "close_trailing",
+   "stop_r": 1.0,
+   "target_r": null,
+   "activation_best_close_r": 1.0,
+   "trail_atr_entry": 1.0,
+   "time_exit_minutes": 60
+  },
+  "C": {
+   "label": "adaptive_exit",
+   "stop_r": 1.0,
+   "target_r": 1.5,
+   "time_exit_minutes": 60,
+   "invalidation": {
+    "u_max": -0.5,
+    "atr_ratio_min": 1.5,
+    "action": "market_exit_next_open"
+   },
+   "exhaustion": {
+    "giveback_mfe_min": 1.0,
+    "giveback_r": 0.5,
+    "giveback_stop_atr_current": 0.5,
+    "stall_min_bars": 6,
+    "stall_abs_u_max": 0.25,
+    "stall_action": "market_exit_next_open",
+    "within_rule_priority": "stall exit before giveback tightening"
+   },
+   "favourable": {
+    "u_min": 1.0,
+    "requires_new_best_close": true,
+    "stop_to": "breakeven_plus_round_trip_cost (baseline profile, stop-like exit)",
+    "target_extension_r": 1.0,
+    "target_cap_r": 3.0
+   },
+   "priority": [
+    "invalidation",
+    "exhaustion",
+    "favourable",
+    "hold"
+   ]
+  }
+ },
+ "execution": {
+  "decision_time": "5m bar close, from the fill bar on",
+  "decision_effect": "from the first 1m candle of the next 5m bar (latency 0); sensitivity: one bar later (latency 1)",
+  "intrabar_checks": "1m candles",
+  "stop_check_from": "fill candle included",
+  "initial_target_check_from": "candle after the fill candle; one-tick trade-through (AM2); sensitivity target_touch_legacy: on a touch",
+  "moved_target": "new limit order: one-tick trade-through from the first candle of the bar after the modification (latency 0)",
+  "tie": "stop first when stop and target are touched in the same 1m candle",
+  "stop_fill_price": "worse of the stop level and the candle open (gaps)",
+  "market_exit": "open of the effective candle; taker fee + stop_spread_rate + stop_slippage_rate",
+  "stop_guarantee": "none: stops fill at the worse of the level and the candle open; costs are assumptions",
+  "stop_never_loosens": true,
+  "rounding": "stops rounded away from the market (long down), break-even level rounded up (long), targets rounded away from the entry",
+  "stop_crossed": "AM3"
+ },
+ "costs": {
+  "source": "research-cost-assumptions.v1 (campaign-assumptions-r1, sha256 83b0216df8d93eae165656c3778e1942ed2599978bc001ce18e33894caa1537b)",
+  "profiles": [
+   "baseline",
+   "adverse",
+   "doubled"
+  ],
+  "doubled": "baseline with every spread rate x2 (costs.doubled_spread)",
+  "entry_role": "maker",
+  "breakeven_profile": "baseline",
+  "sha256": "83b0216df8d93eae165656c3778e1942ed2599978bc001ce18e33894caa1537b",
+  "path": "tradingV3-private/research/20261009T060000Z-campaign-assumptions-r1/cost-assumptions.json",
+  "status": "hypothetical OHLCV costs (fake local fee policy, not historical Binance fees)",
+  "breakeven": "AM8"
+ },
+ "diagnostics": {
+  "common_horizon_minutes_after_fill": 120,
+  "mfe_thresholds_r": [
+   0.5,
+   1.0
+  ],
+  "tight_stop_r": 0.5,
+  "best_prices_are_diagnostic_only": true
+ },
+ "statistics": {
+  "unit": "net R = net_quote / stop_risk_quote (identical risk across methods)",
+  "comparisons": [
+   "B-A",
+   "C-A"
+  ],
+  "bootstrap": {
+   "kind": "block by UTC day of the decision",
+   "resamples": 5000,
+   "seed": 20261021
+  },
+  "lower_bound_level": 0.9,
+  "multiplicity": "Holm on the two comparisons (one-sided)",
+  "sensitivities": [
+   "adverse",
+   "doubled",
+   "latency_1_bar",
+   "target_touch_legacy"
+  ],
+  "large_loss_r": -1.5
+ },
+ "decision": {
+  "continue_if_all": [
+   "improvement: paired difference (B-A or C-A) Holm-rejected with a one-sided Holm lower bound > 0 (baseline)",
+   "profitable: the method's own mean net R > 0 with a day-block 90% lower bound > 0 (baseline, comparison 1)",
+   "robust_costs: adverse profile method mean net R > 0 and paired mean difference > 0",
+   "risk_within_limits: drawdown of cumulative net R in exit order <= 20 R (comparison 1), the method's realistic portfolio takes at least one trade, realized drawdown share <= 0.25 at 1000 USDT (comparison 2, baseline)"
+  ],
+  "max_drawdown_r": 20.0,
+  "max_portfolio_drawdown_share": 0.25,
+  "portfolio_budget_usdt": 1000.0,
+  "verdicts": [
+   "IMPROVEMENT_PROFITABLE_SUPPORTED",
+   "IMPROVEMENT_PROFITABLE_NOT_ROBUST",
+   "IMPROVEMENT_BUT_NOT_PROFITABLE",
+   "NO_IMPROVEMENT_DEMONSTRATED",
+   "INSUFFICIENT_DATA"
+  ],
+  "limits_are": "AM10"
+ },
+ "data_requirements": {
+  "min_trades": 3000,
+  "min_days": 250,
+  "power": {
+   "alpha_one_sided": 0.05,
+   "power": 0.8,
+   "sd_paired_diff_r": 0.6,
+   "delta_diff_r": 0.05,
+   "sd_trade_r": 1.1,
+   "delta_mean_r": 0.05,
+   "design_effect": 1.5,
+   "explanation": "AM9: min_trades 3000 = own-mean n without design effect (2993, sd 1.1 R, delta 0.05 R, alpha 0.05 one-sided, power 0.8) rounded up; the design effect 1.5 (day clustering) applies to every calculation in the confirmation (own mean 4489, paired 1336); min_days 250: judgement floor (about one year of trading days) so that the day-block bootstrap rests on enough independent clusters and the sample spans several regimes; not derived from a formula"
+  }
+ },
+ "data_split": {
+  "exploration": "Binance USD-M 10 majors 1m 2023-01-01 -> 2025-01-01 (consumed; development only; owner authorization 2026-10-21)",
+  "confirmation": "TO BE DESIGNATED BY THE OWNER: Binance intraday 2020-2022 (unread in the register, possibly_independent, to download) or OKX X-Perps prospective capture from 2026-11-02"
+ },
+ "frozen_at_utc": "2026-10-21T19:30:00Z",
+ "parent": {
+  "version": "1.0.0",
+  "file": "dynamic_exits_v1.json",
+  "sha256": "3e956837627106e482d6dcdaafba90a641d2bb9289020e5f820804d2ac8ab851"
+ },
+ "evidence_status": "EXPLORATION_ONLY: Binance 2023-2024 is consumed development data; no result on it can confirm a strategy or count as an independent validation",
+ "amendments": [
+  {
+   "id": "AM1",
+   "what": "Common admission merges both sides of a pair: one plan per pair whatever the side; a bar with both a long and a short decision drops both (counted)",
+   "why": "the v1 table was built per side and allowed a long and a short on the same pair at once"
+  },
+  {
+   "id": "AM2",
+   "what": "Every target (initial and moved) is a resting limit credited only on a one-tick trade-through, from the candle after the fill (initial) or from the effective candle (moved); the v1 convention (initial target on a touch) is kept as the sensitivity target_touch_legacy",
+   "why": "same execution assumption for fixed and moved targets in the main analysis"
+  },
+  {
+   "id": "AM3",
+   "what": "A stop level that is not at least one tick on the protective side of the decision close cannot rest as a stop: the position exits at market at the effective open (reason stop_crossed, market-exit costs); a valid stop that the effective candle opens through fills at the open (worse of level and open)",
+   "why": "never credit a fill at a level the market has already passed"
+  },
+  {
+   "id": "AM4",
+   "what": "Comparison 2 (realistic portfolio) added: each method walks the full S1 candidate list; the pair and the exposure are released at the method's own exit; unfilled entry orders reserve the pair and their notional until the TTL end; same capital and risk rules (budgets: 1 % of realized equity at risk, open notional <= 2 x equity, steps and minimums) for the three methods; also run at the reference size without capital",
+   "why": "the common 60-minute reservation suppresses entries that an early exit would allow"
+  },
+  {
+   "id": "AM5",
+   "what": "Portfolio drawdown = maximum over settlements of (running peak - equity) / running peak on realized equity, settlements in exit order; unrealized losses are not measured (max_open_risk_share bounds them, gaps excepted)",
+   "why": "v1 used the largest absolute fall divided by the final peak, and settled positions in decision order"
+  },
+  {
+   "id": "AM6",
+   "what": "Verdict fails closed: a missing, non-finite or invalid measure never becomes zero and never passes; a method whose portfolio takes no trade cannot pass; labels: IMPROVEMENT_PROFITABLE_SUPPORTED, IMPROVEMENT_PROFITABLE_NOT_ROBUST (improvement and profitable but adverse costs or risk limits fail), IMPROVEMENT_BUT_NOT_PROFITABLE, NO_IMPROVEMENT_DEMONSTRATED, INSUFFICIENT_DATA; per method the four properties are reported separately",
+   "why": "a positive but too risky method is not loss-making; an undemonstrated improvement is not proof of no effect"
+  },
+  {
+   "id": "AM7",
+   "what": "Funding is required: every 8-hour funding time inside a trade must be in the data (within one minute) or the run stops; no unknown funding or cost becomes zero",
+   "why": "owner instruction 2026-10-21"
+  },
+  {
+   "id": "AM8",
+   "what": "Break-even level = entry plus the assumed total round-trip cost of the baseline profile (maker 2 bp, taker 5 bp, stop spread 2 bp, stop slippage 5 bp: about 14 bp); an assumption, not a guarantee of a loss-free exit",
+   "why": "wording"
+  },
+  {
+   "id": "AM9",
+   "what": "Power: the 3000-trade floor is the own-mean calculation without design effect (2993); with the design effect 1.5 it is 4489; the paired comparisons need 891 (1336 with 1.5); the floors 3000 trades and 250 days are kept; the variability and the day-cluster design effect are re-estimated on the exploration data and the confirmation minimum is max(floor, re-estimated requirement)",
+   "why": "owner review 2026-10-21 (NIST e-Handbook 7.2.2.2)"
+  },
+  {
+   "id": "AM10",
+   "what": "The 20 R and 25 % limits are research criteria of the verdict, not automatic stops: the replay does not halt trading when they are crossed; the 1000 USDT account is a simulation scenario",
+   "why": "wording"
+  }
+ ],
+ "funding": {
+  "required": true,
+  "source": "Binance USD-M fundingRate archives in the cache",
+  "unknown_policy": "abort the run (AM7)",
+  "provision_in_stop_risk": "funding_provision_rate x notional x 1 interval"
+ },
+ "portfolio": {
+  "comparison": "AM4",
+  "budget_usdt": 1000.0,
+  "risk_fraction": 0.01,
+  "leverage_cap": 2.0,
+  "profiles": [
+   "baseline",
+   "adverse"
+  ],
+  "drawdown": "AM5",
+  "reference_size_variant": "no capital, reference notional 250 USDT, pair release only"
+ },
+ "data": {
+  "exploration_window_ms": [
+   1672531200000,
+   1735689600000
+  ],
+  "exploration_window_utc": [
+   "2023-01-01T00:00:00Z",
+   "2025-01-01T00:00:00Z"
+  ],
+  "authorization": "owner message 2026-10-21: local Binance USD-M 10 majors 2023-2024, 1m candles + funding + instrument metadata, development only; no download",
+  "cache": "tradingV3-private/research/20261012T003000Z-explore-v2/cache (manifest f532dfab...); only the authorized window is sliced in memory, warm-up included (no 2022 or 2025 row is used)",
+  "symbols": [
+   "BTCUSDT",
+   "ETHUSDT",
+   "BNBUSDT",
+   "XRPUSDT",
+   "ADAUSDT",
+   "DOGEUSDT",
+   "SOLUSDT",
+   "LTCUSDT",
+   "LINKUSDT",
+   "AVAXUSDT"
+  ],
+  "instrument_assumptions_path": "tradingV3-private/research/20261009T060000Z-source-complements-r1/instrument-assumptions.json",
+  "instrument_assumptions_sha256": "a85a65818f8e82129542f52ec27a9ad64d3ab654d7ea933e99e573226363e601",
+  "instrument_status": "current metadata (2026-10-09), not historical 2023-2024 specifications",
+  "prior_use": "the same period and pairs were consumed by the v2 scalping screen (S1 among 36 5m configurations, all negative, median -0.30 R); this exploration is a new trial on consumed data"
+ },
+ "trial_count": {
+  "this_run": "3 methods x 1 parameter set, 1 run; sensitivities are not separate trials",
+  "rule": "any later change of parameters, rules or data after reading this run's performance counts as a new trial and is numbered"
+ }
+}

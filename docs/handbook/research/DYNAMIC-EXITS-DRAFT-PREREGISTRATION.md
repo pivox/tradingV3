@@ -1,12 +1,13 @@
-# Pré-enregistrement (BROUILLON) : sorties dynamiques à entrées identiques
+# Pré-enregistrement : sorties dynamiques à entrées identiques
 
-**Statut : BROUILLON, NON GELÉ.** Ce texte n'est gelé qu'une fois la ligne `FROZEN` (en bas) remplie
-avec un horodatage et le sha256 du corps. Aucune donnée de marché et aucun résultat de performance n'a
-été lu pour l'écrire. Le code et les tests ont tourné sur des séries **synthétiques** uniquement.
+**Statut : version 1.1.0 GELÉE pour le premier rejeu d'exploration** (2026-10-21, ligne `FROZEN` en
+bas). Le gel précède toute lecture de performance sur données réelles. L'exploration porte sur des
+données Binance 2023-2024 **déjà consommées** : aucun résultat de ce rejeu ne vaut validation
+indépendante ni stratégie confirmée. La version 1.0.0 (brouillon) reste dans le dépôt pour l'historique.
 
-- Spécification machine : `python-orchestrator/scripts/research_v2/specs/dynamic_exits_v1.json`
-  (version 1.0.0). Son sha256 est enregistré dans `dynamic_exits_v1.sha256`, et le module refuse un
-  fichier qui ne correspond pas.
+- Spécification machine : `python-orchestrator/scripts/research_v2/specs/dynamic_exits_v1_1.json`
+  (version 1.1.0, parent 1.0.0). Son sha256 est enregistré dans `dynamic_exits_v1_1.sha256`, et le
+  module refuse un fichier qui ne correspond pas.
 - Code : `python-orchestrator/scripts/research_v2/exits_dynamic.py`.
 - Tests : `python-orchestrator/tests/test_research_v2_exits_dynamic.py`.
 - Date du brouillon : 2026-10-21.
@@ -145,11 +146,12 @@ Valeurs initiales : TP à 1,5 R, SL à 1 R. Horizon de 60 minutes.
   sensibilité, on ajoute une barre de latence.
 - **Contrôle du SL et du TP.** Les deux sont vérifiés à l'intérieur des barres, sur les bougies 1 min.
   - Le stop est surveillé dès la bougie de remplissage.
-  - Le TP initial est surveillé à partir de la bougie suivante ; il est rempli au simple contact, selon
-    la convention de `fills.py`.
+  - Le TP initial est surveillé à partir de la bougie suivante. Depuis la v1.1.0, il n'est rempli que
+    si le marché le traverse d'un tick (AM2) ; le contact seul est la sensibilité `target_touch_legacy`.
   - Si le SL et le TP sont touchés dans la même minute, le stop l'emporte.
 - **Exécution du stop.** Un stop est exécuté au pire du niveau et de l'ouverture de la bougie, ce qui
-  traite les gaps. Il n'est jamais garanti à son niveau.
+  traite les gaps. Il n'est jamais garanti à son niveau. Un nouveau niveau déjà franchi à la clôture de
+  décision devient une sortie au marché à l'ouverture effective suivante (AM3).
 - **TP déplacé.** Un TP déplacé est un nouvel ordre limite et perd sa priorité dans la file. Il n'est
   rempli que par une traversée d'un tick, à partir de la première bougie qui suit la barre de
   modification. L'ancien TP n'est plus actif dès l'entrée en vigueur du nouveau.
@@ -158,7 +160,7 @@ Valeurs initiales : TP à 1,5 R, SL à 1 R. Horizon de 60 minutes.
 - **Arrondis.** Les stops sont arrondis vers l'extérieur (vers le bas pour un long). Le niveau
   d'équilibre est arrondi contre la position (vers le haut pour un long). Les TP sont arrondis en
   s'éloignant de l'entrée.
-- **Contrôle de cohérence.** La méthode A du module reproduit exactement `fills.simulate`. Un test le
+- **Contrôle de cohérence.** En mode `target_touch_legacy`, la méthode A du module reproduit exactement `fills.simulate`. Un test le
   vérifie trajectoire par trajectoire.
 
 ## 6. Coûts
@@ -220,11 +222,20 @@ d'une barre, on rapporte :
 
 On poursuit avec une méthode M (B ou C) seulement si **toutes** les conditions suivantes sont remplies :
 
-1. La différence M−A est rejetée par Holm et sa borne basse ajustée est > 0 (profil de base).
-2. Le R net moyen de M est > 0, avec une borne basse à 90 % (bootstrap par jours) > 0 (profil de base).
-3. Sous le profil défavorable, le R net moyen de M est > 0 et la différence moyenne M−A est > 0.
-4. Le drawdown réalisé de M est ≤ 20 R (net cumulé en R) et le drawdown maximal du portefeuille à
-   1 000 USDT est ≤ 25 %.
+1. **Amélioration** : la différence M−A est rejetée par Holm et sa borne basse ajustée est > 0
+   (profil de base, comparaison 1).
+2. **Rentabilité** : le R net moyen de M est > 0, avec une borne basse à 90 % (bootstrap par jours) > 0
+   (profil de base, comparaison 1).
+3. **Robustesse aux coûts** : sous le profil défavorable, le R net moyen de M est > 0 et la différence
+   moyenne M−A est > 0.
+4. **Risque** : le drawdown de M est ≤ 20 R (net cumulé en R, ordre des sorties, comparaison 1). Son
+   portefeuille réaliste prend au moins un trade. Son drawdown réalisé relatif à 1 000 USDT est ≤ 25 %
+   (comparaison 2, profil de base).
+
+Une mesure absente, non finie ou invalide ne vaut jamais zéro et fait échouer le critère concerné
+(amendement AM6). Les limites de 20 R et 25 % sont des critères de recherche, pas des arrêts
+automatiques : le rejeu ne coupe pas les positions quand elles sont franchies (AM10). Le compte de
+1 000 USDT est un scénario de simulation.
 
 La sensibilité à l'écart doublé et à la latence d'une barre est rapportée et commentée. Elle n'est pas
 un critère bloquant, mais un renversement de signe devra figurer dans le verdict.
@@ -242,6 +253,15 @@ avec α = 0,05 en unilatéral (le niveau le plus strict sous Holm) et une puissa
 Minimums déclarés : **3 000 trades et 250 jours distincts**. En dessous, le verdict est
 `INSUFFICIENT_DATA`. Ce calcul est implémenté dans `required_trades` et vérifié par un test.
 
+Précision de la v1.1.0 (AM9, d'après NIST/SEMATECH e-Handbook §7.2.2.2) : les 3 000 trades viennent du
+calcul sur le R net propre **sans** effet de plan (2 993, arrondi). Le facteur 1,5 de dépendance par
+jour doit s'appliquer aux deux calculs. Il donne 4 489 trades pour le R net propre et 1 336 pour la
+différence appariée (891 sans facteur). Le plancher de 250 jours est un jugement, pas une formule : il
+faut assez de grappes indépendantes (des jours) pour le bootstrap par blocs, et un échantillon qui
+couvre plusieurs régimes, soit à peu près une année de jours de cotation. Les planchers sont conservés.
+Le rejeu d'exploration ré-estime σ et l'effet de plan par jour. Le minimum de la future confirmation
+sera max(plancher, besoin ré-estimé).
+
 Les écarts-types σ sont des hypothèses a priori ; aucune donnée n'a été lue pour les fixer. Si le
 propriétaire autorise l'exploration, ils seront ré-estimés sur les données d'exploration **avant** le
 gel. Le minimum ne pourra alors qu'augmenter, jamais baisser.
@@ -251,8 +271,9 @@ gel. Le minimum ne pourra alors qu'augmenter, jamais baisser.
 - **Exploration** : Binance USD-M, 10 majors, bougies 1 min, du 2023-01-01 au 2024-12-31. Ces données
   sont **déjà consommées** par les screens v2 et scalping. Elles servent au développement uniquement,
   par exemple à vérifier le code de bout en bout et à ré-estimer σ. Elles ne seront lues **qu'avec
-  l'autorisation écrite du propriétaire.** `exits_dynamic run` refuse de démarrer sans
-  `--owner-authorization`.
+  l'autorisation écrite du propriétaire**, donnée le 2026-10-21. `exits_dynamic run` refuse de démarrer
+  sans `--owner-authorization`, sans spécification gelée, hors de la fenêtre autorisée ou si le hash
+  des coûts ou des instruments diffère de la spécification.
 - **Confirmation** : des données réellement nouvelles, **à désigner par le propriétaire**. Deux options :
   - l'intraday Binance 2020-2022, non lu selon le registre (statut `possibly_independent`), à
     télécharger ;
@@ -307,13 +328,22 @@ https://dspace.mit.edu/entities/publication/bb69ca4b-0cdc-487f-831d-63b2e84fafee
 **OKX, « How to use trailing stop »** (https://www.okx.com/en-eu/help/how-to-use-trailing-stop) : voir
 §4 B.
 
-## 13. Verdicts possibles (quatre cas)
+## 13. Verdicts possibles
 
-- `IMPROVEMENT_PROFITABLE_SUPPORTED` : au moins une méthode remplit les quatre critères du §9.
-- `IMPROVEMENT_BUT_LOSS_MAKING` : l'amélioration appariée est étayée (critère 1), mais la méthode
-  échoue sur le net, la robustesse ou le drawdown (critères 2 à 4).
-- `NO_IMPROVEMENT` : aucune comparaison n'est rejetée par Holm avec une borne basse > 0.
-- `INSUFFICIENT_DATA` : moins de 3 000 trades ou moins de 250 jours.
+Version 1.1.0 (AM6). Chaque méthode reçoit séparément les quatre propriétés du §9, avec la liste des
+critères échoués.
+
+- `IMPROVEMENT_PROFITABLE_SUPPORTED` : au moins une méthode remplit les quatre critères.
+- `IMPROVEMENT_PROFITABLE_NOT_ROBUST` : amélioration et rentabilité étayées, mais la robustesse aux
+  coûts ou le risque échoue. Une telle méthode n'est pas « déficitaire » : elle est trop risquée ou
+  trop sensible aux coûts sous les critères fixés.
+- `IMPROVEMENT_BUT_NOT_PROFITABLE` : l'amélioration appariée est étayée, mais la rentabilité propre ne
+  l'est pas.
+- `NO_IMPROVEMENT_DEMONSTRATED` : aucune comparaison n'est rejetée par Holm avec une borne basse > 0.
+  Une amélioration non démontrée ne prouve pas l'absence d'effet.
+- `INSUFFICIENT_DATA` : moins de 3 000 trades ou moins de 250 jours, ou mesure absente.
+
+Sur les données d'exploration, tout verdict porte le statut `EXPLORATION_ONLY`.
 
 ## 14. Code, tests et commandes
 
@@ -350,8 +380,8 @@ https://dspace.mit.edu/entities/publication/bb69ca4b-0cdc-487f-831d-63b2e84fafee
 - Des bougies 1 min ne montrent ni le carnet d'ordres, ni la file d'attente, ni le chemin à l'intérieur
   de la minute. C'est pourquoi le stop l'emporte en cas d'égalité et que le TP déplacé exige une
   traversée.
-- Le TP initial est rempli au simple contact (convention de `fills.py`), alors que le TP déplacé exige
-  une traversée. Cette asymétrie est conservatrice contre C.
+- Depuis la v1.1.0, tous les TP (initial et déplacé) exigent une traversée d'un tick (AM2). L'ancienne
+  convention (TP initial au contact) reste calculée comme contrôle de compatibilité.
 - Le niveau d'équilibre de C est calculé avec le profil de base. Sous le profil défavorable, il ne couvre
   pas tous les frais. C'est voulu : la stratégie ne connaît pas le coût réalisé.
 - En exécution réelle, déplacer un SL ou un TP passerait aujourd'hui par un annuler-puis-replacer, avec
@@ -359,6 +389,49 @@ https://dspace.mit.edu/entities/publication/bb69ca4b-0cdc-487f-831d-63b2e84fafee
 
 ## Amendements
 
-(aucun)
+Version 1.1.0, écrits le 2026-10-21 après la revue du propriétaire et **avant toute lecture de
+performance réelle**. Le détail machine est dans `amendments` de la spécification.
 
-FROZEN: (non gelé — en attente de la revue du propriétaire)
+- **AM1, admission commune par paire.** Une seule position par paire, quel que soit le sens. Une barre
+  portant un signal long et un signal court est un conflit : les deux sont écartés et comptés. La
+  v1.0.0 construisait la table par sens et autorisait un long et un court en même temps.
+- **AM2, TP harmonisés.** Tout TP, initial ou déplacé, est un ordre limite crédité seulement si le
+  marché le traverse d'un tick. L'ancien mode (TP initial au contact) devient la sensibilité
+  `target_touch_legacy`.
+- **AM3, stop déjà franchi.** Un nouveau stop doit se trouver au moins un tick du bon côté de la clôture
+  de décision. Sinon il ne peut pas reposer comme stop : la position sort au marché à l'ouverture
+  effective suivante (motif `stop_crossed`, coûts d'une sortie au marché). Un stop valide que la bougie
+  effective ouvre au-delà se remplit à l'ouverture. Aucun remplissage n'est crédité à un niveau déjà
+  dépassé.
+- **AM4, deuxième comparaison : portefeuille réaliste.** Chaque méthode parcourt la liste complète des
+  candidats S1. Sa propre sortie libère la paire et l'exposition. Un ordre d'entrée non rempli réserve
+  la paire et son notionnel jusqu'à la fin du TTL. Les règles de capital et de risque sont identiques
+  pour les trois méthodes : 1 % du capital réalisé en risque, notionnel ouvert ≤ 2 × capital, pas et
+  minimums d'échange. Une variante à taille de référence, sans capital, isole l'effet d'admission.
+- **AM5, drawdown.** Le drawdown du portefeuille est la plus forte baisse relative du capital réalisé
+  par rapport au sommet atteint avant cette baisse. Les règlements suivent l'ordre des sorties. Les
+  pertes latentes ne sont pas mesurées. La part de risque ouvert maximale les borne, hors gaps. La
+  v1.0.0 divisait la plus forte perte absolue par le sommet final et réglait dans l'ordre des
+  décisions.
+- **AM6, verdict fermé.** Voir §9 et §13.
+- **AM7, funding obligatoire.** Chaque heure de funding comprise dans un trade doit figurer dans les
+  données, à une minute près. Sinon le rejeu s'arrête. Aucun funding ni coût inconnu ne devient zéro.
+- **AM8, point mort.** Il vaut l'entrée plus le coût aller-retour total supposé du profil de base :
+  commission maker 2 pb, commission taker 5 pb, écart 2 pb, glissement 5 pb, soit environ 14 pb. C'est
+  une hypothèse de coût, pas la garantie d'une sortie sans perte.
+- **AM9, puissance.** Voir §10.
+- **AM10, limites.** Les 20 R et 25 % sont des critères de recherche, pas des arrêts automatiques.
+
+Paramètres du premier rejeu d'exploration, fixés avant lecture :
+
+- Fenêtre : décisions et simulations entre le 2023-01-01 00:00 UTC et le 2025-01-01 00:00 UTC, données
+  découpées en mémoire à cette fenêtre, échauffement des indicateurs compris. Aucune bougie de 2022 ou
+  de 2025 n'est utilisée.
+- Paires : les 10 majors du cache `20261012T003000Z-explore-v2`.
+- Coûts : `cost-assumptions.json` (sha256 `83b0216d…`), profils base, défavorable et écart doublé.
+- Instruments : `instrument-assumptions.json` (sha256 `a85a6581…`). Ce sont des métadonnées
+  actuelles, pas les spécifications historiques de 2023-2024.
+- Un seul rejeu. Toute modification après lecture compte comme un nouvel essai numéroté.
+
+FROZEN: v1.1.0 pour le rejeu d'exploration 1, 2026-10-21, spécification `dynamic_exits_v1_1.json`
+sha256 e7d2328cb62d8ffe7d0fdb42dd0c9745d4a5cb408e83c52ef040c28893f32207 (voir le commit qui introduit cette ligne).
