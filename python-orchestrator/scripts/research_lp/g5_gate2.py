@@ -161,7 +161,8 @@ COVERS_RULE = ("the evaluator refuses a spec whose scoring window (every events[
 RATE_CLASS_RE = re.compile(r"^\+1 if settled rate >= (?P<hi>\d+(?:\.\d+)?), -1 if <= (?P<lo>-\d+(?:\.\d+)?), 0 otherwise$")
 TYPE_REQUIRED = ("type", "decisive", "primary", "gate1_identity", "execution_role", "expected_cost_bp", "expected_cost_note", "days_per_year", "window_rule", "window_end",
                  "generator", "footprint_min", "footprint_note", "arm_min", "entry", "exit", "return_window_min", "exit_until_min", "key_candles_end_min", "controls", "criteria")
-TYPE_OPTIONAL = ("rest_until_min", "classifier", "fill_sim", "sign", "validation", "c7", "inconclusive_if", "audit_expected", "utc_time_note")
+TYPE_OPTIONAL = ("rest_until_min", "classifier", "fill_sim", "sign", "validation", "c7", "inconclusive_if", "audit_expected", "utc_time_note",
+                 "adverse_selection_entry_leg")
 IDENTITY_FIELDS = {"classifier": ("classifier",), "thresholds": ("classifier", "validation"), "sign rule": ("classifier", "sign"), "footprint": ("footprint",),
                    "arm_min": ("arm_min",), "rest_until_min": ("rest_until_min",), "return window": ("return_window",), "key candles": ("key_candles",),
                    "validation": ("validation",), "controls": ("controls",), "c7": ("c7",), "criteria": ("criteria",), "generator in New York time": ("generator",)}
@@ -889,7 +890,12 @@ def _parse_capture_type(item, position: int, ctx: dict) -> g5.TypeSpec:
             got = g5._iso(g5.local_to_utc_us(day, generator["minute_of_day"], generator["tz_info"]))[11:16]
             if got != hhmm:
                 raise SpecError(f"{where}.utc_time_note: {generator['tz']} {gen['time']} on {day} is {got} UTC, not {hhmm}")
-    cost_t = g5.cost_terms(role, costs)
+    # Amendment A1: the entry-leg rule of the descriptive Gate 1 construction (through proxy on the minute bars of the prints), the same as
+    # the Gate 1 type's (identity checked in check_gate1_identity); the primary simulation measures every term and is not affected.
+    entry_adverse = g5._choice(item, "adverse_selection_entry_leg", where, g5.ENTRY_ADVERSE_VALUES) if "adverse_selection_entry_leg" in item else g5.ENTRY_ADVERSE_DESIGN
+    if entry_adverse == g5.ENTRY_ADVERSE_MEASURED and (role != "maker_maker" or rest is None):
+        raise SpecError(f"{where}.adverse_selection_entry_leg: measured_by_fill_proxy needs a resting entry conditioned on the construction proxy (A1)")
+    cost_t = g5.cost_terms(role, costs, entry_adverse)
     expected = item["expected_cost_bp"]
     if expected is not None and (isinstance(expected, bool) or not isinstance(expected, (int, float)) or abs(float(expected) - cost_t["total_bp"]) > 1e-9):
         raise SpecError(f"{where}.expected_cost_bp: null (measured) or the Gate 1 design total {cost_t['total_bp']:g} kept for the descriptive net_bp")
@@ -900,7 +906,7 @@ def _parse_capture_type(item, position: int, ctx: dict) -> g5.TypeSpec:
              "construction_proxy": {"open_from_min": arm, "open_to_min": rest - 1} if rest is not None else None, "entry": dict(entry), "exit": dict(ex)}
     return g5.TypeSpec(name, label, position, role, cost_t["total_bp"], cost_t["stress_total_bp"], _num(item, "days_per_year", where, 0.0, 366.0, lo_open=True), "spec_window",
                        generator, footprint, arm, rest, classifier, None, sign, {"kind": entry["kind"], "price": entry["price"]}, {"kind": ex["kind"], "price": ex["price"]}, rw, keys,
-                       validation, controls, c7, criteria, inconclusive, missing_share, audit, gate2, raw=item)
+                       validation, controls, c7, criteria, inconclusive, missing_share, audit, gate2, raw=item, entry_adverse_selection=entry_adverse)
 
 
 # ----------------------------------------------------------------------------- identity with the Gate 1 (frozen_with, piège 7)
@@ -934,6 +940,9 @@ def check_gate1_identity(spec2_types: tuple, parts: dict, gate1: g5.Spec) -> lis
             raise SpecError(f"frozen_with: {t.name} is not a type of the Gate 1 spec") from None
         if t.role != t1.role or t.days_per_year != t1.days_per_year:
             raise SpecError(f"frozen_with: {t.name} execution_role / days_per_year differ from the Gate 1")
+        if t.entry_adverse_selection != t1.entry_adverse_selection:  # A1: the same assumed costs for the Gate 1 construction at both gates
+            raise SpecError(f"frozen_with: {t.name} adverse_selection_entry_leg {t.entry_adverse_selection} differs from the Gate 1 ({t1.entry_adverse_selection}, A1)")
+        checked.append(f"{t.name}:adverse_selection_entry_leg")
         for name in t.gate2["identity"]:
             for field in IDENTITY_FIELDS[name]:
                 if not _same(_type_view(t, field), _type_view(t1, field)):

@@ -112,7 +112,7 @@ def frozen(document: dict, tmp_path: Path | None = None, t05_end: str = "2027-03
             session["verify_at_freeze"] = False
     document.update({"status": "FROZEN", "spec_version": "1.0.0-test"})
     document["universe"]["analysed"] = [item(BTC), item(ETH, "2026-04-01T04:00:00Z", 0.01)]
-    document["events"][0]["expected_cost_bp"], document["events"][1]["expected_cost_bp"] = 13.0, 15.5
+    document["events"][0]["expected_cost_bp"], document["events"][1]["expected_cost_bp"] = 9.5, 15.5  # A1: the Gate 1 design total of T01 (13 before A1)
     document["calendars"]["incomplete_at_draft"] = {}
     document["costs"]["funding"]["fallback"] = "none: an unknown settled rate excludes the observation (test)"
     document["costs"]["funding"]["source"] = g5_gate2.FUNDING_SOURCE
@@ -176,7 +176,9 @@ def test_the_real_gate2_draft_is_accepted_and_every_block_is_read():
     assert t01.inconclusive_if == ("classifier_index_source_unresolved_or_unavailable", "classifier_missing_instrument_day_share_gt_0_50", "C6_failed_or_not_computable")
     assert t01.proxy_missing_share_max == 0.5 and t01.validation["rate_high"] == 0.0004 and t01.controls["within"] == "spec_window"
     # The design totals are kept for the descriptive Gate 1 construction; the stress add-on of the measured terms (proposed by the draft).
-    assert (t01.expected_cost_bp, t01.expected_cost_bp_stress, t05.expected_cost_bp, t05.expected_cost_bp_stress) == (13.0, 19.5, 15.5, 23.25)
+    # A1 (adapted): the T01 entry leg is measured by the fill conditioning of the Gate 1 construction, as at the Gate 1 (13 / 19.5 bp before A1).
+    assert (t01.expected_cost_bp, t01.expected_cost_bp_stress, t05.expected_cost_bp, t05.expected_cost_bp_stress) == (9.5, 14.25, 15.5, 23.25)
+    assert t01.entry_adverse_selection == "measured_by_fill_proxy" and "T01_funding_8h:adverse_selection_entry_leg" in spec.gate2["identity_checked"]
     assert spec.costs["stress_add_bp_per_maker_leg"] == 1.75 and spec.costs["stress_add_bp_per_taker_entry"] == 1.5 and spec.costs["slippage_bp_per_taker_leg"] == 2.0
     assert spec.gate2["sim"] == {"rule": "touch", "descriptive_rules": ("through", "queue"), "latency_ms": 250.0, "stale_s": 10.0, "funding_fill_grace_min": 1.0, "notional": 100.0}
     assert spec.gate2["quality"] == {"coverage_min": 0.9, "stale_us": 10 * MINUTE_US, "share_max": 0.2, "classifier_missing_share_max": 0.5}
@@ -492,9 +494,9 @@ def test_the_gate2_simulation_maker_taker_exit_grace_and_stress(capture_root: Pa
     finally:
         s.vol[:] = vol
     # The descriptive Gate 1 construction on the prints: through proxy (a seller at 100.0 is not strictly below c(h − 5) − 1 tick),
-    # design costs 13 bp.
+    # design costs 9.5 bp (A1, as at the Gate 1: the entry leg is measured by the fill conditioning; 13 bp before A1).
     g1 = g5_eval.measure(s, [h], t01, spec, "event", {"construction": "gate1"})
-    assert g1["execution"] == "candles" and g1["counts"]["unfilled"] == 1
+    assert g1["execution"] == "candles" and g1["counts"]["unfilled"] == 1 and g1["costs"]["total_bp"] == 9.5
 
 
 def test_quality_unusable_days_and_the_data_gap_extension(tmp_path: Path):

@@ -1,10 +1,10 @@
 {
   "spec_id": "LP-G5-GATE1-2026",
   "spec_schema": "g5-spec/2",
-  "spec_version": "0.2.0-draft",
+  "spec_version": "0.3.0-draft",
   "status": "DRAFT_NOT_FROZEN",
   "protocol": "docs/handbook/research/LP-G5-DRAFT-PREREGISTRATION.md",
-  "note": "Spec machine du G5 Gate 1 (historique confirmatoire). Seul fichier lu par l'evaluateur. Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee. Le sha256 de la version FROZEN fait partie du gel (protocole section 13).",
+  "note": "Spec machine du G5 Gate 1 (historique confirmatoire). Seul fichier lu par l'evaluateur. Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee. Le sha256 de la version FROZEN fait partie du gel (protocole section 13). Amendement A1 du 2026-10-21 (avant tout gel et toute lecture, protocole section Amendement A1) : selection adverse de la jambe d'entree de T01 mesuree par le conditionnement au remplissage (cout T01 9,5 / 14,25 pb, ancien total 13 / 19,5 pb en sensibilite rapportee), tableau A/B/C, analyse des non-remplis, variante preneur, stabilite chronologique, classification diagnostique (rapportes, jamais decisifs), frontieres comptees.",
   "source": "history",
   "dataset_id": "okx-xperp-1m-history-2026-03-30..2026-10-13",
   "end_exclusive_utc": "2026-10-14T00:00:00Z",
@@ -38,7 +38,14 @@
     "sealed_statistics_for_inconclusive_and_not_informative",
     "economic_reading_days_per_year",
     "bootstrap_day_blocks",
-    "descriptive_reports_g5_v2"
+    "descriptive_reports_g5_v2",
+    "a1_entry_adverse_selection_measured_by_fill_proxy",
+    "a1_footprint_boundaries_counted",
+    "a1_descriptive_abc_signal_execution_net",
+    "a1_descriptive_filled_vs_unfilled_signal",
+    "a1_descriptive_taker_variant_without_fill_conditioning",
+    "a1_descriptive_chronological_stability",
+    "a1_diagnostic_classification_reported_never_a_verdict"
   ],
 
   "freeze_fill": {
@@ -203,8 +210,10 @@
       "decisive": true,
       "primary": true,
       "execution_role": "maker_maker",
-      "expected_cost_bp": 13.0,
-      "expected_cost_bp_stress": 19.5,
+      "expected_cost_bp": 9.5,
+      "expected_cost_bp_stress": 14.25,
+      "adverse_selection_entry_leg": "measured_by_fill_proxy",
+      "cost_sensitivity_pre_a1": {"adverse_selection_entry_leg": "assumed_design_value", "expected_cost_bp": 13.0, "expected_cost_bp_stress": 19.5, "use": "reported sensitivity only: C2 / C3 values at the pre-A1 total ; never a criterion"},
       "days_per_year": 365,
       "window_rule": "funding_coverage",
       "funding_coverage": {
@@ -373,8 +382,30 @@
       "T01_mark_reference_inside_coverage", "T01_premium_balance_events_vs_controls", "T01_funding_cap_stress",
       "T05_horizons_15_30", "T05_move_ge_1_tick", "T05_macro_days_separately", "T05_ten_am_et_release_days", "T05_brr_adjacency",
       "by_month", "by_instrument", "by_sign", "regime_rv24_above_median", "instruments_per_instant_ge_3", "excluded_share_by_instrument",
-      "block_days_7", "minute_zero_T07", "hourly_seasonality_last_price", "weekday_seasonality", "funding_intervals_histogram", "portfolio_reading"
-    ]
+      "block_days_7", "minute_zero_T07", "hourly_seasonality_last_price", "weekday_seasonality", "funding_intervals_histogram", "portfolio_reading",
+      "abc_signal_execution_net", "T01_filled_vs_unfilled_signal", "T01_taker_variant_without_fill_conditioning", "T01_cost_sensitivity_pre_a1",
+      "chronological_stability_month_and_window_halves", "diagnostic_classification_a1"
+    ],
+    "a1": {
+      "status": "amendment A1 (2026-10-21), written before any freeze and any reading ; reported, never decisive, never a verdict",
+      "definitions": {
+        "A_signal": "gross signed return of the reference price over return_window_min at every classified instrument-instant (classifier or sign passed, fill proxy off) ; no funding, no cost",
+        "B_execution": "the same gross return at the instrument-instants retained by the primary measure (filled by the fill proxy ; a taker entry is filled by construction)",
+        "C_net": "the primary net_bp = B + funding - the costs of the type (events[].expected_cost_bp) ; with the portfolio reading",
+        "statistics": "per row (events, controls, events - controls): n instants, n instrument-instants, fill rate, mean, median, LB90 and UB90 of the day-block bootstrap of the statistics block ; no p-value",
+        "filled_vs_unfilled": "A at the filled against A at the unfilled classified instrument-instants, events and controls (instant means), gap = filled - unfilled ; fill rates of the events and of the controls",
+        "taker_variant": "taker entry at c(t_arm) plus costs.taker_entry_half_spread_bp, no fill conditioning, costs of the taker_maker role, same funding, same exit",
+        "chronological_stability": "D and n per calendar month (UTC) and per half of the type's window (calendar days, first half = the first floor(L / 2) days), for C (net_bp) and A"
+      },
+      "classification_precedence": ["d_insufficiently_documented", "a_no_edge", "c_badly_executed", "b_too_weak_for_costs", "none_of_the_four"],
+      "classification_rules": {
+        "d_insufficiently_documented": "verdict NOT_INFORMATIVE or INCONCLUSIVE, or n below power_floor, or no LB90 / UB90 for A_event - A_control, or LB90(A_event - A_control) <= 0 and UB90(A_event - A_control) >= threshold_bp",
+        "a_no_edge": "LB90(A_event - A_control) <= 0",
+        "c_badly_executed": "LB90(A_event - A_control) > 0, the type has a fill proxy, UB90(A_filled - A_unfilled at the events) < 0, mean B_event < mean A_event, mean C_event <= 0 and mean taker-variant net at the events > 0",
+        "b_too_weak_for_costs": "LB90(A_event - A_control) > 0 and mean C_event <= 0",
+        "none_of_the_four": "LB90(A_event - A_control) > 0 and mean C_event > 0"
+      }
+    }
   },
 
   "fetch_plan": {

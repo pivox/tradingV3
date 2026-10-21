@@ -14,11 +14,22 @@ et les traitements différents sont écrits « **Réponse à la revue** ». En b
 (h−5) pour les événements et les contrôles (B1) ; contrôles à la **même minute de l'heure** que l'événement, sessions exclues en
 heure locale (B2, M4) ; éligibilité codée, **T05 = 105 instants** et non 123 (B3) ; une **seule règle** de PASS (B4) ; issues
 **automatiques** et statistiques **scellées** pour `INCONCLUSIVE` et `NOT_INFORMATIVE` (B5) ; seuil d'incitation |R| ≥ 4 pb (M1) ;
-proxy de fill en primaire de T01 (M11) ; coûts 13 / 15,5 pb (M6) ; fetch pré-gel limité au funding, scellé ; lecture ramenée à
+proxy de fill en primaire de T01 (M11) ; coûts 13 / 15,5 pb (M6 ; T01 à **9,5 pb** depuis l'amendement A1) ; fetch pré-gel limité au funding, scellé ; lecture ramenée à
 ≈ 58 000 requêtes sur 25 instruments (M7, M8). La **spécification machine** du Gate 1 est désormais un fichier du dépôt :
 `python-orchestrator/scripts/research_lp/specs/g5_gate1_spec.json` (statut `DRAFT_NOT_FROZEN`, cohérent avec ce texte) ; c'est ce
 fichier, et lui seul, que l'évaluateur lira ; **son sha256 fait partie du gel** (§13). La relecture CTO (`review/cto.md`) porte sur
 le code : ses constats sont repris comme prérequis de code (P-G5-11 (B)), pas appliqués par cette passe.
+
+**Amendement A1 du 2026-10-21 (demandé par le propriétaire ; écrit avant tout gel et toute lecture, déclaré comme tel ; section
+« Amendement A1 » avant §13).** Statut inchangé (`DRAFT_NOT_FROZEN`). Objet : une expérience qui distingue « signal sans avantage »,
+« avantage trop faible pour les coûts », « signal exploitable mal exécuté » et « résultat insuffisamment documenté », en mesurant à part
+**A** (mouvement après le signal), **B** (mouvement après un remplissage simulé) et **C** (net : coûts, funding, lecture portefeuille),
+sans compter deux fois le spread ni la sélection adverse. En bref : la sélection adverse de la jambe d'entrée de T01 est **mesurée par le
+conditionnement au remplissage** (0 supposé) ; T01 coûte **9,5 pb** (stress **14,25 pb**) au lieu de 13 / 19,5 pb, l'ancien total devenant
+une **sensibilité rapportée** ; T05 vérifié et inchangé (15,5 / 23,25 pb) ; tableau A/B/C, analyse des non-remplis, variante preneur de
+T01, stabilité chronologique et classification diagnostique **rapportés, jamais décisifs** (§9.9) ; frontières de fenêtre exclues et
+comptées. C1–C7, Holm et la porte économique sont inchangés, sauf le total de coût de T01 dans C2 / C3 (et donc dans le net absolu lu par
+la porte économique), déclaré. Spec Gate 1 `0.3.0-draft`, spec Gate 2 `0.1.3-draft` (identité de la règle, piège 7).
 
 **Mandat.** Propriétaire, 2026-10-20 : « Ok go. Mais ta mission reste de trouver comment faire un PnL positif avec le
 scalping, même sur des périodes précises ». Décisions du 2026-10-21 (`LP-OWNER-DECISIONS-2026-10-21.md`) : D1 licence §9.4
@@ -162,7 +173,7 @@ forme testée du type (§8).
 **2026-04-03** ; (ii) PERIODS écrit pour T05 « 122 hors CPI/NFP » et « 13 sur 135 » : sans éligibilité, c'est 123 et 12 (04-03 est
 férié) ; (iii) **les deux documents ignoraient l'éligibilité** `listTime + 30 j` : avec elle, **116** jours NYSE et **105** instants
 T05 (§5.2) ; (iv) PERIODS met le **mark** en prix primaire de T01 et des coûts de 4 pb ; ce protocole prend le **dernier prix**
-(§5.3) et **13 pb** (§6) ; (v) PERIODS propose 10:30 UTC comme contrôle de T05 ; ce protocole prend **toutes** les minutes 30
+(§5.3) et **13 pb** (§6 ; **9,5 pb** depuis l'amendement A1) ; (v) PERIODS propose 10:30 UTC comme contrôle de T05 ; ce protocole prend **toutes** les minutes 30
 admissibles des jours d'événement (§7.1). PERIODS n'est pas modifié (hors du périmètre d'écriture) ; ces écarts y font foi.
 
 ---
@@ -176,7 +187,7 @@ aux règlements h à intervalle 8 h (§5.1) de la fenêtre couverte par l'histor
 reconstituée à la décision vérifie **|P̂(h−5)| ≥ 0,09 %** (équivalent, par la formule officielle, d'un taux |R| ≥ 4 pb), un ordre
 passif posé à **h−5** au prix c(h−5) du côté s (bid si P̂ ≥ +0,09 % : les longs paieront ; ask si P̂ ≤ −0,09 %), vivant jusqu'à h+1,
 **rempli** selon le proxy de bougies (§5.4), tenu à travers la photo et sorti passivement à **h+15**, obtient sur [h−5 ; h+15] une
-dérive signée nette du funding réellement payé (−s·R_h) et des coûts supposés (13 pb, §6) **supérieure d'au moins +10 pb** à la même
+dérive signée nette du funding réellement payé (−s·R_h) et des coûts supposés (9,5 pb, §6, amendement A1 ; 13 pb avant A1) **supérieure d'au moins +10 pb** à la même
 règle — même classifieur, même seuil, même proxy de fill, mêmes coûts — appliquée aux instants hh:00 sans règlement des mêmes jours
 (§7.1). Forme attendue (descriptive) : le prix baisse sur [h−15 ; h] et remonte sur [h ; h+15] quand P̂ > 0 (miroir sinon) ; l'effet
 croît avec |R_h| (dose). Écart déclaré à la fiche G5 (« prime publiée à h−1 ») : la prime de h−1 n'est pas observable à la
@@ -306,7 +317,7 @@ toute clé inconnue (xviii). Les constats CTO B1–B3, M1–M3 et m1–m7 sont i
 | x | `generator_local_time_exclude_dates` : T05 = 09:30 `America/New_York` des jours NYSE de la liste gelée, hors dates CPI et Employment Situation (CTO B1-vii) | §5.2 |
 | xi | `controls_minute_of_hour_all_admissible` et `exclusion_by_footprint_with_margin` : contrôles d'un type à sa `minute_of_hour` (T01 : 0 ; T05 : 30), **toutes** les heures admissibles des jours d'événement de l'instrument (T01 : dans D_cov) ; admissible si l'empreinte du contrôle est à ≥ 60 min de **toute** empreinte de l'union d'exclusion (règlements connus de l'instrument, grille par défaut du type, instants T05, sessions, macro) ; aucun tirage aléatoire | §7.1, quant B2, M5 |
 | xii | `sessions_local_time_dst` et `macro_filter_new_york_time` : sessions et publications converties depuis l'heure locale (`zoneinfo` ; New York vérifié contre `events.us_dst_active`) | §7.1, quant M4, m8 |
-| xiii | `costs_by_execution_role` : `maker_maker` (T01) / `taker_maker` (T05), sélection adverse 3,5 pb par jambe maker, glissement 2 pb, demi-spread d'entrée preneur 3 pb, stress × 1,5 sur **tous** les termes de coût ; le spec déclare le total attendu (13 / 15,5 pb) et l'évaluateur vérifie l'égalité (CTO B1-vi) | §6, quant M6 |
+| xiii | `costs_by_execution_role` : `maker_maker` (T01) / `taker_maker` (T05), sélection adverse 3,5 pb par jambe maker **dont la sélection adverse est supposée** (amendement A1 : la jambe d'entrée de T01, conditionnée au remplissage, est mesurée, 0 supposé), glissement 2 pb, demi-spread d'entrée preneur 3 pb, stress × 1,5 sur **tous** les termes de coût ; le spec déclare le total attendu (9,5 / 15,5 pb ; 13 pb pour T01 avant A1, gardé en `cost_sensitivity_pre_a1`) et l'évaluateur vérifie l'égalité (CTO B1-vi) | §6, quant M6, A1 |
 | xiv | `funding_unknown_outside_coverage_counted` : funding d'une fenêtre hors D_cov supposé nul et compté (`funding_unknown`) ; funding des contrôles calculé (attendu nul ; non nul compté comme anomalie) | §4.4, quant M5 ; CTO M1 |
 | xv | `verdict_c1_c7_precedence` : précédence `INCONCLUSIVE` > `NOT_INFORMATIVE` > critères ; C1–C7 (§7.5) ; annotation du FAIL (UB90 ≥ / < +10 pb) ; lecture « poursuivi » (CTO B3) | §7.5, §8 |
 | xvi | `holm_local_and_programme_fields` : `holm_local_confirmed` (K = 2) et `pass_programme_immediate` (p ≤ 0,10/7) ; le champ `pass_programme` disparaît (quant B4) | §7.5 |
@@ -315,6 +326,7 @@ toute clé inconnue (xviii). Les constats CTO B1–B3, M1–M3 et m1–m7 sont i
 | xix | **Fetcher** : `--inst-ids` (liste hachée) et `--max-requests` obligatoires pour un vrai run, refus si le plan dépasse ; départ par flux (bougies : éligibilité − 1 j ; mark / indice : max(D_cov − 1 j, éligibilité − 1 j)) ; mode **scellé** pour le funding pré-gel (totaux globaux et D_cov seulement à l'écran et au journal, manifeste par instrument dans un fichier scellé haché) ; `end_reason` et `coverage_start_us` ; `data` non-liste traité comme transitoire puis fatal ; compteurs cumulés ; `--force` réel (CTO M1, M3, m1, m2, m3) | §4.3, P-G5-3, quant M7, M8 |
 | xx | `sealed_statistics_for_inconclusive_and_not_informative` : pour un type `INCONCLUSIVE` ou `NOT_INFORMATIVE`, D, LB90, UB90, p, moyennes, critères et descriptifs du type écrits dans `sealed/<type>.json`, sha256 imprimé, rien d'autre ; `economic_reading_days_per_year` (365 / 252) ; `bootstrap_day_blocks` (10 000 rééchantillons ; sensibilité 7 jours descriptive) ; `descriptive_reports_g5_v2` (§9, avertissement en tête du Markdown, CTO m7) | §7.3, §7.6, §8, quant B5, m1 |
 | xxi | **Gate 2** : fill dans [h ; h+1) compté comme traversant la photo ; entrée **preneur** de T05 au touch opposé + glissement dans `measure_lp_sim` ; classifieur P̂ sur mark de capture et indice (P-G5-10 ii) ; validation C6 avec R du canal `funding-rate` | §10 |
+| xxiii | **Amendement A1** (capacités `a1_*`, Gate 1) : `a1_entry_adverse_selection_measured_by_fill_proxy` (clé `adverse_selection_entry_leg`, `type_cost_terms`, sensibilité `cost_sensitivity_pre_a1`), `a1_footprint_boundaries_counted` (`crosses_end_exclusive`, éligibilité, événements et contrôles), `a1_descriptive_abc_signal_execution_net`, `a1_descriptive_filled_vs_unfilled_signal`, `a1_descriptive_taker_variant_without_fill_conditioning`, `a1_descriptive_chronological_stability`, `a1_diagnostic_classification_reported_never_a_verdict` (bloc `descriptive.a1`, lu mot pour mot) ; tests `tests/test_research_lp_g5_a1.py` | section Amendement A1 |
 | xxii | **`tests/test_research_lp_g5_eval.py`** étendu (synthétique, hors ligne, garde `socket` au niveau du module — CTO m6) : calibration sous H0 sur ≥ 1 000 jeux (marche aléatoire avec rebond bid-ask, sursauts de minute 0, chocs de jour partagés ; 1 000 rééchantillons dans les tests, déclaré) : taux de {LB90(D) > 0} ≤ 0,10 + 3 erreurs types Monte-Carlo, uniformité de p (Kolmogorov-Smirnov, non rejetée à 1 %), FWER de Holm ≤ 0,10 + 3 erreurs types ; **non-régression de B2** : sursaut et rebond plantés à la minute 0, événement à la minute 30 ⇒ D sans biais (valeur absolue de la moyenne ≤ 3 erreurs types) avec les contrôles à la minute 30, biais détecté avec des contrôles à la minute 0 ; effet planté de +30 pb : **puissance rapportée** (pas un booléen) ; éligibilité, `vol = 0`, proxy de fill, classifieur à t_arm, refus d'un champ après la décision, clé inconnue refusée, scellement, constante END (quant m7) | gel impossible sans |
 
 ---
@@ -505,11 +517,14 @@ l'ampleur du rebond croît avec le spread, qui peut différer entre 13:30 et les
   plus haut (`high`) est **strictement supérieur à c(h−5) + `tickSz`** (règle `through`, conservatrice) ; non rempli ⇒ exclu de la
   mesure primaire, compté ; taux de fill rapporté aux événements et aux contrôles ; sortie passive **supposée** à c(h+15) ;
   r = s × ln(c(h+15) / c(h−5)) × 10⁴ pb ; funding_bp = −s × R_h × 10⁴ (règlement h ∈ (h−5 ; h+15], `FundingSchedule.crossed`) ;
-  net = r + funding_bp − 13 pb (§6). Lecture : le fournisseur du côté s **paie** R_h quand le signe de P̂ et celui de R_h concordent
-  (piège 19) ; net = rebond − R − coûts. La version **sans** proxy de fill est descriptive (§9.4).
+  net = r + funding_bp − **9,5 pb** (§6 ; amendement A1 : r part du prix limite et n'existe que pour un ordre traversé, donc le mouvement
+  défavorable qui suit le remplissage — la sélection adverse de la jambe d'entrée — est **déjà dans r** et n'est plus supposée ; 13 pb
+  avant A1, rapporté en sensibilité). Lecture : le fournisseur du côté s **paie** R_h quand le signe de P̂ et celui de R_h concordent
+  (piège 19) ; net = rebond − R − coûts. La version **sans** proxy de fill est descriptive (§9.4) : elle n'est pas conditionnée au
+  remplissage, rien n'y mesure la jambe d'entrée, son net garde 13 pb ; sa dérive brute est la ligne **A** du tableau A/B/C (§9.9).
 - **T05** : décision à **h+5**, entrée **preneur** à c(h+5) du côté s, demi-spread de conception payé (§6) ; sortie passive supposée à
   c(h+60) ; r = s × ln(c(h+60) / c(h+5)) × 10⁴ ; funding_bp = −s × Σ taux des règlements dans (h+5 ; h+60] (D_cov ; hors D_cov
-  supposé nul, compté) ; net = r + funding_bp − 15,5 pb.
+  supposé nul, compté) ; net = r + funding_bp − 15,5 pb (vérification du double compte : §6 et amendement A1, A1.2 ; inchangé).
 - **Pas de stop** dans l'analyse primaire (règle 12) ; lecture portefeuille : coupe de catastrophe à **3 σ₁₅** (σ₁₅ = écart-type des
   rendements 1 m du dernier prix sur les 24 h précédant h × √15), jamais plus serrée ; taille **100 USD** par ordre.
 
@@ -527,18 +542,29 @@ impact de marché supposé (déclaré).
 
 ---
 
-## 6. Coûts (pessimistes, dans le net ; `GATES` §5 ; quant M6)
+## 6. Coûts (pessimistes, dans le net ; `GATES` §5 ; quant M6 ; amendement A1)
 
 | Terme | T01 (maker / maker) | T05 (preneur / maker) | Stress (× 1,5 sur tous les termes) |
 |---|---|---|---|
 | Frais | 2 + 2 = 4 pb | 5 + 2 = 7 pb | 6 / 10,5 pb |
-| Sélection adverse (valeur de conception `GATES` §5.4 : **3,5 pb par jambe maker**, borne haute de Part A, structurellement plus élevée sur X-Perps à cause des RPI) | 3,5 × 2 = 7 pb (l'entrée est en partie déjà mesurée par le proxy de fill : double compte partiel **déclaré**, biais vers le FAIL sur C2 / C3, sans effet sur D) | 3,5 pb sur la jambe maker de sortie | 10,5 / 5,25 pb |
+| Sélection adverse (valeur de conception `GATES` §5.4 : **3,5 pb par jambe maker dont la sélection adverse est supposée**, borne haute de Part A, structurellement plus élevée sur X-Perps à cause des RPI) | **3,5 pb sur la seule jambe de sortie** (sortie passive supposée à c(h+15), non conditionnée). **Jambe d'entrée : mesurée** par le conditionnement au remplissage (amendement A1) — le mouvement défavorable qui suit le remplissage est dans r —, **0 supposé**. Avant A1 : 3,5 × 2 = 7 pb, double compte partiel déclaré | 3,5 pb sur la jambe maker de sortie | 5,25 / 5,25 pb (10,5 pb pour T01 avant A1) |
 | Demi-spread d'entrée preneur | — | **3 pb** (conception : la moitié du seuil de 6 pb de G2 ; spreads des X-Perps minces UNKNOWN) | 4,5 pb |
 | Glissement | 2 pb | 2 pb | 3 pb |
-| **Total supposé** | **13 pb** | **15,5 pb** | **19,5 / 23,25 pb** |
+| **Total supposé** | **9,5 pb** (A1 ; 13 pb avant A1 : sensibilité rapportée, `T01_cost_sensitivity_pre_a1`) | **15,5 pb** | **14,25 / 23,25 pb** (T01 : 19,5 pb avant A1, rapporté) |
 | Funding | **réel**, `−s × R_h` (traversé par construction) ; stress au plafond de l'instrument contre la position : descriptif | réel dans D_cov ; hors D_cov supposé nul, compté | idem |
 | Marge gelée | 100 USD × 20 min / 365 j × SOFR : négligeable, écrit (`GATES` §5.2) | idem (55 min) | — |
 | Liquidation, ADL, bandes | sans objet à 1× sur 20–55 min (mouvement de l'ordre de 99 % requis, calcul d'audit G2 §5.6) ; rejet par bande (`maxPxLmtPct`) non modélisé au Gate 1, compté au Gate 2 (`band_rejected`) | idem | — |
+
+**Règle anti-double compte (amendement A1).** Chaque terme de coût est soit **mesuré** dans le rendement, soit **supposé** dans le coût, jamais
+les deux, jamais aucun. Un ordre au repos dont la mesure est **conditionnée au remplissage** (proxy `through`, T01 primaire) a sa sélection
+adverse d'entrée mesurée : 0 supposé. Une mesure **non conditionnée** (T01 sans proxy, §9.4 ; variante preneur, §9.9) ne la mesure pas : la
+valeur de conception s'applique (13 pb pour la version maker sans proxy, 15,5 pb pour la variante preneur). La jambe de sortie (sortie
+passive **supposée** remplie à c(h+15) / c(h+60)) n'est conditionnée à rien : sa sélection adverse est supposée (3,5 pb), pour les deux
+types. **T05 vérifié** (A1.2) : frais, sélection adverse de la jambe de sortie, demi-spread d'entrée (milieu → touch) et glissement
+(touch → prix moyen) sont des termes distincts ; le seul chevauchement est **partiel** et déclaré — conditionnée au signe s de
+[h ; h+5], la clôture c(h+5) est plus souvent du côté du touch que le preneur paie (rebond de Roll), si bien qu'une part de 0 à 3 pb du
+demi-spread est déjà dans c(h+5) : surcharge vers le FAIL sur C2 / C3, nulle sur D ; non corrigée (non mesurable sur bougies ; la corriger
+serait une hypothèse vers le PASS ; le Gate 2 mesure le demi-spread réel). T05 reste à 15,5 / 23,25 pb.
 
 Les coûts sont **identiques** à l'événement et au contrôle : dans D (§7.3) ils s'annulent, sauf le funding (payé à l'événement, nul au
 contrôle). Le seuil +10 pb porte donc sur l'**excès de dérive net du funding** ; C2 et C3 exigent en plus un net **absolu** positif à
@@ -613,8 +639,9 @@ règle C1 exige **aussi** D ≥ +10 pb au point, donc l'effet vrai qui donne une
   incalculable) ; (2) `G5_GATE1_NOT_INFORMATIVE` sous la porte (§7.4) ; (3) les critères puis Holm.
 - **Critères** (tous requis pour le type) :
   - **C1** (test confirmatoire de la famille) : D ≥ **+10 pb** au point (mesure `net_bp`, coûts §6, funding réel) **et LB90(D) > 0** ;
-  - **C2** : net moyen des instants d'événement **> 0** (point), coûts compris ;
-  - **C3** : C2 tient avec **tous** les termes de coût × 1,5 ;
+  - **C2** : net moyen des instants d'événement **> 0** (point), coûts compris (T01 : 9,5 pb depuis l'amendement A1, 13 pb avant ; la valeur
+    à 13 pb est rapportée, jamais un critère) ;
+  - **C3** : C2 tient avec **tous** les termes de coût × 1,5 (T01 : 14,25 pb depuis A1, 19,5 pb avant, rapporté) ;
   - **C4** : D (point) **> 0 dans chaque moitié** ; moitiés = jours distincts d'événement du type, triés, coupés à la **médiane
     inférieure** (première moitié = jours ≤ jour médian ; T05 : 53 / 52 jours), avec les contrôles des mêmes jours (quant m2 : c'est la
     règle du code, et non des moitiés calendaires) ;
@@ -639,7 +666,8 @@ point ≥ S_éco **et** (UB90 ≥ 2 S_éco **ou** LB90 > 0) (`GATES` §1.2). Seu
 **T05** à 4 fills par instant, 105 instants pour 116 jours NYSE : net d'événement ≥ **10,6 pb** (la relecture écrivait 9,6 pb en
 supposant un instant chaque jour NYSE), soit une continuation brute de l'ordre de **26 pb** après 15,5 pb de coûts — **un PASS de T05 à
 D = +10 pb sans net absolu de cet ordre est « PASS, non poursuivi » par construction** (écrit d'avance) ; **T01** : ≥ 2,2 pb nets à
-12 fills par jour (3 photos × 4 instruments), ≥ 8,9 pb à 3 fills par jour.
+12 fills par jour (3 photos × 4 instruments), ≥ 8,9 pb à 3 fills par jour (seuils **nets**, inchangés par l'amendement A1 ; en dérive
+brute de remplissage, ils baissent de 3,5 pb pour T01 puisque le net y retire 9,5 pb au lieu de 13 pb, funding en plus).
 
 ---
 
@@ -691,7 +719,8 @@ sur le dernier prix ; au Gate 2, sélection adverse « hh:00–hh:01 » contre l
 9.3 **Jour de la semaine** (T10) et **ouvré / non ouvré US** (T09) ; T01 par strate « jour ouvré US / week-end et fériés ».
 
 9.4 **T01** : version **classée par R_h** (ancien classifieur, zone morte du taux) ; version **zone morte** (P̂ > +0,06 % ou < −0,05 %) ;
-version **sans proxy de fill** (dérive inconditionnelle) ; forme en V ([h−15 ; h] contre [h ; h+15]) ; dose |R_h| ; par heure de photo
+version **sans proxy de fill** (dérive inconditionnelle ; son net garde 13 pb car rien n'y mesure la jambe d'entrée, A1 ; sa dérive brute
+est la ligne A de §9.9) ; forme en V ([h−15 ; h] contre [h ; h+15]) ; dose |R_h| ; par heure de photo
 (00:00 « jour UTC / Tokyo », 08:00 « composite HKEX / Deribit / datés le vendredi », 16:00 seul — en plus de C7) ; vendredi contre autres
 jours (T08) ; strate T02 (règlements à 4 h, 2 h, 1 h : net et F) ; **sur le mark, dans D_cov seulement** ; équilibre de |P̂| entre
 événements et contrôles ; par instrument ; par mois ; par signe ; histogramme des intervalles de funding et part des règlements escaladés ;
@@ -711,6 +740,26 @@ données manquantes) ; taux de fill aux événements et aux contrôles ; sensibi
 9.8 **Différés au Gate 2 (strates sur la capture, jamais de test sans nouveau pré-enregistrement gelé avant la lecture du Gate 1)** :
 T02 photos 4 h (`premium`, `settState` du canal `funding-rate`, carnet) ; T06 clôture US 20:00/21:00 UTC (réversion, `trades.source`) ;
 T18 fixing CME (spécifications CME à consulter) ; T20 imbalance de quart d'heure (flux signé ; hors scalp ; décision 12).
+
+9.9 **Amendement A1 — rapports obligatoires, rapportés, jamais décisifs** (spec `descriptive.reports` et bloc `descriptive.a1`, lus mot
+pour mot ; aucun p-value ; scellés avec le type s'il est `INCONCLUSIVE` ou `NOT_INFORMATIVE` ; définitions complètes en A1.3–A1.7) :
+- `abc_signal_execution_net` (par type) — **A** (signal) : rendement brut signé du prix de référence sur `return_window_min` à **tous** les
+  instruments-instants classés (classifieur ou signe passés, proxy de fill coupé), sans funding ni coût ; **B** (exécution) : le même
+  rendement aux seuls instruments-instants de la mesure primaire (remplis par le proxy ; une entrée preneur est remplie par construction,
+  B = A pour T05) ; **C** (net) : le net primaire = B + funding − coûts du type, et la lecture portefeuille ; lignes événements, contrôles et
+  événements − contrôles, avec n instants, n instruments-instants, jours, taux de remplissage, moyenne, médiane, LB90 / UB90 du bootstrap par
+  jours (même graine et mêmes rééchantillons que la statistique décisive ; la ligne C événements − contrôles **est** D) ;
+- `T01_filled_vs_unfilled_signal` — A aux remplis contre A aux non-remplis, aux événements et aux contrôles ; écart rempli − non-rempli
+  (signature de la sélection adverse) avec LB90 / UB90 ; taux de remplissage événements, contrôles et leur différence ;
+- `T01_taker_variant_without_fill_conditioning` — entrée **preneur** à c(h−5) plus le demi-spread de conception (3 pb), sans
+  conditionnement au remplissage (population A), même funding, même sortie, coûts du rôle `taker_maker` (15,5 / 23,25 pb) : D, net moyen
+  d'événement et son stress ; c(h−5) n'étant conditionné à aucun mouvement du dernier prix, le demi-spread n'y chevauche aucun rebond ;
+- `T01_cost_sensitivity_pre_a1` — valeurs de C2 / C3 au total d'avant A1 (13 / 19,5 pb) : le net de chaque instant baisse de 3,5 pb
+  (5,25 pb au stress) ; D inchangé ;
+- `chronological_stability_month_and_window_halves` (par type) — D et n par **mois calendaire** UTC et par **moitié de la fenêtre du type**
+  (jours calendaires : T01 [D_cov ; END_EXCLUSIVE), T05 la fenêtre du spec ; première moitié = les ⌊L/2⌋ premiers jours), pour C et pour A
+  (distinct de C4, qui coupe à la médiane des jours d'événement) ;
+- `diagnostic_classification_a1` (par type) — la classification de A1.7, **jamais un verdict**.
 
 ---
 
@@ -747,10 +796,14 @@ avant son propre verdict.
 
 ## 11. Risques, biais déclarés, pièges intégrés
 
-11.1 **Biais vers le PASS (déclarés)** : demi-spread d'entrée de T05 fixé à 3 pb sur des carnets minces (C2, C3 seulement) ; rejet par
+11.1 **Biais vers le PASS (déclarés)** : demi-spread d'entrée de T05 fixé à 3 pb sur des carnets minces (C2, C3 seulement) ; à l'instant qui
+ouvre D_cov, la fenêtre de funding de T01 s'ouvre avant D_cov et le funding y est supposé nul (compté `funding_unknown` ; un instant sur
+≈ 211, constat de la passe A1, à trancher à la relecture du code) ; rejet par
 bande de prix non modélisé au Gate 1 ; aucun impact de marché ; prints RPI au Gate 2 tant que `trades.source` n'est pas utilisé (G2 §0.9) ;
-sortie passive supposée remplie à c(h+15) / c(h+60). **Biais vers le FAIL** : sélection adverse comptée sur l'entrée de T01 alors que le
-proxy de fill en mesure déjà une partie (C2, C3) ; funding payé par construction à T01 ; Holm à K = 2 avec p = 1 pour un type
+sortie passive supposée remplie à c(h+15) / c(h+60). **Biais vers le FAIL** : (avant A1 : sélection adverse comptée sur l'entrée de T01
+alors que le proxy de fill la mesure déjà — supprimé par l'amendement A1) ; la règle `through` ne garde que les remplissages traversés,
+dont la sélection adverse mesurée est probablement **supérieure** à la valeur de conception (C2, C3) ; demi-spread de T05 en partie
+contenu dans c(h+5) conditionné au signe, 0 à 3 pb (C2, C3 ; A1.2) ; funding payé par construction à T01 ; Holm à K = 2 avec p = 1 pour un type
 `NOT_INFORMATIVE` ; seuil d'incitation qui réduit n ; rebond bid-ask sur le net absolu de T05. **Direction UNKNOWN** : proxy de fill
 (le prix limite est c(h−5), pas le bid réel ; une transaction au bid peut satisfaire la règle quand c(h−5) était au ask) ; écart de spread
 entre 13:30 et les minutes 30 de contrôle (ampleur du rebond) ; sélection de l'univers par un volume d'octobre (§3.1) ; sessions locales
@@ -794,12 +847,12 @@ ou traitement différent, motivé ; **signalé** = hors du périmètre d'écritu
 | quant **M3** — bougies figées : biais sans direction garantie | **Appliqué** : §4.5, §5.4, spec `frozen_candle`, `key_candles_end_min` — exclusion de tout instrument-instant dont une bougie clé a `vol = 0` (champ présent dans `candles_1m`, établi), même règle aux contrôles, part exclue par instrument ; « rendement nul, biais vers le FAIL » retiré ; prérequis (B) viii |
 | quant **M4** — composites 00:00 / 08:00 ; contrôles à 20:00 (clôture US) et 07:00 (Londres) ; composition changeante au Gate 2 | **Appliqué** : §1.4, §4.6, §7.1, spec `sessions` — sessions en heure locale (clôture et ouverture US, Londres / Xetra, Hong Kong, Tokyo, BRR, datés du vendredi) exclues à ± 60 min des contrôles ; **C7** (D > 0 à 16:00 seul) ajouté comme critère, avec son interprétation écrite d'avance ; prérequis (B) xii |
 | quant **M5** — aucune photo dans l'union hors couverture ; exclusion par instants | **Appliqué** : §4.4, §7.1, spec `controls_common` — grille par défaut 00/08/16 pour T01, **00/04/08/12/16/20 toujours** pour T05 (plus strict que « hors couverture » : composition constante dans et hors D_cov) ; exclusion écrite sur les **empreintes** ; funding de T05 hors D_cov « supposé nul, non observé », compté ; prérequis (B) xi, xiv |
-| quant **M6** — sélection adverse sous le défaut de `GATES` ; demi-spread de T05 absent | **Appliqué** : §6, spec `costs` — 3,5 pb par jambe maker, demi-spread d'entrée de T05 à 3 pb ; totaux 13 / 15,5 pb, stress 19,5 / 23,25 pb. **Réponse à la revue** : « ou la table G2 » est sans objet au Gate 1 — G5 est gelé avant la lecture de G2 (P-G5-9), la table ne peut pas exister au gel ; les valeurs de conception sont définitives |
+| quant **M6** — sélection adverse sous le défaut de `GATES` ; demi-spread de T05 absent | **Appliqué** : §6, spec `costs` — 3,5 pb par jambe maker, demi-spread d'entrée de T05 à 3 pb ; totaux 13 / 15,5 pb, stress 19,5 / 23,25 pb. **Réponse à la revue** : « ou la table G2 » est sans objet au Gate 1 — G5 est gelé avant la lecture de G2 (P-G5-9), la table ne peut pas exister au gel ; les valeurs de conception sont définitives. **Révisé par l'amendement A1** (2026-10-21, avant lecture) : T01 9,5 / 14,25 pb (jambe d'entrée mesurée par le conditionnement au remplissage, 0 supposé ; sortie 3,5 pb), 13 / 19,5 pb en sensibilité rapportée ; T05 vérifié, inchangé |
 | quant **M7** — fetch aveugle trop large ; manifeste révélateur | **Appliqué** : P-G5-3, §4.3, spec `fetch_plan.pre_freeze` — fetch pré-gel limité à `funding_hist`, mode scellé ; bougies, mark, indice après le gel. **Réponse à la revue** (plus strict) : même les totaux **par instrument** sont scellés (un nombre de règlements par instrument révèle encore une escalade) ; seuls les totaux globaux et D_cov sont imprimés ; prérequis (B) xix |
 | quant **M8** — mark et indice depuis `listTime` : échelle non nécessaire | **Appliqué** : §0.5, §4.1, §4.3, P-G5-1, spec `fetch_plan` — mark / indice bornés à [D_cov − 1 j ; END) ; descriptifs « sur le mark » hors D_cov supprimés ; facteur 0,4 proposé. **Réponse à la revue** (plus loin) : les 4 instruments sans jour éligible ne sont pas récupérés et les bougies partent de l'éligibilité − 1 j : ≈ 58 300 requêtes au lieu des ≈ 87 000 de la relecture |
 | quant **M9** — univers choisi par un volume du 2026-10-14 | **Appliqué, options (b) + (a)** : §3.1, P-G5-4, spec `universe` — règle par métadonnées dans le snapshot post-10-31 ∩ liste D1 (enveloppe de licence ; 25 attendus) **et** dérogation écrite du propriétaire nommant l'exception et ses biais ; biais déclarés (faible sur D, plus fort sur C2/C3) |
 | quant **M10** — clôtures trop fortes pour des tests sous-puissants | **Appliqué** : §8 — FAIL = FAIL, annoté « absence non démontrée » (UB90 ≥ +10) / « effet ≥ +10 pb exclu » (UB90 < +10) ; clôture limitée aux formes testées ; « mécanisme compris » retiré |
-| quant **M11** — estimand inconditionnel au Gate 1, conditionnel au fill au Gate 2 | **Appliqué** : §0.9, §5.4, spec `fill_proxy` — proxy `through` primaire pour T01, même règle aux contrôles, taux de fill rapporté, version inconditionnelle descriptive. **Réponse à la revue** sur un point : la sélection adverse supposée de l'entrée est **conservée** (3,5 pb) malgré la part mesurée par le proxy ; double compte partiel déclaré, biais vers le FAIL sur C2/C3, sans effet sur D |
+| quant **M11** — estimand inconditionnel au Gate 1, conditionnel au fill au Gate 2 | **Appliqué** : §0.9, §5.4, spec `fill_proxy` — proxy `through` primaire pour T01, même règle aux contrôles, taux de fill rapporté, version inconditionnelle descriptive. **Réponse à la revue** sur un point : la sélection adverse supposée de l'entrée est **conservée** (3,5 pb) malgré la part mesurée par le proxy ; double compte partiel déclaré, biais vers le FAIL sur C2/C3, sans effet sur D. **Révisé par l'amendement A1** : ce double compte est retiré — la sélection adverse de la jambe d'entrée est mesurée par le conditionnement au remplissage (0 supposé) ; l'ancien total reste rapporté ; la version sans proxy garde 13 pb (non conditionnée) |
 | quant **m1** — 1 000 rééchantillons ; blocs d'un jour ; critère H0 | **Appliqué** : §7.3 (10 000 ; sensibilité 7 jours) ; critère H0 en (B) xxii. **Réponse à la revue** : les tests synthétiques de calibration tournent à 1 000 rééchantillons (coût), déclaré ; la calibration de la règle ne dépend pas de ce nombre au premier ordre |
 | quant **m2** — C4 « calendaires » contre médiane du code ; C5 imprécis | **Appliqué** : §7.5 — C4 sur la médiane inférieure des jours d'événement (règle du code, 53 / 52 pour T05) ; C5 = net par instant d'événement, contrôles inchangés |
 | quant **m3** — 252 jours contre `GATES` §1.1 ; PASS de T05 à +10 « non poursuivi » | **Appliqué** : §7.6 (seuil de rentabilité recalculé à **10,6 pb** nets sur le vrai calendrier ; remarque économique écrite) ; amendement de `GATES` §1.1 **signalé** (P-G5-7) |
@@ -814,7 +867,137 @@ ou traitement différent, motivé ; **signalé** = hors du périmètre d'écritu
 | quant **m12** — descriptifs réutilisés comme filtres | **Appliqué** : §8, §9 (règle p = 1 en tête) |
 | quant **m13** — visibilité plus restrictive que D1 | **Appliqué** : §4.8 aligné sur D1 (agrégats sans prix pour `PASS` / `FAIL`, jamais les valeurs scellées) |
 | CTO **B1–B3, M1–M3, m1–m7** (`review/cto.md`) | **Prérequis** : intégrés aux lignes (B) i, ii, iii, iv, vii, viii, xiii, xv, xvii, xviii, xix, xx, xxii ; non codés par cette passe (chemins de code hors périmètre, sauf le spec) |
+| **Propriétaire, 2026-10-21 — amendement A1** : une expérience qui distingue « sans avantage », « trop faible pour les coûts », « mal exécuté », « insuffisamment documenté », A / B / C mesurés à part, sans double compte | **Appliqué** (avant tout gel et toute lecture) : section « Amendement A1 », §5.4, §6, §7.5, §7.6, §9.4, §9.9, §11.1, (B) xiii et xxiii, Annexes A et B ; spec Gate 1 `0.3.0-draft` (clés `adverse_selection_entry_leg`, `cost_sensitivity_pre_a1`, bloc `descriptive.a1`, six rapports, sept capacités `a1_*`) ; spec Gate 2 `0.1.3-draft` (même règle d'entrée, piège 7) ; code `g5_eval` / `g5_gate2` ; tests `tests/test_research_lp_g5_a1.py` (16), quatre tests antérieurs adaptés (A1.11) |
 | Spec machine (demande de la passe) | **Appliqué** : `python-orchestrator/scripts/research_lp/specs/g5_gate1_spec.json` (sha256 du brouillon au 2026-10-21 en Annexe A, informatif ; JSON validé, cohérence des coûts, des comptes et de `END_EXCLUSIVE` vérifiée, refus par le parseur actuel constaté) ; son sha256 de version `FROZEN` entre dans la ligne de gel (§13) |
+
+---
+
+## Amendement A1 (2026-10-21) — signal, exécution, net : trois mesures séparées, aucun double compte
+
+**Statut et date.** Écrit le 2026-10-21, à la demande du propriétaire, **avant tout gel** (le protocole et les deux specs sont
+`DRAFT_NOT_FROZEN`) et **avant toute lecture** : aucune donnée de marché n'a été lue ni appelée pour l'écrire (aucun endpoint, aucun
+WebSocket, aucun jeu de données ; `g5-fetch` jamais lancé ; rien sous `tradingV3-private/research/20261013T100000Z-forward-okx-r1/`). Il
+est déclaré comme amendement, et non fondu dans le texte, parce qu'il **abaisse le coût supposé de T01** (C2 / C3 moins exigeants de 3,5 pb,
+5,25 pb au stress) : sa justification est **a priori** (structure de la mesure), l'ancien total reste rapporté, et rien de ce qui décide
+entre événements et contrôles (D, C1, C4–C7, Holm) n'en dépend. Règle d'acceptation : celle de §13 point 8, appliquée avant le gel —
+aucun seuil de D abaissé, aucune fenêtre allongée, aucune analyse promue.
+
+**A1.0 Pourquoi (justification a priori, aucune donnée lue).** Un FAIL du Gate 1 ne dit pas aujourd'hui *pourquoi* : le signal peut ne
+porter aucun avantage, porter un avantage plus petit que les coûts, être exploitable mais perdu par l'exécution passive (sélection adverse
+au remplissage), ou n'être pas mesurable avec la puissance disponible. Le propriétaire veut une expérience qui distingue ces quatre cas. Il
+faut pour cela mesurer à part **A** (mouvement après le signal, tous instants classés), **B** (mouvement après un remplissage simulé
+réaliste, instants remplis) et **C** (net : B + funding − coûts, et la lecture portefeuille), et que chaque terme de coût y soit compté **une
+seule fois** : mesuré dans le rendement ou supposé dans le coût, jamais les deux.
+
+**A1.1 Double compte de T01 (correction).** §5.4 mesure T01 depuis le prix limite c(h−5), et seulement aux instants que le proxy `through`
+remplit : un long n'est gardé que si le prix a traversé **strictement** c(h−5) − 1 tick pendant [h−5 ; h+1). La sélection des instants
+remplis **est** la sélection adverse de l'entrée, et le mouvement défavorable qui suit le remplissage est **déjà dans r**. La valeur de
+conception de 3,5 pb (Part A, §0.3) est elle-même une markout de remplissages `through` : l'ajouter en coût la comptait une seconde fois
+(le « double compte partiel déclaré » de la version précédente de §6). Règle A1 : la sélection adverse de la jambe d'entrée est **mesurée
+par le conditionnement au remplissage** et vaut **0** dans le coût supposé de T01 ; la jambe de sortie (sortie passive **supposée** remplie
+à c(h+15), conditionnée à rien) garde **3,5 pb**. Total T01 = 4 (frais maker/maker) + 3,5 (sortie) + 2 (glissement) = **9,5 pb** ; stress
+× 1,5 sur chaque terme = **14,25 pb**. L'ancien total **13 / 19,5 pb** devient une **sensibilité rapportée** (`T01_cost_sensitivity_pre_a1` :
+valeurs de C2 et C3 à 13 / 19,5 pb, jamais un critère). Corollaire écrit d'avance : une mesure **non conditionnée** au remplissage (la
+version sans proxy de §9.4) ne mesure pas la jambe d'entrée — son net garde la valeur de conception (13 pb). Au Gate 2, la mesure
+primaire simulée mesure tous ses termes et n'est pas touchée ; la construction descriptive du Gate 1 sur les prints suit la même règle
+(spec Gate 2, `adverse_selection_entry_leg`, identité vérifiée : piège 7). **Écart de stress déclaré** : le stress de T01 ajoute +4,75 pb
+au Gate 1 depuis A1 (9,5 → 14,25) contre +5,5 pb au Gate 2 (frais × 1,5 plus 0,5 × la valeur de conception par jambe maker remplie).
+
+**A1.2 T05 : vérification du double compte (conclusion : aucun terme ne double un autre ; un chevauchement partiel, déclaré, non
+corrigé ; T05 inchangé à 15,5 / 23,25 pb).** (i) Frais 5 + 2 pb : distincts. (ii) Sélection adverse 3,5 pb sur la jambe maker de sortie :
+la sortie passive est supposée remplie à c(h+60), aucune mesure n'est conditionnée à son remplissage, rien ne la mesure — gardée. (iii)
+Demi-spread d'entrée 3 pb (milieu → touch payé) et glissement 2 pb (touch → prix moyen exécuté : profondeur, latence) : deux étapes
+distinctes du même ordre, pas un même terme. (iv) **Demi-spread contre dernier prix** : l'entrée est c(h+5), clôture du dernier prix, et le
+côté s est le signe de c(h+5) − c(h) ; conditionnée à s, c(h+5) est plus souvent un échange du côté que le preneur paierait (rebond de Roll :
+après une hausse, le dernier échange est plus souvent à l'ask). Une part du demi-spread est alors **déjà** dans c(h+5) : si q est la
+probabilité que c(h+5) soit au touch payé, la surcharge est (2q − 1) × 3 pb, entre 0 et 3 pb, q **UNKNOWN**. Effet : vers le FAIL sur C2 / C3,
+nul sur D (même règle de signe aux contrôles, à la même minute de l'heure). Non corrigé : q n'est pas mesurable sur bougies, une correction
+serait une hypothèse vers le PASS, et le Gate 2 mesure le demi-spread réel. (v) La variante preneur de T01 (A1.5) entre à c(h−5), qu'aucun
+mouvement du dernier prix ne conditionne : son demi-spread ne chevauche aucun rebond.
+
+**A1.3 Tableau A/B/C (obligatoire, rapporté, non décisif).** Par type, aux événements, aux contrôles et en différence : **A** = rendement
+brut signé du prix de référence sur la fenêtre de rendement pré-déclarée (`return_window_min`) à **tous** les instruments-instants classés
+(classifieur ou signe passés, remplis ou non ; c'est le descriptif « sans proxy » de §9.4, formalisé en brut), sans funding ni coût ;
+**B** = le même rendement aux seuls instruments-instants de la mesure primaire (remplis ; T05 : remplis par construction, B = A) ; **C** = le
+net primaire (B + funding − coûts du type) et la lecture portefeuille (§9.6). Pour chaque ligne : n instants, n instruments-instants,
+jours, taux de remplissage, moyenne, médiane, LB90 et UB90 du bootstrap par blocs de jours du bloc `statistics` (même graine, mêmes
+rééchantillons ; aucune p-value). La ligne C événements − contrôles **est** D (mêmes tirages). A et B ne portent aucun terme de coût ;
+C retire chaque terme supposé une fois.
+
+**A1.4 Analyse des non-remplis (rapportée).** Pour T01, aux événements et aux contrôles : A aux instants remplis contre A aux non-remplis
+(moyennes par instant), écart rempli − non-rempli avec LB90 / UB90 (bootstrap par jours, les deux échantillons d'un jour ensemble) ;
+taux de remplissage événements, contrôles et leur différence ; fenêtres de fill manquantes comptées. Un écart **négatif** aux événements
+est la signature de la sélection adverse : on n'est rempli que quand le prix va contre la position.
+
+**A1.5 Variante preneur de T01 (descriptive).** Entrée preneur à c(h−5) plus le demi-spread de conception (3 pb), **sans conditionnement au
+remplissage** (population A), même funding et même sortie, coûts du rôle preneur/maker (15,5 pb, stress 23,25 pb) : D, net moyen
+d'événement et son stress. Elle sépare « mal exécuté » (le preneur garde un net positif que le fournisseur perd au remplissage) de
+« sans avantage » (le preneur ne gagne rien non plus).
+
+**A1.6 Stabilité chronologique (descriptive).** D et n par mois calendaire UTC, et par moitié de la fenêtre du type (jours calendaires ;
+T01 : [D_cov ; END_EXCLUSIVE), T05 : la fenêtre du spec ; première moitié = les ⌊L/2⌋ premiers jours), pour C (net) et pour A (signal).
+Distincte de C4 (moitiés à la médiane inférieure des jours d'événement), qui reste le critère.
+
+**A1.7 Classification diagnostique (rapportée, jamais un verdict ; écrite d'avance, mot pour mot dans `descriptive.a1`).** Notations : G =
+A_événement − A_contrôle (moyennes par instant), LB90 / UB90 de G par le bootstrap ci-dessus ; C_év = net moyen d'événement (la quantité de
+C2) ; gap = A_rempli − A_non-rempli aux événements ; preneur = net moyen d'événement de la variante A1.5. Première règle vraie dans l'ordre :
+1. **(d) insuffisamment documenté** — verdict `NOT_INFORMATIVE` ou `INCONCLUSIVE`, ou n sous le plancher (§7.4), ou pas d'intervalle pour
+   G, ou **LB90(G) ≤ 0 et UB90(G) ≥ +10 pb** (l'intervalle contient à la fois « aucun effet » et l'effet testé : « absence d'effet non
+   démontrée », même langue que l'annotation du FAIL, §8) ;
+2. **(a) signal sans avantage** — LB90(G) ≤ 0 (donc UB90(G) < +10 pb : un avantage de la taille testée est exclu) ;
+3. **(c) signal exploitable mal exécuté** — LB90(G) > 0, le type a un proxy de fill, UB90(gap) < 0, B_év < A_év, C_év ≤ 0 et preneur > 0 ;
+4. **(b) avantage trop faible pour les coûts** — LB90(G) > 0 et C_év ≤ 0 ;
+5. **aucun des quatre** — LB90(G) > 0 et C_év > 0 (signal et net positifs ; seuls C1–C7 et Holm disent si c'est un PASS).
+Chaque entrée et chaque condition sont imprimées. T05 n'a pas de proxy : jamais (c). Sous H0 et σ de conception, T05 tombera
+probablement en (d) : c'est la conclusion de §7.4 (δ₈₀ ≈ +15,6 à +28,3 pb), écrite d'avance. Pour un type scellé, la classification est
+scellée avec ses descriptifs (§8).
+
+**A1.8 Frontières (écrit et vérifié par le code et les tests).** Un instrument-instant dont l'**empreinte** (§7.1) finit après la fin de la
+fenêtre — END_EXCLUSIVE = 2026-10-14T00:00Z au Gate 1 — est exclu et compté (`crosses_end_exclusive`) ; une empreinte qui finit
+exactement à END_EXCLUSIVE lit la bougie qui se ferme à END_EXCLUSIVE (ouverte à 23:59, horodatée avant la borne) : gardée. Une empreinte
+qui commence avant `listTime + 30 j` est exclue et comptée (`excluded_ineligible`). Les deux règles valent pour les événements **et** les
+contrôles (comptes agrégés dans `exclusions.controls.restriction`). Aucun générateur du spec n'atteint la borne de fin (T01 : h ≤ END_EXCLUSIVE − 8 h,
+le règlement suivant devant être servi ; T05 : 14:30 UTC ; contrôles : empreintes finissant au plus tard à 23:30, la candidate de 23:30 de
+T05 étant déjà retirée par la grille de 00:00) : le compteur doit valoir 0 et la garde est testée sur des instants synthétiques. Déclaré : la fenêtre de P̂ (480 minutes avant h−5) n'est pas une empreinte ; elle peut commencer avant l'éligibilité
+(mark et indice sont récupérés dès l'éligibilité − 1 jour, §4.3), sous la règle de couverture ≥ 90 %.
+
+**A1.9 Ce qui ne change pas.** Hypothèses, signes, fenêtres, classifieur, proxy de fill, contrôles, unité, plancher, seuil +10 pb, α, bootstrap,
+C1 et C4–C7, précédence des verdicts, Holm local et programme, scellement, inscriptions au Gate 2, licence et plan de fetch. La porte
+économique garde sa règle ; elle lit le net d'événement de T01 aux coûts A1 (sa valeur à 13 pb se déduit de la sensibilité).
+
+**A1.10 Ancien / nouveau.**
+
+| Élément | Avant A1 | Après A1 |
+|---|---|---|
+| Sélection adverse, jambe d'entrée de T01 | 3,5 pb supposés (double compte partiel déclaré) | mesurée par le conditionnement au remplissage, 0 supposé (`adverse_selection_entry_leg: measured_by_fill_proxy`) |
+| Sélection adverse, jambe de sortie de T01 | 3,5 pb | 3,5 pb (inchangé) |
+| Coût supposé de T01 (C2) / stress (C3) | 13 / 19,5 pb | **9,5 / 14,25 pb** ; 13 / 19,5 pb rapportés (`cost_sensitivity_pre_a1`) |
+| T01 sans proxy (descriptif, net) | 13 pb | 13 pb (non conditionné) |
+| T05 (C2 / C3) | 15,5 / 23,25 pb | 15,5 / 23,25 pb (vérifié, A1.2) |
+| D, C1, C4–C7, Holm, plancher, seuil +10 pb | — | inchangés (les coûts s'annulent dans D) |
+| Seuils économiques nets (2,2 / 8,9 / 10,6 pb) | — | inchangés ; en dérive brute de remplissage, −3,5 pb pour T01 |
+| Rapports | — | A/B/C, non-remplis, variante preneur, sensibilité, stabilité, classification (§9.9), obligatoires |
+| Frontières | empreinte au-delà de la fin exclue, comptée avec la couverture | compteur dédié `crosses_end_exclusive`, éligibilité, contrôles compris |
+| Spec Gate 1 | `0.2.0-draft`, 27 capacités, sha256 `d4189493…f85af80a` | `0.3.0-draft`, 34 capacités, sha256 `2ab0073cf53003d65ff46b3f62700faac46ec2fd00cdef7a529baeca362b15a6` |
+| Spec Gate 2 | `0.1.2-draft`, sha256 `e29c4f20…51d390cf` | `0.1.3-draft`, sha256 `f506f157fdf8af6a725899fca42acc3ae0f1be05715712e28d3bbef35934c7a3` (brouillon accepté) |
+
+**A1.11 Implémentation et tests (hors ligne, synthétiques).** Spec Gate 1 : `events[T01].adverse_selection_entry_leg`
+(`measured_by_fill_proxy` | `assumed_design_value` ; absente = règle d'avant A1), `events[T01].cost_sensitivity_pre_a1` (obligatoire avec
+`measured_by_fill_proxy`, refusée sinon, comparée aux totaux de conception), `expected_cost_bp` 9,5 / `expected_cost_bp_stress` 14,25 vérifiés
+contre `cost_terms(rôle, coûts, règle)` (toute incohérence refusée ; `measured_by_fill_proxy` refusé sur une entrée preneur ou sans proxy),
+six rapports A1 obligatoires et le bloc `descriptive.a1` (statut, définitions, précédence, règles : lus mot pour mot), sept capacités `a1_*`
+dans `requires` (Gate 1 seulement). Code : `g5_eval.cost_terms(…, entry_adverse)`, `type_cost_terms`, `check_type_costs`, `restrict`
+(`crosses_end_exclusive`), `measure` (`fill_status`, `fill_flag`), `report_abc`, `report_filled_vs_unfilled`, `report_taker_variant`,
+`report_cost_sensitivity`, `report_chronology`, `diagnostic_classification`, rendu Markdown du tableau ; `g5_gate2` (clé et identité).
+Tests : `tests/test_research_lp_g5_a1.py` (16 : 9,5 pb avec la clé et 13 sans ; refus des incohérences ; identité Gate 2 ; frontières ;
+tableau A/B/C ; non-remplis ; variante preneur ; sensibilité ; stabilité ; classification sur des tapes synthétiques construites pour
+tomber en (a), (b), (c), (d) — sous le plancher et intervalle trop large — et « aucun des quatre »). Tests antérieurs adaptés **parce que
+A1 les rendait faux** : `test_the_real_spec_is_accepted_and_every_field_is_read` (sha256, 34 capacités, coûts A1),
+`test_costs_by_role_funding_signs_and_funding_outside_coverage` (net à 9,5 / 14,25 pb), `test_a_planted_effect_passes_c1_to_c7_and_holm_with_the_programme_field`
+(écart de stress 4,75 pb), `test_c7_c4_and_c2_are_criteria_of_their_own` (C2 en échec démontré sur le spec sans la clé à 13 pb ; sous A1,
+C3 seul échoue), `test_the_real_gate2_draft_is_accepted_and_every_block_is_read` et l'assistant `frozen` (9,5 pb au Gate 2), et
+`test_the_gate2_simulation_maker_taker_exit_grace_and_stress` (construction du Gate 1 à 9,5 pb). Suite `tests/test_research_lp_*.py`
+verte hors réseau (résultat exact dans les notes de la passe, `tradingV3-private/research/20261021T0700Z-scalping-diagnostic/g5-a1/NOTES.md`).
 
 ---
 
@@ -852,8 +1035,9 @@ Spec Gate 2 (ligne du 2026-10-21, volet `docs-b`) : `python-orchestrator/scripts
 ## Annexe A — Spec Gate 1 (fichier du dépôt)
 
 **Chemin** : `python-orchestrator/scripts/research_lp/specs/g5_gate1_spec.json` (schéma `g5-spec/2`, `status: "DRAFT_NOT_FROZEN"`,
-version `0.2.0-draft`). sha256 du brouillon au 2026-10-21, **informatif** (le sha256 qui compte est celui de la version `FROZEN`, §13) :
-`d4189493d896fe508b36f32da6433c03305cd4867fdc5fe94ff67d17f85af80a` (aussi dans `a1-protocol/NOTES.md` §9). Valeurs clés, à lire dans le fichier (en cas d'écart, le texte de ce protocole fait foi au gel et
+version `0.3.0-draft`, amendement A1). sha256 du brouillon au 2026-10-21 après A1, **informatif** (le sha256 qui compte est celui de la
+version `FROZEN`, §13) : `2ab0073cf53003d65ff46b3f62700faac46ec2fd00cdef7a529baeca362b15a6` (version `0.2.0-draft` d'avant A1 :
+`d4189493d896fe508b36f32da6433c03305cd4867fdc5fe94ff67d17f85af80a`, aussi dans `a1-protocol/NOTES.md` §9). Valeurs clés, à lire dans le fichier (en cas d'écart, le texte de ce protocole fait foi au gel et
 le spec est corrigé avant le gel, jamais après) :
 
 | Clé | Valeur |
@@ -865,7 +1049,9 @@ le spec est corrigé avant le gel, jamais après) :
 | `unit` | instant, pondération égale, ≥ 1 instrument, n = instants uniques |
 | `statistics` | `net_bp`, α 0,10 unilatéral, seuil +10 pb, bootstrap blocs d'un jour, 10 000, graine 20261102 ; sensibilité 7 jours |
 | `power_floor` | 100 instants, 30 jours |
-| `costs` | maker 2, taker 5, sélection adverse 3,5 / jambe maker, glissement 2, demi-spread preneur 3, stress × 1,5 ; totaux 13 / 15,5 |
+| `costs` | maker 2, taker 5, sélection adverse 3,5 / jambe maker dont la sélection adverse est supposée, glissement 2, demi-spread preneur 3, stress × 1,5 ; totaux 9,5 (T01, A1) / 15,5 |
+| A1 (T01) | `adverse_selection_entry_leg: measured_by_fill_proxy`, `expected_cost_bp` 9,5 / `expected_cost_bp_stress` 14,25, `cost_sensitivity_pre_a1` 13 / 19,5 (rapporté) |
+| A1 (`requires`, `descriptive`) | sept capacités `a1_*` (34 au total) ; rapports `abc_signal_execution_net`, `T01_filled_vs_unfilled_signal`, `T01_taker_variant_without_fill_conditioning`, `T01_cost_sensitivity_pre_a1`, `chronological_stability_month_and_window_halves`, `diagnostic_classification_a1` ; bloc `descriptive.a1` (statut, définitions, précédence et règles de la classification) |
 | T01 | `funding_settlements` (8 h ± 1 min des deux côtés, réalisé requis), D_cov, empreinte [−5 ; +15], `arm_min −5`, `rest_until_min 1`, classifieur `premium_wavg` à t_arm (480 min, ≥ 90 %, ±0,0009), proxy `through_candles`, bougies clés −5 / +15, validation C6 (±0,0004 ; 0,80 / 0,20 ; ≥ 30), contrôles minute 0, grille 00/08/16, C7 à 16:00 |
 | T05 | 09:30 `America/New_York`, jours NYSE hors CPI / Employment Situation, empreinte [0 ; 60], signe [0 ; 5], `arm_min 5`, entrée preneur, sortie h+60, bougies clés 0 / 5 / 60, contrôles minute 30, grille 00/04/…/20 |
 | `controls_common` | toutes les heures admissibles, aucun tirage, marge 60 min entre empreintes |
@@ -878,10 +1064,12 @@ le spec est corrigé avant le gel, jamais après) :
 ## Annexe B — Spec Gate 2 (fichier du dépôt, brouillon)
 
 **Chemin** : `python-orchestrator/scripts/research_lp/specs/g5_gate2_spec.json` (schéma `g5-spec/2`, `spec_id: "LP-G5-GATE2-2026"`,
-`status: "DRAFT_NOT_FROZEN"`, version `0.1.2-draft`), écrit le 2026-10-21 (volet `docs-b` de `20261020T2321Z-g5-periods`, deux passes),
+`status: "DRAFT_NOT_FROZEN"`, version `0.1.3-draft` depuis l'amendement A1 : `events[T01_funding_8h].adverse_selection_entry_leg:
+measured_by_fill_proxy`, identique au Gate 1 et vérifié par `g5_gate2.check_gate1_identity`, pour la seule construction descriptive du
+Gate 1 sur les prints ; sha256 informatif `f506f157fdf8af6a725899fca42acc3ae0f1be05715712e28d3bbef35934c7a3`, brouillon accepté), écrit le 2026-10-21 (volet `docs-b` de `20261020T2321Z-g5-periods`, deux passes),
 révisé le même jour par la passe de correction qui suit la relecture `tradingV3-private/research/20261020T2321Z-g5-periods/review-b/quant.md`
-(verdict `NEEDS_CHANGES` ; **textes libres seulement** : aucun texte que le lecteur strict compare mot pour mot n'a changé). sha256 du
-brouillon, **informatif** : `e29c4f20733e760e5a4c64ac5907059817b06d08e5198340b7da551351d390cf` (versions antérieures : `0.1.1-draft`
+(verdict `NEEDS_CHANGES` ; **textes libres seulement** : aucun texte que le lecteur strict compare mot pour mot n'a changé). sha256 de la
+version `0.1.2-draft` (avant A1), **informatif** : `e29c4f20733e760e5a4c64ac5907059817b06d08e5198340b7da551351d390cf` (versions antérieures : `0.1.1-draft`
 `af1f00f0…d22e`, `0.1.0-draft` `f35d820c…fb4e083`). Le sha256 qui compte est celui de la version `FROZEN`, gelée **dans la même ligne
 de gel** que le spec Gate 1 (§13, point 5 ; piège 7). En cas d'écart entre ce fichier et le corps du protocole, le corps fait foi et le
 spec est corrigé avant le gel, jamais après.
@@ -920,7 +1108,7 @@ specs ensemble** avant le gel (le lecteur exige l'égalité des deux portes ; re
 | `execution_sim` | `lp_sim`, règle `touch` (`through` / `queue` descriptives), latence 250 ms, carnet périmé > 10 s ⇒ intention non posée, post-only annulé s'il croise, 100 USD, `books5` (`bbo-tbt` s'il est capturé), `funding_fill_grace_min: 1` |
 | T01 | post-only au touch du côté s décidé à h−5, vivant jusqu'à h+1 ; un fill dans [h ; h+1) traverse la photo et paie ; sortie passive au touch opposé de h+15 à h+60, reliquat taker |
 | T05 | preneur au touch opposé à h+5 (+ latence) plus 2 pb de glissement ; sortie passive de h+60 à h+75, reliquat taker ; 14:30 UTC jusqu'au 2027-03-12, 13:30 dès le 2027-03-15 |
-| `costs` | frais 2 / 5 pb ; glissement 2 pb par jambe preneuse ; sélection adverse et demi-spread **mesurés** ; stress : frais et glissement × 1,5 **plus** 0,5 × la valeur de conception de chaque terme mesuré (1,75 pb par jambe maker remplie, 1,5 pb par entrée preneuse) ; **écart déclaré** (relecture review-b m9, calcul d'audit) : le stress ajoute +5,5 pb à T01 au Gate 2 (frais 4 → 6 pb, aucune jambe preneuse, 2 × 1,75 pb) contre +6,5 pb au Gate 1 (13 → 19,5 pb), car le glissement de conception de 2 pb d'un aller-retour maker/maker disparaît quand les deux jambes sont maker ; T05 : +7,75 pb aux deux portes ; « jamais plus faible que le stress du Gate 1 » ne vaut que sur les termes supposés |
+| `costs` | frais 2 / 5 pb ; glissement 2 pb par jambe preneuse ; sélection adverse et demi-spread **mesurés** ; stress : frais et glissement × 1,5 **plus** 0,5 × la valeur de conception de chaque terme mesuré (1,75 pb par jambe maker remplie, 1,5 pb par entrée preneuse) ; **écart déclaré** (relecture review-b m9, calcul d'audit) : le stress ajoute +5,5 pb à T01 au Gate 2 (frais 4 → 6 pb, aucune jambe preneuse, 2 × 1,75 pb) contre +4,75 pb au Gate 1 depuis l'amendement A1 (9,5 → 14,25 pb ; +6,5 pb avant A1, 13 → 19,5 pb), car le glissement de conception de 2 pb d'un aller-retour maker/maker disparaît quand les deux jambes sont maker ; T05 : +7,75 pb aux deux portes ; « jamais plus faible que le stress du Gate 1 » ne vaut que sur les termes supposés |
 | `costs.funding` | taux réglé du canal `funding-rate`. Le texte du brouillon (« attributed to fundingTime ; field semantics UNKNOWN, to verify on the documentation and the first capture before freeze ») est **remplacé dans sa portée** : avant le gel, la sémantique est vérifiée sur la documentation et sur un **échantillon de schéma** seulement — noms de champs, valeurs de `settState`, `fundingTime` contre `ts`, **aucun taux affiché ni persisté hors de la tape** (`GATES` §9.5 ; relecture review-b M3 ; ligne `selection` annoncée au registre ; variante admise sous la même restriction : les deux swaps globaux, hors univers G5). Le texte `FROZEN` est `g5_gate2.FUNDING_SOURCE` (taux réglé attribué au règlement **précédent**, docs-v5 ; relecture CTO review-b B1), qui porte déjà cette restriction ; le texte du brouillon reste dans le fichier parce que le lecteur l'accepte en brouillon et que `tests/test_research_lp_g5_gate2.py` le fige. Repli REST : non implémenté, non couvert par D1, écrit `none…` au gel (`freeze_pending:`). Taux inconnu ⇒ observation exclue, comptée |
 | C6 | même matrice, R lu dans le canal `funding-rate` ; échec ⇒ `G5_GATE2_INCONCLUSIVE` |
 | `universe` | règle de G2 §3 au gel (métadonnées, comptages P3 `selection`, ≤ 40), `listTime + 30 j` ; liste `analysed` remplie au gel ; **BTC et ETH inclus** : P-S3 sans objet depuis D8 (recopie au gel, plus bas) ; règle de liquidité de G2 §3.3 non appliquée (`freeze_pending:`) |

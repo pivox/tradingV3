@@ -53,7 +53,8 @@ Implemented (§2.3 (B)):
   when the control footprint is ≥ 60 min from every footprint of the exclusion union (settlements of the instrument, the
   type's default grid, T05 instants, sessions, macro releases); no random draw;
 - (xii) sessions and macro releases from local time (`zoneinfo`; New York checked against `events.us_dst_active`);
-- (xiii) costs by execution role (maker_maker 13 bp, taker_maker 15.5 bp; stress × 1.5 on every term);
+- (xiii) costs by execution role (maker_maker 13 bp at the design rule, 9.5 bp with the A1 entry leg measured by the fill
+  conditioning; taker_maker 15.5 bp; stress × 1.5 on every term);
 - (xiv) T05 funding outside D_cov assumed zero, counted (`funding_unknown`); control funding computed, non-zero counted;
 - (xv) verdict precedence INCONCLUSIVE > NOT_INFORMATIVE > criteria C1–C7 then Holm; FAIL annotated;
 - (xvi) `holm_local_confirmed` (K = 2, α 0.10) and `pass_programme_immediate` (p ≤ 0.10 / 7); no `pass_programme` field;
@@ -77,6 +78,18 @@ Implemented (§2.3 (B)):
   with the data-gap extension, unusable instrument-days
   removed (share > 20 % ⇒ INCONCLUSIVE); the types inscribed by the Gate 1 result (FAIL: not evaluated, p = 1); no sealing;
   the deferred strata of §9.8 as descriptive reports.
+
+Amendment A1 (LP-G5 « Amendement A1 (2026-10-21) », written before any freeze and any reading; capabilities `a1_*`, Gate 1 only):
+- the adverse selection of the T01 entry leg is **measured by the conditioning on the fill** (`events[].adverse_selection_entry_leg:
+  measured_by_fill_proxy`): 0 in the assumed cost of the filled (primary) measure, the passive exit leg keeps its design value; T01
+  9.5 bp (stress 14.25) instead of 13 (19.5), the pre-A1 total kept as a reported sensitivity (`cost_sensitivity_pre_a1`); without
+  the conditioning (the descriptive variant without the fill proxy) nothing measures the entry leg and the design value applies;
+- the reported, never decisive A / B / C table (A = signal: gross return of every classified instrument-instant; B = execution: the
+  same return at the filled ones; C = net: the primary net_bp and the portfolio reading), the filled / unfilled analysis, the taker
+  variant of T01, the chronological stability, the diagnostic classification (a) / (b) / (c) / (d) written in advance in the
+  spec's `descriptive.a1` block (reported, never a verdict); C1–C7, Holm and the economic gate unchanged;
+- a footprint crossing the window end (END_EXCLUSIVE in the Gate 1 spec) or starting before the eligibility is excluded and counted
+  (`crosses_end_exclusive`, `excluded_ineligible`), at the events and at the controls.
 
 Statistics: D = mean(event instants) − mean(control instants); bootstrap over blocks of UTC days (events and controls
 of a day resampled together; LB90 / UB90 = quantiles 0.10 / 0.90; one-sided p = P*(D* ≤ 0), `GATES` §2.2). Block sums
@@ -167,9 +180,21 @@ CAPABILITIES: dict[str, str] = {
     "gate2_inscription_from_gate1_result": "(B) xxi: the Gate 1 result decides which types are evaluated (FAIL: not evaluated, p = 1)",
     "gate2_quality_unusable_instrument_day": "(B) xxi: books5 coverage < 90 % or a stale period > 10 min: instrument-day removed; share > 20 % => INCONCLUSIVE",
     "calendars_cover_the_window": "(B) xxi, P-G5-5: the scoring window (every type end, the data-gap extension) inside calendars.covers; FROZEN needs complete lists",
+    # Amendment A1 (LP-G5, 2026-10-21, before any freeze and any reading) — the Gate 1.
+    "a1_entry_adverse_selection_measured_by_fill_proxy": "A1: adverse_selection_entry_leg measured_by_fill_proxy: 0 in the assumed cost of the filled measure, exit leg at "
+                                                          "its design value (T01 9.5 / 14.25 bp), pre-A1 total reported as a sensitivity; checked against expected_cost_bp",
+    "a1_footprint_boundaries_counted": "A1: a footprint crossing the window end (END_EXCLUSIVE) or starting before the eligibility excluded and counted, events and controls",
+    "a1_descriptive_abc_signal_execution_net": "A1: A (signal, every classified instant) / B (execution, filled) / C (net, primary and portfolio) table, events, "
+                                               "controls and difference, n, fill rate, mean, median, LB90 / UB90 (no p-value)",
+    "a1_descriptive_filled_vs_unfilled_signal": "A1: A at the filled against A at the unfilled instants, events and controls, gap, fill rates",
+    "a1_descriptive_taker_variant_without_fill_conditioning": "A1: taker entry at c(t_arm) + design half spread, no fill conditioning, taker_maker costs",
+    "a1_descriptive_chronological_stability": "A1: D and n per calendar month and per half of the type's window (C and A)",
+    "a1_diagnostic_classification_reported_never_a_verdict": "A1: (a) no edge / (b) too weak for the costs / (c) badly executed / (d) insufficiently "
+                                                            "documented, rules of descriptive.a1, reported in the type's descriptives, never a verdict",
 }
+A1_CAPABILITIES = tuple(k for k in CAPABILITIES if k.startswith("a1_"))
 GATE1_ONLY = ("candle_confirm_and_vol_zero_exclusion", "funding_coverage_window", "fill_proxy_through_candles", "funding_unknown_outside_coverage_counted",
-              "sealed_statistics_for_inconclusive_and_not_informative")
+              "sealed_statistics_for_inconclusive_and_not_informative") + A1_CAPABILITIES
 GATE2_ONLY = ("owner_decisions_resolved_required_for_freeze", "capture_source_quarantine_floor_check", "price_last_print_per_minute", "key_minute_without_print_exclusion",
               "classifier_mark_and_index_from_capture_or_index_history", "gate2_sim_maker_post_only_touch", "gate2_sim_taker_entry_opposite_touch_slippage",
               "gate2_sim_passive_exit_taker_remainder", "gate2_funding_fill_grace_crossing", "gate2_classifier_validation_funding_channel", "gate2_stress_add_on_for_measured_terms",
@@ -235,10 +260,48 @@ DESCRIPTIVE_REPORTS = (
     "T01_mark_reference_inside_coverage", "T01_premium_balance_events_vs_controls", "T01_funding_cap_stress",
     "T05_horizons_15_30", "T05_move_ge_1_tick", "T05_macro_days_separately", "T05_ten_am_et_release_days", "T05_brr_adjacency",
     "by_month", "by_instrument", "by_sign", "regime_rv24_above_median", "instruments_per_instant_ge_3", "excluded_share_by_instrument",
-    "block_days_7", "minute_zero_T07", "hourly_seasonality_last_price", "weekday_seasonality", "funding_intervals_histogram", "portfolio_reading")
+    "block_days_7", "minute_zero_T07", "hourly_seasonality_last_price", "weekday_seasonality", "funding_intervals_histogram", "portfolio_reading",
+    # Amendment A1 (2026-10-21): reported, never decisive.
+    "abc_signal_execution_net", "T01_filled_vs_unfilled_signal", "T01_taker_variant_without_fill_conditioning", "T01_cost_sensitivity_pre_a1",
+    "chronological_stability_month_and_window_halves", "diagnostic_classification_a1")
 COMMON_REPORTS = ("minute_zero_T07", "hourly_seasonality_last_price", "weekday_seasonality", "funding_intervals_histogram")
+A1_PER_TYPE_REPORTS = ("abc_signal_execution_net", "chronological_stability_month_and_window_halves", "diagnostic_classification_a1")
+A1_FILL_PROXY_SUFFIXES = ("_filled_vs_unfilled_signal", "_taker_variant_without_fill_conditioning")  # <label> of every type with a fill proxy
+A1_SENSITIVITY_SUFFIX = "_cost_sensitivity_pre_a1"  # <label> of every type whose entry-leg adverse selection is measured by the fill proxy
 PER_TYPE_REPORTS = ("by_month", "by_instrument", "by_sign", "regime_rv24_above_median", "instruments_per_instant_ge_3", "excluded_share_by_instrument", "block_days_7",
-                    "portfolio_reading")
+                    "portfolio_reading") + A1_PER_TYPE_REPORTS
+# Amendment A1: the texts of `events[].adverse_selection_entry_leg`, `events[].cost_sensitivity_pre_a1` and `descriptive.a1` (matched word for word).
+ENTRY_ADVERSE_MEASURED = "measured_by_fill_proxy"
+ENTRY_ADVERSE_DESIGN = "assumed_design_value"
+ENTRY_ADVERSE_VALUES = (ENTRY_ADVERSE_MEASURED, ENTRY_ADVERSE_DESIGN)
+COST_SENSITIVITY_USE = "reported sensitivity only: C2 / C3 values at the pre-A1 total ; never a criterion"
+A1_STATUS = "amendment A1 (2026-10-21), written before any freeze and any reading ; reported, never decisive, never a verdict"
+A1_DEFINITIONS = {
+    "A_signal": "gross signed return of the reference price over return_window_min at every classified instrument-instant (classifier or sign passed, fill proxy off) ; "
+                "no funding, no cost",
+    "B_execution": "the same gross return at the instrument-instants retained by the primary measure (filled by the fill proxy ; a taker entry is filled by construction)",
+    "C_net": "the primary net_bp = B + funding - the costs of the type (events[].expected_cost_bp) ; with the portfolio reading",
+    "statistics": "per row (events, controls, events - controls): n instants, n instrument-instants, fill rate, mean, median, LB90 and UB90 of the day-block bootstrap "
+                  "of the statistics block ; no p-value",
+    "filled_vs_unfilled": "A at the filled against A at the unfilled classified instrument-instants, events and controls (instant means), gap = filled - unfilled ; "
+                          "fill rates of the events and of the controls",
+    "taker_variant": "taker entry at c(t_arm) plus costs.taker_entry_half_spread_bp, no fill conditioning, costs of the taker_maker role, same funding, same exit",
+    "chronological_stability": "D and n per calendar month (UTC) and per half of the type's window (calendar days, first half = the first floor(L / 2) days), "
+                               "for C (net_bp) and A",
+}
+DIAGNOSTIC_PRECEDENCE = ("d_insufficiently_documented", "a_no_edge", "c_badly_executed", "b_too_weak_for_costs", "none_of_the_four")
+DIAGNOSTIC_RULES = {
+    "d_insufficiently_documented": "verdict NOT_INFORMATIVE or INCONCLUSIVE, or n below power_floor, or no LB90 / UB90 for A_event - A_control, or "
+                                   "LB90(A_event - A_control) <= 0 and UB90(A_event - A_control) >= threshold_bp",
+    "a_no_edge": "LB90(A_event - A_control) <= 0",
+    "c_badly_executed": "LB90(A_event - A_control) > 0, the type has a fill proxy, UB90(A_filled - A_unfilled at the events) < 0, mean B_event < mean A_event, "
+                        "mean C_event <= 0 and mean taker-variant net at the events > 0",
+    "b_too_weak_for_costs": "LB90(A_event - A_control) > 0 and mean C_event <= 0",
+    "none_of_the_four": "LB90(A_event - A_control) > 0 and mean C_event > 0",
+}
+DIAGNOSTIC_LABELS = {"d_insufficiently_documented": "(d) insuffisamment documenté", "a_no_edge": "(a) signal sans avantage",
+                     "c_badly_executed": "(c) signal exploitable mal exécuté", "b_too_weak_for_costs": "(b) avantage trop faible pour les coûts",
+                     "none_of_the_four": "aucun des quatre (avantage et net positifs)"}
 DEAD_ZONE_RE = re.compile(r"^(?P<label>T\d+)_dead_zone_thresholds_(?P<hi_a>\d)_(?P<hi_b>\d+)_minus_(?P<lo_a>\d)_(?P<lo_b>\d+)$")
 HORIZONS_RE = re.compile(r"^(?P<label>T\d+)_horizons_(?P<h>\d+(?:_\d+)*)$")
 FETCH_END_TEXT = "g5_fetch.END_EXCLUSIVE (module constant, never a parameter)"
@@ -518,6 +581,9 @@ class TypeSpec:
     audit_expected: dict
     gate2: dict | None
     raw: dict = field(default_factory=dict, compare=False)
+    # Amendment A1: how the adverse selection of the entry leg enters the cost of the filled measure, and the pre-A1 totals (sensitivity).
+    entry_adverse_selection: str = ENTRY_ADVERSE_DESIGN
+    cost_sensitivity: dict | None = None
 
     @property
     def key_price_offsets(self) -> tuple:
@@ -855,20 +921,38 @@ def _parse_costs(block, source: str) -> dict:
     return out
 
 
-def cost_terms(role: str, costs: dict) -> dict:
-    """Round-trip cost terms of an execution role (bp, LP-G5 §6): fees at the role, adverse selection on each maker leg, the
-    taker entry half-spread, slippage; `stress_total_bp` multiplies every term."""
+def cost_terms(role: str, costs: dict, entry_adverse: str = ENTRY_ADVERSE_DESIGN) -> dict:
+    """Round-trip cost terms of an execution role (bp, LP-G5 §6): fees at the role, adverse selection on each maker leg whose
+    adverse selection is assumed, the taker entry half-spread, slippage; `stress_total_bp` multiplies every term.
+
+    Amendment A1: `entry_adverse = measured_by_fill_proxy` (maker_maker only) — the entry leg is a resting order kept only when the
+    fill proxy fills it, so the adverse move that follows the fill is already inside the measured return: its assumed term is 0 and
+    only the passive exit leg keeps the design value (T01: 4 + 3.5 + 2 = 9.5 bp, stress 14.25). The default (`assumed_design_value`)
+    is the pre-A1 rule (T01 13 / 19.5 bp) — the reported sensitivity, and the rule of any measure without the fill conditioning."""
+    if entry_adverse not in ENTRY_ADVERSE_VALUES:
+        raise SpecError(f"adverse_selection_entry_leg {entry_adverse!r} is not implemented ({ENTRY_ADVERSE_VALUES})")
     if role == "maker_maker":
         fees, maker_legs, half_spread = 2.0 * costs["maker_fee_bp"], 2, 0.0
     elif role == "taker_maker":
+        if entry_adverse == ENTRY_ADVERSE_MEASURED:
+            raise SpecError("adverse_selection_entry_leg measured_by_fill_proxy: a taker entry is not a resting order, no fill conditioning measures it (A1)")
         fees, maker_legs, half_spread = costs["taker_fee_bp"] + costs["maker_fee_bp"], 1, costs["taker_entry_half_spread_bp"]
     else:
         raise SpecError(f"unknown execution role {role!r}")
-    adverse = maker_legs * costs["adverse_selection_bp_per_maker_leg"]
+    assumed_legs = maker_legs - (1 if entry_adverse == ENTRY_ADVERSE_MEASURED else 0)
+    adverse = assumed_legs * costs["adverse_selection_bp_per_maker_leg"]
     terms = {"fees_bp": fees, "adverse_selection_bp": adverse, "taker_entry_half_spread_bp": half_spread, "slippage_bp": costs["slippage_bp_per_round_trip"]}
     total = math.fsum(terms.values())
     mult = costs["stress_multiplier_all_cost_terms"]
-    return {"role": role, **terms, "maker_legs": maker_legs, "total_bp": total, "stress_multiplier": mult, "stress_total_bp": math.fsum(v * mult for v in terms.values())}
+    return {"role": role, **terms, "maker_legs": maker_legs, "maker_legs_with_assumed_adverse_selection": assumed_legs,
+            "adverse_selection_entry_leg": entry_adverse if role == "maker_maker" else "not_applicable_taker_entry", "total_bp": total, "stress_multiplier": mult,
+            "stress_total_bp": math.fsum(v * mult for v in terms.values())}
+
+
+def type_cost_terms(tspec: "TypeSpec", costs: dict, conditioned_on_fill: bool = True) -> dict:
+    """The assumed costs of a type's measure (A1): the type's entry-leg rule when the measure is conditioned on the fill proxy (the
+    primary), the design value otherwise (nothing measures the entry leg of a measure that does not condition on the fill)."""
+    return cost_terms(tspec.role, costs, tspec.entry_adverse_selection if conditioned_on_fill else ENTRY_ADVERSE_DESIGN)
 
 
 def _parse_controls_common(block, source: str) -> dict:
@@ -973,7 +1057,8 @@ def _parse_macro(block, calendars: dict, source: str = "history") -> tuple:
 
 _TYPE_REQUIRED = ("type", "decisive", "primary", "execution_role", "expected_cost_bp", "expected_cost_bp_stress", "days_per_year", "window_rule", "generator",
                   "footprint_min", "arm_min", "entry", "exit", "return_window_min", "key_candles_end_min", "controls", "criteria")
-_TYPE_OPTIONAL = ("funding_coverage", "rest_until_min", "classifier", "fill_proxy", "sign", "validation", "c7", "inconclusive_if", "audit_expected")
+_TYPE_OPTIONAL = ("funding_coverage", "rest_until_min", "classifier", "fill_proxy", "sign", "validation", "c7", "inconclusive_if", "audit_expected",
+                  "adverse_selection_entry_leg", "cost_sensitivity_pre_a1")
 AUDIT_KEYS = {"local_time": ("nyse_days_with_eligible_instrument", "raw_instants", "raw_instants_with_ge_3_instruments", "first_instant_utc", "halves_by_lower_median_day"),
               "funding_settlements": ("not_informative_expected_if_f_inst_below",)}
 RAW_UPPER_RE = re.compile(r"^raw_instants_upper_bound_if_funding_fetched_(?P<y>\d{4})_(?P<m>\d{2})_(?P<d>\d{2})$")
@@ -1072,6 +1157,43 @@ def _parse_validation(block, where: str, label: str, classifier: dict, gate: str
     _exact(block, "fail_or_not_computable", where, gate + "INCONCLUSIVE")
     return {"rate_high": float(r.group("hi")), "rate_low": float(r.group("lo")), "sensitivity_min": _num(block, "sensitivity_min", where, 0.0, 1.0),
             "false_positive_rate_max": _num(block, "false_positive_rate_max", where, 0.0, 1.0), "min_denominator": _int(block, "min_denominator", where, 1)}
+
+
+def _parse_entry_adverse(item: dict, where: str, role: str, conditioned_on_fill: bool) -> tuple[str, dict | None]:
+    """Amendment A1 — `adverse_selection_entry_leg` (absent = `assumed_design_value`, the pre-A1 rule) and its companion
+    `cost_sensitivity_pre_a1` (required with `measured_by_fill_proxy`, refused otherwise). `measured_by_fill_proxy` needs a resting
+    entry whose measure is conditioned on a fill (maker_maker with a fill proxy, or the Gate 2 construction proxy); the totals are
+    checked against `cost_terms` by the caller (parse_spec, g5_gate2)."""
+    rule = _choice(item, "adverse_selection_entry_leg", where, ENTRY_ADVERSE_VALUES) if "adverse_selection_entry_leg" in item else ENTRY_ADVERSE_DESIGN
+    if rule == ENTRY_ADVERSE_MEASURED and (role != "maker_maker" or not conditioned_on_fill):
+        raise SpecError(f"{where}.adverse_selection_entry_leg: measured_by_fill_proxy needs a resting (maker_maker) entry conditioned on a fill proxy; "
+                        f"a {role} entry without fill conditioning measures nothing (A1)")
+    sensitivity = None
+    if "cost_sensitivity_pre_a1" in item:
+        if rule != ENTRY_ADVERSE_MEASURED:
+            raise SpecError(f"{where}.cost_sensitivity_pre_a1: only beside adverse_selection_entry_leg measured_by_fill_proxy (the pre-A1 total is its sensitivity, A1)")
+        block = _check_keys(item["cost_sensitivity_pre_a1"], f"{where}.cost_sensitivity_pre_a1", ("adverse_selection_entry_leg", "expected_cost_bp", "expected_cost_bp_stress", "use"))
+        _exact(block, "adverse_selection_entry_leg", f"{where}.cost_sensitivity_pre_a1", ENTRY_ADVERSE_DESIGN)
+        _exact(block, "use", f"{where}.cost_sensitivity_pre_a1", COST_SENSITIVITY_USE)
+        sensitivity = {"expected_cost_bp": _num(block, "expected_cost_bp", f"{where}.cost_sensitivity_pre_a1", 0.0),
+                       "expected_cost_bp_stress": _num(block, "expected_cost_bp_stress", f"{where}.cost_sensitivity_pre_a1", 0.0)}
+    elif rule == ENTRY_ADVERSE_MEASURED:
+        raise SpecError(f"{where}: adverse_selection_entry_leg measured_by_fill_proxy needs cost_sensitivity_pre_a1 (the pre-A1 total stays reported, A1)")
+    return rule, sensitivity
+
+
+def check_type_costs(t: "TypeSpec", costs: dict) -> None:
+    """(B) xiii, CTO B1-vi, A1 — the declared totals equal the cost terms of the role under the type's entry-leg rule, and the pre-A1
+    sensitivity equals the design-value totals: any other pair is an inconsistency, refused."""
+    costs_t = cost_terms(t.role, costs, t.entry_adverse_selection)
+    if abs(costs_t["total_bp"] - t.expected_cost_bp) > 1e-9 or abs(costs_t["stress_total_bp"] - t.expected_cost_bp_stress) > 1e-9:
+        raise SpecError(f"{t.name}: expected_cost_bp {t.expected_cost_bp:g} / stress {t.expected_cost_bp_stress:g} differ from the cost terms of {t.role} with "
+                        f"adverse_selection_entry_leg {t.entry_adverse_selection} ({costs_t['total_bp']:g} / {costs_t['stress_total_bp']:g}) (CTO B1-vi, A1)")
+    if t.cost_sensitivity is not None:
+        design = cost_terms(t.role, costs, ENTRY_ADVERSE_DESIGN)
+        if abs(design["total_bp"] - t.cost_sensitivity["expected_cost_bp"]) > 1e-9 or abs(design["stress_total_bp"] - t.cost_sensitivity["expected_cost_bp_stress"]) > 1e-9:
+            raise SpecError(f"{t.name}.cost_sensitivity_pre_a1: {t.cost_sensitivity['expected_cost_bp']:g} / {t.cost_sensitivity['expected_cost_bp_stress']:g} differ from "
+                            f"the design-value totals of {t.role} ({design['total_bp']:g} / {design['stress_total_bp']:g}) (A1)")
 
 
 def _parse_type(item, position: int, source: str, gate: str, calendars: dict) -> TypeSpec:
@@ -1199,11 +1321,12 @@ def _parse_type(item, position: int, source: str, gate: str, calendars: dict) ->
             if key not in AUDIT_KEYS[generator["kind"]] and not (generator["kind"] == "funding_settlements" and RAW_UPPER_RE.match(key)):
                 raise SpecError(f"{where}.audit_expected: unknown key {key!r}")
             audit[key] = value
+    entry_adverse, sensitivity = _parse_entry_adverse(item, where, role, fill is not None)
     gate2 = None
     return TypeSpec(name, label, position, role, _num(item, "expected_cost_bp", where, 0.0), _num(item, "expected_cost_bp_stress", where, 0.0),
                     _num(item, "days_per_year", where, 0.0, 366.0, lo_open=True), window_rule, generator, footprint, arm, rest, classifier, fill, sign,
                     {"kind": entry["kind"], "price": entry["price"]}, {"kind": exit_["kind"], "price": exit_["price"]}, rw, keys, validation, controls, c7, criteria,
-                    inconclusive, proxy_share, audit, gate2, raw=item)
+                    inconclusive, proxy_share, audit, gate2, raw=item, entry_adverse_selection=entry_adverse, cost_sensitivity=sensitivity)
 
 
 def _parse_verdict(block, gate: str, types: tuple) -> dict:
@@ -1308,13 +1431,56 @@ def _parse_economic(block) -> dict:
 
 
 def _parse_descriptive(block, labels: set) -> dict:
-    _check_keys(block, "descriptive", ("rule", "reports"))
+    _check_keys(block, "descriptive", ("rule", "reports"), ("a1",))
     reports = _str_list(block, "reports", "descriptive", DESCRIPTIVE_REPORTS)
     for name in reports:
         label = name.split("_", 1)[0]
         if re.match(r"^T\d+$", label) and label not in labels:
             raise SpecError(f"descriptive.reports: {name} names no type of the spec")
-    return {"rule": _text(block, "rule", "descriptive"), "reports": reports}
+    a1 = _parse_a1_block(block["a1"]) if "a1" in block else None
+    return {"rule": _text(block, "rule", "descriptive"), "reports": reports, "a1": a1}
+
+
+def _parse_a1_block(block) -> dict:
+    """Amendment A1 — `descriptive.a1`: the status, the definitions of A / B / C and of the A1 reports, the precedence and the rules
+    of the diagnostic classification, word for word (a different text would be a different rule)."""
+    where = "descriptive.a1"
+    _check_keys(block, where, ("status", "definitions", "classification_precedence", "classification_rules"))
+    _exact(block, "status", where, A1_STATUS)
+    definitions = _check_keys(block["definitions"], f"{where}.definitions", tuple(A1_DEFINITIONS))
+    for key, text in A1_DEFINITIONS.items():
+        _exact(definitions, key, f"{where}.definitions", text)
+    if tuple(_str_list(block, "classification_precedence", where)) != DIAGNOSTIC_PRECEDENCE:
+        raise SpecError(f"{where}.classification_precedence: {list(DIAGNOSTIC_PRECEDENCE)} is the implemented precedence")
+    rules = _check_keys(block["classification_rules"], f"{where}.classification_rules", tuple(DIAGNOSTIC_RULES))
+    for key, text in DIAGNOSTIC_RULES.items():
+        _exact(rules, key, f"{where}.classification_rules", text)
+    return {"status": A1_STATUS, "definitions": dict(A1_DEFINITIONS), "precedence": DIAGNOSTIC_PRECEDENCE, "rules": dict(DIAGNOSTIC_RULES)}
+
+
+def _check_a1_reports(descriptive: dict, types: tuple) -> None:
+    """Amendment A1 — the A1 reports are mandatory in a history spec (their capabilities are in HISTORY_REQUIRES): the three per-type
+    reports, the two fill-proxy reports of every type with a fill proxy, the sensitivity of every type whose entry leg is measured by
+    the fill proxy, and the `descriptive.a1` block; a fill-proxy or sensitivity report of a type without the feature is refused."""
+    reports = set(descriptive["reports"])
+    if descriptive["a1"] is None:
+        raise SpecError("descriptive.a1: missing (the A1 definitions and the diagnostic rules are written in the spec before any reading)")
+    expected = set(A1_PER_TYPE_REPORTS)
+    for t in types:
+        if t.fill_proxy is not None:
+            expected |= {t.label + suffix for suffix in A1_FILL_PROXY_SUFFIXES}
+        if t.cost_sensitivity is not None:
+            expected.add(t.label + A1_SENSITIVITY_SUFFIX)
+    missing = sorted(expected - reports)
+    if missing:
+        raise SpecError(f"descriptive.reports: the A1 reports {missing} are mandatory (reported, never decisive)")
+    by_label = {t.label: t for t in types}
+    for name in reports:
+        label = name.split("_", 1)[0]
+        if label in by_label and any(name == label + s for s in A1_FILL_PROXY_SUFFIXES) and by_label[label].fill_proxy is None:
+            raise SpecError(f"descriptive.reports: {name}: {label} has no fill proxy")
+        if label in by_label and name == label + A1_SENSITIVITY_SUFFIX and by_label[label].cost_sensitivity is None:
+            raise SpecError(f"descriptive.reports: {name}: {label} has no cost_sensitivity_pre_a1 (its entry leg is not measured by the fill proxy)")
 
 
 def _parse_fetch_plan(block, universe: tuple, eligibility_days: float) -> dict:
@@ -1546,10 +1712,7 @@ def parse_spec(document, gate1=None) -> Spec:
         if target[0] not in names or target[3] != target[0].split("_", 1)[0] or next(t for t in types if t.name == target[0]).generator["kind"] != "local_time":
             raise SpecError(f"controls_common.exclusions: {target[0]} is not a local_time type of the spec (labelled {target[3]})")
     for t in types:
-        costs_t = cost_terms(t.role, costs)
-        if abs(costs_t["total_bp"] - t.expected_cost_bp) > 1e-9 or abs(costs_t["stress_total_bp"] - t.expected_cost_bp_stress) > 1e-9:
-            raise SpecError(f"{t.name}: expected_cost_bp {t.expected_cost_bp:g} / stress {t.expected_cost_bp_stress:g} differ from the cost terms of {t.role} "
-                            f"({costs_t['total_bp']:g} / {costs_t['stress_total_bp']:g}) (CTO B1-vi)")
+        check_type_costs(t, costs)
     verdict = _parse_verdict(document["verdict"], gate, types)
     if verdict["fetch_error_share_max"] is None and source == "history":
         raise SpecError("verdict.inconclusive_global: a history spec states fetch_job_error_share_gt_<x> (LP-G5 §4.5)")
@@ -1558,6 +1721,7 @@ def parse_spec(document, gate1=None) -> Spec:
     gate2_inscription = _parse_gate2_inscription(document["gate2_inscription"], gate)
     economic = _parse_economic(document["economic"])
     descriptive = _parse_descriptive(document["descriptive"], {t.label for t in types})
+    _check_a1_reports(descriptive, types)
     if "fetch_plan" not in document:
         raise SpecError("spec: missing key(s) ['fetch_plan'] (a history spec carries its fetch plan)")
     fetch_plan = _parse_fetch_plan(document["fetch_plan"], universe, eligibility_days)
@@ -2038,7 +2202,9 @@ def restrict(series: Series, instants: np.ndarray, tspec: TypeSpec, spec: Spec, 
     funding_coverage type, its instant lies in D_cov = [first settlement whose predecessor is served ; END_EXCLUSIVE) (LP-G5 §4.4:
     the settlement that opens D_cov is an instant of T01 — the audit count of 211 includes it) with its footprint before the end;
     events and controls alike. Capture (B xxi): the whole footprint inside the type's window [T0 ; end) (`window`, default
-    `g5_gate2.type_window`), and no footprint touching an unusable instrument-day (`quality`, `series.coverage['unusable_days']`)."""
+    `g5_gate2.type_window`), and no footprint touching an unusable instrument-day (`quality`, `series.coverage['unusable_days']`).
+    A1 (point 7): history — a footprint ending after the window end (END_EXCLUSIVE) is excluded and counted (`crosses_end_exclusive`),
+    a footprint starting before the eligibility is excluded and counted (`eligibility.count_field`), at the events and at the controls."""
     instants = np.asarray(instants, dtype=np.int64)
     start = instants + tspec.footprint[0] * MINUTE_US
     end = instants + tspec.footprint[1] * MINUTE_US
@@ -2047,13 +2213,20 @@ def restrict(series: Series, instants: np.ndarray, tspec: TypeSpec, spec: Spec, 
     eligible = start >= series.meta.eligible_from_us
     counts[spec.eligibility_count_field] = int((~eligible).sum())
     keep &= eligible
+    if spec.source != "capture":
+        # A1 (point 7): a footprint that ends after the window end (END_EXCLUSIVE in the Gate 1 spec) would read a candle closing after it;
+        # excluded and counted on its own, before the window rules. A footprint ending exactly at the end reads the candle closing at the end
+        # (opened at end − 60 s, ts < END_EXCLUSIVE): kept.
+        crosses = end > spec.end_us
+        counts["crosses_end_exclusive"] = int((keep & crosses).sum())
+        keep &= ~crosses
     if tspec.window_rule == "funding_coverage":
         if series.d_cov_start_us is None:
             counts["funding_coverage_unknown"] = int(keep.sum())
             keep[:] = False
         else:
             lo = max(int(series.d_cov_start_us), int(window[0])) if window is not None else int(series.d_cov_start_us)
-            inside = (instants >= lo) & (end <= spec.end_us)
+            inside = instants >= lo
             counts["outside_funding_coverage"] = int((keep & ~inside).sum())
             keep &= inside
     elif spec.source == "capture":
@@ -2069,7 +2242,7 @@ def restrict(series: Series, instants: np.ndarray, tspec: TypeSpec, spec: Spec, 
             counts["excluded_unusable_instrument_day"] = int((keep & touched).sum())
             keep &= ~touched
     else:
-        inside = end <= spec.end_us
+        inside = (instants >= spec.start_us) & (instants < spec.end_us)
         counts["outside_window"] = int((keep & ~inside).sum())
         keep &= inside
     counts["kept"] = int(keep.sum())
@@ -2187,7 +2360,9 @@ def measure(series: Series, instants_us, tspec: TypeSpec, spec: Spec, role: str 
     entry and exit are simulated on the captured book (`measure_lp_sim`); `options['construction'] = 'gate1'` gives instead the
     Gate 1 construction on the minute bars of the prints with the design costs (descriptive). `options` (descriptive variants only):
     `thresholds` (hi, lo) and `strict` of the classifier, `fill` (False: no fill proxy), `side_from_rate` (hi, lo): events signed by
-    the class of R_h, `price` ('mark'), `exit_min`, `tick_move` (T05: |c(h+5) − c(h)| ≥ 1 tick), `sim_rule` (capture)."""
+    the class of R_h, `price` ('mark'), `exit_min`, `tick_move` (T05: |c(h+5) − c(h)| ≥ 1 tick), `sim_rule` (capture), `fill_status` (A1:
+    with `fill` False, the proxy's verdict is recorded in `fill_flag` without excluding). Costs (A1): `type_cost_terms` — the type's
+    entry-leg rule when the measure is conditioned on the fill proxy, the design value otherwise."""
     options = options or {}
     capture = spec.source == "capture"
     construction = "lp_sim" if capture and options.get("construction") != "gate1" else "candles"
@@ -2250,21 +2425,26 @@ def measure(series: Series, instants_us, tspec: TypeSpec, spec: Spec, role: str 
     fill_attempted = int(alive.sum())
     proxy = tspec.fill_proxy if tspec.fill_proxy is not None else ((tspec.gate2 or {}).get("construction_proxy") if capture else None)
     use_fill = proxy is not None and options.get("fill", True)
-    if use_fill:
+    # A1: `fill_status` (with the proxy off) records, without excluding, whether the proxy would fill each instrument-instant:
+    # 1 filled, 0 unfilled, -1 window missing or no proxy (the filled / unfilled analysis of the signal A).
+    fill_flag = np.full(instants.size, -1, dtype=np.int8)
+    if proxy is not None and (use_fill or options.get("fill_status")):
         ks = [k0 + j + 1 for j in range(proxy["open_from_min"], proxy["open_to_min"] + 1)]  # candles opening at h+j end at h+j+1
         lows = np.vstack([series.at(series.low, k) for k in ks])
         highs = np.vstack([series.at(series.high, k) for k in ks])
         known = np.all(np.isfinite(lows), axis=0) & np.all(np.isfinite(highs), axis=0)
-        counts["fill_window_missing"] = int((alive & ~known).sum())
-        alive &= known
         limit = series.at(series.close, k0 + tspec.arm_min)
         eps = series.meta.tick_sz * 1e-6
         with np.errstate(invalid="ignore"):
             long_fill = np.nanmin(np.where(np.isfinite(lows), lows, np.inf), axis=0) < limit - series.meta.tick_sz - eps
             short_fill = np.nanmax(np.where(np.isfinite(highs), highs, -np.inf), axis=0) > limit + series.meta.tick_sz + eps
         filled = ((side > 0) & long_fill) | ((side < 0) & short_fill)
-        counts["unfilled"] = int((alive & ~filled).sum())
-        alive &= filled
+        fill_flag = np.where(known, np.where(filled, 1, 0), -1).astype(np.int8)
+        if use_fill:
+            counts["fill_window_missing"] = int((alive & ~known).sum())
+            alive &= known
+            counts["unfilled"] = int((alive & ~filled).sum())
+            alive &= filled
     open_us = instants + entry_min * MINUTE_US
     close_us = instants + exit_min * MINUTE_US
     f_count, f_sum, f_unknown = series.funding_crossed(open_us, close_us)
@@ -2281,7 +2461,7 @@ def measure(series: Series, instants_us, tspec: TypeSpec, spec: Spec, role: str 
     kk = k0[keep]
     r_unsigned = _log_bp(series.at(prices, kk + entry_min), series.at(prices, kk + exit_min))
     funding_bp = np.where(outside[keep], 0.0, -s * f_sum[keep] * 1e4)
-    costs = cost_terms(tspec.role, spec.costs)
+    costs = type_cost_terms(tspec, spec.costs, conditioned_on_fill=use_fill)  # A1: the entry leg is measured only by a fill-conditioned measure
     r_bp = s * r_unsigned
     net = np.array([math.fsum([a, b, -costs["total_bp"]]) for a, b in zip(r_bp.tolist(), funding_bp.tolist())], dtype=np.float64)
     stress = np.array([math.fsum([a, b, -costs["stress_total_bp"]]) for a, b in zip(r_bp.tolist(), funding_bp.tolist())], dtype=np.float64)
@@ -2289,7 +2469,7 @@ def measure(series: Series, instants_us, tspec: TypeSpec, spec: Spec, role: str 
            "p_hat": p_hat[keep], "rate_at_h": series.rate_at(instants[keep]), "counts": counts, "costs": costs,
            "fill": {"attempted": fill_attempted if use_fill else 0, "filled": counts["kept"] + counts["funding_rate_missing"] if use_fill else 0},
            "funding_settlements_crossed": f_count[keep], "funding_outside_coverage": int(outside[keep].sum()), "funding_nonzero": int((f_count[keep] > 0).sum()),
-           "execution": "candles"}
+           "execution": "candles", "fill_flag": fill_flag[keep], "conditioned_on_fill": bool(use_fill)}
     if not capture:
         out["counts"][spec.costs["funding_count_field"]] = int(outside[keep].sum())
     return out
@@ -2308,7 +2488,7 @@ def _measure_sim(series: Series, instants: np.ndarray, alive: np.ndarray, side: 
     counts[spec.costs["funding_count_field"]] = int(status["funding_unknown"])
     out = {"inst": series.inst, "instants_us": instants[keep], "sign": side[keep], "r_bp": sim["sim_rt_bp"][filled], "funding_bp": sim["sim_funding_bp"][filled],
            "net_bp": sim["sim_net_bp"][filled], "net_stress_bp": sim["sim_net_bp_stress"][filled], "p_hat": p_hat[keep], "rate_at_h": series.rate_at(instants[keep]),
-           "counts": counts, "costs": cost_terms(tspec.role, spec.costs), "fill": {"attempted": int(idx.size), "filled": int(status["filled"])},
+           "counts": counts, "costs": type_cost_terms(tspec, spec.costs), "fill": {"attempted": int(idx.size), "filled": int(status["filled"])},
            "funding_settlements_crossed": sim["sim_funding_count"][filled], "funding_outside_coverage": 0, "funding_nonzero": int((sim["sim_funding_count"][filled] > 0).sum()),
            "execution": "lp_sim", "sim_status": status, "sim_rule": options.get("sim_rule", spec.gate2["sim"]["rule"]),
            "sim": {key: sim[key][filled] for key in ("sim_fee_bp", "sim_slippage_bp", "sim_maker_legs", "sim_markout_0_bp", "sim_markout_60_bp", "sim_markout_300_bp", "sim_half_spread_bp")}}
@@ -2995,15 +3175,276 @@ def report_us_close_reversion(series_by_inst: dict, spec: Spec, windows: dict | 
             "by_instrument_observations": by_inst, "trades_source": "not captured (G2 0.9): no RPI split"}
 
 
-def type_reports(run: dict, spec: Spec, names: tuple, calendar_days: int) -> dict:
-    """The descriptive reports of one type (sealed with the type when it is INCONCLUSIVE or NOT_INFORMATIVE)."""
+# ----------------------------------------------------------------------------- amendment A1: signal, execution, net (reported, never decisive)
+
+
+def _row(spec: Spec, ts, values, observations: int, fill_rate=None, extra: dict | None = None) -> dict:
+    """One row of an A1 table: n instants / instrument-instants / days, fill rate, mean, median and LB90 / UB90 of the mean (day-block
+    bootstrap of the statistics block, one sample); no p-value."""
+    ts, v = np.asarray(ts, dtype=np.int64), np.asarray(values, dtype=np.float64)
+    st = boot(spec, ts, v) if v.size else {}
+    out = {"n_instants": int(ts.size), "n_instrument_instants": int(observations), "n_days": int(np.unique(ts // DAY_US).size), "fill_rate": fill_rate,
+           "mean": _fmean(v), "median": float(np.median(v)) if v.size else None, "lb90": st.get("lb90"), "ub90": st.get("ub90")}
+    out.update(extra or {})
+    return out
+
+
+def _diff_row(spec: Spec, ev_ts, ev_v, ct_ts, ct_v) -> dict:
+    """Events minus controls (or filled minus unfilled): point, LB90 / UB90 of the day-block bootstrap (the two samples of a day move
+    together), the difference of the medians; no p-value."""
+    ev_v, ct_v = np.asarray(ev_v, dtype=np.float64), np.asarray(ct_v, dtype=np.float64)
+    st = boot(spec, ev_ts, ev_v, ct_ts, ct_v) if ev_v.size and ct_v.size else {}
+    return {"n_instants": int(ev_v.size), "n_other_instants": int(ct_v.size), "point": st.get("point"), "lb90": st.get("lb90"), "ub90": st.get("ub90"),
+            "median_difference": (float(np.median(ev_v)) - float(np.median(ct_v))) if ev_v.size and ct_v.size else None}
+
+
+def _a1_parts(run: dict, spec: Spec) -> dict:
+    """The A population (A1): every classified instrument-instant of the events and of the controls, the fill proxy off, the fill
+    status recorded (`fill_flag`); measured once per run."""
+    if "_a1_parts" not in run:
+        tspec, empty = run["tspec"], np.zeros(0, dtype=np.int64)
+        options = {"fill": False, "fill_status": True}
+        if spec.source == "capture":
+            options["construction"] = "gate1"
+        run["_a1_parts"] = {side: [measure(s, run[key].get(i, empty), tspec, spec, role, options) for i, s in run["series"].items()]
+                            for side, key, role in (("events", "events", "event"), ("controls", "controls", "control"))}
+    return run["_a1_parts"]
+
+
+def _a1_cached(run: dict, key: str, build) -> dict:
+    cache = run.setdefault("_a1_reports", {})
+    if key not in cache:
+        cache[key] = build()
+    return cache[key]
+
+
+def _flag_subset(parts: list[dict], flag: int, key: str = "r_bp") -> tuple[list[dict], int]:
+    out, n = [], 0
+    for p in parts:
+        sel = np.asarray(p["fill_flag"]) == flag
+        n += int(sel.sum())
+        out.append({"inst": p["inst"], "instants_us": np.asarray(p["instants_us"])[sel], key: np.asarray(p[key])[sel]})
+    return out, n
+
+
+def _obs(parts: list[dict]) -> int:
+    return int(sum(np.asarray(p["instants_us"]).size for p in parts))
+
+
+def report_abc(run: dict, spec: Spec, calendar_days: int) -> dict:
+    """A1 — the A / B / C table of one type (`descriptive.a1.definitions`): A = gross signed return of every classified instant (fill
+    proxy off), B = the same return at the filled (primary) instants, C = the primary net_bp (B + funding − the type's costs) and the
+    portfolio reading; events, controls and events − controls; nothing here is a test."""
+    tspec, mi = run["tspec"], spec.unit["min_instruments"]
+    a = _a1_parts(run, spec)
+    fill = run.get("fill_rate") or {}
+    out: dict = {"status": A1_STATUS, "definitions": {k: A1_DEFINITIONS[k] for k in ("A_signal", "B_execution", "C_net", "statistics")},
+                 "costs_bp": type_cost_terms(tspec, spec.costs), "fill_conditioning": "fill proxy (through)" if tspec.fill_proxy is not None else "none: taker entry, filled by construction"}
+    arrays: dict = {}
+    for row, key in (("A_signal", "r_bp"), ("B_execution", "r_bp"), ("C_net", "net_bp")):
+        out[row] = {}
+        for side, a_parts, b_parts in (("events", a["events"], run["ev_parts"]), ("controls", a["controls"], run["ct_parts"])):
+            parts = a_parts if row == "A_signal" else b_parts
+            ts, values, _ = instant_means(parts, key, mi)
+            arrays[(row, side)] = (ts, values)
+            if row == "A_signal":
+                rate = None
+            elif tspec.fill_proxy is not None:
+                rate = (fill.get(side) or {}).get("rate")
+            else:
+                rate = 1.0
+            extra = None
+            if row == "C_net":
+                _, st_v, _ = instant_means(parts, "net_stress_bp", mi)
+                extra = {"mean_at_stress": _fmean(st_v)}
+            out[row][side] = _row(spec, ts, values, _obs(parts), rate, extra)
+        (ev_ts, ev_v), (ct_ts, ct_v) = arrays[(row, "events")], arrays[(row, "controls")]
+        out[row]["events_minus_controls"] = _diff_row(spec, ev_ts, ev_v, ct_ts, ct_v)
+    portfolio = report_portfolio(run, spec, calendar_days)["net_mode"]
+    out["C_net"]["portfolio"] = {k: portfolio[k] for k in ("admitted_instants", "fills", "fills_per_day", "pnl_usd", "pnl_usd_with_cut_3_sigma15", "cuts_triggered", "calendar_days")}
+    out["no_double_count"] = ("A and B carry no cost term; C subtracts each assumed term once: the entry-leg adverse selection of a fill-conditioned maker entry is "
+                              "measured inside B (0 assumed, A1), the exit leg, the fees, the slippage and the taker half spread are assumed once")
+    return out
+
+
+def report_filled_vs_unfilled(run: dict, spec: Spec) -> dict:
+    """A1 — A at the filled against A at the unfilled classified instrument-instants (instant means), at the events and at the
+    controls; gap = filled − unfilled (its sign is the signature of the adverse selection); fill rates events against controls."""
+    tspec, mi = run["tspec"], spec.unit["min_instruments"]
+    if tspec.fill_proxy is None:
+        return {"status": "NOT_APPLICABLE", "reason": "no fill proxy (taker entry, filled by construction)"}
+    a = _a1_parts(run, spec)
+    out: dict = {"status": A1_STATUS, "rule": A1_DEFINITIONS["filled_vs_unfilled"]}
+    for side in ("events", "controls"):
+        filled, n_f = _flag_subset(a[side], 1)
+        unfilled, n_u = _flag_subset(a[side], 0)
+        _, n_m = _flag_subset(a[side], -1)
+        f_ts, f_v, _ = instant_means(filled, "r_bp", mi)
+        u_ts, u_v, _ = instant_means(unfilled, "r_bp", mi)
+        out[side] = {"A_filled": _row(spec, f_ts, f_v, n_f), "A_unfilled": _row(spec, u_ts, u_v, n_u), "gap_filled_minus_unfilled": _diff_row(spec, f_ts, f_v, u_ts, u_v),
+                     "fill_rate": (n_f / (n_f + n_u)) if (n_f + n_u) else None, "fill_window_missing": n_m}
+    ev, ct = out["events"], out["controls"]
+    out["fill_rate_events_minus_controls"] = (ev["fill_rate"] - ct["fill_rate"]) if ev["fill_rate"] is not None and ct["fill_rate"] is not None else None
+    ge, gc = ev["gap_filled_minus_unfilled"]["point"], ct["gap_filled_minus_unfilled"]["point"]
+    out["gap_events_minus_controls"] = (ge - gc) if ge is not None and gc is not None else None
+    return out
+
+
+def report_taker_variant(run: dict, spec: Spec) -> dict:
+    """A1 — the taker variant of a resting type (T01): entry taker at c(t_arm) plus the design half spread, no fill conditioning (the
+    A population), the same funding and exit, the costs of the taker_maker role (15.5 bp, stress 23.25); D, the event net and its
+    stress, as C2 / C3 would read them. Distinguishes « badly executed » from « no edge »."""
+    tspec, mi = run["tspec"], spec.unit["min_instruments"]
+    if tspec.fill_proxy is None:
+        return {"status": "NOT_APPLICABLE", "reason": "the type's entry is already taker"}
+    costs = cost_terms("taker_maker", spec.costs)
+    a = _a1_parts(run, spec)
+    arrays = {}
+    for side in ("events", "controls"):
+        parts = []
+        for p in a[side]:
+            r, f = np.asarray(p["r_bp"], dtype=np.float64), np.asarray(p["funding_bp"], dtype=np.float64)
+            net = np.array([math.fsum([x, y, -costs["total_bp"]]) for x, y in zip(r.tolist(), f.tolist())], dtype=np.float64)
+            stress = np.array([math.fsum([x, y, -costs["stress_total_bp"]]) for x, y in zip(r.tolist(), f.tolist())], dtype=np.float64)
+            parts.append({"inst": p["inst"], "instants_us": p["instants_us"], "net_bp": net, "net_stress_bp": stress})
+        ts, v, _ = instant_means(parts, "net_bp", mi)
+        _, vs, _ = instant_means(parts, "net_stress_bp", mi)
+        arrays[side] = (ts, v, vs, _obs(parts))
+    (ev_ts, ev_v, ev_s, ev_n), (ct_ts, ct_v, _, ct_n) = arrays["events"], arrays["controls"]
+    return {"status": A1_STATUS, "rule": A1_DEFINITIONS["taker_variant"], "costs_bp": costs, "events": _row(spec, ev_ts, ev_v, ev_n, 1.0),
+            "controls": _row(spec, ct_ts, ct_v, ct_n, 1.0), "D": _diff_row(spec, ev_ts, ev_v, ct_ts, ct_v), "event_net_mean": _fmean(ev_v), "event_net_stress_mean": _fmean(ev_s),
+            "note": "c(t_arm) is not conditioned on a last-price move for a classifier type: the design half spread is charged once, without bounce overlap"}
+
+
+def report_cost_sensitivity(run: dict, spec: Spec) -> dict:
+    """A1 — the C2 / C3 values of the type at the pre-A1 totals (the costs are constant per instrument-instant: each instant value
+    moves by the difference of the totals; D does not depend on it)."""
+    tspec, inst = run["tspec"], run["instant"]
+    if tspec.cost_sensitivity is None:
+        return {"status": "NOT_APPLICABLE", "reason": "no cost_sensitivity_pre_a1 in the spec"}
+    now = type_cost_terms(tspec, spec.costs)
+    pre = cost_terms(tspec.role, spec.costs, ENTRY_ADVERSE_DESIGN)
+    mean, mean_stress = _fmean(inst["ev"]), _fmean(inst["ev_stress"])
+    d_total, d_stress = math.fsum([pre["total_bp"], -now["total_bp"]]), math.fsum([pre["stress_total_bp"], -now["stress_total_bp"]])
+    shifted = None if mean is None else math.fsum([mean, -d_total])
+    shifted_stress = None if mean_stress is None else math.fsum([mean_stress, -d_stress])
+    return {"status": A1_STATUS, "rule": COST_SENSITIVITY_USE,
+            "a1": {"total_bp": now["total_bp"], "stress_total_bp": now["stress_total_bp"], "event_net_mean": mean, "event_net_stress_mean": mean_stress},
+            "pre_a1": {"total_bp": pre["total_bp"], "stress_total_bp": pre["stress_total_bp"], "event_net_mean": shifted, "event_net_stress_mean": shifted_stress,
+                       "event_net_mean_positive": None if shifted is None else bool(shifted > 0),
+                       "event_net_stress_mean_positive": None if shifted_stress is None else bool(shifted_stress > 0)},
+            "D": "unchanged: the same costs at the events and at the controls"}
+
+
+def _type_window_days(run: dict, spec: Spec) -> tuple[int, int]:
+    """The calendar days [first ; end) of the type's window: D_cov (T01, the receipt's or the earliest instrument's), the spec window
+    otherwise."""
+    tspec = run["tspec"]
+    lo = spec.start_us
+    if run.get("window") is not None:
+        lo = int(run["window"][0])
+    elif tspec.window_rule == "funding_coverage":
+        known = [s.d_cov_start_us for s in run["series"].values() if s.d_cov_start_us is not None]
+        lo = min(known) if known else spec.start_us
+    return int(lo // DAY_US), int((spec.end_us - 1) // DAY_US) + 1
+
+
+def report_chronology(run: dict, spec: Spec) -> dict:
+    """A1 — D and n per calendar month (UTC) and per half of the type's window, for C (net_bp, the primary measure) and A (signal)."""
+    inst, mi = run["instant"], spec.unit["min_instruments"]
+    a = _a1_parts(run, spec)
+    a_ev_ts, a_ev, _ = instant_means(a["events"], "r_bp", mi)
+    a_ct_ts, a_ct, _ = instant_means(a["controls"], "r_bp", mi)
+    series = {"C_net": (inst["ev_ts"], inst["ev"], inst["ct_ts"], inst["ct"]), "A_signal": (a_ev_ts, a_ev, a_ct_ts, a_ct)}
+
+    def month(ts):
+        return np.array([tape.date_of_day(int(d))[:7] for d in (np.asarray(ts, dtype=np.int64) // DAY_US).tolist()], dtype=object)
+
+    months = sorted(set(month(inst["ev_ts"]).tolist()) | set(month(a_ev_ts).tolist()))
+    by_month = {}
+    for m_ in months:
+        by_month[m_] = {row: _d_summary(e_ts[month(e_ts) == m_], e_v[month(e_ts) == m_], c_ts[month(c_ts) == m_], c_v[month(c_ts) == m_])
+                        for row, (e_ts, e_v, c_ts, c_v) in series.items()}
+    first, end = _type_window_days(run, spec)
+    cut = first + (end - first) // 2
+    halves = {"window": [tape.date_of_day(first), tape.date_of_day(end)], "cut_day": tape.date_of_day(cut), "rule": A1_DEFINITIONS["chronological_stability"]}
+    for label, lo, hi in (("first_half", first, cut), ("second_half", cut, end)):
+        halves[label] = {row: _d_summary(e_ts[(e_ts // DAY_US >= lo) & (e_ts // DAY_US < hi)], e_v[(e_ts // DAY_US >= lo) & (e_ts // DAY_US < hi)],
+                                         c_ts[(c_ts // DAY_US >= lo) & (c_ts // DAY_US < hi)], c_v[(c_ts // DAY_US >= lo) & (c_ts // DAY_US < hi)])
+                         for row, (e_ts, e_v, c_ts, c_v) in series.items()}
+    return {"status": A1_STATUS, "by_month": by_month, "window_halves": halves}
+
+
+def diagnostic_classification(run: dict, spec: Spec, calendar_days: int, verdict: str | None) -> dict:
+    """A1 — the diagnostic classification of `descriptive.a1.classification_rules`, first matching rule in the precedence (d) > (a) >
+    (c) > (b) > none; every input and every condition is printed; a report, never a verdict (C1–C7 and Holm decide)."""
+    tspec = run["tspec"]
+    abc = _a1_cached(run, "abc", lambda: report_abc(run, spec, calendar_days))
+    g = abc["A_signal"]["events_minus_controls"]
+    lb, ub = g["lb90"], g["ub90"]
+    a_ev, b_ev, c_ev = abc["A_signal"]["events"]["mean"], abc["B_execution"]["events"]["mean"], abc["C_net"]["events"]["mean"]
+    has_fill = tspec.fill_proxy is not None
+    gap_ub = taker_mean = None
+    if has_fill:
+        fills = _a1_cached(run, "fills", lambda: report_filled_vs_unfilled(run, spec))
+        taker = _a1_cached(run, "taker", lambda: report_taker_variant(run, spec))
+        gap_ub, taker_mean = fills["events"]["gap_filled_minus_unfilled"]["ub90"], taker["event_net_mean"]
+    n_instants = int(run["instant"]["ev_ts"].size)
+    n_days = int(np.unique(run["instant"]["ev_ts"] // DAY_US).size)
+    threshold = spec.statistics["threshold_bp"]
+    below_floor = n_instants < spec.power["min_instants"] or n_days < spec.power["min_days"]
+    conditions = {
+        "verdict_not_informative_or_inconclusive": verdict in ("NOT_INFORMATIVE", "INCONCLUSIVE"),
+        "n_below_power_floor": bool(below_floor),
+        "no_interval_for_A_gap": lb is None or ub is None,
+        "A_gap_interval_holds_0_and_threshold": bool(lb is not None and ub is not None and lb <= 0 and ub >= threshold),
+        "A_gap_lb90_gt_0": bool(lb is not None and lb > 0),
+        "fill_gap_ub90_lt_0_at_events": bool(gap_ub is not None and gap_ub < 0),
+        "B_event_below_A_event": bool(a_ev is not None and b_ev is not None and b_ev < a_ev),
+        "C_event_le_0": bool(c_ev is None or c_ev <= 0),
+        "taker_variant_event_net_gt_0": bool(taker_mean is not None and taker_mean > 0),
+    }
+    if (conditions["verdict_not_informative_or_inconclusive"] or below_floor or conditions["no_interval_for_A_gap"]
+            or conditions["A_gap_interval_holds_0_and_threshold"]):
+        key = "d_insufficiently_documented"
+    elif not conditions["A_gap_lb90_gt_0"]:
+        key = "a_no_edge"
+    elif (has_fill and conditions["fill_gap_ub90_lt_0_at_events"] and conditions["B_event_below_A_event"] and conditions["C_event_le_0"]
+          and conditions["taker_variant_event_net_gt_0"]):
+        key = "c_badly_executed"
+    elif conditions["C_event_le_0"]:
+        key = "b_too_weak_for_costs"
+    else:
+        key = "none_of_the_four"
+    return {"status": A1_STATUS, "class": key, "label": DIAGNOSTIC_LABELS[key], "precedence": list(DIAGNOSTIC_PRECEDENCE), "rule": DIAGNOSTIC_RULES[key],
+            "inputs": {"verdict": verdict, "n_instants": n_instants, "n_days": n_days, "power_floor": dict(spec.power), "threshold_bp": threshold,
+                       "A_gap_point": g["point"], "A_gap_lb90": lb, "A_gap_ub90": ub, "A_event_mean": a_ev, "B_event_mean": b_ev, "C_event_mean": c_ev,
+                       "fill_gap_ub90_at_events": gap_ub, "taker_variant_event_net_mean": taker_mean, "has_fill_proxy": has_fill},
+            "conditions": conditions, "note": "a report, never a verdict: C1-C7, Holm and the economic gate decide (LP-G5 section 7.5, amendment A1)"}
+
+
+def type_reports(run: dict, spec: Spec, names: tuple, calendar_days: int, verdict: str | None = None) -> dict:
+    """The descriptive reports of one type (sealed with the type when it is INCONCLUSIVE or NOT_INFORMATIVE); `verdict` feeds the A1
+    diagnostic classification (its rule (d))."""
     tspec, inst = run["tspec"], run["instant"]
     out: dict = {}
     mine = [n for n in names if n.split("_", 1)[0] == tspec.label] + [n for n in names if n in PER_TYPE_REPORTS]
     mine += [n for n in names if n in GATE2_TYPE_REPORTS and GATE2_TYPE_REPORTS[n](tspec) and n not in mine]
     ev_hour = (inst["ev_ts"] % DAY_US) // HOUR_US
     for name in mine:
-        if name == "T01_classified_by_realized_rate" or name.endswith("_classified_by_realized_rate"):
+        if name == "abc_signal_execution_net":  # A1
+            out[name] = _a1_cached(run, "abc", lambda: report_abc(run, spec, calendar_days))
+        elif name == "chronological_stability_month_and_window_halves":
+            out[name] = report_chronology(run, spec)
+        elif name == "diagnostic_classification_a1":
+            out[name] = diagnostic_classification(run, spec, calendar_days, verdict)
+        elif name.endswith("_filled_vs_unfilled_signal"):
+            out[name] = _a1_cached(run, "fills", lambda: report_filled_vs_unfilled(run, spec))
+        elif name.endswith("_taker_variant_without_fill_conditioning"):
+            out[name] = _a1_cached(run, "taker", lambda: report_taker_variant(run, spec))
+        elif name.endswith(A1_SENSITIVITY_SUFFIX):
+            out[name] = report_cost_sensitivity(run, spec)
+        elif name == "T01_classified_by_realized_rate" or name.endswith("_classified_by_realized_rate"):
             v = tspec.validation or {"rate_high": 0.0004, "rate_low": -0.0004}
             out[name] = {"rule": "events signed by the class of R_h (old classifier, a look-ahead of 4 minutes); controls by P_hat(t_arm)",
                          **_variant_d(run, spec, {"side_from_rate": (v["rate_high"], v["rate_low"])}, {})}
@@ -3235,7 +3676,7 @@ def evaluate_type(series_by_inst: dict, tspec: TypeSpec, spec: Spec, common: dic
         window = (int(common["d_cov_global_us"]), spec.end_us)  # LP-G5 §4.4: T01 entier se restreint à D_cov (the registry's single window)
     events, controls, raw_all, other, by_inst = {}, {}, {}, {}, {}
     excluded_instruments = []
-    gen_totals, restrict_totals, control_totals = {}, {}, {"candidates": 0, "kept": 0, "excluded_union": 0, "excluded_by_component": {}}
+    gen_totals, restrict_totals, control_totals = {}, {}, {"candidates": 0, "kept": 0, "excluded_union": 0, "excluded_by_component": {}, "restriction": {}}
     for inst, s in series_by_inst.items():
         instants, gdiag, other_i = generator_instants(s, tspec, spec, common)
         raw, rdiag = restrict(s, instants, tspec, spec, window)
@@ -3259,6 +3700,8 @@ def evaluate_type(series_by_inst: dict, tspec: TypeSpec, spec: Spec, common: dic
             control_totals[key] += int(cdiag[key])
         for key, value in cdiag["excluded_by_component"].items():
             control_totals["excluded_by_component"][key] = control_totals["excluded_by_component"].get(key, 0) + int(value)
+        for key, value in cdiag["restriction"].items():
+            control_totals["restriction"][key] = control_totals["restriction"].get(key, 0) + int(value)
         entry["controls"] = cdiag
         by_inst[inst] = entry
     used = {i: s for i, s in series_by_inst.items() if i in events}
@@ -3438,7 +3881,7 @@ def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> 
         immediate = bool(verdict == "PASS" and p_value is not None and p_value <= spec.multiplicity["immediate_if_p_le"])
         calendar_days = _calendar_days(spec, tspec, run["series"], d_cov_global, run.get("window"))
         economic = economic_reading(run["ev_parts"], tspec, spec, calendar_days, verdict)
-        descriptive = type_reports(run, spec, spec.descriptive["reports"], calendar_days)
+        descriptive = type_reports(run, spec, spec.descriptive["reports"], calendar_days, verdict)
         descriptive["instruments_per_instant"] = {"events": _instruments_per_instant(run["instant"]["ev_n"]), "controls": _instruments_per_instant(run["instant"]["ct_n"])}
         for report in spec.unit["reports"]:  # unit.report (B ix)
             if report == "instruments_per_instant_distribution":
@@ -3449,7 +3892,7 @@ def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> 
                      "event_mean": p["diff"].get("event_mean"), "control_mean": p["diff"].get("control_mean"), "n_control_instants": int(run["instant"]["ct_ts"].size),
                      "blocks": p["diff"].get("blocks"), "resamples": p["diff"].get("resamples"), "seed": p["diff"].get("seed"), "measure": spec.raw["statistics"]["measure"]}
         criteria = p["criteria"]
-        result = {"type": name, "label": tspec.label, "decisive": True, "role": tspec.role, "costs_bp": cost_terms(tspec.role, spec.costs), "days_per_year": tspec.days_per_year,
+        result = {"type": name, "label": tspec.label, "decisive": True, "role": tspec.role, "costs_bp": type_cost_terms(tspec, spec.costs), "days_per_year": tspec.days_per_year,
                   "window_rule": tspec.window_rule, "verdict": verdict, "verdict_label": spec.gate + verdict, "verdict_reasons": reasons, "n_instants": p["n_instants"],
                   "n_days": p["n_days"], "exclusions": {**run["exclusions"], "proxy_missing": p["proxy"]}, "fill_rate": run["fill_rate"], "validation": p["validation"],
                   "fail_annotation": annotation, "closure_scope": spec.verdict["closure_scope"] if verdict == "FAIL" else None,
@@ -3549,6 +3992,38 @@ def _fmt(value, digits: int = 2, signed: bool = True) -> str:
     return format(float(value), f"+.{digits}f" if signed else f".{digits}f")
 
 
+A1_ROW_LABELS = {"A_signal": "A (signal)", "B_execution": "B (exécution)", "C_net": "C (net)"}
+A1_SIDE_LABELS = {"events": "événements", "controls": "contrôles", "events_minus_controls": "événements − contrôles"}
+
+
+def render_a1(descriptive: dict) -> list[str]:
+    """A1 — the A / B / C table and the diagnostic classification as Markdown (an unsealed type only; reported, never decisive)."""
+    abc = descriptive.get("abc_signal_execution_net")
+    if not isinstance(abc, dict) or "A_signal" not in abc:
+        return []
+    lines = ["### Amendement A1 — signal (A), exécution (B), net (C) : rapporté, jamais décisif", "",
+             f"Coûts du type : {json.dumps(abc.get('costs_bp'), ensure_ascii=False)} ; conditionnement : {abc.get('fill_conditioning')}.", "",
+             "| ligne | côté | n instants | n instrument-instants | taux de fill | moyenne (pb) | médiane (pb) | LB90 | UB90 |", "|---|---|---|---|---|---|---|---|---|"]
+    for row in ("A_signal", "B_execution", "C_net"):
+        for side in ("events", "controls", "events_minus_controls"):
+            r = abc[row].get(side) or {}
+            if side == "events_minus_controls":
+                cells = [str(r.get("n_instants")), "—", "—", _fmt(r.get("point")), _fmt(r.get("median_difference")), _fmt(r.get("lb90")), _fmt(r.get("ub90"))]
+            else:
+                rate = r.get("fill_rate")
+                cells = [str(r.get("n_instants")), str(r.get("n_instrument_instants")), "—" if rate is None else _fmt(rate, 3, signed=False), _fmt(r.get("mean")),
+                         _fmt(r.get("median")), _fmt(r.get("lb90")), _fmt(r.get("ub90"))]
+            lines.append(f"| {A1_ROW_LABELS[row]} | {A1_SIDE_LABELS[side]} | " + " | ".join(cells) + " |")
+    portfolio = abc["C_net"].get("portfolio")
+    if portfolio:
+        lines += ["", f"Lecture portefeuille (C) : {json.dumps(portfolio, ensure_ascii=False)}."]
+    cls = descriptive.get("diagnostic_classification_a1")
+    if isinstance(cls, dict) and "class" in cls:
+        lines += ["", f"**Classification diagnostique (rapportée, jamais un verdict) : {cls['label']}** — règle : {cls['rule']} ; "
+                      f"conditions : {json.dumps(cls['conditions'], ensure_ascii=False)}."]
+    return lines + [""]
+
+
 def render_markdown(document: dict) -> str:
     spec = document["spec"]
     rule = spec["descriptive_rule"]
@@ -3584,7 +4059,9 @@ def render_markdown(document: dict) -> str:
                   f"- Exclusions : {json.dumps({k: v for k, v in r['exclusions'].items() if k != 'by_instrument'}, ensure_ascii=False)}.", ""]
         if "sealed" not in r:
             lines += [f"- Statistique : {json.dumps(r['statistic'])}.", f"- Critères : {json.dumps(r['criteria'], ensure_ascii=False)}.",
-                      f"- Lecture économique : {json.dumps(r['economic'], ensure_ascii=False)}.", "", "### Descriptifs du type (aucune p-value, aucun verdict)", ""]
+                      f"- Lecture économique : {json.dumps(r['economic'], ensure_ascii=False)}.", ""]
+            lines += render_a1(r["descriptive"])
+            lines += ["### Descriptifs du type (aucune p-value, aucun verdict)", ""]
             for key, value in r["descriptive"].items():
                 lines.append(f"- `{key}` : {json.dumps(value, ensure_ascii=False)[:1500]}")
             lines.append("")

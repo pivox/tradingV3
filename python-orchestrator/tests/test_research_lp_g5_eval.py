@@ -33,7 +33,8 @@ MINUTE_US = 60 * US
 HOUR_US = 60 * MINUTE_US
 DAY_US = tape.DAY_S * US
 REAL_SPEC = Path(__file__).resolve().parents[1] / "scripts" / "research_lp" / "specs" / "g5_gate1_spec.json"
-REAL_SPEC_SHA256_DRAFT = "d4189493d896fe508b36f32da6433c03305cd4867fdc5fe94ff67d17f85af80a"  # LP-G5 Annexe A (informative)
+# LP-G5 Annexe A (informative). A1 (2026-10-21): the draft 0.2.0 was d4189493…af80a; 0.3.0-draft carries the amendment A1.
+REAL_SPEC_SHA256_DRAFT = "2ab0073cf53003d65ff46b3f62700faac46ec2fd00cdef7a529baeca362b15a6"
 BASE = json.loads(REAL_SPEC.read_text())
 BTC, ETH, SOL = "BTC-USD_UM_XPERP-310404", "ETH-USD_UM_XPERP-310404", "SOL-USD_UM_XPERP-310404"
 LISTED = {BTC: "2026-03-30T04:30:00Z", ETH: "2026-04-01T04:00:00Z", SOL: "2026-04-01T04:25:00Z"}
@@ -94,6 +95,15 @@ def spec_of(**kw) -> g5_eval.Spec:
 
 
 SHORT = {"start": "2026-08-01", "end_exclusive": "2026-10-14"}
+
+
+def pre_a1(document: dict) -> None:
+    """The spec without the amendment A1's cost rule (the T01 entry leg at its design value: 13 / 19.5 bp) — the « sans la clé » case."""
+    t01 = document["events"][0]
+    t01.pop("adverse_selection_entry_leg")
+    t01.pop("cost_sensitivity_pre_a1")
+    t01["expected_cost_bp"], t01["expected_cost_bp_stress"] = 13.0, 19.5
+    document["descriptive"]["reports"].remove("T01_cost_sensitivity_pre_a1")
 
 
 def lowered_floor(document: dict, instants: int = 20, days: int = 10) -> None:
@@ -173,7 +183,9 @@ def k_of(series: g5_eval.Series, text: str) -> int:
 def test_the_real_spec_is_accepted_and_every_field_is_read():
     spec, sha = g5_eval.load_spec(REAL_SPEC)
     assert sha == REAL_SPEC_SHA256_DRAFT and spec.status == "DRAFT_NOT_FROZEN" and spec.source == "history" and spec.gate == "G5_GATE1_"
-    assert spec.requires == tuple(BASE["requires"]) and set(spec.requires) == set(g5_eval.HISTORY_REQUIRES) and len(spec.requires) == 27
+    # A1: 27 capabilities + the 7 of the amendment (a1_*, Gate 1 only).
+    assert spec.requires == tuple(BASE["requires"]) and set(spec.requires) == set(g5_eval.HISTORY_REQUIRES) and len(spec.requires) == 34
+    assert set(g5_eval.A1_CAPABILITIES) <= set(spec.requires) and len(g5_eval.A1_CAPABILITIES) == 7
     # CTO M4: the sha256 of the sealed funding receipt is a freeze_fill value; the draft predates the key (absent = null, listed).
     assert spec.freeze_fill["null"] == ["instruments_snapshot_path", "instruments_snapshot_sha256", "calendars_verified_utc", "code_digest_sha256", "decision_ref_p_g5_1",
                                         "funding_seal_receipt_sha256"]
@@ -194,7 +206,10 @@ def test_the_real_spec_is_accepted_and_every_field_is_read():
         "T05_us_open", "taker_maker", (0, 60), 5, (5, 60), (0, 5, 60), {"kind": "return_sign", "from_min": 0, "to_min": 5})
     assert t05.generator["minute_of_day"] == 9 * 60 + 30 and t05.generator["tz"] == "America/New_York" and t05.generator["exclude_refs"] == ("cpi", "employment_situation")
     assert t05.controls == {"minute_of_hour": 30, "grid_hours": (0, 4, 8, 12, 16, 20), "within": "spec_window"} and t05.criteria == ("C1", "C2", "C3", "C4", "C5") and t05.days_per_year == 252
-    assert g5_eval.cost_terms("maker_maker", spec.costs)["total_bp"] == 13.0 and g5_eval.cost_terms("maker_maker", spec.costs)["stress_total_bp"] == 19.5
+    assert g5_eval.cost_terms("maker_maker", spec.costs)["total_bp"] == 13.0 and g5_eval.cost_terms("maker_maker", spec.costs)["stress_total_bp"] == 19.5  # design rule
+    # A1: the T01 entry leg is measured by the fill conditioning: 9.5 / 14.25 bp, the pre-A1 13 / 19.5 bp kept as the reported sensitivity.
+    assert (t01.entry_adverse_selection, t01.expected_cost_bp, t01.expected_cost_bp_stress) == ("measured_by_fill_proxy", 9.5, 14.25)
+    assert g5_eval.type_cost_terms(t01, spec.costs)["total_bp"] == 9.5 and t01.cost_sensitivity == {"expected_cost_bp": 13.0, "expected_cost_bp_stress": 19.5}
     assert g5_eval.cost_terms("taker_maker", spec.costs)["total_bp"] == 15.5 and g5_eval.cost_terms("taker_maker", spec.costs)["stress_total_bp"] == pytest.approx(23.25)
     assert spec.statistics == {"alpha": 0.1, "threshold_bp": 10.0, "block_days": 1, "resamples": 10000, "seed": 20261102, "lb_quantile": 0.1, "ub_quantile": 0.9, "sensitivity_block_days": 7}
     assert spec.power == {"min_instants": 100, "min_days": 30} and spec.unit["min_instruments"] == 1 and spec.price["max_missing_share"] == 0.2
@@ -662,9 +677,10 @@ def test_costs_by_role_funding_signs_and_funding_outside_coverage():
     series.close[k + 15:] = 100.0 * math.exp(30 / 1e4)  # +30 bp at the exit
     series.cache.clear()
     e = g5_eval.measure(series, [h], t01, spec, "event")
-    # The long pays R_h = 5 bp (the settlement h is in (h − 5, h + 15]); maker / maker costs 13 bp.
-    assert e["sign"].tolist() == [1] and e["r_bp"][0] == pytest.approx(30.0) and e["funding_bp"][0] == pytest.approx(-5.0) and e["net_bp"][0] == pytest.approx(30 - 5 - 13)
-    assert e["net_stress_bp"][0] == pytest.approx(30 - 5 - 19.5) and e["rate_at_h"][0] == pytest.approx(5e-4)
+    # The long pays R_h = 5 bp (the settlement h is in (h − 5, h + 15]); maker / maker costs 9.5 bp since A1 (13 bp before: the entry leg's
+    # adverse selection is measured by the fill conditioning; adapted by A1).
+    assert e["sign"].tolist() == [1] and e["r_bp"][0] == pytest.approx(30.0) and e["funding_bp"][0] == pytest.approx(-5.0) and e["net_bp"][0] == pytest.approx(30 - 5 - 9.5)
+    assert e["net_stress_bp"][0] == pytest.approx(30 - 5 - 14.25) and e["rate_at_h"][0] == pytest.approx(5e-4)
     # T05: taker / maker 15.5 bp; a settlement crossed inside (h + 5, h + 60] is paid; outside D_cov the funding is assumed zero and counted.
     h5 = tape.parse_iso_utc("2026-09-02T13:30:00Z")
     k5 = int(series.index_of([h5])[0])
@@ -753,7 +769,7 @@ def test_a_planted_effect_passes_c1_to_c7_and_holm_with_the_programme_field(plan
     # D ≈ drift − funding paid (5 bp) at T01, ≈ the continuation at T05; the costs cancel in D, not in C2 / C3.
     assert 25 < t01["statistic"]["D"] < 45 and 30 < t05["statistic"]["D"] < 50
     assert t01["criteria"]["C2"]["event_net_mean"] == pytest.approx(t01["statistic"]["event_mean"]) and t01["criteria"]["C3"]["event_net_stress_mean"] == pytest.approx(
-        t01["statistic"]["event_mean"] - 6.5, abs=1e-6)
+        t01["statistic"]["event_mean"] - 4.75, abs=1e-6)  # A1: 14.25 − 9.5 (19.5 − 13 = 6.5 before A1; adapted)
     assert t01["criteria"]["C4"]["halves"]["first_half"]["days"] >= t01["criteria"]["C4"]["halves"]["second_half"]["days"]
     assert t01["criteria"]["C7"]["event_hour_utc"] == 16 and t01["criteria"]["C7"]["n"] > 0
     assert t01["validation"]["pass"] and t01["validation"]["sensitivity"] == 1.0 and t01["validation"]["false_positive_rate"] == 0.0
@@ -785,10 +801,16 @@ def test_c7_c4_and_c2_are_criteria_of_their_own():
     _, _, doc = study(seed=6, t01=60.0, t01_drift_days=cut)  # the effect in the first half of the event days only
     t01 = doc["types"]["T01_funding_8h"]
     assert t01["verdict"] == "FAIL" and "C4 fails" in t01["verdict_reasons"] and t01["criteria"]["C4"]["halves"]["second_half"]["point"] < 0
-    _, _, doc = study(seed=7, t01=16.0)  # D ≈ 16 − 5 bp of funding ≥ 10, but the absolute net ≈ 16 − 5 − 13 < 0: C2 (and C3) fail
+    # Adapted by A1: at the pre-A1 total (the spec without adverse_selection_entry_leg, 13 / 19.5 bp) D ≈ 16 − 5 bp of funding ≥ 10 but the
+    # absolute net ≈ 16 − 5 − 13 < 0: C2 (and C3) fail; under A1 (9.5 / 14.25 bp) the net ≈ +1.5 bp holds C2 and C3 alone fails.
+    _, _, doc = study(seed=7, t01=16.0, mutate=pre_a1)
     t01 = doc["types"]["T01_funding_8h"]
-    assert t01["criteria"]["C1"]["pass"] and not t01["criteria"]["C2"]["pass"] and not t01["criteria"]["C3"]["pass"] and t01["verdict"] == "FAIL"
-    assert t01["verdict_reasons"][:2] == ["C2 fails", "C3 fails"]
+    assert t01["costs_bp"]["total_bp"] == 13.0 and t01["criteria"]["C1"]["pass"] and not t01["criteria"]["C2"]["pass"] and not t01["criteria"]["C3"]["pass"]
+    assert t01["verdict"] == "FAIL" and t01["verdict_reasons"][:2] == ["C2 fails", "C3 fails"]
+    _, _, doc = study(seed=7, t01=16.0)
+    t01 = doc["types"]["T01_funding_8h"]
+    assert t01["costs_bp"]["total_bp"] == 9.5 and t01["criteria"]["C1"]["pass"] and t01["criteria"]["C2"]["pass"] and not t01["criteria"]["C3"]["pass"]
+    assert t01["verdict"] == "FAIL" and t01["verdict_reasons"][0] == "C3 fails"
 
 
 def test_inconclusive_c6_and_d_cov_unknown_are_sealed_and_inscribed_automatically():
