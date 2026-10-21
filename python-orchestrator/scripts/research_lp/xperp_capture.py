@@ -5,7 +5,7 @@
     python -m scripts.research_lp.cli count   --out DIR …            # P3: counting only, no value persisted
 
 Public data only: no credential, no private endpoint, no order. Channels (per instrument unless
-noted): `trades`, `books5`, `mark-price`, `funding-rate`, and `liquidation-orders`. Hosts: the
+noted): `trades`, `books5`, `mark-price`, `funding-rate`, `liquidation-orders` and `index-tickers`. Hosts: the
 global public endpoint `wss://ws.okx.com:8443/ws/v5/public` (the task's default) or the EEA host
 `wss://wseea.okx.com/ws/v5/public` in the form the EEA documentation gives (no port;
 `docs/handbook/research/LP-DATA-DESK-2026-10-20.md` §0.1 — whether a port is accepted is UNKNOWN,
@@ -17,6 +17,15 @@ families that were not selected included — and the collector persists each row
 `instId`. This is deliberate: the G4 detector benefits from a wide universe and the rows carry no
 cost on the other channels. `--liq-selected-only` restricts persistence to the selected
 instruments (dropped rows are counted as `dropped_unselected`).
+
+**`index-tickers` is subscribed per index**, not per instrument (owner decision D10, 2026-10-21, option (a) of
+LP-G5 P-G5-10 (ii)): docs-v5 "Index tickers channel" (URL path `/ws/v5/public`, the same public endpoint, hence the same EEA host
+`wss://wseea.okx.com/ws/v5/public`; read in the docs copies of `20261020T1430Z-lp-programme/a4-data-desk/txt/`, global
+`docs-v5-en.txt` l.43881 and EEA `my-docs-v5-en.txt` l.18392, identical): argument `instId` = "Index with USD, USDT, BTC, USDC as
+the quote currency, e.g. BTC-USDT. Same as uly"; push fields `instId`, `idxPx` (latest index price), `high24h`, `low24h`,
+`open24h`, `sodUtc0`, `sodUtc8`, `ts` (ms); "Push data every 100ms if there are any changes, otherwise push once a minute". The
+index ids are the `uly` of the captured instruments (`BTC-USD_UM_XPERP-310404` → `BTC-USD`, regex fallback on the id when no
+metadata row is given), deduplicated; only `ts` and `idxPx` are kept, in the `index_tick` layout keyed by the index id.
 
 Four guards:
 
@@ -80,9 +89,12 @@ HOST_ALIASES = {"global": WS_PUBLIC_GLOBAL, "eea": WS_PUBLIC_EEA}
 REST_ALIASES = {"global": REST_GLOBAL, "eea": REST_EEA}
 INSTRUMENTS_PATH = "/api/v5/public/instruments?instType=FUTURES"
 
-CHANNELS = ("trades", "books5", "liquidation-orders", "mark-price", "funding-rate")
-CHANNEL_LAYOUT = {"trades": "trades", "books5": "books5", "liquidation-orders": "liquidations", "mark-price": "mark", "funding-rate": "funding"}
+CHANNELS = ("trades", "books5", "liquidation-orders", "mark-price", "funding-rate", "index-tickers")
+CHANNEL_LAYOUT = {"trades": "trades", "books5": "books5", "liquidation-orders": "liquidations", "mark-price": "mark", "funding-rate": "funding",
+                  "index-tickers": "index_tick"}
 INSTTYPE_CHANNELS = frozenset({"liquidation-orders"})
+# D10 (2026-10-21): subscribed once per index id (`uly` of the captured instruments), not per instrument.
+INDEX_CHANNELS = frozenset({"index-tickers"})
 # The forward test fwd-okx-r1 runs 2026-10-13..31: no value of that window may be captured or read by this programme.
 QUARANTINE_FLOOR = "2026-11-02T00:00:00Z"
 DEFAULT_NOT_BEFORE = QUARANTINE_FLOOR
@@ -90,6 +102,7 @@ DEFAULT_CHECKPOINT_S = {"values": 90.0, "counting": 600.0}
 INST_TYPE = "FUTURES"
 
 XPERP_RE = re.compile(r"^[A-Z0-9]+-USD_UM_XPERP-\d{6}$")
+INDEX_OF_ID_RE = re.compile(r"^(?P<base>[A-Z0-9]+)-USD_UM(?:_XPERP)?-\d{6}$")  # same shape as g5_fetch._INDEX_RE
 DATED_RE = re.compile(r"^[A-Z0-9]+-USD_UM-\d{6}$")
 FAMILIES = ("xperp", "dated", "all")
 
@@ -189,6 +202,25 @@ def instrument_spec_row(row: dict) -> dict:
             "lotSz": row.get("lotSz"), "minSz": row.get("minSz"), "listTime": row.get("listTime"), "expTime": row.get("expTime"), "family": family_of(str(row.get("instId", "")))}
 
 
+def index_id_of_row(row: dict) -> str:
+    """The index id (`instId` of `index-tickers`, "Same as uly") of a FUTURES row: `uly` when present, else `<BASE>-USD` from the id
+    (the rule of `g5_fetch.index_id_of`)."""
+    uly = str(row.get("uly") or "").strip()
+    if uly:
+        return uly
+    match = INDEX_OF_ID_RE.match(str(row.get("instId", "")))
+    if not match:
+        raise ValueError(f"cannot deduce the index id of {row.get('instId')!r}: no uly and an unknown id shape")
+    return f"{match.group('base')}-USD"
+
+
+def index_ids_for(inst_ids, rows: list[dict] | None = None) -> tuple[str, ...]:
+    """The sorted, de-duplicated index ids of the captured instruments: the metadata row of an instrument when given (its `uly`),
+    else the id itself."""
+    by_id = {str(r.get("instId")): r for r in (rows or []) if isinstance(r, dict)}
+    return tuple(sorted({tape.check_inst_name(index_id_of_row(by_id.get(inst, {"instId": inst}))) for inst in inst_ids}))
+
+
 def fetch_instruments(rest_host: str, timeout: float = 20.0) -> list[dict]:
     """REST `GET /api/v5/public/instruments?instType=FUTURES` (metadata, no price). Never called by the tests."""
     url = resolve_rest(rest_host) + INSTRUMENTS_PATH
@@ -271,6 +303,11 @@ def rows_from_data(channel: str, inst_id: str, data: list, recv_us: int) -> list
             ts_us = _i(row.get("ts")) * 1000
             inst = str(row.get("instId") or inst_id)
             out.append((inst, ts_us, (ts_us, recv_us, _f(row.get("markPx")))))
+    elif channel == "index-tickers":  # D10: only the clock and idxPx are kept (high24h, low24h, open24h, sodUtc0, sodUtc8 dropped)
+        for row in data:
+            ts_us = _i(row.get("ts")) * 1000
+            inst = str(row.get("instId") or inst_id)
+            out.append((inst, ts_us, (ts_us, recv_us, _f(row.get("idxPx")))))
     elif channel == "funding-rate":
         for row in data:
             ts_us = _i(row.get("ts")) * 1000
@@ -308,11 +345,15 @@ def missing_seq_ids(channel: str, data: list) -> int:
     return sum(1 for row in data if isinstance(row, dict) and (row.get("seqId") is None or row.get("seqId") == ""))
 
 
-def subscription_args(inst_ids: list[str], channels: tuple[str, ...]) -> list[dict]:
+def subscription_args(inst_ids: list[str], channels: tuple[str, ...], index_ids: tuple[str, ...] | None = None) -> list[dict]:
+    """One argument per instrument, one per `instType` for `liquidation-orders`, one per index id for `index-tickers` (`index_ids`,
+    default derived from the instrument ids by `index_ids_for`)."""
     args = []
     for channel in channels:
         if channel in INSTTYPE_CHANNELS:
             args.append({"channel": channel, "instType": INST_TYPE})
+        elif channel in INDEX_CHANNELS:
+            args.extend({"channel": channel, "instId": index_id} for index_id in (index_ids if index_ids is not None else index_ids_for(inst_ids)))
         else:
             args.extend({"channel": channel, "instId": inst_id} for inst_id in inst_ids)
     return args
@@ -467,6 +508,7 @@ class CaptureConfig:
     subscribe_chunk: int = 50
     open_timeout_s: float = 20.0
     instruments_rows: list[dict] | None = None
+    index_ids: tuple[str, ...] | None = None  # `index-tickers` arguments; None → index_ids_for(inst_ids, instruments_rows)
     liq_selected_only: bool = False
     echo: bool = True
     argv: list[str] | None = None
@@ -497,6 +539,9 @@ class Capture:
         self.guard = NotBeforeGuard(self.not_before_us, cfg.counting_only)
         self.guard.assert_above_floor(cfg.floor_override_for_tests)  # before anything is written
         self.guard.assert_may_start()
+        self.index_ids = tuple(cfg.index_ids) if cfg.index_ids is not None else (index_ids_for(cfg.inst_ids, cfg.instruments_rows) if INDEX_CHANNELS & set(cfg.channels) else ())
+        for index_id in self.index_ids:
+            tape.check_inst_name(index_id)
         self.lock = tape.DirectoryLock(self.out_dir).acquire()
         try:
             self.health = HealthJournal(self.out_dir / "health.log", echo=cfg.echo)
@@ -524,11 +569,11 @@ class Capture:
         if cfg.instruments_rows:
             self.write_instruments(cfg.instruments_rows)
         self.store.manifest["sessions"].append({"started_at": iso_now(), "pid": os.getpid(), "mode": cfg.mode, "host": self.host, "channels": list(cfg.channels),
-                                                "inst_count": len(cfg.inst_ids), "not_before": cfg.not_before, "quarantine_floor": QUARANTINE_FLOOR,
+                                                "inst_count": len(cfg.inst_ids), "index_ids": list(self.index_ids), "not_before": cfg.not_before, "quarantine_floor": QUARANTINE_FLOOR,
                                                 "floor_override_for_tests": bool(cfg.floor_override_for_tests), "checkpoint_every_s": cfg.checkpoint_s,
                                                 "liq_selected_only": bool(cfg.liq_selected_only), "argv": list(cfg.argv or [])})
         self.store.save_manifest()
-        self.health.log("INFO", "started", mode=cfg.mode, host=self.host, instruments=len(cfg.inst_ids), channels=",".join(cfg.channels), not_before=cfg.not_before,
+        self.health.log("INFO", "started", mode=cfg.mode, host=self.host, instruments=len(cfg.inst_ids), indices=len(self.index_ids), channels=",".join(cfg.channels), not_before=cfg.not_before,
                         quarantine_floor=QUARANTINE_FLOOR, checkpoint_every_s=cfg.checkpoint_s)
 
     # -- metadata
@@ -539,7 +584,7 @@ class Capture:
         selection is visible to the readers."""
         path = self.out_dir / "instruments-futures.json"
         fresh = {"source": f"{INSTRUMENTS_PATH} (contract specifications, no market value)", "fetched_at": iso_now(), "selected": sorted(self.cfg.inst_ids),
-                 "instruments": [instrument_spec_row(row) for row in rows]}
+                 "index_ids": list(self.index_ids), "instruments": [instrument_spec_row(row) for row in rows]}
         if path.exists():
             try:
                 existing = json.loads(path.read_text())
@@ -549,6 +594,7 @@ class Capture:
             for row in fresh["instruments"]:
                 merged_rows[str(row.get("instId"))] = row
             document = {**existing, "updated_at": iso_now(), "selected": sorted(set(existing.get("selected", [])) | set(self.cfg.inst_ids)),
+                        "index_ids": sorted(set(existing.get("index_ids", [])) | set(self.index_ids)),
                         "instruments": [merged_rows[k] for k in sorted(merged_rows)]}
             document.setdefault("fetched_at", fresh["fetched_at"])
             document.setdefault("source", fresh["source"])
@@ -739,7 +785,7 @@ class Capture:
         import websockets
 
         backoff = self.cfg.reconnect_first_s
-        args = subscription_args(list(self.cfg.inst_ids), self.cfg.channels)
+        args = subscription_args(list(self.cfg.inst_ids), self.cfg.channels, self.index_ids)
         while not self.should_stop():
             stop_waiter = asyncio.ensure_future(self._stop_event.wait())
             try:

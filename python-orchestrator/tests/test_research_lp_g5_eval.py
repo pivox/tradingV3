@@ -701,6 +701,34 @@ def test_costs_by_role_funding_signs_and_funding_outside_coverage():
     assert c["funding_nonzero"] == 0
 
 
+def test_the_t01_instant_that_opens_d_cov_pays_its_known_settlement():
+    """LP-G5 §11.1 (defect fixed 2026-10-21, pre-freeze pass): the T01 instant h = D_cov has a funding window (h − 5 ; h + 15] that opens
+    before D_cov, but the only settlement it crosses is h itself, which is covered (rate known). Before the fix the whole window was
+    `outside` (open < D_cov) and its funding assumed zero (`funding_unknown` = 1); now a settlement is assumed zero only when it is really
+    outside the coverage, i.e. when the window may cross a settlement before D_cov (it opens before the served predecessor of D_cov)."""
+    spec = spec_of(universe=[uni(BTC)], window=SHORT)
+    meta = spec.instrument(BTC)
+    t01 = spec.type("T01_funding_8h")
+    h = tape.parse_iso_utc("2026-09-02T16:00:00Z")
+    st = settlements_8h(spec)
+    series = flat(spec, meta, settlements=st, rates=np.full(st.size, 5e-4), d_cov_us=h)  # D_cov = h: the instant that opens the coverage
+    k = int(series.index_of([h])[0])
+    series.mark[k - 484: k - 4] = series.index[k - 484: k - 4] * 1.0012
+    series.low[k - 4] = 99.0
+    series.close[k + 15:] = 100.0 * math.exp(30 / 1e4)
+    series.cache.clear()
+    e = g5_eval.measure(series, [h], t01, spec, "event")
+    assert e["sign"].tolist() == [1] and e["funding_bp"][0] == pytest.approx(-5.0) and e["counts"]["funding_unknown"] == 0 and e["funding_outside_coverage"] == 0
+    assert e["net_bp"][0] == pytest.approx(30 - 5 - 9.5)
+    # A window that opens before the served predecessor of D_cov may cross a settlement outside the coverage: still assumed zero, counted.
+    h_before = h - 8 * HOUR_US
+    series.mark[k - 484 - 480: k - 4 - 480] = series.index[k - 484 - 480: k - 4 - 480] * 1.0012
+    series.low[k - 4 - 480] = 99.0
+    series.cache.clear()
+    b = g5_eval.measure(series, [h_before], t01, spec, "event")
+    assert b["funding_bp"][0] == 0.0 and b["counts"]["funding_unknown"] == 1 and b["funding_outside_coverage"] == 1
+
+
 def test_t01_reads_one_d_cov_the_receipt_window_on_top_of_the_instrument_coverage():
     """LP-G5 §4.4: « T01 entier (événements et contrôles) se restreint à D_cov », the single window of the sealed receipt (registry);
     an instrument whose own history starts earlier is cut at it, one whose history starts later keeps its own start."""

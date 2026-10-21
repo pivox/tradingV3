@@ -1,11 +1,11 @@
 {
   "spec_id": "LP-G5-GATE2-2026",
   "spec_schema": "g5-spec/2",
-  "spec_version": "0.1.3-draft",
+  "spec_version": "0.1.4-draft",
   "status": "DRAFT_NOT_FROZEN",
   "protocol": "docs/handbook/research/LP-G5-DRAFT-PREREGISTRATION.md",
   "protocol_sections": "section 10 (Gate 2), section 5.5 (simulated scalp), section 8 (inscription), Annex B (this file)",
-  "note": "Spec machine du G5 Gate 2 (prospectif, confirmation). Gele EN MEME TEMPS que le spec Gate 1 (piege 7) : memes types, classifieur, seuils, signes, fenetres, controles, unite et criteres ; seules changent la source (capture), l'execution (simulee sur carnet reel, lp_sim) et les calendriers (2026-11 -> 2027-04). Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee ; toute valeur null ou owner_decision_pending interdit le statut FROZEN. Le sha256 de la version FROZEN fait partie du gel (protocole section 13). Revision 0.1.2-draft (2026-10-21, passe de correction apres tradingV3-private/research/20261020T2321Z-g5-periods/review-b/quant.md) : textes libres seulement, chaque texte lie au lecteur strict est inchange. Les reponses du proprietaire D7 (P-G5-10 (i) : option a ; (ii) : refus lu dans Nn, confirmation explicite demandee) et D8 (piste S close, P-S3 sans objet, BTC et ETH restent) sont ecrites dans les textes et au journal du registre ; elles sont recopiees dans les blocs de decision au gel (status et choice restent owner_decision_pending jusque-la : echec ferme). Une valeur qui contient le marqueur freeze_pending suivi d un deux-points marque un choix de redaction que le corps du protocole ne fixe pas encore (a1, sections 10 et 11) ; elle interdit FROZEN (regle a coder, a2). Avant le gel, le canal funding-rate n est verifie que sur la documentation et sur un echantillon de schema (noms de champs, valeurs de settState, fundingTime contre ts ; aucun taux affiche ni persiste hors de la tape ; GATES 9.5) ; le texte FROZEN de costs.funding.source est g5_gate2.FUNDING_SOURCE. Revision 0.1.3-draft (2026-10-21, amendement A1 du Gate 1, avant tout gel et toute lecture) : events[T01_funding_8h].adverse_selection_entry_leg = measured_by_fill_proxy, identique au Gate 1 (piege 7, verifie par check_gate1_identity) ; il ne regle que la construction descriptive du Gate 1 sur les derniers prints (9,5 pb au lieu de 13) ; la mesure primaire simulee mesure tous ses termes et n est pas touchee.",
+  "note": "Spec machine du G5 Gate 2 (prospectif, confirmation). Gele EN MEME TEMPS que le spec Gate 1 (piege 7) : memes types, classifieur, seuils, signes, fenetres, controles, unite et criteres ; seules changent la source (capture), l'execution (simulee sur carnet reel, lp_sim) et les calendriers (2026-11 -> 2027-04). Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee ; toute valeur null ou owner_decision_pending interdit le statut FROZEN. Le sha256 de la version FROZEN fait partie du gel (protocole section 13). Revision 0.1.2-draft (2026-10-21, passe de correction apres tradingV3-private/research/20261020T2321Z-g5-periods/review-b/quant.md) : textes libres seulement, chaque texte lie au lecteur strict est inchange. Les reponses du proprietaire D7 (P-G5-10 (i) : option a ; (ii) : refus lu dans Nn, remplace par D10 du 2026-10-21 : les deux sources, choix sur la qualite, recopie dans classifier_index_source) et D8 (piste S close, P-S3 sans objet, BTC et ETH restent) sont ecrites dans les textes et au journal du registre ; elles sont recopiees dans les blocs de decision au gel (status et choice restent owner_decision_pending jusque-la : echec ferme). Une valeur qui contient le marqueur freeze_pending suivi d un deux-points marque un choix de redaction que le corps du protocole ne fixe pas encore (a1, sections 10 et 11) ; elle interdit FROZEN (regle a coder, a2). Avant le gel, le canal funding-rate n est verifie que sur la documentation et sur un echantillon de schema (noms de champs, valeurs de settState, fundingTime contre ts ; aucun taux affiche ni persiste hors de la tape ; GATES 9.5) ; le texte FROZEN de costs.funding.source est g5_gate2.FUNDING_SOURCE. Revision 0.1.3-draft (2026-10-21, amendement A1 du Gate 1, avant tout gel et toute lecture) : events[T01_funding_8h].adverse_selection_entry_leg = measured_by_fill_proxy, identique au Gate 1 (piege 7, verifie par check_gate1_identity) ; il ne regle que la construction descriptive du Gate 1 sur les derniers prints (9,5 pb au lieu de 13) ; la mesure primaire simulee mesure tous ses termes et n est pas touchee.",
 
   "frozen_with": {
     "spec": "python-orchestrator/scripts/research_lp/specs/g5_gate1_spec.json",
@@ -77,7 +77,7 @@
     "rule": "every value owner_decision_pending is replaced by the owner's dated choice (text copied in freeze_fill and in the register journal) before status FROZEN ; the evaluator refuses a FROZEN spec that still contains owner_decision_pending anywhere",
     "pending": [
       {"id": "P-G5-10 (i)", "subject": "end of the T05 Gate 2 window (owner answer D7, 2026-10-21: option a, end 2027-03-31, NOT_INFORMATIVE by construction ; copied at freeze)", "path": "events[T05_us_open].window_end", "status": "owner_decision_pending"},
-      {"id": "P-G5-10 (ii)", "subject": "source of the per-minute index for the classifier P_hat (owner answer D7, 2026-10-21: Nn read as a refusal of point 3 as a whole ; explicit confirmation requested ; if confirmed: no source, T01 INCONCLUSIVE by construction)", "path": "classifier_index_source", "status": "owner_decision_pending"}
+      {"id": "P-G5-10 (ii)", "subject": "source of the per-minute index for the classifier P_hat (owner decision D10, 2026-10-21, which supersedes the reading of D7 on this point: both sources, a = capture index-tickers and b = history-index-candles after the window ; primary chosen by classifier_index_source.selection_rule on coverage and agreement only, before any T01 evaluation ; the other source reported as a sensitivity)", "path": "classifier_index_source", "status": "owner_decided"}
     ],
     "related_not_p_g5_10": [
       {"id": "P-S3 (track S, LP-S-CSFUND-K1C-AMENDMENT-DRAFT.md section 4.3)", "subject": "BTC and ETH in the G5 universe (owner answer D8, 2026-10-21: track S closed without follow-up, P-S3 moot, BTC and ETH stay at both gates ; the strict reader accepts alpha or beta only: a value moot_track_s_closed is to add, a2, then copied at freeze)", "path": "universe.p_s3_track_s", "status": "owner_decision_pending"}
@@ -97,7 +97,7 @@
     "decision_ref_p_g5_10_ii": null,
     "decision_ref_p_s3": null,
     "t05_end_inclusive_utc": null,
-    "rule": "toutes ces valeurs sont non nulles dans la version FROZEN ; l'evaluateur refuse un spec FROZEN qui en contient une nulle ; decision_ref_p_g5_10_i = texte de D7 (point 3 du 2026-10-21) et t05_end_inclusive_utc = 2027-03-31 ; decision_ref_p_s3 = texte de D8 (piste S close, P-S3 sans objet) ; decision_ref_p_g5_10_ii = confirmation explicite demandee par D7"
+    "rule": "toutes ces valeurs sont non nulles dans la version FROZEN ; l'evaluateur refuse un spec FROZEN qui en contient une nulle ; decision_ref_p_g5_10_i = texte de D7 (point 3 du 2026-10-21) et t05_end_inclusive_utc = 2027-03-31 ; decision_ref_p_s3 = texte de D8 (piste S close, P-S3 sans objet) ; decision_ref_p_g5_10_ii = texte de D10 (2026-10-21, les deux sources, choix sur la qualite)"
   },
 
   "universe": {
@@ -205,20 +205,34 @@
 
   "classifier_index_source": {
     "decision": "P-G5-10 (ii)",
-    "status": "owner_decision_pending",
-    "choice": "owner_decision_pending",
-    "why": "the D1 capture carries no index channel (xperp_capture.CHANNELS = trades, books5, liquidation-orders, mark-price, funding-rate at 2026-10-21) ; P_hat needs idx(g) at every minute boundary of the 480-min lookback ; owner answer D7 (2026-10-21): refusal read from Nn, explicit confirmation requested ; option b has no fetcher for the Gate 2 period (g5_fetch stops at END_EXCLUSIVE ; refused at FROZEN by the reader, CTO review-b M3: code to write) ; option a needs a new D1 decision and code ; if the refusal is confirmed the strict reader needs a choice none (a2) and T01 is G5_GATE2_INCONCLUSIVE by construction",
+    "status": "owner_decided",
+    "choice": "d10_both_primary_by_quality_rule",
+    "why": "P_hat needs idx(g) at every minute boundary of the 480-min lookback ; owner decision D10 (2026-10-21, LP-OWNER-DECISIONS-2026-10-21.md: On essaye des deux un par un puis on decide) : (a) the public channel index-tickers is added to the continuous capture (extension of D1 under section 9.4: one more public channel, same instruments, same host, same period ; xperp_capture.CHANNELS and the tape layout index_tick since 2026-10-21) and (b) history-index-candles is fetched once after the end of the Gate 2 window ; the primary source follows selection_rule, the other one is a reported sensitivity ; option b still has no fetcher for the Gate 2 period (g5_fetch stops at END_EXCLUSIVE ; a FROZEN spec choosing D10 is refused by the reader until that fetcher exists, CTO review-b M3: code to write)",
     "options": {
       "a_capture_index_tickers": {
-        "source": "public WS channel index-tickers (docs-v5 l.43897), instId = index_id (uly), captured from before T0",
+        "source": "public WS channel index-tickers (docs-v5 l.43897, URL path /ws/v5/public, EEA host wss://wseea.okx.com/ws/v5/public), instId = index_id (uly), captured from before T0 ; tape layout index_tick (ts_us, recv_us, idx_px) keyed by index_id",
         "idx_minute": "last idxPx received in (g - 60 s ; g] ; none = minute missing",
-        "requires": ["new D1 decision (channel added to the capture ; tout canal ajoute est une nouvelle decision)", "code: index layout in tape.py and xperp_capture.py", "capture of the channel started >= 480 min before the first t_arm scored"]
+        "requires": ["D10 (2026-10-21): channel added to the continuous capture (extension of D1, section 9.4)", "code: index_tick layout in tape.py and the index-tickers channel in xperp_capture.py (written 2026-10-21)", "capture of the channel started >= 480 min before the first t_arm scored"]
       },
       "b_history_index_candles_after_window": {
         "source": "GET /api/v5/market/history-index-candles (bar 1m, instId = index_id), fetched once after the end of the window",
         "idx_minute": "close of the 1m index candle ending at g (Gate 1 convention)",
-        "requires": ["new reading decision (REST history read of the Gate 2 period ; D1 covers the capture and the Gate 1 history only)", "depth served for the whole window (from recent years ; UNKNOWN per X-Perp)", "fetch plan and max_requests (about 2 160 pages per index for 150 days)"]
+        "requires": ["D10 (2026-10-21): fetched once after the end of the Gate 2 window (REST history read of the Gate 2 period)", "a dedicated fetcher (g5_fetch stops at END_EXCLUSIVE ; code to write before FROZEN, CTO review-b M3)", "depth served for the whole window (from recent years ; UNKNOWN per X-Perp)", "fetch plan and max_requests (about 2 160 pages per index for 150 days)"]
       }
+    },
+    "selection_rule": {
+      "decision_ref": "D10 (2026-10-21), LP-OWNER-DECISIONS-2026-10-21.md : On essaye des deux un par un puis on decide ; rule written before the capture and never revised after a reading of T01",
+      "status": "decided by the owner (D10) ; computed by g5_gate2.select_index_source, checked by g5_gate2.verify_index_selection and g5_eval.run_study",
+      "sources": ["a_capture_index_tickers", "b_history_index_candles_after_window"],
+      "window_minutes": "every minute boundary g with T0 <= g < end_exclusive of T01_funding_8h (before any data-gap extension), for every distinct index_id of universe.analysed",
+      "coverage": "share of the (index_id, g) pairs of window_minutes with an idx_minute from a_capture_index_tickers",
+      "coverage_min_share": 0.98,
+      "agreement": "median, over the (index_id, g) pairs of window_minutes where both sources have an idx_minute, of |idx_a(g) - idx_b(g)| / idx_b(g) x 1e4 (bp)",
+      "agreement_max_median_abs_bp": 0.5,
+      "rule": "primary = a_capture_index_tickers if coverage >= coverage_min_share and agreement <= agreement_max_median_abs_bp (no common pair: agreement undefined, rule not met) ; otherwise b_history_index_candles_after_window",
+      "sensitivity": "the other source: T01 recomputed with it, reported as a sensitivity, never decisive, never used to choose",
+      "record": "the choice is computed from coverage and agreement only, hashed (sha256 of the canonical JSON of the rule, the measures and the primary) and written in the result before any T01 evaluation ; the evaluator refuses to evaluate T01 without a recorded choice",
+      "forbidden": "comparing the T01 results obtained with each source in order to choose"
     },
     "if_unresolved_or_unavailable": "T01_funding_8h = G5_GATE2_INCONCLUSIVE by construction (written in advance, protocol P-G5-10)",
     "mark_minute": "last markPx of the capture mark-price channel in (g - 60 s ; g] ; none = minute missing",
@@ -463,7 +477,7 @@
     "fail": "G5_GATE2_FAIL(type) otherwise, once no inconclusive condition holds and the floor is met",
     "fail_annotation": {"ub90_ge_threshold": "non poursuivi ; absence d'effet non demontree", "ub90_lt_threshold": "effet >= +10 pb exclu sous la forme testee"},
     "closure_scope": "the tested form for this architecture only (protocol 8: G5_GATE2_FAIL closes the form ; a filter at most) ; never the mechanism",
-    "pass_effect": "a written Phase 4 proposal (demo only) iff G5_GATE2_PASS(type) and PASS_PROGRAMME of G5-Gate2-<type> (immediate, p <= 0.10 / 7, or Holm at the closure of the family, GATES 2.3) and the reading 'PASS, poursuivi' ; otherwise the proposal waits for the closure of the family ; a PASS_PROGRAMME of a historical test (G5-Gate1-*) opens no Phase 4 and does not count for GATES 1.3 ; never an order (protocol 8, 10.4 ; review-b quant M1) ; under D7, if the refusal of P-G5-10 (ii) is confirmed, no G5_GATE2_PASS is possible (T05 NOT_INFORMATIVE, T01 INCONCLUSIVE by construction ; written in advance)"
+    "pass_effect": "a written Phase 4 proposal (demo only) iff G5_GATE2_PASS(type) and PASS_PROGRAMME of G5-Gate2-<type> (immediate, p <= 0.10 / 7, or Holm at the closure of the family, GATES 2.3) and the reading 'PASS, poursuivi' ; otherwise the proposal waits for the closure of the family ; a PASS_PROGRAMME of a historical test (G5-Gate1-*) opens no Phase 4 and does not count for GATES 1.3 ; never an order (protocol 8, 10.4 ; review-b quant M1) ; under D7 (T05 NOT_INFORMATIVE by construction) only T01 can reach G5_GATE2_PASS ; the refusal of P-G5-10 (ii) read in D7 is superseded by D10 (2026-10-21: both index sources, primary by selection_rule) ; written in advance"
   },
 
   "multiplicity": {
@@ -517,10 +531,9 @@
     "command": "python -m scripts.research_lp.cli capture (values mode), host eea (wss://wseea.okx.com/ws/v5/public)",
     "channels_required": ["trades", "books5", "mark-price", "funding-rate"],
     "channels_conditional": {
-      "index-tickers": "classifier_index_source option a ; new D1 decision ; not in xperp_capture.CHANNELS at 2026-10-21 ; refused with point 3 by D7 (confirmation requested)",
       "bbo-tbt": "G2 (B) vi ; in the channel list of decision 1 ; not in xperp_capture.CHANNELS at 2026-10-21"
     },
-    "channels_in_code_2026_10_21": ["trades", "books5", "liquidation-orders", "mark-price", "funding-rate"],
+    "channels_in_code_2026_10_21": ["trades", "books5", "liquidation-orders", "mark-price", "funding-rate", "index-tickers"],
     "instruments_metadata": "REST snapshot public/instruments (instruments-futures.json), not a WS channel",
     "layouts_read": ["trades", "books5", "mark", "funding"],
     "manifest": "tape manifest and per-day sha256 at finalisation (tape.py) ; segments append-only",

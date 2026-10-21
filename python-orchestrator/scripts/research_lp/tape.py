@@ -15,6 +15,8 @@ convention of `scripts/research_exec/forward_okx.py`), under `<out>/<layout>/<in
                   `next_funding_rate`, `premium`, `sett_funding_rate`, `sett_state` (1 settled,
                   0 processing, −1 unknown), `method` (1 next_period, 0 current_period, −1 unknown),
                   `max_rate`, `min_rate`, `interest_rate`;
+- `index_tick`    `ts_us`, `recv_us`, `idx_px` — the `index-tickers` WS channel (owner decision D10, 2026-10-21), keyed by
+                  the index id (`BTC-USD`, the `uly` of the captured instruments), one row per push (`idxPx`, `ts`);
 - `candles_1m`, `mark_1m`, `index_1m`, `funding_hist`
                   the REST 1-minute history layouts of `g5_fetch` (`HISTORY_LAYOUTS`; one row per
                   candle opening time or per settlement, `fetched_us` instead of `recv_us`), stored
@@ -81,6 +83,7 @@ LIQUIDATIONS_DTYPE = np.dtype(
     [("ts_us", "<i8"), ("recv_us", "<i8"), ("side", "<i1"), ("pos_side", "<i1"), ("size", "<f8"), ("bk_px", "<f8"), ("bk_loss", "<f8")]
 )
 MARK_DTYPE = np.dtype([("ts_us", "<i8"), ("recv_us", "<i8"), ("mark_px", "<f8")])
+INDEX_TICK_DTYPE = np.dtype([("ts_us", "<i8"), ("recv_us", "<i8"), ("idx_px", "<f8")])  # index-tickers (D10)
 FUNDING_DTYPE = np.dtype(
     [("ts_us", "<i8"), ("recv_us", "<i8"), ("funding_time_us", "<i8"), ("funding_rate", "<f8"), ("next_funding_time_us", "<i8"), ("next_funding_rate", "<f8"),
      ("premium", "<f8"), ("sett_funding_rate", "<f8"), ("sett_state", "<i1"), ("method", "<i1"), ("max_rate", "<f8"), ("min_rate", "<f8"), ("interest_rate", "<f8")]
@@ -97,6 +100,7 @@ PX_CANDLES_1M_DTYPE = np.dtype([("ts_us", "<i8"), ("fetched_us", "<i8"), ("open"
 FUNDING_HIST_DTYPE = np.dtype([("ts_us", "<i8"), ("fetched_us", "<i8"), ("funding_rate", "<f8"), ("realized_rate", "<f8"), ("method", "<i1"), ("formula_type", "<i1")])
 
 LAYOUTS: dict[str, np.dtype] = {"trades": TRADES_DTYPE, "books5": BOOKS5_DTYPE, "liquidations": LIQUIDATIONS_DTYPE, "mark": MARK_DTYPE, "funding": FUNDING_DTYPE,
+                                "index_tick": INDEX_TICK_DTYPE,
                                 "candles_1m": CANDLES_1M_DTYPE, "mark_1m": PX_CANDLES_1M_DTYPE, "index_1m": PX_CANDLES_1M_DTYPE, "funding_hist": FUNDING_HIST_DTYPE}
 HISTORY_LAYOUTS = ("candles_1m", "mark_1m", "index_1m", "funding_hist")
 # Fields identifying one record (duplicates come from reconnects and from the liquidation channel's repeated first push).
@@ -107,6 +111,7 @@ DEDUPE_KEYS: dict[str, tuple[KeyItem, ...]] = {
     "books5": ("ts_us", "seq_id", ("bid_px", 0), ("ask_px", 0)),  # seq_id = -1 when the venue sent none: the top of book then tells snapshots apart
     "liquidations": ("ts_us", "side", "pos_side", "size", "bk_px"),
     "mark": ("ts_us", "mark_px"),
+    "index_tick": ("ts_us", "idx_px"),
     "funding": ("ts_us", "funding_time_us"),
     # One candle (or one settlement) per instant: a page fetched twice across a resume is the same row.
     "candles_1m": ("ts_us",),

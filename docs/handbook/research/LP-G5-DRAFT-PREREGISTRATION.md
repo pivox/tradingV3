@@ -772,6 +772,23 @@ la capture et **indice** selon la décision P-G5-10 (ii) — une seule grandeur 
 `premium` du canal (prime officielle) sert à la seule comparaison descriptive ; règlements lus dans la tape, intervalle par instrument.
 Univers = celui de G2 §3 (métadonnées + comptages P3, ≤ 40 X-Perps), filtre `listTime + 30 j`.
 
+**D10 (2026-10-21)** — source d'indice de P̂ (P-G5-10 (ii), `LP-OWNER-DECISIONS-2026-10-21.md` D10 : « On essaye des deux un par un
+puis on décide ») : **les deux sources**. (a) Canal public `index-tickers` ajouté à la capture continue (extension de D1 au titre du
+§9.4 ; `xperp_capture.CHANNELS`, une souscription par `index_id` = `uly` des instruments capturés, même hôte EEE et même chemin
+`/ws/v5/public` — docs-v5 « Index tickers channel », copies du 2026-10-20 de `a4-data-desk/txt/` ; layout `index_tick` (`ts_us`,
+`recv_us`, `idx_px`) de `tape.py`, même reprise par segments, mode comptage sans valeur, plancher `QUARANTINE_FLOOR`, manifeste) ;
+idx_a(g) = dernier `idxPx` reçu dans (g − 60 s ; g]. (b) `history-index-candles` récupéré **une fois après la fin de la fenêtre** ;
+idx_b(g) = clôture de la bougie 1 min confirmée finissant en g. **Règle, écrite avant la capture et jamais révisée après une lecture de
+T01** : sur les paires (index_id, g) des minutes [T0 ; fin exclusive de T01) (sans prolongation pour trous), la source primaire est (a)
+si sa **couverture** est ≥ 98 % des paires **et** si la **médiane** de |idx_a − idx_b| / idx_b × 10⁴ sur les paires communes est
+≤ 0,5 pb (aucune paire commune : règle non remplie) ; sinon (b). L'autre source est une **sensibilité rapportée** de T01, jamais
+décisive. Le choix est calculé sur ces seules mesures, **haché** (sha256 du JSON canonique de la règle, des mesures et du choix) et
+écrit (`<out>.index-selection.json`, puis le résultat) **avant toute évaluation de T01** ; `g5_eval.run_study` refuse d'évaluer un
+spec D10 sans choix enregistré et vérifié (hash, seuils, conditions, fenêtre, source en place). Interdit : comparer les résultats de
+T01 obtenus avec chaque source pour choisir. Spec : `classifier_index_source.choice = d10_both_primary_by_quality_rule`, bloc
+`selection_rule` lu strictement (`g5_gate2._parse_selection_rule`). Un `FROZEN` qui choisit D10 reste refusé tant que le fetcher de
+(b) pour la période du Gate 2 n'existe pas (CTO review-b M3 ; (b) est à la fois la comparaison et le repli).
+
 10.2 **Types** : inscrits **automatiquement** selon §8 (`PASS`, `NOT_INFORMATIVE`, `INCONCLUSIVE`) ; **mêmes** classifieur, seuil,
 signes, fenêtres, contrôles (minute de l'heure, sessions en heure locale, grille par défaut, macro en heure de New York : CPI/NFP à
 13:30 UTC et FOMC à 19:00 UTC en heure d'hiver jusqu'au 2027-03-14 — quant m8), unité et critères (§5–7), sélection adverse **mesurée**
@@ -780,7 +797,8 @@ jamais h−1). T05 à **14:30 UTC** du 2026-11-02 au 2027-03-12, 13:30 à partir
 
 10.3 **Fenêtre et puissance (calcul d'audit).** T0 = gel du Gate 2 (≥ 2026-11-02, ≥ P3) ; fin ≤ **2027-03-31** (`GATES` §1.3).
 - **T01** : 3 photos/jour sur ≤ 150 jours ⇒ 450 f_inst instants ; ≥ 100 si f_inst ≥ 0,23 ; sans source d'indice : `INCONCLUSIVE` par
-  construction (P-G5-10 ii).
+  construction (P-G5-10 ii). **D10 (2026-10-21)** : source choisie par la règle de 10.1 avant T01 ; `INCONCLUSIVE` seulement si la source
+  retenue n'a aucune minute (`classifier_index_source_unresolved_or_unavailable`) ou si > 50 % des instrument-jours sont sans P̂.
 - **T05** : du 2026-11-02 au 2027-03-31, **102 jours NYSE** (fériés 11-26, 12-25, 01-01, 01-18, 02-15, 03-26), moins ≈ 10 dates CPI/NFP
   (BLS, à relever, P-G5-5) ⇒ **≈ 92 < 100** : `NOT_INFORMATIVE` **par construction** si la fenêtre s'arrête au 2027-03-31. Décision du
   propriétaire **au gel** (P-G5-10 i) : fin de T05 Gate 2 au **2027-04-12** (110ᵉ jour NYSE depuis le 2026-11-02, ≈ 100 instants hors
@@ -796,11 +814,16 @@ avant son propre verdict.
 
 ## 11. Risques, biais déclarés, pièges intégrés
 
-11.1 **Biais vers le PASS (déclarés)** : demi-spread d'entrée de T05 fixé à 3 pb sur des carnets minces (C2, C3 seulement) ; à l'instant qui
-ouvre D_cov, la fenêtre de funding de T01 s'ouvre avant D_cov et le funding y est supposé nul (compté `funding_unknown` ; un instant sur
-≈ 211, constat de la passe A1, à trancher à la relecture du code) ; rejet par
+11.1 **Biais vers le PASS (déclarés)** : demi-spread d'entrée de T05 fixé à 3 pb sur des carnets minces (C2, C3 seulement) ; (avant le 2026-10-21 :
+à l'instant qui ouvre D_cov, la fenêtre de funding de T01 s'ouvrait avant D_cov et le funding y était supposé nul, compté
+`funding_unknown`, un instant sur ≈ 211, constat de la passe A1 — **corrigé**, voir la fin de ce paragraphe) ; rejet par
 bande de prix non modélisé au Gate 1 ; aucun impact de marché ; prints RPI au Gate 2 tant que `trades.source` n'est pas utilisé (G2 §0.9) ;
-sortie passive supposée remplie à c(h+15) / c(h+60). **Biais vers le FAIL** : (avant A1 : sélection adverse comptée sur l'entrée de T01
+sortie passive supposée remplie à c(h+15) / c(h+60). **Défaut corrigé le 2026-10-21 (passe pré-gel)** : l'instant T01 qui ouvre D_cov
+recevait un funding nul alors que son règlement h (couvert) a un taux connu, parce que sa fenêtre (h−5 ; h+15] s'ouvre 5 min avant D_cov ;
+désormais (`g5_eval.measure`, `covered_from_us`) tout règlement T ≥ D_cov traversé est compté (taux connu payé, taux inconnu ⇒
+observation exclue, `funding_rate_missing`), et seule la part d'une fenêtre qui peut traverser un règlement **hors couverture** (fenêtre
+ouverte avant le prédécesseur servi de D_cov) est supposée nulle et comptée (`funding_unknown`) ; test
+`test_the_t01_instant_that_opens_d_cov_pays_its_known_settlement`. Le biais « un instant sur ≈ 211 » est donc retiré pour T01. **Biais vers le FAIL** : (avant A1 : sélection adverse comptée sur l'entrée de T01
 alors que le proxy de fill la mesure déjà — supprimé par l'amendement A1) ; la règle `through` ne garde que les remplissages traversés,
 dont la sélection adverse mesurée est probablement **supérieure** à la valeur de conception (C2, C3) ; demi-spread de T05 en partie
 contenu dans c(h+5) conditionné au signe, 0 à 3 pb (C2, C3 ; A1.2) ; funding payé par construction à T01 ; Holm à K = 2 avec p = 1 pour un type
@@ -1074,6 +1097,21 @@ version `0.1.2-draft` (avant A1), **informatif** : `e29c4f20733e760e5a4c64ac5907
 de gel** que le spec Gate 1 (§13, point 5 ; piège 7). En cas d'écart entre ce fichier et le corps du protocole, le corps fait foi et le
 spec est corrigé avant le gel, jamais après.
 
+**D10 (2026-10-21) — version `0.1.4-draft`**, sha256 informatif `26b36111a1b76621d2a47113a7e19d3f8f91764b2c8e7b638f96d046f71bfa2c`, brouillon accepté par le lecteur
+(`tests/test_research_lp_g5_gate2.py`). La valeur `owner_decision_pending` de P-G5-10 (ii) est remplacée par la décision D10 :
+`classifier_index_source.status = owner_decided`, `choice = d10_both_primary_by_quality_rule` (nouveau choix du lecteur ; l'option (a)
+seule est refusée : D10 n'y mène que par la règle), bloc `selection_rule` (sources (a) et (b), fenêtre des minutes, couverture ≥ 0,98,
+accord ≤ 0,5 pb, règle, sensibilité, enregistrement, interdit ; textes comparés mot pour mot, seuils égaux à ceux de D10 sinon refus) ;
+`owner_decisions.pending[P-G5-10 (ii)].status = owner_decided` ; `index-tickers` retiré de `capture.channels_conditional` et ajouté à
+`capture.channels_in_code_2026_10_21` (le lecteur exige l'égalité avec `xperp_capture.CHANNELS`) ; `options.a_capture_index_tickers` et
+`options.b_history_index_candles_after_window` (`requires`), `why`, `freeze_fill.rule` (`decision_ref_p_g5_10_ii` = texte de D10),
+`verdict.pass_effect` et `note` mis à jour (textes libres). Restent en attente : P-G5-10 (i) (`events[T05_us_open].window_end`) et P-S3
+(`universe.p_s3_track_s`) — deux chemins, six valeurs `owner_decision_pending`, recopiés au gel. Code : `g5_gate2.select_index_source`
+(couverture comptée en fraction exacte, médiane des écarts en pb), `verify_index_selection`, `apply_index_selection`,
+`use_index_source` ; `g5_eval.load_capture_series` charge `index_tick` et `index_1m`, `run_study` refuse sans choix enregistré,
+`_command_eval_capture` écrit le choix avant l'étude puis rapporte la sensibilité (`index_sensitivity`, T01 seul, jamais décisif). Le
+`FROZEN` sous D10 reste refusé tant que `INDEX_FROZEN_ALLOWED` ne contient pas l'option (b) (fetcher à écrire, CTO M3).
+
 **Parseur (constats datés, heure de la machine).** À 07:52 (seconde passe `docs-b`, `g5_eval/3` `148d52eb…6566327`), ce brouillon était
 **refusé** (neuf clés de premier niveau inconnues). Depuis 08:18 (`g5_gate2.py` `94b8bec7…`, `g5_eval.py` `38cbe452…`), `g5_eval.load_spec`
 le confie à `g5_gate2.parse_capture_spec`, qui l'**accepte** en `DRAFT_NOT_FROZEN` : trois décisions en attente, `freeze_fill` nul, tous
@@ -1133,8 +1171,9 @@ specs ensemble** avant le gel (le lecteur exige l'égalité des deux portes ; re
   le brouillon `0.1.1`, jamais écrite dans le corps) : seule à atteindre 100, en capturant jusqu'au ≈ 2027-04-15 (T0 11-03) → ≈ 2027-04-30
   (T0 11-20), plus 14 jours de prolongation, donc au-delà de `covers` pour un T0 tardif (le lecteur la refuserait : échec fermé). L'erreur
   du corps allait dans le sens d'une option refusée : D7 n'en est pas affectée. G5-Gate2-T05 reste dans la famille, p = 1 (`GATES` §2.3).
-- **(ii) source d'indice à la minute** (`classifier_index_source`) — **D7 : « Nn » lu comme un refus du point 3 entier ; confirmation
-  explicite demandée.** Si le refus est confirmé : aucune source, T01 au Gate 2 `G5_GATE2_INCONCLUSIVE` par construction (écrit d'avance) ;
+- **(ii) source d'indice à la minute** (`classifier_index_source`) — **remplacé par D10 (2026-10-21)** : les deux sources, primaire par
+  la règle de qualité (§10.1, paragraphe D10 ci-dessus) ; le texte qui suit est l'état antérieur, pour mémoire. **D7 : « Nn » lu comme
+  un refus du point 3 entier ; confirmation explicite demandée.** Si le refus est confirmé : aucune source, T01 au Gate 2 `G5_GATE2_INCONCLUSIVE` par construction (écrit d'avance) ;
   le lecteur n'a pas de choix « aucune source » (valeur à ajouter, a2) ; `decision_ref_p_g5_10_ii` = le texte de la confirmation.
   Rappel : l'option (a) exige une décision D1 nouvelle et du code de capture ; l'option (b) n'a **pas de fetcher** pour la période du
   Gate 2 (`g5_fetch` s'arrête à END_EXCLUSIVE) et le lecteur réécrit la refuse en `FROZEN` (relecture CTO review-b M3). **Conséquence**,
@@ -1169,7 +1208,7 @@ pendant la passe, constat final sur le code gelé, P-G5-11). Les dix écarts du 
 |---|---|---|---|
 | 1 | Calendriers complets et couvrant la fenêtre (P-G5-5, §10.3) | **couverture codée** (`calendars_cover_the_window` : T0, fins par type, options, prolongation dans `covers` ; listes hors `covers` refusées ; `incomplete_at_draft` non vide refuse `FROZEN`) | **test de contenu** (relecture review-b M4, ligne 13 ci-dessous) |
 | 2 | Fin de fenêtre par type (P-G5-10 (i)) | **codée** (`gate2_window_end_per_type` : options a / b / c, règle du calendrier, fin recopiée dans `freeze_fill.t05_end_inclusive_utc`, `beyond_allowed` lié à l'option) | recopie de D7 (option a) au gel |
-| 3 | Source d'indice (P-G5-10 (ii)) | option (b) lue sur une tape `index_1m` ; option (a) refusée (aucun canal) ; à 09:04, (b) refusée en `FROZEN` (aucun fetcher, CTO M3) | choix « aucune source » à ajouter si le refus de D7 est confirmé (ligne 15) |
+| 3 | Source d'indice (P-G5-10 (ii)) | option (b) lue sur une tape `index_1m` ; option (a) refusée (aucun canal) ; à 09:04, (b) refusée en `FROZEN` (aucun fetcher, CTO M3) ; **D10 (2026-10-21)** : canal `index-tickers` et layout `index_tick` codés, choix `d10_both_primary_by_quality_rule` lu, règle, hash et refus sans choix codés | fetcher de (b) pour la période du Gate 2 (sans lui, `FROZEN` sous D10 refusé) |
 | 4 | Types lus = inscrits par le résultat du Gate 1 (§8, §10.2) | **codé** (`gate2_inscription_from_gate1_result`, `read_gate1_result` : sha256 au registre, spec Gate 1 = `freeze_fill.gate1_spec_sha256`, jamais `sealed/`) | — |
 | 5 | `entry` / `exit` de l'exécution simulée (§5.5) | **codé** (textes de capture exacts : post-only au touch, preneur au touch opposé, sortie passive puis preneur) | — |
 | 6 | C3 « tous les termes × 1,5 » (§7.5) | **codé** avec l'ajout de 0,5 × la valeur de conception (1,75 / 1,5 pb) | écart de T01 déclaré (m9) ; choix (1) à écrire au corps |
@@ -1186,7 +1225,7 @@ Code demandé par la relecture `review-b/quant.md` (hors du périmètre de cette
 | 12 | Champ P-S3 au spec Gate 1 (`moot_track_s_closed`, référence D8, `freeze_fill.decision_ref_p_s3`) ; valeur `moot_track_s_closed` acceptée par `g5_gate2` | B2 ; D8 |
 | 13 | Test de contenu des calendriers en `FROZEN`, aux deux portes | M4 ; `calendars.covers_rule` |
 | 14 | Refus de `FROZEN` tant qu'une valeur contient `freeze_pending:` | M5 |
-| 15 | Choix « aucune source » de l'indice (T01 `INCONCLUSIVE` par construction, `FROZEN` permis) | D7 (ii) |
+| 15 | Choix « aucune source » de l'indice (T01 `INCONCLUSIVE` par construction, `FROZEN` permis) — **sans objet depuis D10 (2026-10-21)** | D7 (ii) ; D10 |
 | 16 | S_éco ≥ 97,25 dans les deux specs ensemble | m5 ; `GATES` §1.2 |
 | 17 | `net_bp_gate1_construction_on_last_prints` imprimé à côté du primaire | m8 |
 | 18 | Version descriptive de T01 filtrée sur le seul règlement précédent ; biais du filtre « règlement suivant à 8 h » déclaré au §11.1 (a1) | m12 ; CTO review-b M1 |

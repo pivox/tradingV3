@@ -1871,6 +1871,15 @@ class Series:
         return out
 
 
+def covered_from_us(series: Series) -> int:
+    """The earliest window opening whose crossed settlements are all covered (§4.4, §11.1): the served predecessor of D_cov (the last
+    settlement before D_cov; none lies between them), or D_cov itself when no predecessor is held."""
+    d_cov = int(series.d_cov_start_us)
+    ts = series.settlements_us
+    pos = int(np.searchsorted(ts, d_cov, side="left"))
+    return int(ts[pos - 1]) if pos > 0 else d_cov
+
+
 def make_series(meta: Instrument, grid_us, close, low=None, high=None, vol=None, mark=None, index=None, settlements_us=(), rates=(), d_cov_start_us: int | None = None,
                 source: str = "history", coverage: dict | None = None) -> Series:
     """A `Series` from arrays (synthetic tests): `low` / `high` default to `close`, `vol` to 1, mark / index to NaN."""
@@ -2099,11 +2108,17 @@ def load_capture_series(tape_dir: Path, meta: Instrument, spec: Spec, row: dict 
     mark = last_per_minute(marks["ts_us"].astype(np.int64), marks["mark_px"].astype(np.float64))
     index_px = np.full(grid.size, np.nan)
     choice = spec.gate2["index_choice"]
+    index_sources = None
     if choice == "b_history_index_candles_after_window":
         rows = load(Path(index_dir or tape_dir), "index_1m", meta.index_id)
         rows = rows[rows["confirm"] != 0]
         if rows.size:
             _place(grid, rows["ts_us"].astype(np.int64), rows["close"].astype(np.float64), index_px)
+    elif choice == g5_gate2.INDEX_CHOICE_D10:  # both sources loaded; the primary is put in place by g5_gate2.apply_index_selection, before any T01
+        ticks = load(Path(tape_dir), "index_tick", meta.index_id)
+        index_sources = {g5_gate2.INDEX_OPTION_A: g5_gate2.index_minutes_from_ticks(grid, ticks["ts_us"], ticks["idx_px"]),
+                         g5_gate2.INDEX_OPTION_B: g5_gate2.index_minutes_from_candles(grid, load(Path(index_dir or tape_dir), "index_1m", meta.index_id))}
+        cov["index_minutes_by_source"] = {k: int(np.isfinite(v).sum()) for k, v in index_sources.items()}
     funding = load(Path(tape_dir), "funding", meta.inst_id)
     attribution = attribute_settled_rates(funding)
     ts, rate = attribution["settlements_us"], attribution["rates"]
@@ -2132,6 +2147,8 @@ def load_capture_series(tape_dir: Path, meta: Instrument, spec: Spec, row: dict 
     order = np.argsort(np.array(premium_ts, dtype=np.int64), kind="stable")
     series.cache["premium_okx"] = (np.array(premium_ts, dtype=np.int64)[order], np.array(premium_v, dtype=np.float64)[order])
     series.cache["funding_messages"] = attribution["messages"]
+    if index_sources is not None:
+        series.cache["index_sources"] = index_sources
     return series
 
 
@@ -2447,12 +2464,19 @@ def measure(series: Series, instants_us, tspec: TypeSpec, spec: Spec, role: str 
             alive &= filled
     open_us = instants + entry_min * MINUTE_US
     close_us = instants + exit_min * MINUTE_US
-    f_count, f_sum, f_unknown = series.funding_crossed(open_us, close_us)
-    if series.d_cov_start_us is None:
+    f_count, f_sum, f_unknown = series.funding_crossed(open_us, close_us)  # every settlement crossed (reported; controls: anomalies)
+    if series.d_cov_start_us is None:  # coverage unknown: every window outside, its funding assumed zero and counted
         outside = np.ones(instants.size, dtype=bool)
+        f_sum, f_unknown = np.zeros(instants.size), np.zeros(instants.size, dtype=np.int64)
     else:
-        outside = open_us < int(series.d_cov_start_us)
-    missing_rate = (f_unknown > 0) & ~outside
+        # §11.1 (fixed 2026-10-21): only the settlements T >= D_cov are covered and they are always counted (known rate paid, unknown rate
+        # excluded); a window is `outside` (funding of its uncovered part assumed zero, counted) only when it may cross a settlement before
+        # D_cov, i.e. when it opens before the served predecessor of D_cov (no settlement lies between them). Before the fix the T01 instant
+        # h = D_cov, whose window opens at h − 5 < D_cov, was `outside` and its own covered settlement h was assumed zero.
+        d_cov = int(series.d_cov_start_us)
+        _, f_sum, f_unknown = series.funding_crossed(np.minimum(np.maximum(open_us, d_cov - 1), close_us), close_us)  # covered part (max(open, D_cov − 1 µs) ; close]
+        outside = open_us < covered_from_us(series)
+    missing_rate = f_unknown > 0
     counts["funding_rate_missing"] = int((alive & missing_rate).sum())
     alive &= ~missing_rate
     counts["kept"] = int(alive.sum())
@@ -2460,7 +2484,7 @@ def measure(series: Series, instants_us, tspec: TypeSpec, spec: Spec, role: str 
     s = side[keep].astype(np.float64)
     kk = k0[keep]
     r_unsigned = _log_bp(series.at(prices, kk + entry_min), series.at(prices, kk + exit_min))
-    funding_bp = np.where(outside[keep], 0.0, -s * f_sum[keep] * 1e4)
+    funding_bp = -s * f_sum[keep] * 1e4  # covered settlements only; the uncovered part of an `outside` window is assumed zero (counted)
     costs = type_cost_terms(tspec, spec.costs, conditioned_on_fill=use_fill)  # A1: the entry leg is measured only by a fill-conditioned measure
     r_bp = s * r_unsigned
     net = np.array([math.fsum([a, b, -costs["total_bp"]]) for a, b in zip(r_bp.tolist(), funding_bp.tolist())], dtype=np.float64)
@@ -3778,14 +3802,46 @@ def _gate2_context(series_by_inst: dict, spec: Spec, context: dict, device_globa
     index_minutes = sum(int(s.coverage.get("index_minutes", 0)) for s in series_by_inst.values())
     choice = spec.gate2["index_choice"]
     index_state = "unresolved" if choice == g5_gate2.PENDING else ("available" if index_minutes > 0 else "unavailable")
+    index_block = {"choice": choice, "state": index_state, "minutes": index_minutes}
+    if choice == g5_gate2.INDEX_CHOICE_D10:  # D10: the recorded choice (checked by run_study before this point) and the source used here
+        selection = context["index_selection"]
+        index_block.update({"source_used": context.get("index_role_source"), "role": context.get("index_role", "primary"), "primary": selection["primary"],
+                            "sensitivity": selection["sensitivity"], "selection_sha256": selection["sha256"], "selection": selection})
     return {"inscription": inscription, "windows": windows,
             "quality": {"instrument_days_scored": scored, "instrument_days_unusable": bad, "share": share, "share_max": share_max,
                         "days_lost_by_every_instrument": [tape.date_of_day(d) for d in lost], "extension_days": extension,
                         "extension_applied": {t.name: windows[t.name][1] != g5_gate2.type_window(spec, t)[1] for t in spec.types},
                         "extension_beyond_2027_03_31_allowed": spec.gate2["beyond_allowed"]},
-            "index": {"choice": choice, "state": index_state, "minutes": index_minutes},
+            "index": index_block,
             "window_utc": {n: [_iso(a), _iso(b)] for n, (a, b) in windows.items()}, "t0_provisional": spec.gate2["t0_provisional"],
             "window_end_provisional": {t.name: t.gate2["window_end"]["provisional"] for t in spec.types}}
+
+
+def _d10_choice() -> str:
+    from . import g5_gate2  # lazy: g5_gate2 imports this module
+
+    return g5_gate2.INDEX_CHOICE_D10
+
+
+def _require_index_selection(series_by_inst: dict, spec: Spec, context: dict) -> None:
+    """D10 (P-G5-10 (ii), owner 2026-10-21): refuse the study unless `context['index_selection']` is a recorded choice whose sha256, D10
+    thresholds, conditions and window verify, and every series carries the source of its role (`index_role`: primary, or the reported
+    sensitivity). Sets `context['index_role_source']`."""
+    from . import g5_gate2  # lazy: g5_gate2 imports this module
+
+    selection = context.get("index_selection")
+    problems = g5_gate2.verify_index_selection(selection, spec)
+    role = context.get("index_role", "primary")
+    if role not in ("primary", "sensitivity"):
+        problems.append(f"index_role {role!r}")
+    if not problems:
+        expected = selection["primary"] if role == "primary" else selection["sensitivity"]
+        wrong = sorted(i for i, s in series_by_inst.items() if s.cache.get("index_source_used") != expected)
+        if wrong:
+            problems.append(f"series without the {role} index source {expected}: {wrong[:5]}")
+        context["index_role_source"] = expected
+    if problems:
+        raise ValueError("D10: T01 is not evaluated without a recorded index choice (classifier_index_source.selection_rule.record): " + "; ".join(problems))
 
 
 def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> dict:
@@ -3802,6 +3858,8 @@ def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> 
         known = [s.d_cov_start_us for s in series_by_inst.values() if s.d_cov_start_us is not None]
         d_cov_global = min(known) if known else None
     capture = spec.source == "capture"
+    if capture and spec.gate2["index_choice"] == _d10_choice():
+        _require_index_selection(series_by_inst, spec, context)  # D10: T01 is never evaluated without a recorded, verified choice
     common = common_instants(spec)
     common["d_cov_global_us"] = None if capture else d_cov_global
     g2 = _gate2_context(series_by_inst, spec, context, device_global) if capture else None
@@ -4343,14 +4401,30 @@ def _command_eval_capture(args: argparse.Namespace, spec: Spec, spec_sha: str, s
         raise SystemExit("universe against the snapshot (refuse_run): " + "; ".join(problems[:20]))
     index_dir = Path(args.index_tape) if args.index_tape else None
     index_check = None
-    if spec.gate2["index_choice"] == g5_gate2.INDEX_OPTION_B:
+    d10 = spec.gate2["index_choice"] == g5_gate2.INDEX_CHOICE_D10
+    if spec.gate2["index_choice"] == g5_gate2.INDEX_OPTION_B or d10:
         index_check = g5_gate2.check_index_tape(index_dir or tape_dir, getattr(args, "expect_index_tape_sha256", ""))
     series = {i.inst_id: load_capture_series(tape_dir, i, spec, rows.get(i.inst_id), index_dir) for i in spec.universe}
     context = {"mode": "tape", "device": [], "gate1_verdicts": gate1["verdicts"], "d_cov_global_us": spec.pad_start_us}
+    selection = sensitivity = None
+    if d10:  # D10: the choice is computed and hashed on coverage and agreement only, then recorded, before any T01 evaluation
+        selection = g5_gate2.apply_index_selection(series, spec)
+        _write(Path(args.out_json).with_name(Path(args.out_json).stem + ".index-selection.json"), json.dumps(selection, indent=1, sort_keys=True) + "\n")
+        context["index_selection"] = selection
     study = run_study(series, spec, context)
     study.pop("_sealed_payloads")
+    if d10:  # the other source, reported as a sensitivity of T01, never decisive, never used to choose (selection_rule.sensitivity)
+        g5_gate2.use_index_source(series, selection["sensitivity"])
+        other = run_study(series, spec, {**context, "index_role": "sensitivity"})
+        other.pop("_sealed_payloads")
+        t01 = other["types"].get("T01_funding_8h") or {}
+        sensitivity = {"source": selection["sensitivity"], "role": "sensitivity_reported_never_decisive", "selection_sha256": selection["sha256"],
+                       "T01_funding_8h": {"verdict_label": t01.get("verdict_label"), "n_instants": t01.get("n_instants"), "statistic": t01.get("statistic"),
+                                          "verdict_reasons": t01.get("verdict_reasons")}}
+        g5_gate2.use_index_source(series, selection["primary"])
     document = {**base, **study, "instruments": [i.inst_id for i in spec.universe], "instruments_snapshot": {"path": str(snapshot_path), "sha256": tape.sha256_of(snapshot_path)},
                 "gate1_result": {k: gate1[k] for k in ("path", "sha256", "market_data_read", "note")}, "index_tape": index_check,
+                "index_selection": selection, "index_sensitivity": sensitivity,
                 "coverage": {i: s.coverage for i, s in series.items()}, "elapsed_seconds": round(time.time() - started, 1)}
     _finish(document, args, {})
     print(json.dumps({"spec_sha256": spec_sha, "code_digest": code_digest, "verdicts": study["summary"]["verdicts"], "gate1_inscription": study["summary"]["gate1_inscription"],

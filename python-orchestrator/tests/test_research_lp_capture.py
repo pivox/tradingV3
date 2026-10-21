@@ -170,7 +170,8 @@ def test_instrument_families_and_subscriptions():
     with pytest.raises(ValueError):
         xc.select_instruments(rows, "swap")
     args = xc.subscription_args([INST, OTHER], xc.CHANNELS)
-    assert len(args) == 2 * 4 + 1 and {"channel": "liquidation-orders", "instType": "FUTURES"} in args and {"channel": "books5", "instId": OTHER} in args
+    # Adapted 2026-10-21 (D10): `index-tickers` adds one argument per index id (BTC-USD, ETH-USD) to the 2 × 4 + 1 of before.
+    assert len(args) == 2 * 4 + 1 + 2 and {"channel": "liquidation-orders", "instType": "FUTURES"} in args and {"channel": "books5", "instId": OTHER} in args
     assert xc.resolve_host("eea") == xc.WS_PUBLIC_EEA and xc.resolve_host("global") == xc.WS_PUBLIC_GLOBAL and xc.resolve_host("ws://127.0.0.1:1") == "ws://127.0.0.1:1"
     assert xc.WS_PUBLIC_EEA == "wss://wseea.okx.com/ws/v5/public"  # the documented EEA form carries no port (LP-DATA-DESK §0.1)
     # Bytes on the wire: a text frame counts UTF-8 bytes, not characters.
@@ -308,6 +309,99 @@ def test_liq_selected_only_restricts_the_insttype_channel_to_the_selected_instru
     for command in ("capture", "count"):
         assert cli.build_parser().parse_args([command, "--out", str(tmp_path / "x"), "--inst-ids", INST, "--liq-selected-only"]).liq_selected_only is True
     assert cli.build_parser().parse_args(["capture", "--out", str(tmp_path / "x"), "--inst-ids", INST]).liq_selected_only is False
+
+
+# ----------------------------------------------------------------------------- index-tickers (owner decision D10, 2026-10-21)
+
+IDX_MARKER = "67111.75"  # an index value that must never be written in counting mode
+
+
+def frame_index(index_id, ts_ms, idx_px):
+    """A push of the public `index-tickers` channel in the shape of docs-v5 « Index tickers channel » (Push Data Example), recorded by hand."""
+    return json.dumps({"arg": {"channel": "index-tickers", "instId": index_id},
+                       "data": [{"instId": index_id, "idxPx": str(idx_px), "high24h": "70000.1", "low24h": "65000.2", "open24h": "66000.3", "sodUtc0": "66100.4",
+                                 "sodUtc8": "66200.5", "ts": str(ts_ms)}]})
+
+
+def test_index_tickers_are_subscribed_per_index_id_and_parsed_to_ts_and_idx_px():
+    """D10 (a): one subscription per index id (`uly` of the captured instruments, `<BASE>-USD` from the id otherwise), on the same public
+    endpoint `/ws/v5/public` (EEA host unchanged); only `ts` and `idxPx` are kept."""
+    assert "index-tickers" in xc.CHANNELS and xc.CHANNEL_LAYOUT["index-tickers"] == "index_tick" and "index_tick" in tape.LAYOUTS
+    assert tape.LAYOUTS["index_tick"].names == ("ts_us", "recv_us", "idx_px") and tape.DEDUPE_KEYS["index_tick"] == ("ts_us", "idx_px")
+    assert xc.index_ids_for([OTHER, INST, "BTC-USD_UM_XPERP-310502"]) == ("BTC-USD", "ETH-USD")
+    assert xc.index_ids_for([INST], [{"instId": INST, "uly": "BTC-USDC"}]) == ("BTC-USDC",)  # the metadata row's uly wins
+    assert xc.index_id_of_row({"instId": "BTC-USD_UM-261225"}) == "BTC-USD"
+    with pytest.raises(ValueError):
+        xc.index_ids_for(["BTC-USDT-SWAP"])
+    args = xc.subscription_args([INST, OTHER], ("index-tickers",))
+    assert args == [{"channel": "index-tickers", "instId": "BTC-USD"}, {"channel": "index-tickers", "instId": "ETH-USD"}]
+    assert xc.subscription_args([INST], ("trades", "index-tickers"), ("BTC-USD",)) == [{"channel": "trades", "instId": INST}, {"channel": "index-tickers", "instId": "BTC-USD"}]
+    assert xc.WS_PUBLIC_EEA.endswith("/ws/v5/public") and xc.WS_PUBLIC_GLOBAL.endswith("/ws/v5/public")
+    parsed = xc.parse_frame(frame_index("BTC-USD", T0_MS, "67100.2"))
+    assert parsed.kind == "data" and parsed.channel == "index-tickers" and parsed.inst_id == "BTC-USD"
+    assert xc.rows_from_data("index-tickers", parsed.inst_id, parsed.data, 5) == [("BTC-USD", T0_MS * 1000, (T0_MS * 1000, 5, 67100.2))]
+    assert xc.timestamps_from_data("index-tickers", parsed.inst_id, parsed.data) == [("BTC-USD", T0_MS * 1000)]
+    # The command line subscribes it by default.
+    assert "index-tickers" in cli.build_parser().parse_args(["capture", "--out", "x", "--inst-ids", INST]).channels.split(",")
+
+
+def test_index_ticks_resume_by_segments_dedupe_and_reach_the_manifest(tmp_path: Path):
+    """D10 (a), values mode: rows before not-before dropped, rows per index id in `index_tick/<index_id>/`, a restarted process opens the
+    next segment (nothing overwritten), the finalized day is de-duplicated and hashed in the manifest; the session lists the index ids."""
+    nb = PAST  # a value capture may start only after its not-before: the test hook (below the floor) stands for a run after 2026-11-02
+    rows = [{"instId": INST, "uly": "BTC-USD", "state": "live"}, {"instId": OTHER, "uly": "ETH-USD", "state": "live"}]
+    first = xc.Capture(xc.CaptureConfig(out_dir=tmp_path, inst_ids=(INST, OTHER), counting_only=False, not_before=nb, echo=False, floor_override_for_tests=True,
+                                        instruments_rows=rows))
+    first.handle_raw(frame_index("BTC-USD", tape.parse_iso_utc(nb) // 1000 - 1000, "67000.0"), recv_us=1)  # one second before not-before: dropped
+    first.handle_raw(frame_index("BTC-USD", T0_MS, "67100.2"), recv_us=2)
+    first.handle_raw(frame_index("BTC-USD", T0_MS, "67100.2"), recv_us=3)  # the same push twice (a reconnect): de-duplicated at finalization
+    first.handle_raw(frame_index("ETH-USD", T0_MS + 100, "2450.5"), recv_us=4)
+    assert first.guard.dropped == 1 and first.rows_written == 3
+    first.close()  # the process stops: one segment per index id
+    seg = tmp_path / "index_tick" / "BTC-USD"
+    assert sorted(p.name for p in seg.iterdir()) == ["BTC-USD-2026-11-05.seg0000.npz"]
+    second = xc.Capture(xc.CaptureConfig(out_dir=tmp_path, inst_ids=(INST, OTHER), counting_only=False, not_before=nb, echo=False, floor_override_for_tests=True))
+    second.handle_raw(frame_index("BTC-USD", T0_MS + 60_000, "67105.0"), recv_us=5)
+    second.checkpoint()
+    assert sorted(p.name for p in seg.iterdir()) == ["BTC-USD-2026-11-05.seg0000.npz", "BTC-USD-2026-11-05.seg0001.npz"]  # resumed, nothing overwritten
+    assert second.store.finalize_days_before(tape.day_of_date("2026-11-05") + 1, force=True) == ["BTC-USD:2026-11-05:index_tick", "ETH-USD:2026-11-05:index_tick"]
+    second.close()
+    btc, receipt = tape.load_day(tmp_path, "index_tick", "BTC-USD", "2026-11-05")
+    assert receipt["source"] == "final" and btc["idx_px"].tolist() == [67100.2, 67105.0] and btc["ts_us"].tolist() == [T0_MS * 1000, (T0_MS + 60_000) * 1000]
+    manifest = json.loads((tmp_path / tape.MANIFEST_NAME).read_text())
+    entry = manifest["files"]["BTC-USD:2026-11-05:index_tick"]
+    assert entry["duplicates_dropped"] == 1 and entry["segments_merged"] == 2 and entry["npz_sha256"] == tape.sha256_of(tmp_path / "index_tick" / "BTC-USD" / "BTC-USD-2026-11-05.npz")
+    assert manifest["sessions"][0]["index_ids"] == ["BTC-USD", "ETH-USD"] and "index-tickers" in manifest["sessions"][0]["channels"]
+    assert json.loads((tmp_path / "instruments-futures.json").read_text())["index_ids"] == ["BTC-USD", "ETH-USD"]
+    assert tape.verify(tmp_path)["ok"] and "indices=2" in (tmp_path / "health.log").read_text()
+
+
+def test_index_tickers_in_counting_mode_store_no_value_and_obey_the_floor(tmp_path: Path, monkeypatch):
+    """D10 (a): the counting mode counts the channel per index id and never decodes or writes `idxPx`; a not-before below the quarantine
+    floor is refused for a capture of this channel too (nothing written)."""
+    cfg = xc.CaptureConfig(out_dir=tmp_path / "low", inst_ids=(INST,), channels=("index-tickers",), counting_only=True, not_before="2026-10-20T00:00:00Z", echo=False)
+    with pytest.raises(xc.NotBeforeBelowFloor):
+        xc.Capture(cfg)
+    assert xc.run_capture(cfg) == 2 and not (tmp_path / "low").exists()
+
+    def boom(*args, **kwargs):
+        raise AssertionError("rows_from_data called in counting mode")
+
+    monkeypatch.setattr(xc, "rows_from_data", boom)
+    capture = xc.Capture(xc.CaptureConfig(out_dir=tmp_path / "count", inst_ids=(INST, OTHER), counting_only=True, echo=False))
+    for k in range(3):
+        capture.handle_raw(frame_index("BTC-USD", T0_MS + k * 100, IDX_MARKER), recv_us=NB_US)
+    capture.handle_raw(frame_index("ETH-USD", T0_MS, "2450.5"), recv_us=NB_US)
+    capture.close()
+    counting = json.loads((tmp_path / "count" / "counting.json").read_text())
+    assert counting["by_channel"]["index-tickers"]["instruments"] == 2 and counting["by_channel"]["index-tickers"]["rows"] == 4
+    cell = next(c for c in counting["cells"] if c["channel"] == "index-tickers" and c["inst_id"] == "BTC-USD")
+    assert cell["rows"] == 3 and cell["max_gap_us"] == 100_000
+    assert not (tmp_path / "count" / "index_tick").exists()
+    for path in (tmp_path / "count").rglob("*"):
+        if path.is_file():
+            text = path.read_text(errors="replace")
+            assert IDX_MARKER not in text and "2450.5" not in text and "70000.1" not in text, path
 
 
 # ----------------------------------------------------------------------------- segment store
@@ -480,7 +574,7 @@ def test_fake_websocket_server_end_to_end(tmp_path: Path):
             return capture
 
     capture = asyncio.run(scenario())
-    assert seen["connections"] >= 2 and seen["subscribes"][0]["op"] == "subscribe" and len(seen["subscribes"][0]["args"]) == 9
+    assert seen["connections"] >= 2 and seen["subscribes"][0]["op"] == "subscribe" and len(seen["subscribes"][0]["args"]) == 9 + 2  # adapted 2026-10-21 (D10): + index-tickers BTC-USD, ETH-USD
     assert capture.messages == 8 and capture.rows_written == 8 and capture.stop_reason == "duration"  # 7 data frames on the first connection, 1 on the second
     manifest = json.loads((tmp_path / tape.MANIFEST_NAME).read_text())
     assert len(manifest["disconnects"]) >= 1 and len(manifest["errors"]) == 1 and manifest["sessions"][0]["host"].startswith("ws://127.0.0.1")

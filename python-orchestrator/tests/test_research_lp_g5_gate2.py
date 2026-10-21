@@ -90,12 +90,13 @@ def item(inst: str, listed: str = "2026-03-30T04:30:00Z", tick: float = 0.1) -> 
 
 
 def resolve(document: dict, t05: str | None = "a_end_2027_03_31", index: str | None = "b_history_index_candles_after_window", p_s3: str | None = "beta") -> dict:
-    """The owner's choices written in the decision blocks and the owner_decisions index (None: left pending)."""
+    """The owner's choices written in the decision blocks and the owner_decisions index (None: left as in the document; PENDING: set back to
+    pending — adapted 2026-10-21: the repository's draft carries D10 for the index source, so an index left pending is now written explicitly)."""
     blocks = {"events[T05_us_open].window_end": (document["events"][1]["window_end"], t05), "classifier_index_source": (document["classifier_index_source"], index),
               "universe.p_s3_track_s": (document["universe"]["p_s3_track_s"], p_s3)}
     for path, (block, choice) in blocks.items():
         if choice is not None:
-            block.update({"status": "owner_decided", "choice": choice})
+            block.update({"status": PENDING if choice == PENDING else "owner_decided", "choice": choice})
         for lst in ("pending", "related_not_p_g5_10"):
             for entry in document["owner_decisions"][lst]:
                 if entry["path"] == path:
@@ -163,9 +164,11 @@ def test_the_real_gate2_draft_is_accepted_and_every_block_is_read():
     assert sha == tape.sha256_of(GATE2_SPEC) and spec.status == "DRAFT_NOT_FROZEN" and spec.source == "capture" and spec.gate == "G5_GATE2_"
     assert set(spec.requires) == set(g5_eval.CAPTURE_REQUIRES) and len(spec.requires) == 37 and "calendars_cover_the_window" in spec.requires
     assert not set(spec.requires) & set(g5_eval.GATE1_ONLY) and set(g5_eval.HISTORY_REQUIRES) & set(spec.requires) == set(g5_eval.HISTORY_REQUIRES) - set(g5_eval.GATE1_ONLY)
-    # Owner decisions pending: accepted at DRAFT, listed, every type INCONCLUSIVE in a study (below).
-    assert spec.gate2["pending"] == ["classifier_index_source", "events[T05_us_open].window_end", "universe.p_s3_track_s"]
-    assert len(spec.gate2["pending_values"]) == 9 and spec.gate2["decisions"] == {"classifier_index_source": PENDING, "t05_window_end": PENDING, "p_s3": PENDING}
+    # Owner decisions pending: accepted at DRAFT, listed, every type INCONCLUSIVE in a study (below). Adapted 2026-10-21 (D10): the index
+    # source is decided (both sources, primary by selection_rule) — two paths and six values pending instead of three and nine.
+    assert spec.gate2["pending"] == ["events[T05_us_open].window_end", "universe.p_s3_track_s"]
+    assert len(spec.gate2["pending_values"]) == 6 and spec.gate2["decisions"] == {"classifier_index_source": g5_gate2.INDEX_CHOICE_D10, "t05_window_end": PENDING, "p_s3": PENDING}
+    assert "index-tickers" in xc.CHANNELS and "index-tickers" not in spec.raw["capture"]["channels_conditional"]
     assert spec.universe == () and spec.freeze_fill["null"] == list(g5_gate2.FREEZE_FILL_KEYS) and spec.gate2["t0_provisional"]
     assert (spec.start.isoformat(), spec.end_exclusive.isoformat(), spec.gate2["t0_date"].isoformat()) == ("2026-11-02", "2027-04-01", "2026-11-02")
     t01, t05 = spec.types
@@ -241,7 +244,7 @@ def test_a_frozen_gate2_spec_is_refused_while_an_owner_decision_or_a_null_remain
     c["freeze_fill"]["t05_end_inclusive_utc"] = end_c.isoformat()
     assert parse(c).types[1].gate2["window_end"]["end_inclusive"] == end_c and end_c == g5_gate2.nyse_days(parse(c).calendars, date(2026, 11, 2), end_c, exclude_macro=True)[99]
     # Index option (a) and an undecided P-S3 alpha are refused at any status (not implemented / not decided).
-    refused(lambda d: resolve(d, index="a_capture_index_tickers"), "index-tickers")
+    refused(lambda d: resolve(d, index="a_capture_index_tickers"), "not the owner's decision")  # adapted 2026-10-21: (a) alone is not D10
     refused(lambda d: resolve(d, p_s3="alpha"), "Gate 2 scope")
     alpha = resolve(copy.deepcopy(BASE), p_s3="alpha")
     alpha["universe"]["p_s3_track_s"]["gate2_scope"] = "gate1_and_gate2"
@@ -249,7 +252,9 @@ def test_a_frozen_gate2_spec_is_refused_while_an_owner_decision_or_a_null_remain
     refused(lambda d: None, "removes BTC and ETH", base=alpha)
     alpha["universe"]["analysed"] = [item("SOL-USD_UM_XPERP-310404", "2026-04-01T04:25:00Z", 0.01)]
     assert parse(alpha).gate2["universe"]["btc_eth_removed"]
-    refused(lambda d: d["classifier_index_source"].update({"status": "owner_decided"}), "disagree")  # status decided, choice pending
+    # status decided, choice pending (adapted 2026-10-21: the draft's block is decided by D10, so the pending choice is written here)
+    refused(lambda d: d["classifier_index_source"].update({"status": "owner_decided", "choice": PENDING}), "disagree")
+    refused(lambda d: d["classifier_index_source"].update({"status": PENDING}), "disagree")  # status pending, choice decided
 
 
 def test_the_strict_gate2_reader_refuses_unknown_keys_changed_rules_and_wrong_audits():
@@ -421,7 +426,7 @@ def test_the_capture_series_minute_bars_quarantine_floor_and_classifier(capture_
     assert s.p_hat(s.index_of([h - 5 * MINUTE_US]), t01.classifier)[0] == pytest.approx(0.0012, rel=1e-6)  # captured mark, index_1m (option b)
     assert s.coverage["unusable_days"] == [d for d in range(tape.day_of_date("2026-11-05"), tape.day_of_date("2026-11-19"))] and s.coverage["band_pct"] == 0.01
     # Option (ii) pending: no index is read, the classifier cannot be computed.
-    blind = short_spec(index=None)
+    blind = short_spec(index=PENDING)  # adapted 2026-10-21 (D10 in the draft): pending written explicitly
     s2 = g5_eval.load_capture_series(capture_root, blind.instrument(BTC), blind, {"instId": BTC})
     assert np.isnan(s2.index).all() and s2.coverage["index_choice"] == PENDING
     # The index candles of another directory (--index-tape): same values.
@@ -541,7 +546,7 @@ def test_the_inscription_owner_decisions_and_gate2_verdicts(capture_root: Path):
                             {"gate1_verdicts": {"T01_funding_8h": "G5_GATE1_PASS", "T05_us_open": "G5_GATE1_PASS"}})
     assert all(r["verdict"] == "INCONCLUSIVE" and r["verdict_reasons"][0].startswith("owner_decision_pending_present") for r in doc["types"].values())
     # The index source unresolved (P-G5-10 ii): T01 INCONCLUSIVE by construction, T05 untouched by it.
-    blind = short_spec(index=None, mutate=lambda d: None)
+    blind = short_spec(index=PENDING, mutate=lambda d: None)  # adapted 2026-10-21 (D10 in the draft): pending written explicitly
     doc = g5_eval.run_study({BTC: g5_eval.load_capture_series(capture_root, blind.instrument(BTC), blind, {"instId": BTC})}, blind,
                             {"gate1_verdicts": {"T01_funding_8h": "G5_GATE1_PASS", "T05_us_open": "G5_GATE1_PASS"}})
     assert any(x.startswith("classifier_index_source_unresolved_or_unavailable") for x in doc["types"]["T01_funding_8h"]["verdict_reasons"])
@@ -888,6 +893,184 @@ def test_the_gate2_command_line_refuses_before_reading_and_runs_end_to_end(tmp_p
     with pytest.raises(SystemExit, match="capture"):  # Gate 2 options refused with a history spec
         cli.main(["g5-eval", "--tape", str(root), "--spec", str(GATE1_SPEC), "--expect-spec-sha256", "0" * 64, "--gate1-result", str(gate1_result), "--out-json", str(tmp_path / "x.json")])
     capsys.readouterr()
+
+
+# ----------------------------------------------------------------------------- D10: index source chosen on quality (P-G5-10 (ii), 2026-10-21)
+
+D10 = g5_gate2.INDEX_CHOICE_D10
+A_SRC, B_SRC = g5_gate2.INDEX_OPTION_A, g5_gate2.INDEX_OPTION_B
+GATE1_PASS = {"T01_funding_8h": "G5_GATE1_PASS", "T05_us_open": "G5_GATE1_PASS"}
+
+
+def add_index_ticks(root: Path, rel: float, hole: tuple | None = None, days: int = 3, index_id: str = "BTC-USD") -> None:
+    """The captured `index_tick` layout (D10 (a)): a push every 30 s at 100.1 × (1 + rel) (the index candles of `write_capture` close at
+    100.1: |a − b| / b = rel); `hole` = (start, end) µs without any push."""
+    store = tape.TapeStore(root, "values")
+    day0 = tape.parse_iso_utc("2026-11-02T00:00:00Z")
+    for sec in range(0, days * tape.DAY_S, 30):
+        ts = day0 + sec * US
+        if hole is None or not hole[0] <= ts < hole[1]:
+            store.append("index_tick", index_id, ts, (ts, ts + 1000, 100.1 * (1.0 + rel)))
+    store.checkpoint()
+    store.finalize_days_before(tape.day_of_date("2026-11-08"), force=True)
+
+
+@pytest.fixture(scope="module")
+def d10_base(tmp_path_factory) -> Path:
+    root = tmp_path_factory.mktemp("d10") / "base"
+    write_capture(root)
+    return root
+
+
+def d10_root(base: Path, tmp_path: Path, rel: float, hole: tuple | None = None) -> Path:
+    import shutil
+
+    root = tmp_path / "tape"
+    shutil.copytree(base, root)
+    add_index_ticks(root, rel, hole)
+    return root
+
+
+def d10_series(root: Path, spec) -> dict:
+    return {BTC: g5_eval.load_capture_series(root, spec.instrument(BTC), spec, {"instId": BTC})}
+
+
+def test_d10_selection_rule_is_read_strictly_and_frozen_only_with_option_b_fetchable(monkeypatch):
+    """D10 replaces owner_decision_pending of P-G5-10 (ii): the block is decided, its selection_rule read key by key and text by text, the
+    owner's thresholds (98 %, 0.5 bp) are the only ones accepted; a FROZEN spec choosing D10 needs option (b) fetchable (CTO M3)."""
+    spec, _ = g5_eval.load_spec(GATE2_SPEC)
+    assert spec.gate2["index_choice"] == D10 and spec.raw["classifier_index_source"]["status"] == "owner_decided"
+    assert spec.raw["owner_decisions"]["pending"][1]["status"] == "owner_decided" and spec.raw["owner_decisions"]["pending"][0]["status"] == PENDING
+    rule = spec.raw["classifier_index_source"]["selection_rule"]
+    assert (rule["coverage_min_share"], rule["agreement_max_median_abs_bp"]) == (0.98, 0.5) and rule["sources"] == [A_SRC, B_SRC]
+    sel = lambda d: d["classifier_index_source"]["selection_rule"]  # noqa: E731
+    for mutate, match in (
+        (lambda d: sel(d).update({"coverage_min_share": 0.97}), "owner's D10 values"),
+        (lambda d: sel(d).update({"agreement_max_median_abs_bp": 1.0}), "owner's D10 values"),
+        (lambda d: sel(d).update({"rule": sel(d)["rule"].replace("otherwise b_history", "otherwise a_capture")}), "implemented rule"),
+        (lambda d: sel(d).update({"sources": [B_SRC, A_SRC]}), "sources"),
+        (lambda d: sel(d).update({"tie_break": "a"}), "unknown key"),
+        (lambda d: sel(d).pop("forbidden"), "missing"),
+        (lambda d: d["classifier_index_source"].pop("selection_rule"), "selection_rule: missing"),
+        (lambda d: d["classifier_index_source"]["options"][A_SRC].update({"idx_minute": "first idxPx of the minute"}), "implemented rule"),
+    ):
+        refused(mutate, match)
+    d10_frozen = frozen(copy.deepcopy(BASE))
+    resolve(d10_frozen, index=D10)
+    with pytest.raises(g5_eval.SpecError, match="D10 needs option b"):
+        parse(d10_frozen)
+    monkeypatch.setattr(g5_gate2, "INDEX_FROZEN_ALLOWED", (B_SRC,))  # the dedicated fetcher of (b), simulated
+    assert parse(d10_frozen).gate2["index_choice"] == D10
+
+
+def test_d10_choice_rule_on_coverage_and_agreement_only():
+    """The rule alone (no T01 read): (a) when its coverage >= 98 % and the median |a − b| <= 0.5 bp on the common minutes, else (b); the
+    record is hashed and its tampering detected."""
+    n = 1000
+    b = np.full(n, 100.0)
+    a_good = b * (1 + 0.3e-4)  # 0.3 bp
+    choice = g5_gate2.select_index_source({"BTC-USD": (a_good, b), "ETH-USD": (a_good.copy(), b.copy())})
+    assert choice["primary"] == A_SRC and choice["sensitivity"] == B_SRC and choice["conditions"] == {"coverage_met": True, "agreement_met": True}
+    assert choice["measures"]["coverage_a"] == 1.0 and choice["measures"]["median_abs_diff_bp"] == pytest.approx(0.3) and choice["measures"]["common_pairs"] == 2 * n
+    assert g5_gate2.verify_index_selection(choice) == [] and len(choice["sha256"]) == 64
+    exactly = a_good.copy()
+    exactly[:20] = np.nan  # 98.0 % exactly: the rule is met (>=, compared as a fraction)
+    assert g5_gate2.select_index_source({"BTC-USD": (exactly, b)})["primary"] == A_SRC
+    holed = a_good.copy()
+    holed[:21] = np.nan  # 97.9 %: (b) by coverage, whatever the agreement
+    by_cov = g5_gate2.select_index_source({"BTC-USD": (holed, b)})
+    assert by_cov["primary"] == B_SRC and by_cov["conditions"] == {"coverage_met": False, "agreement_met": True}
+    by_gap = g5_gate2.select_index_source({"BTC-USD": (b * (1 + 0.6e-4), b)})  # 0.6 bp: (b) by disagreement
+    assert by_gap["primary"] == B_SRC and by_gap["conditions"] == {"coverage_met": True, "agreement_met": False}
+    no_b = g5_gate2.select_index_source({"BTC-USD": (a_good, np.full(n, np.nan))})  # no common minute: agreement undefined, rule not met
+    assert no_b["primary"] == B_SRC and no_b["measures"]["median_abs_diff_bp"] is None
+    tampered = {**choice, "primary": B_SRC}
+    assert g5_gate2.verify_index_selection(tampered) and g5_gate2.verify_index_selection(None)
+    assert g5_gate2.verify_index_selection({**by_gap, "measures": {**by_gap["measures"], "median_abs_diff_bp": 0.1}}) == ["the recorded index choice does not match its sha256"]
+
+
+@pytest.mark.parametrize("case", ["a", "b_by_coverage", "b_by_disagreement"])
+def test_d10_choice_on_a_synthetic_capture(d10_base: Path, tmp_path: Path, case: str):
+    """End to end on a capture: the index_tick layout (a) and the index_1m candles (b) are both loaded; the choice on the window minutes of
+    T01 puts the primary in the series before any evaluation; the record (sha256) is in the result."""
+    day0 = tape.parse_iso_utc("2026-11-02T00:00:00Z")
+    rel, hole, expected = {"a": (0.1e-4, None, A_SRC), "b_by_coverage": (0.1e-4, (day0 + 10 * HOUR_US, day0 + 12 * HOUR_US), B_SRC),
+                           "b_by_disagreement": (1e-4, None, B_SRC)}[case]
+    root = d10_root(d10_base, tmp_path, rel, hole)
+    spec = short_spec(index=D10)
+    series = d10_series(root, spec)
+    assert np.isnan(series[BTC].index).all() and series[BTC].coverage["index_minutes_by_source"][A_SRC] > 0
+    selection = g5_gate2.apply_index_selection(series, spec)
+    m = selection["measures"]
+    assert selection["primary"] == expected and m["pairs"] == 3 * 1440 and m["window_utc"] == ["2026-11-02T00:00:00Z", "2026-11-05T00:00:00Z"]
+    if case == "b_by_coverage":
+        # no push in [10:00 ; 12:00): g = 10:00 still reads the 09:59:30 push, g = 10:01 .. 11:59 are missing (119 minutes, 97.2 %)
+        assert m["pairs_a"] == 3 * 1440 - 119 and m["coverage_a"] < 0.98 and m["median_abs_diff_bp"] == pytest.approx(0.1, abs=1e-6)
+    elif case == "b_by_disagreement":
+        assert m["coverage_a"] == 1.0 and m["median_abs_diff_bp"] == pytest.approx(1.0, abs=1e-6)
+    else:
+        assert m["coverage_a"] == 1.0 and m["median_abs_diff_bp"] == pytest.approx(0.1, abs=1e-6)
+    s = series[BTC]
+    assert s.cache["index_source_used"] == expected and np.array_equal(s.index, s.cache["index_sources"][expected], equal_nan=True)
+    doc = g5_eval.run_study(series, spec, {"gate1_verdicts": GATE1_PASS, "index_selection": selection})
+    index = doc["summary"]["gate2"]["index"]
+    assert index["primary"] == expected and index["source_used"] == expected and index["selection_sha256"] == selection["sha256"] and index["state"] == "available"
+
+
+def test_d10_t01_is_never_evaluated_without_a_recorded_choice(d10_base: Path, tmp_path: Path):
+    root = d10_root(d10_base, tmp_path, 0.1e-4)
+    spec = short_spec(index=D10)
+    series = d10_series(root, spec)
+    with pytest.raises(ValueError, match="not evaluated without a recorded index choice"):
+        g5_eval.run_study(series, spec, {"gate1_verdicts": GATE1_PASS})  # no choice recorded
+    selection = g5_gate2.apply_index_selection(series, spec)
+    for bad in ({**selection, "primary": B_SRC}, {**selection, "sha256": "0" * 64}, {**selection, "rule": {**selection["rule"], "coverage_min_share": 0.5}}):
+        with pytest.raises(ValueError, match="not evaluated without a recorded index choice"):
+            g5_eval.run_study(series, spec, {"gate1_verdicts": GATE1_PASS, "index_selection": bad})
+    g5_gate2.use_index_source(series, B_SRC)  # the series carry the other source than the recorded primary: refused as well
+    with pytest.raises(ValueError, match="series without the primary index source"):
+        g5_eval.run_study(series, spec, {"gate1_verdicts": GATE1_PASS, "index_selection": selection})
+    doc = g5_eval.run_study(series, spec, {"gate1_verdicts": GATE1_PASS, "index_selection": selection, "index_role": "sensitivity"})  # the reported sensitivity
+    assert doc["summary"]["gate2"]["index"]["role"] == "sensitivity" and doc["summary"]["gate2"]["index"]["source_used"] == B_SRC
+
+
+def test_d10_the_command_line_records_the_choice_before_t01_and_reports_the_sensitivity(d10_base: Path, tmp_path: Path, capsys, index_fetcher_exists):
+    """FROZEN spec choosing D10 (option b's fetcher simulated): the choice file `<out>.index-selection.json` is written before the study, its
+    sha256 is in the result next to the source used for T01; the other source is reported as a sensitivity of T01, never decisive."""
+    root = d10_root(d10_base, tmp_path, 1e-4)  # 1 bp apart: (b) is the primary, (a) the sensitivity
+    document = short(frozen(copy.deepcopy(BASE)), "2026-11-05")
+    resolve(document, index=D10)
+    document["freeze_fill"]["t05_end_inclusive_utc"] = "2026-11-04"
+    document["universe"]["analysed"] = [item(BTC, "2026-09-01T00:00:00Z"), item(ETH, "2026-09-01T00:00:00Z")]  # ETH: no row captured (pairs without any source)
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text(json.dumps({"code": "0", "data": [{"instId": u["inst_id"], "instType": "FUTURES", "ruleType": "xperp", "state": "live", "uly": u["index_id"], "ctVal": "0.0001",
+                                                           "tickSz": "0.1", "lotSz": "1", "minSz": "1", "listTime": str(tape.parse_iso_utc("2026-09-01T00:00:00Z") // 1000)}
+                                                          for u in document["universe"]["analysed"]]}))
+    p3 = tmp_path / "p3.json"
+    p3.write_text("{}")
+    gate1_spec = tmp_path / "gate1-frozen.json"
+    gate1_spec.write_text(FROZEN_GATE1_TEXT)
+    gate1_result = tmp_path / "run1" / "g5.json"
+    gate1_result.parent.mkdir()
+    gate1_result.write_text(json.dumps({"kind": "lp-g5-eval", "spec": {"sha256": FROZEN_GATE1_SHA, "spec_id": "LP-G5-GATE1-2026", "status": "FROZEN", "source": "history"},
+                                        "summary": {"mode": "tape", "verdicts": GATE1_PASS}}))
+    document["freeze_fill"].update({"instruments_snapshot_path": str(snapshot), "instruments_snapshot_sha256": tape.sha256_of(snapshot),
+                                    "p3_counts_selection_sha256": tape.sha256_of(p3), "code_digest_sha256": cli.code_digest()})
+    spec_path = tmp_path / "gate2.json"
+    spec_path.write_text(json.dumps(document, indent=1))
+    out = tmp_path / "run2" / "g5.json"
+    args = ["g5-eval", "--tape", str(root), "--spec", str(spec_path), "--expect-spec-sha256", tape.sha256_of(spec_path), "--gate1-result", str(gate1_result),
+            "--expect-gate1-result-sha256", tape.sha256_of(gate1_result), "--p3-counts-file", str(p3), "--gate1-spec", str(gate1_spec),
+            "--expect-index-tape-sha256", g5_fetch.directory_digest(root / "index_1m")[0], "--out-json", str(out)]
+    assert cli.main(args) == 0
+    capsys.readouterr()
+    recorded = json.loads((tmp_path / "run2" / "g5.index-selection.json").read_text())
+    result = json.loads(out.read_text())
+    assert recorded["primary"] == B_SRC and recorded["measures"]["index_ids"] == ["BTC-USD", "ETH-USD"] and g5_gate2.verify_index_selection(recorded) == [] and result["index_selection"]["sha256"] == recorded["sha256"]
+    assert result["summary"]["gate2"]["index"]["source_used"] == B_SRC and result["summary"]["gate2"]["index"]["selection_sha256"] == recorded["sha256"]
+    sens = result["index_sensitivity"]
+    assert sens["source"] == A_SRC and sens["role"] == "sensitivity_reported_never_decisive" and sens["selection_sha256"] == recorded["sha256"]
+    assert sens["T01_funding_8h"]["verdict_label"].startswith("G5_GATE2_") and result["types"]["T01_funding_8h"]["verdict_label"].startswith("G5_GATE2_")
 
 
 def test_no_test_can_open_a_socket():

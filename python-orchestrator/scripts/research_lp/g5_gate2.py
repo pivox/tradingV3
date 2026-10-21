@@ -10,8 +10,9 @@ What this module enforces (fail-closed, `SpecError`):
   (P-G5-10 (i)), `classifier_index_source` (P-G5-10 (ii)), `universe.p_s3_track_s` (P-S3) — carry `status` / `choice`
   (`owner_decision_pending`, or `owner_decided` with one of their options); a `FROZEN` spec is refused while the string
   `owner_decision_pending` or a `null` remains anywhere in the document (the spec's own note), while `calendars.incomplete_at_draft`
-  is not empty, or while a declared-but-unimplemented path is chosen (index option (a): no index channel in the capture; index
-  option (b): no fetcher can read history-index-candles of the Gate 2 period, `INDEX_FROZEN_ALLOWED` is empty, CTO M3; the REST
+  is not empty, or while a declared-but-unimplemented path is chosen (index option (a) alone: not the owner's decision, D10 reaches it
+  through its selection rule only; index option (b), and D10 which needs (b) as comparison and fallback: no fetcher can read
+  history-index-candles of the Gate 2 period, `INDEX_FROZEN_ALLOWED` is empty, CTO M3; the REST
   funding fallback: `g5_fetch` cannot read after END_EXCLUSIVE; the draft text of `costs.funding.source`, which attributes a
   settled rate to its own fundingTime against docs-v5, CTO B1). At `DRAFT_NOT_FROZEN` the spec is accepted and every type of a
   study is `G5_GATE2_INCONCLUSIVE` (`owner_decision_pending_present`);
@@ -27,10 +28,16 @@ What this module enforces (fail-closed, `SpecError`):
 
 Runtime helpers: T0 and the per-type window ends (with the data-gap extension), the unusable instrument-days (`quality`), the
 inscription read from the Gate 1 result (its sha256, kind, mode and FROZEN spec; the effect of a refused Gate 1 run written, CTO m5),
-the capture manifest check, the index tape against its register sha256 (option b, CTO M3), the universe against the freeze snapshot."""
+the capture manifest check, the index tape against its register sha256 (option b, CTO M3), the universe against the freeze snapshot;
+**D10** (owner decision of 2026-10-21 on P-G5-10 (ii)): `classifier_index_source.selection_rule` read strictly, the per-minute index of
+each source (`index_minutes_from_ticks` for the captured `index_tick` layout, `index_minutes_from_candles` for `index_1m`), the coverage
+of (a) and the agreement between (a) and (b) on the common minutes, the choice of the primary source and its sha256
+(`select_index_source`, `verify_index_selection`), computed before any T01 evaluation (`apply_index_selection`); `g5_eval.run_study`
+refuses a D10 spec without a recorded, verified choice."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import date as Date
@@ -52,8 +59,12 @@ PENDING = "owner_decision_pending"
 DECIDED = "owner_decided"
 DECISION_PATHS = ("events[T05_us_open].window_end", "classifier_index_source", "universe.p_s3_track_s")
 INDEX_OPTIONS = ("a_capture_index_tickers", "b_history_index_candles_after_window")
+INDEX_OPTION_A = "a_capture_index_tickers"
 INDEX_OPTION_B = "b_history_index_candles_after_window"
-INDEX_IMPLEMENTED = (INDEX_OPTION_B,)  # read from an index_1m tape (synthetic tapes, DRAFT studies)
+# D10 (owner, 2026-10-21): both sources, the primary chosen by `selection_rule` on coverage and agreement only, before any T01 evaluation.
+INDEX_CHOICE_D10 = "d10_both_primary_by_quality_rule"
+INDEX_CHOICES = INDEX_OPTIONS + (INDEX_CHOICE_D10,)
+INDEX_IMPLEMENTED = (INDEX_OPTION_B, INDEX_CHOICE_D10)  # (b) from an index_1m tape; D10 from index_tick (capture) and index_1m
 # CTO M3: the options a FROZEN spec may choose. Option (b) reads history-index-candles of the Gate 2 period, which no tool can fetch:
 # g5_fetch.EndGuard drops every row at or after END_EXCLUSIVE (2026-10-14, a module constant). Empty until a dedicated fetcher exists.
 INDEX_FROZEN_ALLOWED: tuple = ()
@@ -118,6 +129,24 @@ SIM_TEXTS = {"stale_rule": "book older than stale_s at the decision: intention n
 INDEX_TEXTS = {"if_unresolved_or_unavailable": "T01_funding_8h = G5_GATE2_INCONCLUSIVE by construction (written in advance, protocol P-G5-10)",
                "mark_minute": "last markPx of the capture mark-price channel in (g - 60 s ; g] ; none = minute missing",
                "b_idx_minute": "close of the 1m index candle ending at g (Gate 1 convention)"}
+# D10 selection rule: the parameters fixed by the owner and the texts of the implemented rule (matched exactly).
+D10_COVERAGE_MIN_SHARE = 0.98
+D10_AGREEMENT_MAX_MEDIAN_ABS_BP = 0.5
+D10_KEYS = ("decision_ref", "status", "sources", "window_minutes", "coverage", "coverage_min_share", "agreement", "agreement_max_median_abs_bp", "rule", "sensitivity",
+            "record", "forbidden")
+D10_TEXTS = {
+    "window_minutes": "every minute boundary g with T0 <= g < end_exclusive of T01_funding_8h (before any data-gap extension), for every distinct index_id of universe.analysed",
+    "coverage": "share of the (index_id, g) pairs of window_minutes with an idx_minute from a_capture_index_tickers",
+    "agreement": "median, over the (index_id, g) pairs of window_minutes where both sources have an idx_minute, of |idx_a(g) - idx_b(g)| / idx_b(g) x 1e4 (bp)",
+    "rule": ("primary = a_capture_index_tickers if coverage >= coverage_min_share and agreement <= agreement_max_median_abs_bp (no common pair: agreement undefined, "
+             "rule not met) ; otherwise b_history_index_candles_after_window"),
+    "sensitivity": "the other source: T01 recomputed with it, reported as a sensitivity, never decisive, never used to choose",
+    "record": ("the choice is computed from coverage and agreement only, hashed (sha256 of the canonical JSON of the rule, the measures and the primary) and written "
+               "in the result before any T01 evaluation ; the evaluator refuses to evaluate T01 without a recorded choice"),
+    "forbidden": "comparing the T01 results obtained with each source in order to choose",
+}
+INDEX_A_IDX_MINUTE = "last idxPx received in (g - 60 s ; g] ; none = minute missing"
+
 CALENDAR_INCOMPLETE_KEYS = ("cpi", "employment_situation", "fomc_statement", "nyse_holidays", "ten_am_et_releases")
 INCOMPLETE_RULE = "every list complete and calendars_verified_utc set before FROZEN ; the evaluator refuses a FROZEN spec whose incomplete_at_draft is not empty"
 CRITERIA_TEXT = {
@@ -498,7 +527,8 @@ def _parse_execution_sim(block, notional: float) -> dict:
 
 
 def _parse_index_source(block, status: str = "DRAFT_NOT_FROZEN") -> str:
-    _check_keys(block, "classifier_index_source", ("decision", "status", "choice", "why", "options", "if_unresolved_or_unavailable", "mark_minute", "single_quantity"))
+    _check_keys(block, "classifier_index_source", ("decision", "status", "choice", "why", "options", "if_unresolved_or_unavailable", "mark_minute", "single_quantity"),
+                ("selection_rule",))
     _exact(block, "decision", "classifier_index_source", "P-G5-10 (ii)")
     _text(block, "why", "classifier_index_source")
     _text(block, "single_quantity", "classifier_index_source")
@@ -511,13 +541,40 @@ def _parse_index_source(block, status: str = "DRAFT_NOT_FROZEN") -> str:
         _text(item, "idx_minute", f"classifier_index_source.options.{name}")
         _str_list(item, "requires", f"classifier_index_source.options.{name}", nonempty=False)
     _exact(options["b_history_index_candles_after_window"], "idx_minute", "classifier_index_source.options.b_history_index_candles_after_window", INDEX_TEXTS["b_idx_minute"])
-    choice = _decision(block, "classifier_index_source", INDEX_OPTIONS)
+    _exact(options[INDEX_OPTION_A], "idx_minute", f"classifier_index_source.options.{INDEX_OPTION_A}", INDEX_A_IDX_MINUTE)
+    choice = _decision(block, "classifier_index_source", INDEX_CHOICES)
     if choice not in (PENDING,) + INDEX_IMPLEMENTED:
-        raise SpecError(f"classifier_index_source.choice {choice!r}: not implemented (no index-tickers channel in xperp_capture.CHANNELS {list(xc.CHANNELS)}, no tape layout: "
-                        "a new D1 decision and code)")
-    if status == "FROZEN" and choice not in INDEX_FROZEN_ALLOWED:
-        raise SpecError(INDEX_B_NOT_FETCHABLE)
+        raise SpecError(f"classifier_index_source.choice {choice!r}: not the owner's decision (D10, 2026-10-21: option a is reached only through "
+                        f"selection_rule, choice {INDEX_CHOICE_D10})")
+    if choice == INDEX_CHOICE_D10:
+        if "selection_rule" not in block:
+            raise SpecError(f"classifier_index_source.selection_rule: missing (choice {INDEX_CHOICE_D10})")
+        if "index-tickers" not in xc.CHANNELS or "index_tick" not in tape.LAYOUTS:
+            raise SpecError("classifier_index_source: D10 needs the index-tickers channel and the index_tick layout in the code")
+    if "selection_rule" in block:
+        _parse_selection_rule(block["selection_rule"])
+    if status == "FROZEN" and choice not in INDEX_FROZEN_ALLOWED and not (choice == INDEX_CHOICE_D10 and INDEX_OPTION_B in INDEX_FROZEN_ALLOWED):
+        raise SpecError(INDEX_B_NOT_FETCHABLE + ("" if choice != INDEX_CHOICE_D10 else " ; D10 needs option b (comparison and fallback)"))
     return choice
+
+
+def _parse_selection_rule(block) -> dict:
+    """D10 (owner, 2026-10-21): the strict reading of `classifier_index_source.selection_rule` — every key known, every text equal to the
+    implemented rule, the two thresholds equal to the owner's (98 % of the window minutes, 0.5 bp)."""
+    where = "classifier_index_source.selection_rule"
+    _check_keys(block, where, D10_KEYS)
+    _text(block, "decision_ref", where)
+    _text(block, "status", where)
+    if list(_str_list(block, "sources", where)) != [INDEX_OPTION_A, INDEX_OPTION_B]:
+        raise SpecError(f"{where}.sources: [{INDEX_OPTION_A}, {INDEX_OPTION_B}] (D10)")
+    for key, text in D10_TEXTS.items():
+        _exact(block, key, where, text)
+    coverage = _num(block, "coverage_min_share", where, 0.0, 1.0)
+    agreement = _num(block, "agreement_max_median_abs_bp", where, 0.0)
+    if coverage != D10_COVERAGE_MIN_SHARE or agreement != D10_AGREEMENT_MAX_MEDIAN_ABS_BP:
+        raise SpecError(f"{where}: coverage_min_share {coverage} / agreement_max_median_abs_bp {agreement} differ from the owner's D10 values "
+                        f"({D10_COVERAGE_MIN_SHARE} / {D10_AGREEMENT_MAX_MEDIAN_ABS_BP})")
+    return {"coverage_min_share": coverage, "agreement_max_median_abs_bp": agreement}
 
 
 def _parse_quality(block) -> dict:
@@ -546,7 +603,7 @@ def _parse_capture_block(block) -> dict:
     if list(_str_list(block, "channels_in_code_2026_10_21", "capture")) != list(xc.CHANNELS):
         raise SpecError(f"capture.channels_in_code_2026_10_21 is not the code's xperp_capture.CHANNELS {list(xc.CHANNELS)}")
     if tuple(_str_list(block, "layouts_read", "capture")) != LAYOUTS_READ:
-        raise SpecError(f"capture.layouts_read: the evaluator reads {list(LAYOUTS_READ)} (and index_1m under P-G5-10 (ii) b)")
+        raise SpecError(f"capture.layouts_read: the evaluator reads {list(LAYOUTS_READ)} (and index_1m under P-G5-10 (ii) b, index_tick and index_1m under D10)")
     for key in ("instruments_metadata", "manifest"):
         _text(block, key, "capture")
     _str_list(block, "register", "capture")
@@ -1486,3 +1543,144 @@ def check_universe(spec: g5.Spec, rows: dict) -> list[str]:
         if exp and exp < t0 + 365 * g5.DAY_US:
             problems.append(f"{meta.inst_id}: expTime before T0 + 365 d")
     return problems
+
+
+# ----------------------------------------------------------------------------- D10: index source selection (P-G5-10 (ii), owner 2026-10-21)
+
+
+def index_minutes_from_ticks(grid: np.ndarray, ts_us: np.ndarray, idx_px: np.ndarray) -> np.ndarray:
+    """Option (a) on the minute grid: at each boundary g the last captured idxPx with exchange ts in (g − 60 s ; g]; NaN otherwise."""
+    grid = np.asarray(grid, dtype=np.int64)
+    out = np.full(grid.size, np.nan)
+    ts_us, idx_px = np.asarray(ts_us, dtype=np.int64), np.asarray(idx_px, dtype=np.float64)
+    if ts_us.size == 0:
+        return out
+    order = np.argsort(ts_us, kind="stable")
+    ts_us, idx_px = ts_us[order], idx_px[order]
+    pos = np.searchsorted(ts_us, grid, side="right") - 1
+    valid = pos >= 0
+    safe = np.where(valid, pos, 0)
+    ok = valid & (grid - ts_us[safe] < g5.MINUTE_US) & np.isfinite(idx_px[safe])
+    out[ok] = idx_px[safe][ok]
+    return out
+
+
+def index_minutes_from_candles(grid: np.ndarray, rows: np.ndarray) -> np.ndarray:
+    """Option (b) on the minute grid: at each boundary g the close of the confirmed 1-minute index candle ending at g; NaN otherwise."""
+    out = np.full(np.asarray(grid).size, np.nan)
+    rows = rows[rows["confirm"] != 0] if rows.size else rows
+    if rows.size:
+        g5._place(np.asarray(grid, dtype=np.int64), rows["ts_us"].astype(np.int64), rows["close"].astype(np.float64), out)
+    return out
+
+
+def selection_window_us(spec: g5.Spec) -> tuple[int, int]:
+    """`selection_rule.window_minutes`: [T0 ; end_exclusive of T01_funding_8h), before any data-gap extension."""
+    t01 = next(t for t in spec.types if t.name == "T01_funding_8h")
+    return type_window(spec, t01, 0)
+
+
+def _selection_payload(record: dict) -> dict:
+    return {k: record[k] for k in ("decision", "rule", "measures", "conditions", "primary", "sensitivity")}
+
+
+def selection_sha256(record: dict) -> str:
+    text = json.dumps(_selection_payload(record), sort_keys=True, separators=(",", ":"), allow_nan=False, ensure_ascii=True)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def select_index_source(pairs: dict, window_utc: tuple[str, str] | None = None, coverage_min_share: float = D10_COVERAGE_MIN_SHARE,
+                        agreement_max_bp: float = D10_AGREEMENT_MAX_MEDIAN_ABS_BP) -> dict:
+    """D10 — the choice of the primary index source from coverage and agreement only (`selection_rule`). `pairs` = {index_id: (idx_a, idx_b)},
+    the two per-minute series of one index restricted to the window minutes (NaN = no idx_minute). Coverage of (a) = covered pairs / all
+    pairs (compared exactly as a fraction); agreement = median of |a − b| / b × 1e4 over the pairs where both exist (undefined without a
+    common pair: the rule is not met). Nothing of T01 is read. The record carries its sha256."""
+    from fractions import Fraction
+
+    total = cov_a = cov_b = 0
+    diffs: list[float] = []
+    per_index = {}
+    for index_id in sorted(pairs):
+        a, b = (np.asarray(x, dtype=np.float64) for x in pairs[index_id])
+        if a.shape != b.shape:
+            raise ValueError(f"{index_id}: the two index series differ in length")
+        ok_a, ok_b = np.isfinite(a) & (a > 0), np.isfinite(b) & (b > 0)
+        both = ok_a & ok_b
+        d = (np.abs(a[both] - b[both]) / b[both] * 1e4).tolist()
+        per_index[index_id] = {"pairs": int(a.size), "a": int(ok_a.sum()), "b": int(ok_b.sum()), "common": int(both.sum()),
+                               "median_abs_diff_bp": float(np.median(d)) if d else None}
+        total += int(a.size)
+        cov_a += int(ok_a.sum())
+        cov_b += int(ok_b.sum())
+        diffs.extend(d)
+    median = float(np.median(np.array(diffs))) if diffs else None
+    coverage_met = bool(total > 0 and Fraction(cov_a, total) >= Fraction(str(coverage_min_share)))
+    agreement_met = bool(median is not None and median <= agreement_max_bp)
+    primary = INDEX_OPTION_A if coverage_met and agreement_met else INDEX_OPTION_B
+    record = {"decision": "D10 (2026-10-21)",
+              "rule": {"sources": [INDEX_OPTION_A, INDEX_OPTION_B], "coverage_min_share": coverage_min_share, "agreement_max_median_abs_bp": agreement_max_bp,
+                       "window_minutes": D10_TEXTS["window_minutes"], "rule": D10_TEXTS["rule"]},
+              "measures": {"window_utc": list(window_utc) if window_utc else None, "index_ids": sorted(pairs), "pairs": total, "pairs_a": cov_a, "pairs_b": cov_b,
+                           "coverage_a": (cov_a / total) if total else None, "coverage_b": (cov_b / total) if total else None, "common_pairs": len(diffs),
+                           "median_abs_diff_bp": median, "per_index": per_index},
+              "conditions": {"coverage_met": coverage_met, "agreement_met": agreement_met},
+              "primary": primary, "sensitivity": INDEX_OPTION_B if primary == INDEX_OPTION_A else INDEX_OPTION_A}
+    record["sha256"] = selection_sha256(record)
+    return record
+
+
+def verify_index_selection(record, spec: g5.Spec | None = None) -> list[str]:
+    """Problems of a recorded D10 choice: absent, hash differing from its content, rule parameters other than the owner's, or a primary
+    that does not follow from the recorded conditions."""
+    if not isinstance(record, dict) or "sha256" not in record:
+        return ["no recorded index choice (D10: T01 is never evaluated without it)"]
+    problems = []
+    try:
+        if selection_sha256(record) != record["sha256"]:
+            problems.append("the recorded index choice does not match its sha256")
+    except (KeyError, TypeError, ValueError) as error:
+        return [f"the recorded index choice is malformed ({error})"]
+    rule = record["rule"]
+    if rule.get("coverage_min_share") != D10_COVERAGE_MIN_SHARE or rule.get("agreement_max_median_abs_bp") != D10_AGREEMENT_MAX_MEDIAN_ABS_BP:
+        problems.append("the recorded index choice used other thresholds than D10")
+    cond = record["conditions"]
+    expected = INDEX_OPTION_A if cond.get("coverage_met") and cond.get("agreement_met") else INDEX_OPTION_B
+    if record["primary"] != expected or {record["primary"], record["sensitivity"]} != {INDEX_OPTION_A, INDEX_OPTION_B}:
+        problems.append("the recorded primary does not follow from the recorded conditions")
+    if spec is not None:
+        lo, hi = selection_window_us(spec)
+        if (record["measures"].get("window_utc") or [None, None]) != [g5._iso(lo), g5._iso(hi)]:
+            problems.append("the recorded index choice was computed on another window")
+    return problems
+
+
+def use_index_source(series_by_inst: dict, source: str) -> None:
+    """Put the per-minute index of `source` (D10: `index_sources` of each series) in `series.index`; the premium cache is cleared."""
+    for series in series_by_inst.values():
+        sources = series.cache.get("index_sources")
+        if sources is None or source not in sources:
+            raise ValueError(f"{series.inst}: no index series {source!r} loaded (D10)")
+        series.index = np.array(sources[source], dtype=np.float64)
+        for key in [k for k in series.cache if k == "premium" or (isinstance(k, tuple) and k and k[0] == "p_hat")]:
+            del series.cache[key]
+        series.cache["index_source_used"] = source
+        series.coverage["index_minutes"] = int(np.isfinite(series.index).sum())
+        series.coverage["index_source_used"] = source
+
+
+def apply_index_selection(series_by_inst: dict, spec: g5.Spec) -> dict:
+    """D10, run before any T01 evaluation: the two index series of each distinct index id on the window minutes, the choice
+    (`select_index_source`), then the primary put in every series (`use_index_source`). Returns the hashed record."""
+    lo, hi = selection_window_us(spec)
+    pairs: dict = {}
+    for series in series_by_inst.values():
+        sources = series.cache.get("index_sources")
+        if sources is None:
+            raise ValueError(f"{series.inst}: the D10 index sources were not loaded")
+        if series.meta.index_id in pairs:
+            continue
+        mask = (series.grid_us >= lo) & (series.grid_us < hi)
+        pairs[series.meta.index_id] = (np.asarray(sources[INDEX_OPTION_A])[mask], np.asarray(sources[INDEX_OPTION_B])[mask])
+    record = select_index_source(pairs, (g5._iso(lo), g5._iso(hi)))
+    use_index_source(series_by_inst, record["primary"])
+    return record
