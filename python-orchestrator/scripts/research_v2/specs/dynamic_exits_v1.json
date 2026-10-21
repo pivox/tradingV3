@@ -1,0 +1,93 @@
+{
+ "schema": "research-v2-dynamic-exits-spec.v1",
+ "spec_id": "dynamic_exits",
+ "version": "1.0.0",
+ "status": "DRAFT_NOT_FROZEN",
+ "question": "A entrees identiques (S1 5m), une sortie reevaluee a chaque cloture de barre (B stop suiveur, C sortie adaptative) ameliore-t-elle le net par rapport a la sortie fixe A ? Stop obligatoire.",
+ "document": "docs/handbook/research/DYNAMIC-EXITS-DRAFT-PREREGISTRATION.md",
+ "entry": {
+  "setup_id": "S1",
+  "configuration_template": "S1|5m|{side}|S1.T1.5",
+  "cadence": "5m",
+  "sides": ["long", "short"],
+  "entry_mode": "limit_through",
+  "through_ticks": 1,
+  "ttl_minutes": 5,
+  "initial_stop_atr": 1.0,
+  "atr": "ATR14 Wilder on 5m bars, value at the decision bar close",
+  "horizon_minutes": 60,
+  "horizon_anchor": "decision_close",
+  "reference_notional_usdt": 250.0,
+  "admission": "one plan per pair; a filled plan reserves the pair until decision_close + horizon whatever the method's exit, an unfilled plan until decision_close + ttl (method-independent, so one entry table serves A, B and C)"
+ },
+ "methods": {
+  "A": {"label": "reference_fixed", "stop_r": 1.0, "target_r": 1.5, "time_exit_minutes": 60},
+  "B": {"label": "close_trailing", "stop_r": 1.0, "target_r": null, "activation_best_close_r": 1.0, "trail_atr_entry": 1.0, "time_exit_minutes": 60},
+  "C": {
+   "label": "adaptive_exit",
+   "stop_r": 1.0,
+   "target_r": 1.5,
+   "time_exit_minutes": 60,
+   "invalidation": {"u_max": -0.5, "atr_ratio_min": 1.5, "action": "market_exit_next_open"},
+   "exhaustion": {"giveback_mfe_min": 1.0, "giveback_r": 0.5, "giveback_stop_atr_current": 0.5, "stall_min_bars": 6, "stall_abs_u_max": 0.25, "stall_action": "market_exit_next_open", "within_rule_priority": "stall exit before giveback tightening"},
+   "favourable": {"u_min": 1.0, "requires_new_best_close": true, "stop_to": "breakeven_plus_round_trip_cost (baseline profile, stop-like exit)", "target_extension_r": 1.0, "target_cap_r": 3.0},
+   "priority": ["invalidation", "exhaustion", "favourable", "hold"]
+  }
+ },
+ "execution": {
+  "decision_time": "5m bar close, from the fill bar on",
+  "decision_effect": "from the first 1m candle of the next 5m bar (latency 0); sensitivity: one bar later (latency 1)",
+  "intrabar_checks": "1m candles",
+  "stop_check_from": "fill candle included",
+  "initial_target_check_from": "candle after the fill candle, filled on touch (research_v2 fills convention)",
+  "moved_target": "new limit order: fills only on a one-tick trade-through from the first candle of the bar after the modification",
+  "tie": "stop first when stop and target are touched in the same 1m candle",
+  "stop_fill_price": "worse of the stop level and the candle open (gaps)",
+  "market_exit": "open of the effective candle; taker fee + stop_spread_rate + stop_slippage_rate",
+  "stop_guarantee": "none",
+  "stop_never_loosens": true,
+  "rounding": "stops rounded away from the market (long down), break-even level rounded up (long), targets rounded away from the entry"
+ },
+ "costs": {
+  "source": "research-cost-assumptions.v1 (campaign-assumptions-r1, sha256 83b0216df8d93eae165656c3778e1942ed2599978bc001ce18e33894caa1537b)",
+  "profiles": ["baseline", "adverse", "doubled"],
+  "doubled": "baseline with every spread rate x2 (costs.doubled_spread)",
+  "entry_role": "maker",
+  "breakeven_profile": "baseline"
+ },
+ "diagnostics": {
+  "common_horizon_minutes_after_fill": 120,
+  "mfe_thresholds_r": [0.5, 1.0],
+  "tight_stop_r": 0.5,
+  "best_prices_are_diagnostic_only": true
+ },
+ "statistics": {
+  "unit": "net R = net_quote / stop_risk_quote (identical risk across methods)",
+  "comparisons": ["B-A", "C-A"],
+  "bootstrap": {"kind": "block by UTC day of the decision", "resamples": 5000, "seed": 20261021},
+  "lower_bound_level": 0.90,
+  "multiplicity": "Holm on the two comparisons (one-sided)",
+  "sensitivities": ["adverse", "doubled", "latency_1_bar"]
+ },
+ "decision": {
+  "continue_if_all": [
+   "paired difference (B-A or C-A) Holm-adjusted one-sided 90% lower bound > 0 (baseline)",
+   "the method's own mean net R > 0 with a day-block 90% lower bound > 0 (baseline)",
+   "adverse profile: method mean net R > 0 and paired mean difference > 0",
+   "realized drawdown of the method <= 20 R (cumulative net R, exit order) and portfolio max drawdown share <= 0.25 at 1000 USDT"
+  ],
+  "max_drawdown_r": 20.0,
+  "max_portfolio_drawdown_share": 0.25,
+  "portfolio_budget_usdt": 1000.0,
+  "verdicts": ["IMPROVEMENT_PROFITABLE_SUPPORTED", "IMPROVEMENT_BUT_LOSS_MAKING", "NO_IMPROVEMENT", "INSUFFICIENT_DATA"]
+ },
+ "data_requirements": {
+  "min_trades": 3000,
+  "min_days": 250,
+  "power": {"alpha_one_sided": 0.05, "power": 0.8, "sd_paired_diff_r": 0.6, "delta_diff_r": 0.05, "sd_trade_r": 1.1, "delta_mean_r": 0.05, "design_effect": 1.5}
+ },
+ "data_split": {
+  "exploration": "Binance USD-M 10 majors 1m 2023-01-01 -> 2024-12-31 (consumed; development only; owner authorization required before any read)",
+  "confirmation": "TO BE DESIGNATED BY THE OWNER: Binance intraday 2020-2022 (unread in the register, possibly_independent, to download) or OKX X-Perps prospective capture from 2026-11-02"
+ }
+}
