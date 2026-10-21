@@ -242,6 +242,25 @@ avec δ = 0,05 R.
   recherche et doit faire l'objet d'un changement séparé, avant toute utilisation réelle de sorties
   dynamiques.
 
+**Limites connues du simulateur**, relevées par la revue du code après le rejeu. Aucune ne change les
+chiffres ci-dessus. Le code n'a pas été modifié après lecture. Ces points sont à corriger avant toute
+réutilisation pour une nouvelle hypothèse.
+
+- **Funding à la borne de fenêtre.** Le funding est découpé strictement avant la fin de la fenêtre,
+  alors que le contrôle de complétude inclut l'instant de sortie. Un trade sortant exactement au
+  2025-01-01 00:00 UTC, qui est aussi une heure de funding, arrêterait le rejeu au lieu de supposer un
+  funding nul. Ce cas ne s'est pas produit : le rejeu est allé au bout.
+- **Horodatage des sorties au marché.** Les sorties sur invalidation, stagnation ou stop franchi sont
+  horodatées à la fin de la bougie d'exécution, alors que le prix est celui de son ouverture. La paire
+  est donc libérée une minute trop tard, et un funding tombant à cette minute peut être imputé. Le
+  biais est conservateur.
+- **Convention de funding.** Le funding est imputé sur l'intervalle (remplissage ; sortie]. Une sortie
+  à l'intérieur d'une bougie qui se termine sur une heure de funding paie ce funding. Le biais est
+  conservateur et touche environ une sortie sur 480.
+- **Grille de funding.** Le contrôle de complétude ne vérifie que la grille de 8 h. Il suffit pour ces
+  10 majors en 2023-2024, où la grille était complète. Un symbole à intervalle de 4 h ou de 1 h
+  demanderait de l'étendre.
+
 ## 8. Recommandation
 
 **Fermer le candidat S1 avec les sorties A, B et C.** Les trois couples testés ont un brut
