@@ -435,3 +435,10 @@ Paramètres du premier rejeu d'exploration, fixés avant lecture :
 
 FROZEN: v1.1.0 pour le rejeu d'exploration 1, 2026-10-21, spécification `dynamic_exits_v1_1.json`
 sha256 e7d2328cb62d8ffe7d0fdb42dd0c9745d4a5cb408e83c52ef040c28893f32207 (voir le commit qui introduit cette ligne).
+
+## Exécutions
+
+- Rejeu d'exploration 1, 2026-10-21, spécification v1.1.0, code research_v2 `4acb57a9…`, données
+  Binance 2023-2024 autorisées : `NO_IMPROVEMENT_DEMONSTRATED` (statut `EXPLORATION_ONLY`). Rapport :
+  `docs/handbook/reports/research-dynamic-exits-exploration-2026-10-21.md`. La spécification n'a pas
+  été modifiée après lecture.
