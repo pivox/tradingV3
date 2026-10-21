@@ -44,12 +44,36 @@ page whose records are all unusable is `malformed_page`, never an end of history
 are counted (`skipped_records`), so are unconfirmed candles (`unconfirmed_rows`, `confirm = 0`).
 
 **Scale (licence §9.4, `LP-G5` P-G5-1).** A real run needs: `--decision-ref TEXT` (the owner's written
-confirmation, copied into the manifest and the journal), an explicit instrument list (`--inst-ids` or a
-hashed `--inst-ids-file`), `--max-requests N` (a hard cap on every request sent, retries included) and
-`--plan FILE`, the dry-run plan of exactly this configuration (its jobs are recomputed and compared; its
-sha256 is copied into the manifest next to `decision_ref`; refused when its estimate exceeds the cap).
-`--host global` (outside the EEA licence of the owner, `france-market-eligibility`) is refused for a
-real run without `--host-reason TEXT`. Without any of these the command exits 2 and connects to nothing.
+confirmation, copied into the manifest and the journal), `--spec FILE --phase pre_freeze|post_freeze` (the G5
+machine spec `g5-spec/2`, read by the strict parser of `g5_eval`: its `fetch_plan` fixes the streams of the
+phase, the page sizes, the per-stream starts, the sealed mode, the host and the instruments = `universe.analysed`),
+an explicit instrument list (`--inst-ids` or `--inst-ids-file`) equal to the spec's universe — its sha256 (of
+the sorted ids, one per line, `inst_ids_sha256`) is recorded in the plan, the manifest and the receipt —,
+`--max-requests N` (a hard cap on every request sent, retries included) and `--plan FILE`, the dry-run plan of
+exactly this configuration (its jobs are recomputed and compared; its sha256 is copied into the manifest next
+to `decision_ref`; refused when its estimate exceeds the cap). The post-freeze phase also needs
+`--funding-receipt FILE`, the public receipt of the sealed funding fetch: its `coverage_start_utc` is D_cov.
+`--host global` (outside the EEA licence of the owner, `france-market-eligibility`) is refused for a real run
+without `--host-reason TEXT`. Without any of these the command exits 2 and connects to nothing.
+
+**Per-stream starts (`LP-G5` §4.3, spec `fetch_plan.post_freeze`).** With an eligibility rule (spec mode):
+`candles_1m` from `listTime + eligibility − 1 day`, `mark_1m` and `index_1m` from
+`max(D_cov − 1 day, listTime + eligibility − 1 day)` (the index of an underlying from the earliest of its
+contracts), `funding_hist` from `listTime` (the depth served). Without it (unit tests, dry runs without a
+spec) every stream starts at `max(--start, listTime)`. In spec mode the estimate of a candle walk counts no
+final empty page (its last page reaches the start) and the funding estimate counts its rows from the D_cov
+the spec assumes (`fetch_plan.estimate_assumption`): the totals reproduce the spec's `requests_estimate`.
+
+**Sealed mode (`LP-G5` P-G5-3, (B) xix).** The funding history is fetched **only** in sealed mode, before the
+freeze: the store is `<out>/sealed-funding/`, whose manifest holds the per-instrument states (rows, oldest /
+newest, pages, errors, files and their sha256) and is the sealed file; the console and `<out>/fetch.log` carry
+the global totals only (`SEALED_PRINTED`: jobs, complete jobs, jobs in error, D_cov) — no instrument id, no row,
+page or request count; the public receipt `<out>/funding-sealed-receipt.json` holds those totals, the sha256 of
+the sealed manifest and a digest of every sealed file (`sealed_files_digest`). D_cov of a job = its first
+settlement whose predecessor is also served (the second oldest `fundingTime` stored), once the job ended
+`reached_start` or `server_empty_before_start`; the global `coverage_start_utc` = the latest of these over the
+jobs the server truncated (the documented three-month horizon), else the earliest. Outside sealed mode a
+`funding_hist` stream is refused, and a sealed run fetches nothing else.
 
 **Rate limits.** One sliding-window limiter per stream, at `rate_scale` (default 0.8) of the documented
 ceiling — the ceiling itself is never exceeded. HTTP 429 / 5xx, the OKX codes 50001 (service
@@ -111,6 +135,24 @@ _INDEX_RE = re.compile(r"^(?P<base>[A-Z0-9]+)-USD_UM(?:_XPERP)?-\d{6}$")
 _SNAPSHOT_DATE_RE = re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 END_REASONS = ("reached_start", "server_empty_before_start", "malformed_page", "error", "paused", "max_requests_reached")
+COMPLETE_REASONS = ("reached_start", "server_empty_before_start")
+DAY_US = tape.DAY_S * tape.SECOND_US
+# Sealed mode (LP-G5 P-G5-3): the pre-freeze funding fetch.
+SEALED_DIR_NAME = "sealed-funding"
+SEALED_RECEIPT_NAME = "funding-sealed-receipt.json"
+RECEIPT_KIND = "lp-g5-funding-sealed-receipt"
+SEALED_STREAMS = ("funding_hist",)
+SEALED_PRINTED = ("jobs_total", "jobs_complete", "jobs_error", "coverage_start_utc")
+SEALED_COVERAGE_RULE = ("D_cov of a job = its first fundingTime whose predecessor is also served (second oldest stored), once it ended reached_start or "
+                        "server_empty_before_start; global = the latest over the server-truncated jobs, else the earliest")
+# What a sealed run may write to the console and the journal: these events, these fields; nothing per instrument.
+SEALED_JOURNAL = {"fetch_start": ("jobs", "host", "end_exclusive", "decision_ref", "plan_sha256", "max_requests", "mode"),
+                  "retry": ("stream", "attempt", "reason", "delay_s", "retry_after_s"),
+                  "snapshot_in_quarantine": ("snapshot_date", "note"),
+                  "sealed_end": SEALED_PRINTED + ("receipt_sha256", "sealed_manifest_sha256", "budget_exhausted")}
+# The start rules of the spec's fetch_plan.post_freeze (text → rule) and the streams of each phase.
+START_RULES = {"eligible_from_utc - 1 day": "eligibility_minus_1d", "max(coverage_start - 1 day, eligible_from_utc - 1 day)": "max_coverage_eligibility_minus_1d"}
+PHASES = {"pre_freeze": SEALED_STREAMS, "post_freeze": ("candles_1m", "mark_1m", "index_1m")}
 
 
 @dataclass(frozen=True)
@@ -147,6 +189,18 @@ def sha256_text(text: str) -> str:
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def inst_ids_digest(ids) -> str:
+    """sha256 of the sorted instrument ids, one per line (the hashed list of a real run, whatever form it was given in)."""
+    return sha256_text("".join(f"{i}\n" for i in sorted(set(str(x) for x in ids))))
+
+
+def directory_digest(root: Path) -> tuple[str, int]:
+    """sha256 of the lines `<relative path> <sha256>` of every file under `root`, sorted; and the number of files."""
+    root = Path(root)
+    lines = [f"{path.relative_to(root).as_posix()} {tape.sha256_of(path)}\n" for path in sorted(root.rglob("*")) if path.is_file()]
+    return sha256_text("".join(lines)), len(lines)
 
 
 # ----------------------------------------------------------------------------- guard
@@ -419,9 +473,26 @@ class Job:
         return f"{self.inst_id}:{self.stream}"
 
 
-def jobs_for(rows: list[dict], streams: tuple[str, ...], start: str = DEFAULT_START) -> list[Job]:
-    """One job per (instrument, stream); the index stream is shared by the contracts of one underlying and starts at the
-    earliest of their listTimes."""
+def stream_start_us(row: dict, stream: str, floor_us: int, eligibility_days: float | None = None, coverage_start_us: int | None = None) -> int:
+    """Oldest instant wanted for one (instrument, stream) (LP-G5 §4.3). Without `eligibility_days`: max(floor, listTime). With it:
+    candles from listTime + eligibility − 1 day; mark / index from max(D_cov − 1 day, listTime + eligibility − 1 day); funding
+    history from listTime (the depth served)."""
+    listed_us = xc._i(row.get("listTime"), 0) * 1000
+    if eligibility_days is None or stream == "funding_hist":
+        return max(floor_us, listed_us)
+    eligible_minus_day = listed_us + int(round(float(eligibility_days) * DAY_US)) - DAY_US
+    if stream == "candles_1m":
+        return max(floor_us, eligible_minus_day)
+    if coverage_start_us is None:
+        raise ValueError(f"{stream} starts at max(D_cov - 1 day, eligibility - 1 day): coverage_start_us (D_cov of the sealed funding receipt) is required")
+    return max(floor_us, eligible_minus_day, int(coverage_start_us) - DAY_US)
+
+
+def jobs_for(rows: list[dict], streams: tuple[str, ...], start: str = DEFAULT_START, eligibility_days: float | None = None,
+             coverage_start_us: int | None = None) -> list[Job]:
+    """One job per (instrument, stream), starting at `stream_start_us`; the index stream is shared by the contracts of one
+    underlying and starts at the earliest of their starts. A job whose start is not before END_EXCLUSIVE is refused (an
+    instrument without any eligible minute is never fetched, spec `universe.excluded_never_eligible`)."""
     for stream in streams:
         if stream not in STREAMS:
             raise ValueError(f"unknown stream {stream}")
@@ -432,9 +503,10 @@ def jobs_for(rows: list[dict], streams: tuple[str, ...], start: str = DEFAULT_ST
     index_start: dict[str, int] = {}
     for row in rows:
         inst = tape.check_inst_name(str(row["instId"]))
-        listed_us = xc._i(row.get("listTime"), 0) * 1000
-        start_us = max(floor_us, listed_us)
         for stream in streams:
+            start_us = stream_start_us(row, stream, floor_us, eligibility_days, coverage_start_us)
+            if start_us >= END_EXCLUSIVE_US:
+                raise ValueError(f"{inst} {stream}: start {tape.iso_utc(start_us)} is not before END_EXCLUSIVE {END_EXCLUSIVE} (no eligible minute: never fetched)")
             if stream == "index_1m":
                 index = tape.check_inst_name(index_id_of(row))
                 index_start[index] = min(index_start.get(index, start_us), start_us)
@@ -445,15 +517,31 @@ def jobs_for(rows: list[dict], streams: tuple[str, ...], start: str = DEFAULT_ST
     return jobs
 
 
-def estimate_pages(job: Job, limit: int) -> int:
+def estimate_pages(job: Job, limit: int, walk_reaches_start: bool = False, funding_from_us: int | None = None) -> int:
     """Pages a job needs if the server holds the whole window (candles: one row per minute; funding: three per day at
-    the 8 h interval — an estimate labelled as such, 4 h contracts need up to twice as many)."""
-    span_ms = END_EXCLUSIVE_MS - job.start_us // 1000
+    the 8 h interval — an estimate labelled as such, 4 h contracts need up to twice as many), + the empty page that ends
+    the walk. Spec mode (LP-G5 §4.3 audit): a candle walk whose last page reaches its start needs no empty page
+    (`walk_reaches_start`); the funding walk always ends with one (its oldest settlement is after listTime) and counts its
+    rows from max(start, `funding_from_us`), the D_cov the spec assumes (the server keeps three months)."""
+    first_us = int(job.start_us)
     if STREAMS[job.stream].kind == "funding":
-        rows = math.ceil(span_ms / (8 * 3600 * 1000))
-    else:
-        rows = math.ceil(span_ms / MINUTE_MS)
-    return max(1, math.ceil(rows / limit) + 1)  # + the empty page that ends the walk
+        if funding_from_us is not None:
+            first_us = max(first_us, int(funding_from_us))
+        rows = math.ceil((END_EXCLUSIVE_MS - first_us // 1000) / (8 * 3600 * 1000))
+        return max(1, math.ceil(rows / limit) + 1)
+    rows = math.ceil((END_EXCLUSIVE_MS - first_us // 1000) / MINUTE_MS)
+    return max(1, math.ceil(rows / limit) + (0 if walk_reaches_start else 1))
+
+
+def spec_estimate(instruments: list[dict], eligibility_days: float, coverage_start_us: int, pages: dict) -> dict:
+    """Requests per stream of the spec's fetch plan (calcul d'audit, no data): `instruments` = rows with `instId`, `listTime`
+    (ms) and `uly`; `pages` = the page size per stream. Reproduces `fetch_plan.*.requests_estimate` (LP-G5 §4.3)."""
+    out = {}
+    floor = DEFAULT_START
+    for stream in STREAMS:
+        jobs = jobs_for(instruments, (stream,), floor, eligibility_days, coverage_start_us)
+        out[stream] = sum(estimate_pages(job, int(pages[stream]), walk_reaches_start=True, funding_from_us=coverage_start_us) for job in jobs)
+    return out
 
 
 # ----------------------------------------------------------------------------- fetcher
@@ -478,6 +566,14 @@ class FetchConfig:
     plan_sha256: str = ""  # sha256 of the dry-run plan file of this configuration (mandatory for a real run)
     host_reason: str = ""  # written reason for a non-EEA host (mandatory for `global`)
     inst_ids_source: str = ""  # how the instrument list was given (`--inst-ids` text, or the hashed `--inst-ids-file`)
+    inst_ids_sha256: str = ""  # sha256 of the sorted instrument ids, one per line (`inst_ids_digest`): the hashed list of a real run
+    sealed: bool = False  # the pre-freeze funding fetch (LP-G5 P-G5-3): per-instrument state sealed, global totals only on screen and journal
+    eligibility_days: float | None = None  # spec mode: per-stream starts (LP-G5 §4.3)
+    coverage_start_us: int | None = None  # D_cov of the sealed funding receipt (spec mode, post-freeze phase: mark / index starts)
+    estimate_coverage_start_us: int | None = None  # the D_cov the spec's estimate assumes (funding pages of a spec-mode dry run)
+    limits: dict | None = None  # per-stream page sizes (spec mode: the fetch_plan pages); otherwise `limit`
+    spec_info: dict | None = None  # path, sha256, spec_id, dataset_id, status and phase of the G5 spec driving the run
+    funding_receipt: dict | None = None  # path, sha256 and coverage of the sealed receipt (post-freeze phase)
     instruments_file: str = ""
     snapshot: dict | None = None
     echo: bool = True
@@ -485,20 +581,27 @@ class FetchConfig:
 
     def limit_for(self, stream: str) -> int:
         spec = STREAMS[stream]
-        wanted = spec.limit_default if self.limit is None else int(self.limit)
+        if self.limits and stream in self.limits:
+            wanted = int(self.limits[stream])
+        else:
+            wanted = spec.limit_default if self.limit is None else int(self.limit)
         return max(1, min(wanted, spec.limit_max))
+
+    @property
+    def spec_mode(self) -> bool:
+        return self.eligibility_days is not None
 
 
 def plan(cfg: FetchConfig) -> dict:
     """The dry run: every first request, the page estimates, the request total and the minimal duration at the limits.
     Opens no connection and writes nothing."""
-    jobs = jobs_for(cfg.instruments, cfg.streams, cfg.start)
+    jobs = jobs_for(cfg.instruments, cfg.streams, cfg.start, cfg.eligibility_days, cfg.coverage_start_us)
     limiters = {name: RateLimiter(spec.rate_requests, spec.rate_window_s, cfg.rate_scale) for name, spec in STREAMS.items()}
     requests: dict[str, int] = {name: 0 for name in STREAMS}
     items = []
     for job in jobs:
         limit = cfg.limit_for(job.stream)
-        pages = estimate_pages(job, limit)
+        pages = estimate_pages(job, limit, walk_reaches_start=cfg.spec_mode, funding_from_us=cfg.estimate_coverage_start_us if cfg.spec_mode else None)
         requests[job.stream] += pages
         items.append({"inst_id": job.inst_id, "stream": job.stream, "request_inst_id": job.request_inst_id, "start": tape.iso_utc(job.start_us), "end_exclusive": END_EXCLUSIVE,
                       "first_url": build_url(cfg.host, STREAMS[job.stream], job.request_inst_id, END_EXCLUSIVE_MS, limit), "limit": limit, "estimated_pages": pages})
@@ -508,7 +611,11 @@ def plan(cfg: FetchConfig) -> dict:
             "instruments": [row["instId"] for row in cfg.instruments], "instruments_file": cfg.instruments_file or None, "snapshot": cfg.snapshot, "jobs": items,
             "requests_estimated": requests, "requests_total": sum(requests.values()),
             "min_duration_s_by_stream": duration, "min_duration_s_sequential": math.fsum(duration.values()), "generated_at": tape.iso_now(),
-            "note": "estimate assuming the server holds the whole window from each listTime; retries not included; the real run caps every request with --max-requests"}
+            "mode": "sealed" if cfg.sealed else "values", "inst_ids_sha256": cfg.inst_ids_sha256 or None, "spec": cfg.spec_info, "eligibility_days": cfg.eligibility_days,
+            "coverage_start": tape.iso_utc(int(cfg.coverage_start_us)) if cfg.coverage_start_us is not None else None,
+            "estimate_coverage_start": tape.iso_utc(int(cfg.estimate_coverage_start_us)) if cfg.estimate_coverage_start_us is not None else None,
+            "funding_receipt": cfg.funding_receipt,
+            "note": "estimate assuming the server holds the whole window from each start; retries not included; the real run caps every request with --max-requests"}
 
 
 def _plan_signature(document: dict) -> list[tuple]:
@@ -529,6 +636,12 @@ def check_plan(cfg: FetchConfig, plan_path: Path, max_requests: int) -> tuple[di
         raise SystemExit(f"plan {plan_path}: end_exclusive {document.get('end_exclusive')!r} differs from the constant {END_EXCLUSIVE}")
     if document.get("host") != xc.resolve_rest(cfg.host):
         raise SystemExit(f"plan {plan_path}: host {document.get('host')!r} differs from {xc.resolve_rest(cfg.host)!r}")
+    if document.get("mode", "values") != ("sealed" if cfg.sealed else "values"):
+        raise SystemExit(f"plan {plan_path}: mode {document.get('mode', 'values')!r} differs from this configuration's")
+    if (document.get("spec") or {}).get("sha256") != (cfg.spec_info or {}).get("sha256") or (document.get("spec") or {}).get("phase") != (cfg.spec_info or {}).get("phase"):
+        raise SystemExit(f"plan {plan_path}: made for another spec or phase than this configuration's")
+    if (document.get("inst_ids_sha256") or None) != (cfg.inst_ids_sha256 or None):
+        raise SystemExit(f"plan {plan_path}: its instrument list (inst_ids_sha256) differs from this configuration's")
     expected = plan(cfg)
     if _plan_signature(document) != _plan_signature(expected):
         raise SystemExit(f"plan {plan_path}: its jobs differ from this configuration's (re-run the dry run with the same options)")
@@ -555,21 +668,31 @@ class Fetcher:
             raise ValueError("the global host is outside the owner's EEA licence: a real fetch there needs host_reason")
         if not (0.0 < cfg.rate_scale <= 1.0):
             raise ValueError(f"rate_scale must be in (0, 1], got {cfg.rate_scale}")
+        if "funding_hist" in cfg.streams and not cfg.sealed:
+            raise ValueError("the funding history is fetched in sealed mode only (LP-G5 P-G5-3): its per-instrument rows and pages would reveal the 2 h / 1 h escalations")
+        if cfg.sealed and tuple(cfg.streams) != SEALED_STREAMS:
+            raise ValueError(f"a sealed run fetches {SEALED_STREAMS} only, not {tuple(cfg.streams)}")
         self.cfg = cfg
         self.client = client
         self.sleep = sleep
         self.now_us = now_us
         self.out_dir = Path(cfg.out_dir)
+        self.store_dir = self.out_dir / SEALED_DIR_NAME if cfg.sealed else self.out_dir
         self.guard = EndGuard()
         self.limiters = {name: RateLimiter(spec.rate_requests, spec.rate_window_s, cfg.rate_scale, clock, sleep) for name, spec in STREAMS.items()}
         self.lock = tape.DirectoryLock(self.out_dir).acquire()
+        self.receipt: dict | None = None
         try:
-            self.journal = xc.HealthJournal(self.out_dir / JOURNAL_NAME, echo=cfg.echo)
+            journal = xc.HealthJournal(self.out_dir / JOURNAL_NAME, echo=cfg.echo)
+            self.journal = SealedJournal(journal) if cfg.sealed else journal
             source = {"rest": xc.resolve_rest(cfg.host), "streams": list(cfg.streams), "end_exclusive": END_EXCLUSIVE, "start_floor": cfg.start, "rate_scale": cfg.rate_scale,
                       "endpoints": {name: STREAMS[name].path for name in cfg.streams}, "decision_ref": cfg.decision_ref, "plan_sha256": cfg.plan_sha256,
                       "max_requests": int(cfg.max_requests), "host_reason": cfg.host_reason or None, "inst_ids_source": cfg.inst_ids_source or None,
+                      "inst_ids_sha256": cfg.inst_ids_sha256 or None, "mode": "sealed" if cfg.sealed else "values", "spec": cfg.spec_info,
+                      "dataset_id": (cfg.spec_info or {}).get("dataset_id"), "eligibility_days": cfg.eligibility_days,
+                      "coverage_start": tape.iso_utc(int(cfg.coverage_start_us)) if cfg.coverage_start_us is not None else None, "funding_receipt": cfg.funding_receipt,
                       "instruments_file": cfg.instruments_file, "instruments_snapshot": cfg.snapshot}
-            self.store = tape.TapeStore(self.out_dir, "values", source=source, not_before=None, kind=MANIFEST_KIND)
+            self.store = tape.TapeStore(self.store_dir, "values", source=source, not_before=None, kind=MANIFEST_KIND)
         except Exception:
             self.lock.release()
             raise
@@ -610,7 +733,8 @@ class Fetcher:
     def _defaults(job: Job) -> dict:
         return {"inst_id": job.inst_id, "stream": job.stream, "request_inst_id": job.request_inst_id, "start_us": int(job.start_us), "cursor_after_ms": END_EXCLUSIVE_MS,
                 "pages": 0, "rows": 0, "rejected_at_or_after_end": 0, "dropped_before_start": 0, "skipped_records": 0, "unconfirmed_rows": 0, "oldest_ts_us": None,
-                "newest_ts_us": None, "complete": False, "end_reason": None, "coverage_start_us": None, "truncated": None, "forced": 0, "errors": []}
+                "second_oldest_ts_us": None, "newest_ts_us": None, "complete": False, "end_reason": None, "coverage_start_us": None, "d_cov_start_us": None, "truncated": None,
+                "forced": 0, "errors": []}
 
     def state_of(self, job: Job) -> dict:
         state = self.states.setdefault(job.key, self._defaults(job))
@@ -679,7 +803,7 @@ class Fetcher:
     def _end(self, job: Job, state: dict, end_reason: str, **fields) -> None:
         reason = end_reason
         state["end_reason"] = reason
-        if reason in ("reached_start", "server_empty_before_start"):
+        if reason in COMPLETE_REASONS:
             state["complete"] = True
             if reason == "reached_start":
                 state["coverage_start_us"] = int(state["start_us"])
@@ -688,6 +812,10 @@ class Fetcher:
                 oldest = state.get("oldest_ts_us")
                 state["coverage_start_us"] = None if oldest is None else int(oldest)
                 state["truncated"] = oldest is None or int(oldest) > int(state["start_us"])
+            if STREAMS[job.stream].kind == "funding":
+                # D_cov (LP-G5 §4.4): the first settlement whose predecessor is also served.
+                second = state.get("second_oldest_ts_us")
+                state["d_cov_start_us"] = None if second is None else int(second)
         self.journal.log("INFO" if reason in ("reached_start", "server_empty_before_start", "paused") else "ERROR", "job_end", key=job.key, end_reason=reason, rows=state["rows"],
                          coverage_start=tape.iso_utc(int(state["coverage_start_us"])) if state.get("coverage_start_us") is not None else None, truncated=state.get("truncated"), **fields)
 
@@ -737,7 +865,7 @@ class Fetcher:
                         state["unconfirmed_rows"] = int(state["unconfirmed_rows"]) + 1  # stored; the evaluator drops and counts them
                     self.store.append(job.stream, job.inst_id, ts_us, row)
                     state["rows"] = int(state["rows"]) + 1
-                    state["oldest_ts_us"] = ts_us if state["oldest_ts_us"] is None else min(int(state["oldest_ts_us"]), ts_us)
+                    _track_two_oldest(state, ts_us)
                     state["newest_ts_us"] = ts_us if state["newest_ts_us"] is None else max(int(state["newest_ts_us"]), ts_us)
                 after_ms = oldest_us // 1000
                 state["cursor_after_ms"] = after_ms
@@ -758,10 +886,13 @@ class Fetcher:
         self._save()
         return state
 
+    def jobs(self) -> list[Job]:
+        return jobs_for(self.cfg.instruments, self.cfg.streams, self.cfg.start, self.cfg.eligibility_days, self.cfg.coverage_start_us)
+
     def run(self, force: bool = False) -> dict:
-        jobs = jobs_for(self.cfg.instruments, self.cfg.streams, self.cfg.start)
+        jobs = self.jobs()
         self.journal.log("INFO", "fetch_start", jobs=len(jobs), host=xc.resolve_rest(self.cfg.host), end_exclusive=END_EXCLUSIVE, decision_ref=self.cfg.decision_ref,
-                         plan_sha256=self.cfg.plan_sha256, max_requests=self.cfg.max_requests)
+                         plan_sha256=self.cfg.plan_sha256, max_requests=self.cfg.max_requests, mode="sealed" if self.cfg.sealed else "values")
         done = 0
         try:
             for job in jobs:
@@ -784,10 +915,51 @@ class Fetcher:
             self._save()
             self.journal.log("INFO", "fetch_end", jobs_run=done, requests=self.requests, retries=self.retries, rejected_at_or_after_end=self.guard.rejected,
                              budget_exhausted=self.budget_exhausted, waits={name: lim.waits for name, lim in self.limiters.items() if lim.waits})
+            if self.cfg.sealed:
+                self.receipt = self._write_receipt(jobs)
             self.lock.release()
         return self.summary()
 
+    # -- sealed mode
+
+    def sealed_totals(self, jobs: list[Job]) -> dict:
+        """The only numbers a sealed run shows (`SEALED_PRINTED`): jobs, complete jobs, jobs in error (planned jobs that did not
+        end complete) and the global D_cov (`SEALED_COVERAGE_RULE`)."""
+        states = [self.states.get(job.key) or {} for job in jobs]
+        complete = [s for s in states if s.get("complete") and s.get("end_reason") in COMPLETE_REASONS]
+        truncated = [int(s["d_cov_start_us"]) for s in complete if s.get("end_reason") == "server_empty_before_start" and s.get("d_cov_start_us") is not None]
+        every = [int(s["d_cov_start_us"]) for s in complete if s.get("d_cov_start_us") is not None]
+        coverage = max(truncated) if truncated else (min(every) if every else None)
+        return {"jobs_total": len(jobs), "jobs_complete": len(complete), "jobs_error": len(jobs) - len(complete),
+                "coverage_start_utc": tape.iso_utc(coverage) if coverage is not None else None, "coverage_start_us": coverage}
+
+    def _write_receipt(self, jobs: list[Job]) -> dict:
+        totals = self.sealed_totals(jobs)
+        manifest_path = self.store_dir / tape.MANIFEST_NAME
+        digest, _ = directory_digest(self.store_dir)
+        receipt = {"kind": RECEIPT_KIND, "generated_at": tape.iso_now(), "end_exclusive": END_EXCLUSIVE, "printed": list(SEALED_PRINTED), **totals,
+                   "coverage_rule": SEALED_COVERAGE_RULE, "sealed_dir": SEALED_DIR_NAME, "sealed_manifest": f"{SEALED_DIR_NAME}/{tape.MANIFEST_NAME}",
+                   "sealed_manifest_sha256": tape.sha256_of(manifest_path), "sealed_files_digest": digest, "decision_ref": self.cfg.decision_ref,
+                   "plan_sha256": self.cfg.plan_sha256, "inst_ids_sha256": self.cfg.inst_ids_sha256 or None, "max_requests": int(self.cfg.max_requests),
+                   "spec": self.cfg.spec_info, "register_status": "unread",
+                   "note": "sealed (LP-G5 P-G5-3): the per-instrument manifest is opened by no agent before the evaluator runs; this receipt carries global totals only"}
+        path = self.out_dir / SEALED_RECEIPT_NAME
+        tape.atomic_write_text(path, json.dumps(receipt, indent=1, sort_keys=True) + "\n")
+        receipt["receipt_sha256"] = tape.sha256_of(path)
+        self.journal.log("INFO", "sealed_end", **{k: totals[k] for k in SEALED_PRINTED}, receipt_sha256=receipt["receipt_sha256"],
+                         sealed_manifest_sha256=receipt["sealed_manifest_sha256"], budget_exhausted=self.budget_exhausted)
+        return receipt
+
+    @property
+    def ok(self) -> bool:
+        states = list(self.states.values())
+        return not self.budget_exhausted and not any(s.get("errors") for s in states)
+
     def summary(self) -> dict:
+        if self.cfg.sealed:
+            receipt = self.receipt or {"kind": RECEIPT_KIND, **self.sealed_totals(self.jobs())}
+            return {**{k: receipt.get(k) for k in SEALED_PRINTED}, "mode": "sealed", "receipt": str(self.out_dir / SEALED_RECEIPT_NAME), "receipt_sha256": receipt.get("receipt_sha256"),
+                    "sealed_manifest_sha256": receipt.get("sealed_manifest_sha256"), "sealed_files_digest": receipt.get("sealed_files_digest")}
         states = list(self.states.values())
         reasons: dict[str, int] = {}
         for s in states:
@@ -797,6 +969,44 @@ class Fetcher:
                 "rejected_at_or_after_end": self.guard.rejected, "errors": sum(len(s.get("errors", [])) for s in states), "end_reasons": reasons,
                 "truncated": sorted(k for k, s in self.states.items() if s.get("truncated")), "skipped_records": sum(int(s.get("skipped_records", 0)) for s in states),
                 "budget_exhausted": self.budget_exhausted, "files_finalized": len(self.store.manifest.get("files", {}))}
+
+
+def _track_two_oldest(state: dict, ts_us: int) -> None:
+    """Keep the two oldest distinct market timestamps stored by a job (the second one starts D_cov for the funding history)."""
+    oldest, second = state.get("oldest_ts_us"), state.get("second_oldest_ts_us")
+    if oldest is None or ts_us < int(oldest):
+        state["second_oldest_ts_us"] = None if oldest is None else int(oldest)
+        state["oldest_ts_us"] = int(ts_us)
+    elif ts_us != int(oldest) and (second is None or ts_us < int(second)):
+        state["second_oldest_ts_us"] = int(ts_us)
+
+
+class SealedJournal:
+    """The journal of a sealed run: only the events of `SEALED_JOURNAL`, with their allowed fields (nothing per instrument);
+    every other event is dropped and counted (`suppressed`)."""
+
+    def __init__(self, journal: xc.HealthJournal) -> None:
+        self.journal = journal
+        self.suppressed = 0
+
+    def log(self, level: str, event: str, **fields) -> str | None:
+        allowed = SEALED_JOURNAL.get(event)
+        if allowed is None:
+            self.suppressed += 1
+            return None
+        return self.journal.log(level, event, **{k: v for k, v in fields.items() if k in allowed})
+
+
+def read_receipt(path: Path) -> tuple[dict, str]:
+    """The public receipt of a sealed funding fetch and its sha256 (`--funding-receipt`, post-freeze phase)."""
+    data = Path(path).read_bytes()
+    try:
+        document = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise SystemExit(f"receipt {path}: unreadable ({error})") from None
+    if not isinstance(document, dict) or document.get("kind") != RECEIPT_KIND or document.get("end_exclusive") != END_EXCLUSIVE:
+        raise SystemExit(f"receipt {path}: not a {RECEIPT_KIND} document for END_EXCLUSIVE {END_EXCLUSIVE}")
+    return document, sha256_bytes(data)
 
 
 # ----------------------------------------------------------------------------- command line
@@ -814,7 +1024,10 @@ def add_parser(sub) -> None:
     parser.add_argument("--max-instruments", type=int, default=None, help="dry run only: truncate the selection")
     parser.add_argument("--host", default=DEFAULT_HOST, help="eea | global | https:// URL (default the EEA REST host; global needs --host-reason for a real run)")
     parser.add_argument("--host-reason", default="", help="written reason for a non-EEA host (recorded)")
-    parser.add_argument("--streams", default=",".join(STREAMS), help=f"comma-separated subset of {','.join(STREAMS)}")
+    parser.add_argument("--streams", default="", help=f"comma-separated subset of {','.join(STREAMS)} (default: every stream; with --spec, the streams of the phase)")
+    parser.add_argument("--spec", default="", help="the G5 machine spec (g5-spec/2; mandatory for a real run): streams, pages, starts, sealed mode and instruments come from its fetch_plan")
+    parser.add_argument("--phase", choices=tuple(PHASES), default=None, help="pre_freeze (funding history, sealed) or post_freeze (candles, mark, index); with --spec")
+    parser.add_argument("--funding-receipt", default="", help="post_freeze: the receipt of the sealed funding fetch (its coverage_start_utc is D_cov)")
     parser.add_argument("--limit", type=int, default=None, help="rows per page (default: 100 for the candles, 400 for the funding history; capped at each endpoint's documented maximum)")
     parser.add_argument("--start", default=DEFAULT_START, help=f"global floor (ISO UTC); each instrument starts at max(floor, listTime). There is no --end: {END_EXCLUSIVE} is a constant")
     parser.add_argument("--rate-scale", type=float, default=0.8, help="fraction of the documented rate limits used (0 < x <= 1)")
@@ -837,11 +1050,57 @@ def _inst_ids(args: argparse.Namespace) -> tuple[list[str] | None, str]:
         ids, digest = read_inst_ids_file(Path(args.inst_ids_file))
         return ids, f"file {args.inst_ids_file} sha256={digest}"
     ids = [s for s in args.inst_ids.split(",") if s]
-    return (ids or None), (f"--inst-ids {','.join(ids)}" if ids else "")
+    return (ids or None), (f"--inst-ids sha256={inst_ids_digest(ids)}" if ids else "")
+
+
+def _spec_settings(args: argparse.Namespace, rows: list[dict], inst_ids: list[str] | None) -> dict:
+    """The settings a G5 spec imposes on the fetch (`fetch_plan`, universe, eligibility): read by the strict parser of `g5_eval`
+    (a DRAFT spec is accepted: the pre-freeze funding fetch happens before the freeze), checked against the instruments file."""
+    from . import g5_eval  # lazy: g5_eval imports this module
+
+    if args.phase is None:
+        raise SystemExit("--spec needs --phase pre_freeze|post_freeze")
+    try:
+        spec, spec_sha = g5_eval.load_spec(Path(args.spec))
+    except g5_eval.SpecError as error:
+        raise SystemExit(f"spec error: {error}") from None
+    if spec.source != "history" or spec.fetch_plan is None:
+        raise SystemExit("the spec has no history fetch plan (source must be history)")
+    plan_spec = spec.fetch_plan
+    if xc.resolve_rest(args.host) != plan_spec["host"]:
+        raise SystemExit(f"--host {args.host} differs from the spec's fetch_plan.host {plan_spec['host']}")
+    universe = {i.inst_id: i for i in spec.universe}
+    selected = {str(r["instId"]): r for r in rows}
+    if inst_ids is None or sorted(inst_ids) != sorted(universe):
+        raise SystemExit(f"the instruments of a G5 fetch are the spec's universe.analysed ({len(universe)}), exactly; got {len(inst_ids or [])}")
+    for inst, meta in universe.items():
+        row = selected.get(inst)
+        if row is None or xc._i(row.get("listTime"), 0) * 1000 != meta.list_time_us or index_id_of(row) != meta.index_id:
+            raise SystemExit(f"{inst}: the instruments file disagrees with the spec (listTime / uly) — mismatch_with_snapshot: refuse_run")
+    streams = PHASES[args.phase]
+    given = tuple(s for s in args.streams.split(",") if s)
+    if given and given != streams:
+        raise SystemExit(f"the {args.phase} phase fetches {','.join(streams)} (spec fetch_plan), not {','.join(given)}")
+    limits = {name: int(block["page"]) for name, block in plan_spec["post_freeze"].items()}
+    limits["funding_hist"] = STREAMS["funding_hist"].limit_max
+    coverage, receipt_info = None, None
+    if args.phase == "post_freeze":
+        if not args.funding_receipt:
+            raise SystemExit("the post_freeze phase needs --funding-receipt (the receipt of the sealed funding fetch: D_cov)")
+        receipt, receipt_sha = read_receipt(Path(args.funding_receipt))
+        if receipt.get("coverage_start_us") is None:
+            raise SystemExit(f"receipt {args.funding_receipt}: no coverage_start (D_cov unknown): mark / index have no start")
+        coverage = int(receipt["coverage_start_us"])
+        receipt_info = {"path": str(args.funding_receipt), "sha256": receipt_sha, "coverage_start_utc": receipt.get("coverage_start_utc")}
+    elif args.funding_receipt:
+        raise SystemExit("--funding-receipt belongs to the post_freeze phase")
+    return {"streams": streams, "sealed": args.phase == "pre_freeze", "eligibility_days": spec.eligibility_days, "coverage_start_us": coverage,
+            "estimate_coverage_start_us": plan_spec["estimate_coverage_start_us"], "limits": limits, "funding_receipt": receipt_info,
+            "spec_info": {"path": str(args.spec), "sha256": spec_sha, "spec_id": spec.spec_id, "status": spec.status, "dataset_id": spec.dataset_id, "phase": args.phase}}
 
 
 def config_from_args(args: argparse.Namespace) -> FetchConfig:
-    streams = tuple(s for s in args.streams.split(",") if s)
+    streams = tuple(s for s in args.streams.split(",") if s) or tuple(STREAMS)
     for stream in streams:
         if stream not in STREAMS:
             raise SystemExit(f"unknown stream {stream}; choose among {','.join(STREAMS)}")
@@ -853,11 +1112,19 @@ def config_from_args(args: argparse.Namespace) -> FetchConfig:
     rows = load_instruments(Path(args.instruments_file), inst_ids, args.family, only_live=not args.include_not_live, max_instruments=args.max_instruments, rule_type=args.rule_type or None)
     if not rows:
         raise SystemExit(f"no instrument selected from {args.instruments_file} (family {args.family})")
+    settings: dict = {}
+    if args.spec:
+        if args.max_instruments is not None:
+            raise SystemExit("--max-instruments truncates the spec's universe: refused with --spec")
+        settings = _spec_settings(args, rows, inst_ids)
+        streams = settings.pop("streams")
+    elif args.phase is not None or args.funding_receipt:
+        raise SystemExit("--phase and --funding-receipt need --spec")
     return FetchConfig(out_dir=Path(args.out), instruments=rows, host=args.host, streams=streams, limit=args.limit, start=args.start, rate_scale=args.rate_scale,
                        checkpoint_every_pages=args.checkpoint_every_pages, max_pages_per_job=args.max_pages, max_requests=args.max_requests, decision_ref=args.decision_ref,
-                       host_reason=args.host_reason, inst_ids_source=inst_ids_source,
+                       host_reason=args.host_reason, inst_ids_source=inst_ids_source, inst_ids_sha256=inst_ids_digest(inst_ids) if inst_ids else "",
                        instruments_file=f"{args.instruments_file} sha256={tape.sha256_of(Path(args.instruments_file))}", snapshot=snapshot_info(Path(args.instruments_file)),
-                       echo=not args.quiet, argv=list(sys.argv[1:]))
+                       echo=not args.quiet, argv=list(sys.argv[1:]), **settings)
 
 
 def _refuse(reason: str, hint: str) -> int:
@@ -878,6 +1145,8 @@ def command_fetch(args: argparse.Namespace, client_factory: Callable[[], object]
     # A real run: every refusal happens here, before any client exists (no connection is ever opened by a refused run).
     if not cfg.decision_ref.strip():
         return _refuse("decision_ref_missing", "pass --decision-ref TEXT (the owner's written confirmation of the read and its scale, P-G5-1) or --dry-run")
+    if not cfg.spec_info:
+        return _refuse("spec_missing", "a real run is driven by the G5 spec: --spec FILE --phase pre_freeze|post_freeze (streams, starts, sealed mode, instruments)")
     if not cfg.inst_ids_source:
         return _refuse("inst_ids_missing", "a real run names its instruments: --inst-ids A,B or --inst-ids-file F (the default 'every instrument of the file' is for the dry run only)")
     if args.max_instruments is not None:
@@ -900,4 +1169,4 @@ def command_fetch(args: argparse.Namespace, client_factory: Callable[[], object]
         return 3
     summary = fetcher.run(force=bool(args.force))
     print(json.dumps(summary, sort_keys=True))
-    return 0 if summary["errors"] == 0 and not summary["budget_exhausted"] else 1
+    return 0 if fetcher.ok else 1

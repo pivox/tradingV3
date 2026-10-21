@@ -1,0 +1,538 @@
+{
+  "spec_id": "LP-G5-GATE2-2026",
+  "spec_schema": "g5-spec/2",
+  "spec_version": "0.1.0-draft",
+  "status": "DRAFT_NOT_FROZEN",
+  "protocol": "docs/handbook/research/LP-G5-DRAFT-PREREGISTRATION.md",
+  "protocol_sections": "section 10 (Gate 2), section 5.5 (simulated scalp), section 8 (inscription), Annex B (this file)",
+  "note": "Spec machine du G5 Gate 2 (prospectif, confirmation). Gele EN MEME TEMPS que le spec Gate 1 (piege 7) : memes types, classifieur, seuils, signes, fenetres, controles, unite et criteres ; seules changent la source (capture), l'execution (simulee sur carnet reel, lp_sim) et les calendriers (2026-11 -> 2027-04). Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee ; toute valeur null ou owner_decision_pending interdit le statut FROZEN. Le sha256 de la version FROZEN fait partie du gel (protocole section 13).",
+
+  "frozen_with": {
+    "spec": "python-orchestrator/scripts/research_lp/specs/g5_gate1_spec.json",
+    "spec_id": "LP-G5-GATE1-2026",
+    "rule": "both specs are frozen in the same freeze line (protocol section 13 point 5) ; a Gate 2 spec frozen after any Gate 1 reading is refused"
+  },
+
+  "source": "capture",
+  "dataset_id": "okx-xperp-prospective-G5",
+  "capture_dataset_id": "okx-xperp-capture-2026-11-02",
+  "end_exclusive_utc": "2026-10-14T00:00:00Z",
+  "quarantine_floor_utc": "2026-11-02T00:00:00Z",
+  "quarantine_rule": "nothing timestamped in [end_exclusive_utc ; quarantine_floor_utc) is ever read ; the Gate 2 reads capture rows with ts >= quarantine_floor_utc only (xperp_capture.QUARANTINE_FLOOR and g5_fetch.END_EXCLUSIVE, module constants, checked for equality)",
+  "window": {
+    "start": "2026-11-02",
+    "start_rule": "T0 = first 00:00 UTC >= max(quarantine_floor_utc, freeze of this spec, end of P3) ; written in freeze_fill.t0_utc ; days captured before T0 are never scored",
+    "lookback_before_t0": "allowed for the classifier only (the 480 min of mark and index before t_arm), never before quarantine_floor_utc, never scored",
+    "instant_in_window_if": "the whole footprint of the instant lies in [T0 ; end_exclusive of its type)",
+    "end_exclusive": "2027-04-01",
+    "end_rule": "GATES 1.3 (end of scoring <= 2027-03-31) and D1 (capture until 2027-03-31 at the latest) ; per type: events[].window_end ; T05 per owner decision P-G5-10 (i)",
+    "data_gap_extension": {
+      "rule": "one day added per unusable day (quality.unusable_instrument_day), never on a result",
+      "max_days": 14,
+      "beyond_2027_03_31": "only under the same two decisions as P-G5-10 (i) option b ; otherwise unusable days are not replaced and are counted"
+    }
+  },
+
+  "requires": [
+    "spec_schema_g5_v2_strict_keys",
+    "status_frozen_required_for_market_data",
+    "owner_decisions_resolved_required_for_freeze",
+    "end_exclusive_constant_check",
+    "capture_source_quarantine_floor_check",
+    "universe_from_spec_checked_against_snapshot",
+    "eligibility_list_time_plus_days",
+    "price_source_last_only",
+    "price_last_print_per_minute",
+    "key_minute_without_print_exclusion",
+    "unit_instant_equal_weight",
+    "generator_funding_settlements_interval_filter",
+    "classifier_premium_wavg_at_arm",
+    "classifier_mark_and_index_from_capture_or_index_history",
+    "classifier_validation_confusion_3x3",
+    "generator_local_time_exclude_dates",
+    "controls_minute_of_hour_all_admissible",
+    "exclusion_by_footprint_with_margin",
+    "sessions_local_time_dst",
+    "macro_filter_new_york_time",
+    "costs_by_execution_role",
+    "gate2_sim_maker_post_only_touch",
+    "gate2_sim_taker_entry_opposite_touch_slippage",
+    "gate2_sim_passive_exit_taker_remainder",
+    "gate2_funding_fill_grace_crossing",
+    "gate2_classifier_validation_funding_channel",
+    "gate2_stress_add_on_for_measured_terms",
+    "gate2_window_end_per_type",
+    "gate2_inscription_from_gate1_result",
+    "gate2_quality_unusable_instrument_day",
+    "no_information_after_decision",
+    "verdict_c1_c7_precedence",
+    "holm_local_and_programme_fields",
+    "economic_reading_days_per_year",
+    "bootstrap_day_blocks",
+    "descriptive_reports_g5_v2"
+  ],
+
+  "owner_decisions": {
+    "rule": "every value owner_decision_pending is replaced by the owner's dated choice (text copied in freeze_fill and in the register journal) before status FROZEN ; the evaluator refuses a FROZEN spec that still contains owner_decision_pending anywhere",
+    "pending": [
+      {"id": "P-G5-10 (i)", "subject": "end of the T05 Gate 2 window", "path": "events[T05_us_open].window_end", "status": "owner_decision_pending"},
+      {"id": "P-G5-10 (ii)", "subject": "source of the per-minute index for the classifier P_hat", "path": "classifier_index_source", "status": "owner_decision_pending"}
+    ],
+    "related_not_p_g5_10": [
+      {"id": "P-S3 (track S, LP-S-CSFUND-K1C-AMENDMENT-DRAFT.md section 4.3)", "subject": "BTC and ETH in the G5 universe", "path": "universe.p_s3_track_s", "status": "owner_decision_pending"}
+    ]
+  },
+
+  "freeze_fill": {
+    "t0_utc": null,
+    "gate1_spec_sha256": null,
+    "instruments_snapshot_path": null,
+    "instruments_snapshot_sha256": null,
+    "p3_counts_selection_sha256": null,
+    "calendars_verified_utc": null,
+    "code_digest_sha256": null,
+    "decision_ref_d1_capture": null,
+    "decision_ref_p_g5_10_i": null,
+    "decision_ref_p_g5_10_ii": null,
+    "decision_ref_p_s3": null,
+    "t05_end_inclusive_utc": null,
+    "rule": "toutes ces valeurs sont non nulles dans la version FROZEN ; l'evaluateur refuse un spec FROZEN qui en contient une nulle"
+  },
+
+  "universe": {
+    "rule": "G2 section 3: metadata snapshot public/instruments (instType FUTURES, host EEE) taken at freeze (>= 2026-11-01, hashed) ; filters G2 3.2 (ruleType xperp, state live, id <BASE>-USD_UM_XPERP-<YYMMDD>, crypto underlying, listTime <= T0 - 30 d, expTime >= T0 + 365 d, ctType) ; ceiling N <= 40 by P3 message counts (selection, G2 3.4) if the collector cannot hold every instrument ; no volume, no market value",
+    "always_included": "BTC-USD_UM_XPERP-<...> and ETH-USD_UM_XPERP-<...> (G2 3.5), subject to universe.p_s3_track_s",
+    "global_swaps": "BTC-USDT-SWAP and ETH-USDT-SWAP are recorded by the capture for G2 C0 ; outside the G5 universe",
+    "liquidity_rule_g2_3_3": "not applied: protocol 10.1 names metadata, P3 counts and listTime + 30 d only ; to confirm at freeze",
+    "analysed": null,
+    "analysed_rule": "list of {inst_id, index_id, list_time_utc, ct_val, tick_sz, lot_sz, min_sz} copied from the freeze snapshot ; index_id = uly",
+    "p_s3_track_s": {
+      "status": "owner_decision_pending",
+      "decision": "P-S3: (alpha, recommended by the track S) BTC-USD_UM_XPERP-310404 and ETH-USD_UM_XPERP-310404 removed from the G5 Gate 1 universe and outputs ; (beta) CS-FUND 0.4 amended (G5 reading declared as exposure E9)",
+      "gate2_scope": "P-S3 names the Gate 1 only ; whether option alpha also removes BTC and ETH from the Gate 2 (their capture between 2026-11-02 and the track S T0, read at the single Gate 2 evaluation) is not decided ; to be written with P-S3",
+      "choice": "owner_decision_pending"
+    },
+    "mismatch_with_snapshot": "refuse_run"
+  },
+
+  "eligibility": {"days_after_list_time": 30, "reference": "footprint_start", "applies_to": ["events", "controls"], "count_field": "excluded_ineligible"},
+
+  "price": {
+    "source": "last",
+    "series": "capture trades layout: price of the last print with ts in (t - 60 s ; t]",
+    "boundary_convention": "c(t) = last print of the minute ending at t (Gate 1: close of the 1m candle opening at t - 60 s)",
+    "mixing_sources": "refused",
+    "mark_and_index_use": "classifier_premium_proxy_only",
+    "book_use": "simulated execution only (entry, fills, exit) ; never a reference price",
+    "missing_key_price": "exclude_instrument_instant_and_count",
+    "forward_fill": "none",
+    "max_missing_share_in_event_footprints_per_instrument": 0.20,
+    "above_max_missing_share": "exclude_instrument_from_type_and_count"
+  },
+
+  "frozen_candle": {
+    "rule": "exclude_instrument_instant_if_no_print_in_any_key_minute",
+    "gate1_equivalent": "vol = 0 on a key candle (a minute without any print is the capture analogue of a frozen candle)",
+    "key_candles": "events[].key_candles_end_min (minute bars built from prints)",
+    "count_field": "excluded_no_print",
+    "report": "share_by_instrument"
+  },
+
+  "unit": {
+    "kind": "instant",
+    "instant": "minute-aligned UTC timestamp",
+    "instrument_weight": "equal_within_instant",
+    "instant_weight": "equal",
+    "min_instruments_per_instant": 1,
+    "n_definition": "number of unique event instants with >= min_instruments_per_instant retained instruments",
+    "report": ["instruments_per_instant_distribution", "stratum_min_instruments_3"]
+  },
+
+  "statistics": {
+    "measure": "sim_net_bp",
+    "measure_definition": "simulated round trip on the captured book (execution_sim): entry, passive exit then taker remainder, fees at the role, slippage on taker legs, funding of the settlements crossed ; adverse selection and spread paid are inside the simulated prices",
+    "descriptive_measures": ["net_bp (Gate 1 construction on last prints with the Gate 1 design costs)", "r_bp"],
+    "difference": "D = mean over event instants - mean over control instants",
+    "alpha_one_sided": 0.10,
+    "threshold_bp": 10.0,
+    "bootstrap": {"kind": "day_block", "block_days": 1, "resamples": 10000, "seed": 20261102, "events_and_controls_jointly": true,
+                  "lb_quantile": 0.10, "ub_quantile": 0.90, "p_value": "share of resamples with D* <= 0"},
+    "descriptive_sensitivity": {"block_days": 7}
+  },
+
+  "power_floor": {"min_instants": 100, "min_days": 30, "below_floor": "G5_GATE2_NOT_INFORMATIVE", "extension_on_result": false},
+
+  "costs": {
+    "maker_fee_bp": 2.0,
+    "taker_fee_bp": 5.0,
+    "adverse_selection": "measured_in_simulation (lp_sim fills on the real book ; protocol 10.2) ; no assumed term in sim_net_bp",
+    "taker_half_spread": "measured_in_simulation (taker legs at the opposite touch)",
+    "slippage_bp_per_taker_leg": 2.0,
+    "stress_multiplier_all_cost_terms": 1.5,
+    "stress_rule": "fees and slippage x 1.5 ; the measured terms are inside the simulated prices and cannot be multiplied there, so the stressed net also subtracts 0.5 x the Gate 1 design value of each measured term: 1.75 bp per filled maker leg (adverse selection 3.5 bp) and 1.5 bp per taker entry (half spread 3 bp)",
+    "stress_rule_status": "proposed by this draft (protocol 10.2 is silent on stressing measured terms ; the code of 2026-10-21 stresses fees and slippage only) ; to confirm at freeze ; never weaker than the Gate 1 stress on the assumed terms",
+    "design_values_gate1": {"adverse_selection_bp_per_maker_leg": 3.5, "taker_entry_half_spread_bp": 3.0, "slippage_bp_per_round_trip": 2.0, "use": "descriptive net_bp and stress add-on only"},
+    "g2_table_substitution": "none: the Gate 2 measures its own adverse selection (protocol 10.2)",
+    "funding": {
+      "source": "capture funding-rate channel: settled rate of each settlement (settFundingRate with settState settled, attributed to fundingTime) ; field semantics UNKNOWN, to verify on the documentation and the first capture before freeze",
+      "fallback": "GATES 5.1: REST public/funding-rate-history read after T0 only ; coverage by D1 to confirm at freeze",
+      "formula": "funding_bp = -side * sum(settled rates of the instrument's settlements T with first_fill - execution_sim.funding_fill_grace_min < T <= exit) * 1e4",
+      "unknown_rate": "observation excluded and counted",
+      "count_field": "funding_unknown",
+      "cap_stress": "descriptive_only"
+    },
+    "margin_opportunity_cost": "negligible_reported"
+  },
+
+  "execution_sim": {
+    "engine": "lp_sim primitives (g5_eval simulate_clock_scalp, (B) x and xxi)",
+    "entry_fill_rule": "touch",
+    "descriptive_fill_rules": ["through", "queue"],
+    "latency_ms": 250,
+    "stale_s": 10,
+    "stale_rule": "book older than stale_s at the decision: intention not placed, counted (as G2 section 5)",
+    "post_only": "an order that would cross the opposite touch at activation is cancelled and counted (crossed)",
+    "funding_fill_grace_min": 1,
+    "funding_fill_grace_rule": "a fill within 1 min after a settlement crosses it and pays (the actual fee assessment may take up to a minute ; protocol 5.1 and (B) xxi)",
+    "order_notional_usd": 100.0,
+    "size": "lp_sim.InstrumentSpec.size_for_notional with ct_val, lot_sz, min_sz of the freeze snapshot ; size 0 = skipped_size, counted",
+    "book_layout": "books5 (bbo-tbt when captured, G2 (B) vi)",
+    "rpi_bias": "declared bias to PASS while trades.source is not captured (G2 0.9)",
+    "band_rejected": "counted (maxPxLmtPct), not modelled",
+    "status_counts": ["filled", "unfilled", "stale", "crossed", "skipped_size", "funding_unknown", "no_exit_quote", "unavailable"]
+  },
+
+  "classifier_index_source": {
+    "decision": "P-G5-10 (ii)",
+    "status": "owner_decision_pending",
+    "choice": "owner_decision_pending",
+    "why": "the D1 capture carries no index channel (xperp_capture.CHANNELS = trades, books5, liquidation-orders, mark-price, funding-rate at 2026-10-21) ; P_hat needs idx(g) at every minute boundary of the 480-min lookback",
+    "options": {
+      "a_capture_index_tickers": {
+        "source": "public WS channel index-tickers (docs-v5 l.43897), instId = index_id (uly), captured from before T0",
+        "idx_minute": "last idxPx received in (g - 60 s ; g] ; none = minute missing",
+        "requires": ["new D1 decision (channel added to the capture ; tout canal ajoute est une nouvelle decision)", "code: index layout in tape.py and xperp_capture.py", "capture of the channel started >= 480 min before the first t_arm scored"]
+      },
+      "b_history_index_candles_after_window": {
+        "source": "GET /api/v5/market/history-index-candles (bar 1m, instId = index_id), fetched once after the end of the window",
+        "idx_minute": "close of the 1m index candle ending at g (Gate 1 convention)",
+        "requires": ["new reading decision (REST history read of the Gate 2 period ; D1 covers the capture and the Gate 1 history only)", "depth served for the whole window (from recent years ; UNKNOWN per X-Perp)", "fetch plan and max_requests (about 2 160 pages per index for 150 days)"]
+      }
+    },
+    "if_unresolved_or_unavailable": "T01_funding_8h = G5_GATE2_INCONCLUSIVE by construction (written in advance, protocol P-G5-10)",
+    "mark_minute": "last markPx of the capture mark-price channel in (g - 60 s ; g] ; none = minute missing",
+    "single_quantity": "premium_mark_index at both gates (CTO M2) ; the funding-rate channel field premium (official impact premium) is a descriptive comparison only"
+  },
+
+  "controls_common": {
+    "rule": "same classifier, sign rule, fill simulation, exclusions, costs and funding formula as the events of the type",
+    "candidates": "every hour of the type's control days at controls.minute_of_hour",
+    "selection": "all_admissible",
+    "random_draws": 0,
+    "admissible_if": "control footprint end <= exclusion start - margin_min or control footprint start >= exclusion end + margin_min, for every exclusion footprint",
+    "margin_min": 60,
+    "exclusions": [
+      "settlements of the instrument read in the capture funding layout (all intervals), footprint [s-5 ; s+15]",
+      "default settlement grid of the type (controls.default_settlement_grid_utc_hours), every day, footprint [s-5 ; s+15]",
+      "T05 event instants (generator of T05_us_open), footprint [h ; h+60], for every instrument",
+      "sessions (frozen list, local time, DST-aware)",
+      "macro releases (macro_filter, New York time)"
+    ],
+    "funding_at_controls": "computed; expected 0; any non-zero count reported as anomaly",
+    "audit_expected_utc": {
+      "rule": "calcul d'audit on the frozen lists ; NYSE weekday ; the rule is in local time, its UTC translation follows DST",
+      "us_winter_uk_winter_t0_to_2027_03_13": {"T01": "03 04 05 06 10 11 12 13 18 19 h (13 h out on CPI / Employment Situation days, 18 and 19 h out on FOMC days)", "T05": "05:30 09:30 17:30 (17:30 out on FOMC days)"},
+      "us_summer_uk_winter_2027_03_14_to_2027_03_27": {"T01": "03 04 05 06 10 11 12 18 22 h (12 h out on CPI / Employment Situation days, 18 h out on FOMC days)", "T05": "05:30 09:30 17:30 21:30 (17:30 out on FOMC days)"},
+      "us_summer_uk_summer_from_2027_03_28": {"T01": "03 04 05 10 11 12 18 22 h (as Gate 1)", "T05": "09:30 17:30 21:30 (as Gate 1)"}
+    }
+  },
+
+  "sessions": [
+    {"name": "us_cash_open", "tz": "America/New_York", "start": "09:30", "end": "09:30", "days": "nyse_trading_days"},
+    {"name": "us_cash_close", "tz": "America/New_York", "start": "16:00", "end": "16:00", "days": "nyse_trading_days"},
+    {"name": "london_xetra_open", "tz": "Europe/London", "start": "08:00", "end": "08:00", "days": "mon_fri"},
+    {"name": "hong_kong_open", "tz": "Asia/Hong_Kong", "start": "09:30", "end": "09:30", "days": "mon_fri"},
+    {"name": "tokyo_open", "tz": "Asia/Tokyo", "start": "09:00", "end": "09:00", "days": "mon_fri"},
+    {"name": "cme_cf_brr_window", "tz": "Europe/London", "start": "15:00", "end": "16:00", "days": "all", "verify_at_freeze": true},
+    {"name": "okx_dated_settlement_average", "tz": "UTC", "start": "07:30", "end": "08:00", "days": "fri"}
+  ],
+  "sessions_note": "liste identique au Gate 1 ; jours de semaine locaux ; feries locaux (UK, HK, JP) ignores ; demi-seances NYSE (fermeture anticipee de la cloture) UNKNOWN, a relever au gel (P-G5-5) ; en heure d'hiver, 08:00 UTC = photo de funding ET ouverture de Londres (composite, protocole 1.4, C7)",
+
+  "calendars": {
+    "tz": "America/New_York",
+    "covers": "2026-11-02 .. 2027-04-30 (every option of P-G5-10 (i) and the gap extension)",
+    "nyse_holidays": ["2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26"],
+    "cpi": ["2026-11-10", "2026-12-10"],
+    "employment_situation": [],
+    "fomc_statement": ["2026-12-09", "2027-01-27", "2027-03-17"],
+    "incomplete_at_draft": {
+      "cpi": "2027-01 .. 2027-04 to record (bls.gov schedule 2027)",
+      "employment_situation": "2026-11 .. 2027-04 to record (bls.gov schedules 2026 and 2027) ; never a first-Friday rule (piege 6)",
+      "fomc_statement": "2027 dates tentative on federalreserve.gov (red team 2026-10-21) ; to re-verify ; any meeting before 2027-04-30 to record",
+      "nyse_holidays": "2027-04 list to re-verify (none expected before 2027-04-30) ; NYSE half days to record",
+      "ten_am_et_releases": "descriptive stratum list (JOLTS, ISM) to record"
+    },
+    "incomplete_rule": "every list complete and calendars_verified_utc set before FROZEN ; the evaluator refuses a FROZEN spec whose incomplete_at_draft is not empty",
+    "dst": {"us_2026_end": "2026-11-01 (before T0)", "us_2027_start": "2027-03-14", "eu_uk_2027_start": "2027-03-28"},
+    "sources": ["nyse.com/markets/hours-calendars", "bls.gov/schedule/2026/home.htm and 2027", "federalreserve.gov FOMC calendar (2027 tentative)"],
+    "read_by": "a3-redteam 2026-10-21 (PERIODS.md l.335-336 ; protocol Annex C) ; to re-verify at freeze (P-G5-5)"
+  },
+
+  "macro_filter": {
+    "type": "T11_macro_filter",
+    "evaluate": false,
+    "tz": "America/New_York",
+    "releases": [
+      {"name": "cpi", "time": "08:30", "duration_min": 60, "dates_ref": "calendars.cpi"},
+      {"name": "employment_situation", "time": "08:30", "duration_min": 60, "dates_ref": "calendars.employment_situation"},
+      {"name": "fomc_statement", "time": "14:00", "duration_min": 90, "dates_ref": "calendars.fomc_statement"}
+    ],
+    "utc_note": "EST until 2027-03-13: CPI and Employment Situation 13:30 UTC, FOMC 19:00 UTC ; EDT from 2027-03-14: 12:30 and 18:00 UTC (protocol 10.2, quant m8)",
+    "use": "control exclusion (controls_common.exclusions) ; CPI and employment_situation dates also excluded from T05 events",
+    "ten_am_et_releases": "declared noise inside the T05 window (15:00 UTC in winter), not excluded ; descriptive stratum list frozen at P-G5-5"
+  },
+
+  "events": [
+    {
+      "type": "T01_funding_8h",
+      "decisive": true,
+      "primary": true,
+      "gate1_identity": "same as g5_gate1_spec.json events[T01_funding_8h]: classifier, thresholds, sign rule, footprint, arm_min, rest_until_min, return window, key candles, validation, controls, c7, criteria",
+      "execution_role": "maker_maker",
+      "expected_cost_bp": null,
+      "expected_cost_note": "measured: fees 4 bp if both legs maker (taker remainder: 7 bp plus slippage) ; adverse selection inside the simulated prices ; the Gate 1 design total 13 bp is kept for the descriptive net_bp",
+      "days_per_year": 365,
+      "window_rule": "spec_window",
+      "window_end": {"end_inclusive": "2027-03-31", "end_exclusive": "2027-04-01"},
+      "generator": {
+        "kind": "funding_settlements",
+        "stream": "capture funding layout (fundingTime and nextFundingTime per instrument)",
+        "require_realized_rate": true,
+        "realized_rate_definition": "settled rate of the settlement (costs.funding.source) ; never the predicted rate",
+        "interval_filter": {"previous_gap_h": 8, "next_gap_h": 8, "tolerance_min": 1, "unknown_neighbour": "exclude_and_count"},
+        "fallback_hours": "none"
+      },
+      "footprint_min": [-5, 15],
+      "footprint_note": "the simulated exit tail (h+15 to h+60) is not part of the footprint used by the control exclusion: same footprints as Gate 1 (protocol 7.1 gives the Gate 2 control hours on these footprints) ; declared",
+      "arm_min": -5,
+      "rest_until_min": 1,
+      "classifier": {
+        "kind": "premium_wavg",
+        "evaluated_at": "t_arm",
+        "applies_to": ["events", "controls"],
+        "premium_proxy": "pi(g) = (m(g) - idx(g)) / idx(g) at minute boundary g ; m = classifier_index_source.mark_minute ; idx = classifier_index_source (P-G5-10 ii)",
+        "field_name": "premium_mark_index",
+        "lookback_min": 480,
+        "weights": "k = 1..480, oldest = 1, boundary t_arm = 480 ; renormalised over present minutes",
+        "min_coverage_share": 0.90,
+        "long_if_ge": 0.0009,
+        "short_if_le": -0.0009,
+        "else": "exclude_and_count",
+        "threshold_origin": "|R| >= 4 bp <=> average premium >= +0.09 % or <= -0.09 % (OKX formula, I = 0.01 %, clamp 0.05 %, N = 8)"
+      },
+      "fill_sim": {
+        "kind": "lp_sim_post_only_touch",
+        "applies_to": ["events", "controls"],
+        "decided_at_min": -5,
+        "resting_until_min": 1,
+        "price": "own touch at the decision (bid if s = +1, ask if s = -1), rounded to tick_sz",
+        "rule": "execution_sim.entry_fill_rule",
+        "unfilled": "exclude_from_primary_and_count",
+        "fill_in_h_to_h_plus_1": "crosses the settlement and pays (execution_sim.funding_fill_grace_min)",
+        "report": "fill_rate_events_and_controls"
+      },
+      "entry": {"kind": "post_only_touch", "price": "own touch at h-5 plus latency"},
+      "exit": {"kind": "passive_then_taker", "passive_from_min": 15, "passive_until_min": 60, "price": "opposite touch from max(h+15, fill + latency)", "remainder": "taker at h+60"},
+      "return_window_min": [-5, 15],
+      "exit_until_min": 60,
+      "key_candles_end_min": [-5, 15],
+      "validation": {
+        "criterion": "C6",
+        "population": "raw T01 instrument-settlements (eligible, interval filter passed, settled rate present, classifier computable)",
+        "classifier_class": "+1 if P_hat(t_arm) >= 0.0009, -1 if <= -0.0009, 0 otherwise",
+        "rate_class": "+1 if settled rate >= 0.0004, -1 if <= -0.0004, 0 otherwise",
+        "rate_source": "costs.funding.source (funding-rate channel)",
+        "report": "3x3 matrix (classifier class x rate class), always printed",
+        "sensitivity": "share of rate class != 0 with classifier class == rate class",
+        "false_positive_rate": "share of rate class == 0 with classifier class != 0",
+        "sensitivity_min": 0.80,
+        "false_positive_rate_max": 0.20,
+        "min_denominator": 30,
+        "fail_or_not_computable": "G5_GATE2_INCONCLUSIVE"
+      },
+      "controls": {
+        "minute_of_hour": 0,
+        "days": "days on which the instrument has >= 1 raw T01 event (before classifier and fill)",
+        "within": "spec_window",
+        "default_settlement_grid_utc_hours": [0, 8, 16]
+      },
+      "c7": {"event_hour_utc": 16, "controls": "same_utc_days", "require_point_gt_bp": 0.0},
+      "criteria": ["C1", "C2", "C3", "C4", "C5", "C6", "C7"],
+      "inconclusive_if": ["classifier_index_source_unresolved_or_unavailable", "classifier_missing_instrument_day_share_gt_0_50", "C6_failed_or_not_computable"],
+      "audit_expected": {
+        "calendar_days_if_t0_2026_11_02": 150,
+        "raw_instants_upper_bound_if_t0_2026_11_02": 449,
+        "raw_instants_note": "3 settlements per day ; the 00:00 of T0 is lost (its footprint starts before T0) ; T0 = 2026-11-04: 443 ; T0 = 2026-11-05: 440",
+        "not_informative_expected_if_f_inst_below": 0.223
+      }
+    },
+    {
+      "type": "T05_us_open",
+      "decisive": true,
+      "primary": true,
+      "gate1_identity": "same as g5_gate1_spec.json events[T05_us_open]: generator in New York time, sign rule, footprint, arm_min, return window, key candles, controls, criteria",
+      "execution_role": "taker_maker",
+      "expected_cost_bp": null,
+      "expected_cost_note": "measured: taker entry 5 bp plus slippage 2 bp plus the half spread paid at the opposite touch ; exit maker 2 bp (taker remainder 5 bp plus 2 bp) ; the Gate 1 design total 15.5 bp is kept for the descriptive net_bp",
+      "days_per_year": 252,
+      "window_rule": "spec_window",
+      "window_end": {
+        "decision": "P-G5-10 (i)",
+        "status": "owner_decision_pending",
+        "choice": "owner_decision_pending",
+        "options": {
+          "a_end_2027_03_31": {
+            "end_inclusive": "2027-03-31",
+            "end_exclusive": "2027-04-01",
+            "nyse_days_if_t0_2026_11_02": 102,
+            "raw_instants_expected": "about 92 (102 NYSE days minus about 10 CPI and Employment Situation dates ; BLS dates 2026-11 .. 2027-03 partly to record)",
+            "consequence": "G5_GATE2_NOT_INFORMATIVE by construction (floor 100) ; the owner accepts it in writing",
+            "requires": []
+          },
+          "b_end_2027_04_12": {
+            "end_inclusive": "2027-04-12",
+            "end_exclusive": "2027-04-13",
+            "nyse_days_if_t0_2026_11_02": 110,
+            "raw_instants_expected": "about 98 to 99 (110 NYSE days minus 11 or 12 CPI and Employment Situation dates ; BLS 2027 schedule UNKNOWN) ; protocol 10.3 writes about 100",
+            "consequence": "likely below the floor by 1 or 2 instants: NOT_INFORMATIVE remains probable ; each NYSE day of T0 after 2026-11-02 removes one more instant (T0 = 2026-11-05: 107 NYSE days)",
+            "requires": ["GATES 1.3: written exception by the owner before 2027-03-31 (end of scoring after 2027-03-31)", "D1: capture extended beyond 2027-03-31 (new decision)"]
+          },
+          "c_end_by_calendar_rule": {
+            "rule": "end = the NYSE trading day on which the count of NYSE days from T0 outside the CPI and Employment Situation lists reaches 100, computed at freeze on the frozen and complete lists, written in freeze_fill.t05_end_inclusive_utc",
+            "expected_end": "about 2027-04-13 to 2027-04-15 for T0 = 2026-11-02 ; later if T0 is later",
+            "status": "proposed by this draft, not in the protocol text (protocol 10.3: an end fixed at freeze by the calendar is not an extension on a result)",
+            "consequence": "floor met on the calendar by construction (an instant is lost only if all its instruments are excluded)",
+            "requires": ["GATES 1.3: written exception by the owner before 2027-03-31", "D1: capture extended beyond 2027-03-31 (new decision)"]
+          }
+        }
+      },
+      "generator": {
+        "kind": "local_time",
+        "tz": "America/New_York",
+        "time": "09:30",
+        "days": "nyse_trading_days",
+        "exclude_dates_ref": ["calendars.cpi", "calendars.employment_situation"]
+      },
+      "utc_time_note": "14:30 UTC from T0 to 2027-03-12, 13:30 UTC from 2027-03-15 (defined in New York time ; piege 1)",
+      "footprint_min": [0, 60],
+      "footprint_note": "the simulated exit tail (h+60 to h+75) is not part of the footprint used by the control exclusion: same footprints as Gate 1 ; declared",
+      "sign": {"kind": "return_sign", "from_min": 0, "to_min": 5, "price": "last", "zero": "exclude_and_count"},
+      "arm_min": 5,
+      "entry": {"kind": "taker", "price": "opposite touch at h+5 plus latency", "slippage_bp": "costs.slippage_bp_per_taker_leg", "half_spread": "measured"},
+      "exit": {"kind": "passive_then_taker", "passive_from_min": 60, "passive_until_min": 75, "price": "opposite touch from h+60", "remainder": "taker at h+75"},
+      "return_window_min": [5, 60],
+      "exit_until_min": 75,
+      "key_candles_end_min": [0, 5, 60],
+      "controls": {
+        "minute_of_hour": 30,
+        "days": "days on which the instrument has a raw T05 event",
+        "within": "spec_window, up to the T05 window_end",
+        "default_settlement_grid_utc_hours": [0, 4, 8, 12, 16, 20]
+      },
+      "criteria": ["C1", "C2", "C3", "C4", "C5"],
+      "audit_expected": {"nyse_days_if_t0_2026_11_02": {"to_2027_03_31": 102, "to_2027_04_12": 110}, "nyse_days_if_t0_2026_11_05": {"to_2027_03_31": 99, "to_2027_04_12": 107}, "halves": "lower median of the distinct event days (as Gate 1)"}
+    }
+  ],
+
+  "verdict": {
+    "precedence": ["G5_GATE2_INCONCLUSIVE", "G5_GATE2_NOT_INFORMATIVE", "criteria_then_holm"],
+    "inconclusive_global": ["spec_sha256_mismatch", "code_digest_mismatch", "status_not_frozen", "freeze_fill_null", "owner_decision_pending_present", "gate1_result_sha256_mismatch", "capture_manifest_missing", "unusable_instrument_day_share_gt_0_20"],
+    "criteria": {
+      "C1": "D point >= threshold_bp and LB90(D) > 0 (measure statistics.measure)",
+      "C2": "mean event sim_net_bp (point, costs included) > 0",
+      "C3": "mean event sim_net_bp under costs.stress_rule (point) > 0",
+      "C4": "D point > 0 in each half ; halves = sorted distinct event days of the type cut at the lower median day (first half = days <= median) ; controls of the same days",
+      "C5": "LB90(D) > 0 after removing the ceil(0.05 n) event instants with the highest per-instant net ; controls unchanged ; same bootstrap seed and resamples",
+      "C6": "T01 only: validation of the classifier against the funding-rate channel (events[].validation)",
+      "C7": "T01 only: D point > 0 on the event instants at 16:00 UTC against the controls of the same UTC days"
+    },
+    "pass": "G5_GATE2_PASS(type) iff every criterion of the type holds and holm_local_confirmed(type)",
+    "fail": "G5_GATE2_FAIL(type) otherwise, once no inconclusive condition holds and the floor is met",
+    "fail_annotation": {"ub90_ge_threshold": "non poursuivi ; absence d'effet non demontree", "ub90_lt_threshold": "effet >= +10 pb exclu sous la forme testee"},
+    "closure_scope": "the tested form for this architecture only (protocol 8: G5_GATE2_FAIL closes the form ; a filter at most) ; never the mechanism",
+    "pass_effect": "G5_GATE2_PASS with the reading 'PASS, poursuivi' authorises a written Phase 4 proposal (demo only) ; never an order (protocol 8, 10.4)"
+  },
+
+  "multiplicity": {
+    "local_holm": {"alpha": 0.10, "family": ["T01_funding_8h", "T05_us_open"], "p_for_not_inscribed_inconclusive_or_not_informative": 1.0, "field": "holm_local_confirmed", "status": "mirrors the Gate 1 (protocol 10.2 names the same criteria and is silent on a local Holm at Gate 2) ; to confirm at freeze"},
+    "programme": {"m_max": 7, "tests": ["G5-Gate2-T01", "G5-Gate2-T05"], "immediate_if_p_le": 0.0142857, "otherwise": "Holm at family closure (GATES 2.3)", "field": "pass_programme_immediate", "gate2_effect": "none on the verdict of the type"},
+    "forbidden_field_names": ["pass_programme"]
+  },
+
+  "sealing": {
+    "gate1_sealed_files": {"files": "sealed/<type>.json of the Gate 1 run", "open_after": "the G5 Gate 2 verdict of the same type is written and hashed", "evaluator_rule": "the Gate 2 evaluator never reads a path under the Gate 1 sealed/ directory"},
+    "gate2_own_verdicts": {"rule": "no sealing at Gate 2: no later gate depends on these statistics ; every verdict prints D, LB90, UB90, p", "status": "protocol silent ; to confirm at freeze"},
+    "visibility": "D1 and protocol 4.8: aggregates without price in the repository ; series, tables and files in tradingV3-private"
+  },
+
+  "gate2_inscription": {
+    "input": "Gate 1 result JSON of g5-eval (attached to LP-G5-GATE1-RESULT.md), sha256 written in the register the day of the Gate 1 run",
+    "check": "sha256 of the Gate 1 result equal to the register line, else refuse_run",
+    "rule": {
+      "G5_GATE1_PASS": "evaluated",
+      "G5_GATE1_NOT_INFORMATIVE": "evaluated_automatically_without_futility",
+      "G5_GATE1_INCONCLUSIVE": "evaluated_automatically_without_futility",
+      "G5_GATE1_FAIL": "not_evaluated (counts p = 1 in multiplicity.local_holm and in the programme family)"
+    },
+    "discretion": "none",
+    "interim_reading": "none: a single run after the end of the last window ; no futility for the clock types (protocol 10.3)"
+  },
+
+  "economic": {
+    "s_eco_usd_per_year": 97.0,
+    "capital_usd": 500.0,
+    "leverage": 1,
+    "max_live": 4,
+    "order_notional_usd": 100.0,
+    "admission_order_within_instant": "inst_id_ascending",
+    "fills_per_day": "admitted filled orders / number of days of the type's calendar (T01: calendar days of the T01 window ; T05: NYSE trading days of the T05 window, macro days included in the denominator)",
+    "formula": "plafond_usd_an = fills_per_day * order_notional_usd * mean_event_net_bp / 1e4 * days_per_year",
+    "measure": "absolute event sim_net_bp (round trip), never D",
+    "pursued_if": "point >= s_eco and (ub90 >= 2 * s_eco or lb90 > 0)",
+    "readings": ["PASS, poursuivi", "PASS, non poursuivi (sous S_eco)", "FAIL"],
+    "pos_mode": "both hypotheses reported"
+  },
+
+  "quality": {
+    "unusable_instrument_day": "books5 coverage (minutes with >= 1 snapshot) < 90 % or a stale period > 10 min crossing the instrument-day (G2 4.4, same capture) ; removed before any computation and counted",
+    "unusable_share_inconclusive": 0.20,
+    "classifier_missing_instrument_day_share_inconclusive": 0.50,
+    "status": "borrowed from G2 4.4 (protocol 10.3 names unusable days without defining them) ; to confirm at freeze"
+  },
+
+  "capture": {
+    "command": "python -m scripts.research_lp.cli capture (values mode), host eea (wss://wseea.okx.com/ws/v5/public)",
+    "channels_required": ["trades", "books5", "mark-price", "funding-rate"],
+    "channels_conditional": {
+      "index-tickers": "classifier_index_source option a ; new D1 decision ; not in xperp_capture.CHANNELS at 2026-10-21",
+      "bbo-tbt": "G2 (B) vi ; in the channel list of decision 1 ; not in xperp_capture.CHANNELS at 2026-10-21"
+    },
+    "channels_in_code_2026_10_21": ["trades", "books5", "liquidation-orders", "mark-price", "funding-rate"],
+    "instruments_metadata": "REST snapshot public/instruments (instruments-futures.json), not a WS channel",
+    "layouts_read": ["trades", "books5", "mark", "funding"],
+    "manifest": "tape manifest and per-day sha256 at finalisation (tape.py) ; segments append-only",
+    "register": ["okx-xperp-capture-2026-11-02 (prospective)", "okx-xperp-prospective-G5 (prospective)"]
+  },
+
+  "descriptive": {
+    "rule": "aucun descriptif ne recoit de p-value ni de verdict ; jamais promu ; un filtre G5 qui entre dans un protocole gele apres cette lecture y compte p = 1 (post-screen, GATES 2.1)",
+    "reports": [
+      "T02_funding_4h_settlements_premium_settstate_book", "T06_us_close_reversion", "T18_cme_cf_brr_window", "fill_rules_through_and_queue",
+      "premium_okx_channel_vs_premium_mark_index", "net_bp_gate1_construction_on_last_prints", "adverse_selection_measured_vs_design_3_5",
+      "taker_half_spread_measured_vs_design_3", "T01_by_photo_hour_00_08_16", "T01_dose_abs_rate", "T05_horizons_15_30",
+      "T05_ten_am_et_release_days", "dst_regime_winter_vs_summer", "by_month", "by_instrument", "by_sign", "instruments_per_instant_ge_3",
+      "excluded_share_by_instrument", "block_days_7", "minute_zero_T07", "portfolio_reading"
+    ],
+    "excluded": "T20 quarter-hour imbalance (other protocol, decision 12)"
+  }
+}

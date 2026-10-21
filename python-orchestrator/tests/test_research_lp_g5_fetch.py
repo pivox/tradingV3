@@ -1,8 +1,14 @@
 """Offline tests of the G5 history fetcher (`scripts/research_lp/g5_fetch.py`): the END_EXCLUSIVE
 constant and its guard, pagination, end of job and coverage (`end_reason`, `coverage_start_us`,
-truncation), malformed pages, resume and cumulative counters, `--force`, the rate limiter, the
-backoff (retry codes, `Retry-After`), the request budget, the scale gates of a real run (instrument
-list, `--max-requests`, the dry-run `--plan`, host), the dry run and the instruments metadata.
+truncation, D_cov), malformed pages, resume and cumulative counters, `--force`, the rate limiter, the
+backoff (retry codes, `Retry-After`), the request budget, the scale gates of a real run (the G5 spec and
+its phase, the hashed instrument list, `--max-requests`, the dry-run `--plan`, host), the per-stream
+starts of LP-G5 §4.3, the sealed mode of the pre-freeze funding fetch (P-G5-3: global totals only on the
+console and in the journal, the per-instrument manifest sealed and hashed), the dry run and the metadata.
+
+Adapted on 2026-10-21 (code (B) xix): the funding history is fetched in sealed mode only, so the two tests
+that fetched `funding_hist` openly now run it sealed and read the sealed manifest; a real run is driven by
+`--spec --phase` (the old real-run test without a spec is now a refusal).
 
 No test opens a connection: an autouse fixture makes `socket.socket.connect`, `socket.create_connection`,
 `urllib.request.urlopen` and `UrllibClient.get` fail loudly, and the fetcher only ever sees `FakeOkx`."""
@@ -123,6 +129,40 @@ def one_inst(list_ms: int) -> list[dict]:
     return [{"instId": INST, "ruleType": "xperp", "state": "live", "uly": "BTC-USD", "listTime": str(list_ms)}]
 
 
+REAL_SPEC = Path(__file__).resolve().parents[1] / "scripts" / "research_lp" / "specs" / "g5_gate1_spec.json"
+DAY_MS = 86_400_000
+
+
+def iso_ms(ms: int) -> str:
+    return tape.iso_utc(ms * 1000)[:19] + "Z"
+
+
+def derived_spec(path: Path, universe: list[tuple[str, int]]) -> Path:
+    """The real G5 spec with another universe (`(inst_id, listTime ms)`): the audit numbers that depend on the universe are dropped
+    (T05 calendar, break-evens) or recomputed (fetch-plan estimates) — the real spec keeps its own, checked elsewhere."""
+    document = json.loads(REAL_SPEC.read_text())
+    document["universe"]["analysed"] = [{"inst_id": i, "index_id": i.split("_")[0], "list_time_utc": iso_ms(l), "eligible_from_utc": iso_ms(l + 30 * DAY_MS),
+                                         "ct_val": 0.0001, "tick_sz": 0.1} for i, l in universe]
+    for item in document["events"]:
+        item.pop("audit_expected", None)
+    document["economic"]["audit_break_even_net_bp"] = {}
+    rows = [{"instId": i, "uly": i.split("_")[0], "listTime": str(l)} for i, l in universe]
+    estimate = g5_fetch.spec_estimate(rows, 30, tape.day_of_date("2026-08-04") * 86_400 * US, {"candles_1m": 300, "mark_1m": 100, "index_1m": 100, "funding_hist": 400})
+    document["fetch_plan"]["pre_freeze"]["requests_estimate"] = estimate["funding_hist"]
+    for stream in ("candles_1m", "mark_1m", "index_1m"):
+        document["fetch_plan"]["post_freeze"][stream]["requests_estimate"] = estimate[stream]
+    document["fetch_plan"]["requests_total_estimate"] = sum(estimate.values())
+    path.write_text(json.dumps(document, indent=1, ensure_ascii=False))
+    return path
+
+
+def spec_snapshot(path: Path, universe: list[tuple[str, int]], extra=()) -> Path:
+    rows = [{"instId": i, "instType": "FUTURES", "ruleType": "xperp", "state": "live", "uly": i.split("_")[0], "ctVal": "0.0001", "tickSz": "0.1", "lotSz": "1", "minSz": "1",
+             "listTime": str(l)} for i, l in universe] + list(extra)
+    path.write_text(json.dumps({"code": "0", "msg": "", "data": rows}))
+    return path
+
+
 # ----------------------------------------------------------------------------- END_EXCLUSIVE
 
 
@@ -196,22 +236,31 @@ def test_pagination_walks_backwards_and_a_restart_resumes_from_the_cursor_withou
 
 def test_funding_truncation_is_recorded_and_never_read_as_a_complete_history(tmp_path: Path):
     """M1: the funding history is served "up to three months"; the job ends `server_empty_before_start`, `truncated`, with the
-    oldest settlement served as D_cov start — distinct from a history that reaches the listTime."""
+    oldest settlement served as coverage start and the next one as D_cov (its predecessor is served) — distinct from a history
+    that reaches the listTime. Fetched sealed (P-G5-3): the states live in the sealed manifest, the summary shows totals only."""
     listed_ms = END_MS - 30 * 86_400_000  # listed 30 days before END
     served = [funding_row(END_MS - k * 8 * 3600 * MS) for k in range(1, 31)]  # the server keeps 10 days only
     server = FakeOkx({("/api/v5/public/funding-rate-history", INST): served})
-    summary = g5_fetch.Fetcher(make_config(tmp_path / "t", one_inst(listed_ms), streams=("funding_hist",)), server, sleep=no_sleep).run()
-    state = tape.read_manifest(tmp_path / "t")["g5_streams"][f"{INST}:funding_hist"]
+    with pytest.raises(ValueError, match="sealed mode only"):
+        g5_fetch.Fetcher(make_config(tmp_path / "open", one_inst(listed_ms), streams=("funding_hist",)), server, sleep=no_sleep)
+    summary = g5_fetch.Fetcher(make_config(tmp_path / "t", one_inst(listed_ms), streams=("funding_hist",), sealed=True), server, sleep=no_sleep).run()
+    assert tape.read_manifest(tmp_path / "t") is None  # nothing per instrument outside the sealed store
+    state = tape.read_manifest(tmp_path / "t" / g5_fetch.SEALED_DIR_NAME)["g5_streams"][f"{INST}:funding_hist"]
     oldest = (END_MS - 30 * 8 * 3600 * MS) * 1000
     assert state["complete"] is True and state["end_reason"] == "server_empty_before_start" and state["truncated"] is True
-    assert state["coverage_start_us"] == oldest and state["start_us"] == listed_ms * 1000 and summary["truncated"] == [f"{INST}:funding_hist"]
+    assert state["coverage_start_us"] == oldest and state["start_us"] == listed_ms * 1000 and state["d_cov_start_us"] == oldest + 8 * 3600 * US
+    assert summary == {"jobs_total": 1, "jobs_complete": 1, "jobs_error": 0, "coverage_start_utc": tape.iso_utc(oldest + 8 * 3600 * US), "mode": "sealed",
+                       "receipt": str(tmp_path / "t" / g5_fetch.SEALED_RECEIPT_NAME), "receipt_sha256": summary["receipt_sha256"],
+                       "sealed_manifest_sha256": summary["sealed_manifest_sha256"], "sealed_files_digest": summary["sealed_files_digest"]}
     assert server.calls[0]["limit"] == "400" and len(server.calls) == 2  # docs-v5 default page 400; one page, then the empty page
-    assert summary["end_reasons"] == {"server_empty_before_start": 1}
     # A server with no row at all: complete, truncated, no coverage (the evaluator then gives the stream no D_cov).
     empty = FakeOkx({})
-    g5_fetch.Fetcher(make_config(tmp_path / "e", one_inst(listed_ms), streams=("funding_hist",)), empty, sleep=no_sleep).run()
-    state = tape.read_manifest(tmp_path / "e")["g5_streams"][f"{INST}:funding_hist"]
-    assert state["end_reason"] == "server_empty_before_start" and state["coverage_start_us"] is None and state["truncated"] is True
+    summary = g5_fetch.Fetcher(make_config(tmp_path / "e", one_inst(listed_ms), streams=("funding_hist",), sealed=True), empty, sleep=no_sleep).run()
+    state = tape.read_manifest(tmp_path / "e" / g5_fetch.SEALED_DIR_NAME)["g5_streams"][f"{INST}:funding_hist"]
+    assert state["end_reason"] == "server_empty_before_start" and state["coverage_start_us"] is None and state["truncated"] is True and state["d_cov_start_us"] is None
+    assert summary["coverage_start_utc"] is None and summary["jobs_complete"] == 1
+    with pytest.raises(ValueError, match="sealed run fetches"):
+        g5_fetch.Fetcher(make_config(tmp_path / "x", one_inst(listed_ms), streams=("candles_1m",), sealed=True), empty, sleep=no_sleep)
 
 
 def test_a_malformed_page_is_retried_then_fatal_and_never_ends_the_history(tmp_path: Path):
@@ -250,20 +299,25 @@ def test_every_stream_is_fetched_and_the_index_stream_is_shared_by_the_underlyin
               ("/api/v5/public/funding-rate-history", INST): [funding_row(END_MS - 8 * 3600 * MS), funding_row(END_MS - 16 * 3600 * MS), funding_row(END_MS)],
               ("/api/v5/public/funding-rate-history", "BTC-USD_UM_XPERP-310502"): []}
     server = FakeOkx(series)
-    cfg = make_config(tmp_path / "tape", rows, streams=tuple(g5_fetch.STREAMS), start="2026-10-13T00:00:00Z")
-    jobs = g5_fetch.jobs_for(rows, cfg.streams, cfg.start)
+    jobs = g5_fetch.jobs_for(rows, tuple(g5_fetch.STREAMS), "2026-10-13T00:00:00Z")
     assert [j.key for j in jobs] == [f"{INST}:candles_1m", f"{INST}:mark_1m", f"{INST}:funding_hist", "BTC-USD_UM_XPERP-310502:candles_1m", "BTC-USD_UM_XPERP-310502:mark_1m",
                                      "BTC-USD_UM_XPERP-310502:funding_hist", "BTC-USD:index_1m"]
     assert jobs[-1].request_inst_id == "BTC-USD" and jobs[-1].start_us == listed_ms * 1000
+    # The candle streams openly, then the funding history sealed (B xix), in the same output directory.
+    cfg = make_config(tmp_path / "tape", rows, streams=("candles_1m", "mark_1m", "index_1m"), start="2026-10-13T00:00:00Z")
     summary = g5_fetch.Fetcher(cfg, server, sleep=no_sleep).run()
-    assert summary["complete"] == 7 and summary["errors"] == 0 and summary["rejected_at_or_after_end"] == 0
+    assert summary["complete"] == 5 and summary["errors"] == 0 and summary["rejected_at_or_after_end"] == 0
+    sealed = g5_fetch.Fetcher(make_config(tmp_path / "tape", rows, streams=("funding_hist",), start="2026-10-13T00:00:00Z", sealed=True), server, sleep=no_sleep).run()
+    assert sealed["jobs_complete"] == 2 and sealed["jobs_error"] == 0
     states = tape.read_manifest(tmp_path / "tape")["g5_streams"]
     assert states[f"{INST}:candles_1m"]["unconfirmed_rows"] == 1  # stored, counted; the evaluator drops it
     assert states[f"{INST}:candles_1m"]["end_reason"] == "server_empty_before_start" and states[f"{INST}:candles_1m"]["coverage_start_us"] == start_ms * 1000
+    assert f"{INST}:funding_hist" not in states and f"{INST}:funding_hist" in tape.read_manifest(tmp_path / "tape" / g5_fetch.SEALED_DIR_NAME)["g5_streams"]
     index_rows, _ = tape.load_days(tmp_path / "tape", "index_1m", "BTC-USD", ["2026-10-13"])
     assert index_rows.size == 30 and index_rows["close"][0] == pytest.approx(99.1)
-    funding, _ = tape.load_days(tmp_path / "tape", "funding_hist", INST, ["2026-10-13"])
+    funding, _ = tape.load_days(tmp_path / "tape" / g5_fetch.SEALED_DIR_NAME, "funding_hist", INST, ["2026-10-13"])
     assert funding.size == 2 and funding["method"].tolist() == [1, 1] and funding["realized_rate"][0] == pytest.approx(0.00009)
+    assert not (tmp_path / "tape" / "funding_hist").exists()
     assert {c["path"] for c in server.calls} == {spec.path for spec in g5_fetch.STREAMS.values()}
     assert all("bar" not in c for c in server.calls if c["path"].endswith("funding-rate-history"))
 
@@ -386,48 +440,169 @@ def test_dry_run_lists_the_requests_and_writes_nothing(tmp_path: Path, capsys):
     assert plan["host"] == "https://www.okx.com" and plan["instruments"] == [INST2] and [j["inst_id"] for j in plan["jobs"]][-1] == "ETH-USD"
 
 
-def test_a_real_run_needs_the_decision_the_instruments_the_budget_and_the_matching_plan(tmp_path: Path, capsys):
-    """M3: every refusal exits 2 before any client exists (the autouse fixture would fail on a connection)."""
-    file = snapshot(tmp_path / "snapshot.json", rows=[{"instId": INST, "instType": "FUTURES", "ruleType": "xperp", "state": "live", "uly": "BTC-USD", "ctVal": "0.0001", "tickSz": "0.1",
-                                                        "lotSz": "1", "minSz": "1", "listTime": str(END_MS - 5 * MINUTE_MS)},
-                                                       {"instId": INST2, "instType": "FUTURES", "ruleType": "xperp", "state": "live", "uly": "ETH-USD", "listTime": str(END_MS - 5 * MINUTE_MS)}])
+def test_a_real_run_needs_the_spec_the_decision_the_instruments_the_budget_and_the_matching_plan(tmp_path: Path, capsys):
+    """M3, (B) xix: a real run is driven by the G5 spec and its phase; every refusal happens before any client exists (the autouse
+    fixture would fail on a connection): exit 2 for the command-level gates, SystemExit for the spec-level ones."""
+    list_ms = END_MS - 30 * DAY_MS - MINUTE_MS  # eligible one minute before END: candles, mark and index from END − 1 day − 1 min
+    universe = [(INST, list_ms)]
+    spec_path = derived_spec(tmp_path / "spec.json", universe)
+    file = spec_snapshot(tmp_path / "snapshot.json", universe, extra=[{"instId": INST2, "instType": "FUTURES", "ruleType": "xperp", "state": "live", "uly": "ETH-USD",
+                                                                      "listTime": str(list_ms)}])
+    coverage_us = tape.parse_iso_utc("2026-08-04T00:00:00Z")
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps({"kind": g5_fetch.RECEIPT_KIND, "end_exclusive": g5_fetch.END_EXCLUSIVE, "coverage_start_us": coverage_us, "coverage_start_utc": "2026-08-04T00:00:00Z"}))
     out = tmp_path / "tape"
-    base = ["g5-fetch", "--out", str(out), "--instruments-file", str(file), "--streams", "candles_1m", "--quiet"]
+    base = ["g5-fetch", "--out", str(out), "--instruments-file", str(file), "--quiet"]
+    spec_args = ["--spec", str(spec_path), "--phase", "post_freeze", "--funding-receipt", str(receipt)]
     plan_path = tmp_path / "plan.json"
-    assert cli.main(base + ["--inst-ids", INST, "--dry-run", "--plan-out", str(plan_path)]) == 0
+    assert cli.main(base + spec_args + ["--inst-ids", INST, "--dry-run", "--plan-out", str(plan_path)]) == 0
     capsys.readouterr()
-    total = json.loads(plan_path.read_text())["requests_total"]
+    plan = json.loads(plan_path.read_text())
+    start_ms = END_MS - DAY_MS - MINUTE_MS
+    assert plan["requests_total"] == 5 + 15 + 15 and plan["mode"] == "values" and plan["spec"]["phase"] == "post_freeze" and plan["inst_ids_sha256"] == g5_fetch.inst_ids_digest([INST])
+    assert {j["stream"]: j["start"] for j in plan["jobs"]} == {s: tape.iso_utc(start_ms * 1000) for s in ("candles_1m", "mark_1m", "index_1m")}
+    assert {j["stream"]: j["limit"] for j in plan["jobs"]} == {"candles_1m": 300, "mark_1m": 100, "index_1m": 100}  # the spec's pages
+    total = plan["requests_total"]
 
     def refused(extra: list[str]) -> None:
         assert g5_fetch.command_fetch(cli.build_parser().parse_args(base + extra), client_factory=lambda: pytest.fail("a client was built")) == 2
         assert not out.exists()
 
-    refused(["--inst-ids", INST, "--plan", str(plan_path), "--max-requests", "100"])  # no decision
-    refused(["--decision-ref", "t", "--plan", str(plan_path), "--max-requests", "100"])  # no explicit instruments
-    refused(["--decision-ref", "t", "--inst-ids", INST, "--max-requests", "100"])  # no plan
-    refused(["--decision-ref", "t", "--inst-ids", INST, "--plan", str(plan_path)])  # no budget
-    refused(["--decision-ref", "t", "--inst-ids", INST, "--plan", str(plan_path), "--max-requests", str(total - 1)])  # the plan exceeds the budget
-    refused(["--decision-ref", "t", "--inst-ids", f"{INST},{INST2}", "--plan", str(plan_path), "--max-requests", "100"])  # the plan is not this configuration's
-    refused(["--decision-ref", "t", "--inst-ids", INST, "--plan", str(plan_path), "--max-requests", "100", "--host", "global"])  # global host without a reason
-    refused(["--decision-ref", "t", "--inst-ids", INST, "--plan", str(plan_path), "--max-requests", "100", "--max-instruments", "1"])
+    def refused_early(extra: list[str], match: str) -> None:
+        with pytest.raises(SystemExit, match=match):
+            g5_fetch.command_fetch(cli.build_parser().parse_args(base + extra), client_factory=lambda: pytest.fail("a client was built"))
+        assert not out.exists()
+
+    ok = spec_args + ["--inst-ids", INST, "--plan", str(plan_path), "--max-requests", "100"]
+    refused(ok)  # no decision
+    refused(["--inst-ids", INST, "--plan", str(plan_path), "--max-requests", "100", "--decision-ref", "t", "--streams", "candles_1m"])  # no spec
+    refused(spec_args + ["--decision-ref", "t", "--inst-ids", INST, "--max-requests", "100"])  # no plan
+    refused(spec_args + ["--decision-ref", "t", "--inst-ids", INST, "--plan", str(plan_path)])  # no budget
+    refused(spec_args + ["--decision-ref", "t", "--inst-ids", INST, "--plan", str(plan_path), "--max-requests", str(total - 1)])  # the plan exceeds the budget
+    refused_early(spec_args + ["--decision-ref", "t", "--plan", str(plan_path), "--max-requests", "100"], "universe")  # no explicit instruments
+    refused_early(spec_args + ["--decision-ref", "t", "--inst-ids", f"{INST},{INST2}", "--plan", str(plan_path), "--max-requests", "100"], "universe")  # not the universe
+    refused_early(spec_args + ["--decision-ref", "t", "--inst-ids", INST, "--plan", str(plan_path), "--max-requests", "100", "--host", "global", "--host-reason", "x"], "host")
+    refused_early(spec_args + ["--decision-ref", "t", "--inst-ids", INST, "--plan", str(plan_path), "--max-requests", "100", "--max-instruments", "1"], "max-instruments")
+    refused_early(["--spec", str(spec_path), "--phase", "post_freeze", "--decision-ref", "t", "--inst-ids", INST, "--plan", str(plan_path), "--max-requests", "100"], "funding-receipt")
+    refused_early(["--phase", "post_freeze", "--decision-ref", "t", "--inst-ids", INST, "--plan", str(plan_path), "--max-requests", "100"], "need --spec")
+    refused_early(spec_args + ["--decision-ref", "t", "--inst-ids", INST, "--plan", str(plan_path), "--max-requests", "100", "--streams", "candles_1m"], "phase fetches")
+    other_plan = tmp_path / "plan-pre.json"
+    assert cli.main(base + ["--spec", str(spec_path), "--phase", "pre_freeze", "--inst-ids", INST, "--dry-run", "--plan-out", str(other_plan)]) == 0
     capsys.readouterr()
-    series = {("/api/v5/market/history-candles", INST): [candle(ts) for ts in minutes(END_MS - 5 * MINUTE_MS, 5)]}
+    refused(spec_args + ["--decision-ref", "t", "--inst-ids", INST, "--plan", str(other_plan), "--max-requests", "100"])  # the plan of another phase
+    moments = minutes(start_ms, 1441)
+    series = {("/api/v5/market/history-candles", INST): [candle(ts) for ts in moments], ("/api/v5/market/history-mark-price-candles", INST): [px_candle(ts) for ts in moments],
+              ("/api/v5/market/history-index-candles", "BTC-USD"): [px_candle(ts, 99.0) for ts in moments]}
     server = FakeOkx(series)
     ids_file = tmp_path / "ids.txt"
     ids_file.write_text(f"# G5 universe (test)\n{INST}\n")
-    args = cli.build_parser().parse_args(base + ["--inst-ids-file", str(ids_file), "--plan", str(plan_path), "--max-requests", "100", "--decision-ref", "test only: scale confirmed"])
+    args = cli.build_parser().parse_args(base + spec_args + ["--inst-ids-file", str(ids_file), "--plan", str(plan_path), "--max-requests", "100", "--decision-ref",
+                                                             "test only: scale confirmed"])
     assert g5_fetch.command_fetch(args, client_factory=lambda: server) == 0
     summary = json.loads(capsys.readouterr().out)
-    assert summary["rows"] == 5 and summary["complete"] == 1
+    assert summary["rows"] == 3 * 1441 and summary["complete"] == 3 and len(server.calls) == 35
     manifest = tape.read_manifest(out)
-    assert manifest["source"]["decision_ref"] == "test only: scale confirmed" and manifest["source"]["plan_sha256"] == g5_fetch.sha256_bytes(plan_path.read_bytes())
-    assert manifest["source"]["inst_ids_source"].startswith(f"file {ids_file} sha256=") and manifest["source"]["max_requests"] == 100
-    assert manifest["sessions"][-1]["requests"] == 1 and manifest["requests"] == 1 and manifest["sessions"][-1]["plan_sha256"] == manifest["source"]["plan_sha256"]
+    src = manifest["source"]
+    assert src["decision_ref"] == "test only: scale confirmed" and src["plan_sha256"] == g5_fetch.sha256_bytes(plan_path.read_bytes()) and src["max_requests"] == 100
+    assert src["inst_ids_sha256"] == g5_fetch.inst_ids_digest([INST]) and src["inst_ids_source"].startswith(f"file {ids_file} sha256=") and src["mode"] == "values"
+    assert src["spec"]["sha256"] == g5_fetch.sha256_bytes(spec_path.read_bytes()) and src["spec"]["phase"] == "post_freeze" and src["dataset_id"] == "okx-xperp-1m-history-2026-03-30..2026-10-13"
+    assert src["coverage_start"].startswith("2026-08-04T00:00:00") and src["funding_receipt"]["sha256"] == g5_fetch.sha256_bytes(receipt.read_bytes())
+    assert manifest["sessions"][-1]["requests"] == 35 and manifest["requests"] == 35 and manifest["g5_streams"][f"{INST}:candles_1m"]["end_reason"] == "reached_start"
     held = tape.DirectoryLock(out).acquire()
     try:
         assert g5_fetch.command_fetch(args, client_factory=lambda: server) == 3
     finally:
         held.release()
+
+
+def test_per_stream_starts_and_the_spec_request_estimates(tmp_path: Path, capsys):
+    """LP-G5 §4.3: candles from eligibility − 1 day, mark and index from max(D_cov − 1 day, eligibility − 1 day), the funding history
+    from listTime; the estimates of the real spec (13 023 / 22 606 / 22 606 / 50 requests) are reproduced from its own universe."""
+    listed = tape.parse_iso_utc("2026-05-20T08:00:00Z") // 1000
+    row = one_inst(listed)[0]
+    late, early = tape.parse_iso_utc("2026-08-04T00:00:00Z"), tape.parse_iso_utc("2026-05-01T00:00:00Z")
+    starts = {j.stream: j.start_us for j in g5_fetch.jobs_for([row], tuple(g5_fetch.STREAMS), g5_fetch.DEFAULT_START, 30, late)}
+    eligible_minus_day = (listed + 29 * DAY_MS) * 1000
+    assert starts == {"candles_1m": eligible_minus_day, "mark_1m": late - 86_400 * US, "funding_hist": listed * 1000, "index_1m": late - 86_400 * US}
+    starts = {j.stream: j.start_us for j in g5_fetch.jobs_for([row], tuple(g5_fetch.STREAMS), g5_fetch.DEFAULT_START, 30, early)}
+    assert starts["mark_1m"] == starts["index_1m"] == eligible_minus_day
+    assert {j.stream: j.start_us for j in g5_fetch.jobs_for([row], tuple(g5_fetch.STREAMS))}["candles_1m"] == listed * 1000  # without the rule: listTime (unit tests)
+    with pytest.raises(ValueError, match="coverage_start_us"):
+        g5_fetch.jobs_for([row], ("mark_1m",), g5_fetch.DEFAULT_START, 30, None)
+    with pytest.raises(ValueError, match="never fetched"):
+        g5_fetch.jobs_for(one_inst(END_MS - 10 * DAY_MS), ("candles_1m",), g5_fetch.DEFAULT_START, 30, late)
+    from scripts.research_lp import g5_eval
+
+    spec, _ = g5_eval.load_spec(REAL_SPEC)
+    assert spec.fetch_plan["estimates"] == {"funding_hist": 50, "candles_1m": 13023, "mark_1m": 22606, "index_1m": 22606} and spec.fetch_plan["total"] == 58285
+    universe = [(i.inst_id, i.list_time_us // 1000) for i in spec.universe]
+    file = spec_snapshot(tmp_path / "real-universe-metadata.json", universe)
+    ids = ",".join(i for i, _ in universe)
+    base = ["g5-fetch", "--out", str(tmp_path / "x"), "--instruments-file", str(file), "--inst-ids", ids, "--spec", str(REAL_SPEC), "--dry-run"]
+    assert cli.main(base + ["--phase", "pre_freeze"]) == 0
+    pre = json.loads(capsys.readouterr().out)
+    assert pre["requests_total"] == 50 and pre["mode"] == "sealed" and {j["stream"] for j in pre["jobs"]} == {"funding_hist"} and pre["spec"]["status"] == "DRAFT_NOT_FROZEN"
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps({"kind": g5_fetch.RECEIPT_KIND, "end_exclusive": g5_fetch.END_EXCLUSIVE, "coverage_start_us": tape.parse_iso_utc("2026-08-04T00:00:00Z")}))
+    assert cli.main(base + ["--phase", "post_freeze", "--funding-receipt", str(receipt)]) == 0
+    post = json.loads(capsys.readouterr().out)
+    assert post["requests_estimated"] == {"candles_1m": 13023, "mark_1m": 22606, "index_1m": 22606, "funding_hist": 0} and post["requests_total"] == 58285 - 50
+    assert not (tmp_path / "x").exists()
+
+
+def test_sealed_mode_shows_only_global_totals_and_seals_the_per_instrument_manifest(tmp_path: Path, capsys):
+    """P-G5-3, (B) xix: the pre-freeze funding fetch prints and logs the global totals and D_cov only; the per-instrument manifest
+    (rows, oldest / newest, pages) is in the sealed store, hashed in the public receipt; nothing names an instrument outside it."""
+    l1, l2 = END_MS - 40 * DAY_MS, END_MS - 35 * DAY_MS
+    universe = [(INST, l1), (INST2, l2)]
+    spec_path = derived_spec(tmp_path / "spec.json", universe)
+    file = spec_snapshot(tmp_path / "snapshot.json", universe)
+    out = tmp_path / "run"
+    base = ["g5-fetch", "--out", str(out), "--instruments-file", str(file), "--spec", str(spec_path), "--phase", "pre_freeze"]
+    ids_file = tmp_path / "ids.txt"
+    ids_file.write_text(f"{INST2}\n{INST}\n")
+    plan_path = tmp_path / "plan.json"
+    assert cli.main(base + ["--inst-ids-file", str(ids_file), "--dry-run", "--plan-out", str(plan_path)]) == 0
+    capsys.readouterr()
+    assert json.loads(plan_path.read_text())["requests_total"] == 4
+    eight_h = 8 * 3600 * MS
+    served = {("/api/v5/public/funding-rate-history", INST): [funding_row(END_MS - k * eight_h, 0.0002 * (k % 3)) for k in range(1, 31)],  # truncated: 10 days
+              ("/api/v5/public/funding-rate-history", INST2): [funding_row(END_MS - k * eight_h) for k in range(1, 3 * 35)]}  # from listTime + 8 h
+    server = FakeOkx(served)
+    args = cli.build_parser().parse_args(base + ["--inst-ids-file", str(ids_file), "--plan", str(plan_path), "--max-requests", "10", "--decision-ref", "test: synthetic"])
+    assert g5_fetch.command_fetch(args, client_factory=lambda: server) == 0
+    captured = capsys.readouterr()
+    printed = json.loads(captured.out)
+    assert set(printed) == set(g5_fetch.SEALED_PRINTED) | {"mode", "receipt", "receipt_sha256", "sealed_manifest_sha256", "sealed_files_digest"}
+    assert printed["jobs_total"] == 2 and printed["jobs_complete"] == 2 and printed["jobs_error"] == 0
+    d_cov_inst = (END_MS - 29 * eight_h) * 1000  # second oldest settlement served of the truncated job
+    assert printed["coverage_start_utc"] == tape.iso_utc(d_cov_inst)
+    journal = (out / g5_fetch.JOURNAL_NAME).read_text()
+    receipt_text = (out / g5_fetch.SEALED_RECEIPT_NAME).read_text()
+    for text in (captured.out, captured.err, journal, receipt_text):
+        assert INST not in text and INST2 not in text and "BTC-USD" not in text and "ETH-USD" not in text
+        assert '"rows"' not in text and "rows=" not in text and "pages" not in text
+    events = [line.split("event=")[1].split()[0] for line in journal.splitlines()]
+    assert set(events) <= set(g5_fetch.SEALED_JOURNAL) and "sealed_end" in events and "job_end" not in events
+    for line in journal.splitlines():
+        event = line.split("event=")[1].split()[0]
+        fields = [part.split("=", 1)[0] for part in line.split()[3:] if "=" in part]
+        assert set(fields) <= set(g5_fetch.SEALED_JOURNAL[event]), line
+    receipt = json.loads(receipt_text)
+    sealed_dir = out / g5_fetch.SEALED_DIR_NAME
+    assert receipt["sealed_manifest_sha256"] == tape.sha256_of(sealed_dir / tape.MANIFEST_NAME) == printed["sealed_manifest_sha256"]
+    assert receipt["sealed_files_digest"] == g5_fetch.directory_digest(sealed_dir)[0] and printed["receipt_sha256"] == tape.sha256_of(out / g5_fetch.SEALED_RECEIPT_NAME)
+    assert receipt["inst_ids_sha256"] == g5_fetch.inst_ids_digest([INST, INST2]) and receipt["register_status"] == "unread" and receipt["coverage_start_us"] == d_cov_inst
+    sealed = tape.read_manifest(sealed_dir)["g5_streams"]
+    assert sealed[f"{INST}:funding_hist"]["rows"] == 30 and sealed[f"{INST2}:funding_hist"]["rows"] == 104 and sealed[f"{INST}:funding_hist"]["pages"] == 2
+    assert not (out / tape.MANIFEST_NAME).exists() and not (out / "funding_hist").exists()
+    # The receipt is what the post-freeze phase reads: D_cov = coverage_start_utc.
+    doc, sha = g5_fetch.read_receipt(out / g5_fetch.SEALED_RECEIPT_NAME)
+    assert doc["coverage_start_us"] == d_cov_inst and sha == printed["receipt_sha256"]
+    with pytest.raises(SystemExit):
+        bad = tmp_path / "bad-receipt.json"
+        bad.write_text(json.dumps({"kind": "other"}))
+        g5_fetch.read_receipt(bad)
 
 
 # ----------------------------------------------------------------------------- metadata and parsing

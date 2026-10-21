@@ -1,80 +1,72 @@
-"""Event study of the clock / calendar windows (G5) on the 1-minute X-Perp history (Gate 1) or on the
-capture tape (Gate 2), driven entirely by a frozen JSON specification — nothing here is searched.
+"""Event study of the G5 clock / calendar types on the 1-minute X-Perp history (Gate 1) or on the capture tape (Gate 2),
+driven entirely by the frozen machine spec `specs/g5_gate1_spec.json` (schema `g5-spec/2`) — nothing here is searched.
 
-    python -m scripts.research_lp.cli g5-eval --tape DIR --spec g5-gate1.json --out-json R.json --out-md R.md \\
-        [--expect-spec-sha256 HEX] [--expect-code-digest HEX]
+    python -m scripts.research_lp.cli g5-eval --tape DIR --spec specs/g5_gate1_spec.json --expect-spec-sha256 HEX \\
+        --out-json R.json --out-md R.md [--instruments-file SNAPSHOT] [--expect-funding-seal-sha256 HEX]
 
-**The specification is strict (`g5_eval/2`).** Every key of the document, at every level, must be known:
-an unknown key is refused (`SpecError`), never ignored. `requires` lists the capabilities the spec relies
-on; each must be implemented here (`CAPABILITIES`) and every capability the spec actually uses must be
-listed, so no other version of this evaluator can run it under another meaning. Thresholds, signs,
-windows, controls, costs, seeds and the economic gate all come from the spec; the command line exposes
-none of them. Implemented (`LP-G5-DRAFT-PREREGISTRATION.md` §2.3 (B) and the CTO review of 2026-10-21):
+Authority: `docs/handbook/research/LP-G5-DRAFT-PREREGISTRATION.md` (§2.3 (B) i–xxii, §4–§8, §10, Annexes A–C). The text
+of the protocol prevails over the spec; the spec is the only file the evaluator reads; this module implements it.
 
-- (i) `price_source` (`last` | `mark`) is mandatory: one reference price, no fallback; a return whose ends
-  do not share the same source would be excluded and counted (`mixed_source`); the other price is
-  descriptive (`r_alt_bp`). On the history `last` = `candles_1m.close`, `mark` = `mark_1m.close`; on the
-  capture `last` = the minute's last print, `mark` = its last mark. No forward fill on the history.
-- (ii) a sign or condition on `funding_rate` reads the **realized** rate settled at h only (a row without
-  `realizedRate` never supplies a rate: the settlement's rate is unknown, counted), with a dead zone
-  (`dead_zone: [low, high]`, `eps`: +1 above high + eps, −1 below low − eps, excluded inside); the
-  `funding` generator keeps a settlement only when the previous and next `fundingTime` gaps equal
-  `interval_hours` ± `interval_tolerance_min` (others counted: `interval_other`, `interval_unknown`).
-- (iii) `premium_wavg`: P̂(t) = Σ k·π(t−n+k) / Σ k over the n minutes ending at t (weights 1…n, the
-  shape of the official formula), π = `premium_mark_index` on the history ((mark − index) / index) or
-  `premium_okx` on the capture (the funding channel's `premium`): two distinct fields, each refused on
-  the other source (M2). It is a `sign` or a `control_sign` (the sign at the controls of a type whose
-  event sign reads `funding_rate`, which does not exist there); concordance κ at the events (C6) and the
-  3 × 3 classification table are reported.
-- (iv) controls of a type on the days its instrument has ≥ 1 event of that type (`same_days_as_events`),
-  at minute `control_minute_of_hour` (default 0) of the fixed `hours` and of hours drawn per day
-  (`minute_zero_only`; seed per type and day), ≥ `exclusion_min` from the union of every settlement of
-  the instrument (all intervals), every instant of every type (including `evaluate: false` filters) and
-  the assumed settlement hours outside the funding coverage (`funding_outside_coverage`); the distance
-  is taken to the control instant or to its whole window (`exclusion_on`).
-- (v) the unit is the **instant**: per instant, the mean over the instruments present; n = unique
-  instants; `min_instants` applies to n; instruments per instant reported.
-- (vi) `execution_role` per type (`maker_maker`, `taker_maker`): fees at the role, adverse selection per
-  maker leg, slippage, all in the net; `cost_stress_multiplier` multiplies every cost term.
-- (vii) frozen date lists on `us_open` / `fixed_time`: `exclude_dates` (no session: NYSE holidays) and `skip_dates` (a session the type
-  does not trade: CPI / Employment Situation days) — both give no instant; skipped days stay candidate days of the economic reading.
-- (viii) verdict: C1 D ≥ threshold and LB90(D) > 0; C2 event net > 0; C3 C2 at stressed costs; C4 D > 0 in
-  both calendar halves; C5 LB90(D) > 0 without the best 5 % event instants; C6 κ ≥ `concordance_min`
-  (types with a `control_sign`). `INCONCLUSIVE` (device defect, before any other verdict): C6, proxy
-  coverage, funding coverage, fetch errors (§4.5 thresholds from `quality`); `NOT_INFORMATIVE` below
-  `min_instants` / `min_days`; FAIL annotated « effet exclu » (UB90 < threshold) or « non détecté ».
-- (ix) economic reading per type (`GATES` §1): ≤ `max_fills_per_instant` fills per instant in instrument-id
-  order, `order_notional_usd`, fills per candidate day (days with a generated instant, plus the `skip_dates`
-  sessions) × `days_per_year` of the type; plafond_USD_an point / LB90 / UB90 against
-  `s_eco_usd_per_year` → « PASS, poursuivi » / « PASS, non poursuivi (sous S_éco) » / « FAIL ».
-- (x) capture (Gate 2): simulated entry on the real book — post-only at the own touch decided at
-  h + arm_min and resting until h + rest_until_min (`maker_maker`), or taker at the opposite touch plus
-  slippage (`taker_maker`) —, passive exit at the opposite touch from h + to_min until h + exit_until_min,
-  remainder taker; a fill within `funding_fill_grace_min` after a settlement crosses it (`sim_net_bp`).
-- (xii) `requires` and the strict key whitelist.
-- **No look-ahead (B2).** Every field a condition or a sign reads must be observed at or before the decision
-  `h + arm_min` (`funding_rate` is observed at h − 1: "The fee assessment at 16:00 will use the funding rate
-  calculated at 15:59"). A later observation is refused unless declared by name in `declared_lookahead`
-  (`{"field": "sign" | "condition" | "control_sign", "reason": "…"}`), copied into the JSON and the Markdown.
-- **Coverage (M1).** `restrict_to_coverage` bounds a type's events and controls to the D_cov of the named
-  history streams (from the fetch manifest: `end_reason`, `coverage_start_us`; else the oldest row read). It is
-  mandatory on the history for the streams a type reads: `funding_hist` for a `funding_rate` sign / condition,
-  `mark_1m` and `index_1m` for `premium_mark_index` (sign, condition or control sign);
-  a window crossing a settlement whose rate is unknown is excluded and counted (`funding_unknown`; the
-  settlement of exactly END_EXCLUSIVE is never known: `funding_unknown_end_edge`).
-- Quality (§4.5): unconfirmed candles (`confirm = 0`) dropped and counted (`unconfirmed_dropped`); an
-  instrument missing more than `max_missing_window_share` of its event-window minutes is excluded from the
-  type; optional `listTime + days_after_list` eligibility and zero-volume exclusion.
+**Strict reading (B xviii).** `parse_spec` accepts the schema `g5-spec/2` only. Every key, at every level, must be
+known, and every value with an implemented meaning must be the implemented one: an unknown key, an unknown value
+or a missing key raises `SpecError` (fail-closed: nothing is evaluated). `requires` must name exactly the capabilities
+of `CAPABILITIES` that the spec's source needs (`HISTORY_REQUIRES`, `CAPTURE_REQUIRES`): a capability this module does
+not implement, or one it implements but the spec omits, is refused. Descriptive texts (`note`, `rule`, …) are copied
+into the reports; texts that state a rule (`formula`, `criteria.C4`, `classifier_class`, …) are matched against the
+implemented rule (numbers in them are parsed and used). The spec is checked against itself at parse time: costs per
+execution role against `expected_cost_bp`, `eligible_from_utc` against `list_time_utc + days`, the T05 calendar audit
+(116 / 105 / 103 / 53–52), the T01 instant audit (211, 0.474), the economic break-evens and the fetch-plan request
+estimates (13 023 / 22 606 / 22 606 / 50) are recomputed from the spec's own lists (calcul d'audit, no data).
 
-Statistics: D = mean(event instants) − mean(control instants); bootstrap over blocks of calendar days
-(events and controls of a block resampled together; LB90 / UB90, one-sided p = P*(D* ≤ 0), `GATES` §2.2).
-Holm (α from the spec) over the evaluated `primary` types, a `NOT_INFORMATIVE` or `INCONCLUSIVE` type
-counting p = 1; `holm_local_confirmed` = local PASS surviving this protocol's family (not `PASS_PROGRAMME`,
-which is the programme-level status of `GATES` §2.3: `programme.m_max` reports its immediate test).
+**Market data only under a frozen spec (B xviii).** `command_eval` opens no market value unless the spec is `FROZEN`,
+its `freeze_fill` complete, its sha256 equal to `--expect-spec-sha256`, the code digest equal to
+`freeze_fill.code_digest_sha256`, the instruments snapshot hash equal to `freeze_fill.instruments_snapshot_sha256` and
+the spec's universe equal to the snapshot (listTime, tickSz, ctVal, uly). A spec / code / status / freeze_fill defect
+gives `G5_GATE1_INCONCLUSIVE` for every type without reading anything (exit 2). `run_study` evaluates in-memory series
+(synthetic tests): there the frozen status is recorded, not required.
 
-Guards: the spec window may not touch the quarantine [2026-10-14, 2026-11-02) (`g5_fetch.END_EXCLUSIVE`,
-`xperp_capture.QUARANTINE_FLOOR`); a history read drops any row at or after END_EXCLUSIVE; the spec's
-sha256 and the code digest are recorded and checked when expected. Sums use `math.fsum`.
+Implemented (§2.3 (B)):
+- (i) the reference price is `candles_1m.close` (`c(t)` = close of the candle opening at t − 60 s); mark and index only
+  feed the classifier; no forward fill; unconfirmed candles dropped and counted;
+- (ii) T01 instants = `fundingTime` of `funding_hist` kept when the gaps to the previous and to the next settlement are
+  8 h ± 1 min (unknown neighbour excluded and counted), realized rate required (never the predicted rate);
+- (iii) D_cov per instrument = its first settlement whose predecessor is served (sealed manifest + rows), global D_cov
+  from the sealed receipt; T01 events and controls inside D_cov; unknown D_cov ⇒ T01 INCONCLUSIVE;
+- (iv) one classifier P̂(t_arm) = Σ k·π / Σ k over the 480 minute boundaries ending at t_arm = h − 5 (π = (m − idx) / idx,
+  weights 1…480, renormalised over the present ones, ≥ 90 % present), ±0.0009, the same function at events and controls;
+- (v) C6: the 3 × 3 matrix (class of P̂ × class of R_h at ±0.0004), sensitivity, false-positive rate, denominators;
+- (vi) the `through` fill proxy of T01 on the six candles opening at h−5 … h, at events and controls;
+- (vii) eligibility: an instrument-instant exists only if its footprint starts ≥ listTime + 30 days (events, controls);
+- (viii) zero-volume key candles exclude the instrument-instant; an instrument missing > 20 % of its event-footprint
+  minutes leaves the type;
+- (ix) unit = the instant (equal weight within an instant, ≥ 1 instrument), n = unique event instants;
+- (x) T05 = 09:30 America/New_York of the frozen NYSE days, CPI and Employment Situation dates excluded;
+- (xi) controls at the type's minute of the hour, every admissible hour of the instrument's event days, admissible
+  when the control footprint is ≥ 60 min from every footprint of the exclusion union (settlements of the instrument, the
+  type's default grid, T05 instants, sessions, macro releases); no random draw;
+- (xii) sessions and macro releases from local time (`zoneinfo`; New York checked against `events.us_dst_active`);
+- (xiii) costs by execution role (maker_maker 13 bp, taker_maker 15.5 bp; stress × 1.5 on every term);
+- (xiv) T05 funding outside D_cov assumed zero, counted (`funding_unknown`); control funding computed, non-zero counted;
+- (xv) verdict precedence INCONCLUSIVE > NOT_INFORMATIVE > criteria C1–C7 then Holm; FAIL annotated;
+- (xvi) `holm_local_confirmed` (K = 2, α 0.10) and `pass_programme_immediate` (p ≤ 0.10 / 7); no `pass_programme` field;
+- (xvii) no information after the decision: a classifier evaluated elsewhere than at t_arm, a sign window ending after
+  `arm_min`, a lookback ending after t_arm are refused at parse time;
+- (xviii) the strict schema, `requires`, the frozen status, the END_EXCLUSIVE constant, the universe against the snapshot;
+- (xx) INCONCLUSIVE and NOT_INFORMATIVE types are sealed: D, LB90, UB90, p, means, criteria and the type's descriptive
+  reports go to `sealed/<type>.json` (sha256 printed), nothing else; economic reading at 365 / 252 days a year;
+  day-block bootstrap (10 000 resamples, seed 20261102; 7-day blocks descriptive); the descriptive reports of §9 under
+  the warning of `descriptive.rule`;
+- (xxi) Gate 2 (`source: capture`, capability `gate2_capture_simulation`): the entry and exit simulated on the captured
+  book (`measure_lp_sim`: post-only at the touch armed at h − 5 for T01, a fill in [h ; h+1) crossing the settlement;
+  taker at the opposite touch + slippage for T05), P̂ on the captured mark and the `index_1m` candles of the tape,
+  C6 on the settled rate of the `funding-rate` channel.
+
+Statistics: D = mean(event instants) − mean(control instants); bootstrap over blocks of UTC days (events and controls
+of a day resampled together; LB90 / UB90 = quantiles 0.10 / 0.90; one-sided p = P*(D* ≤ 0), `GATES` §2.2). Block sums
+use `math.fsum`; the resample sums are integer-count matrix products of those block sums.
+
+Guards: the spec window may not touch the quarantine [2026-10-14, 2026-11-02); every history row at or after
+`g5_fetch.END_EXCLUSIVE` is dropped; `end_exclusive_utc` of the spec must equal the constant.
 """
 
 from __future__ import annotations
@@ -82,10 +74,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date as _date
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
 
@@ -93,58 +88,137 @@ from . import events as ev
 from . import g5_fetch, lp_sim, tape
 from . import xperp_capture as xc
 
-EVALUATOR_VERSION = "g5_eval/2"
+EVALUATOR_VERSION = "g5_eval/3"
+SPEC_SCHEMA = "g5-spec/2"
 MINUTE_US = 60 * tape.SECOND_US
 HOUR_US = 60 * MINUTE_US
 DAY_US = tape.DAY_S * tape.SECOND_US
 QUARANTINE_START_US = g5_fetch.END_EXCLUSIVE_US  # 2026-10-14T00:00:00Z
 QUARANTINE_END_US = xc.quarantine_floor_us()  # 2026-11-02T00:00:00Z
-PAD_DAYS = 1  # read before the window: the premium average looks back up to 480 minutes and windows start before h
-FUNDING_RATE_OBSERVED_MIN = -1  # funding page EEE l.258–270: the rate of the 16:00 assessment is calculated at 15:59
-PREMIUM_FFILL_MIN = 5
-PRICE_CODE = {"last": 1, "mark": 2}
+PAD_DAYS = 1  # read one day before the window: P̂ looks back 480 minutes, footprints start before h
+STATUSES = ("DRAFT_NOT_FROZEN", "FROZEN")
 ROLES = ("maker_maker", "taker_maker")
 VERDICTS = ("PASS", "FAIL", "NOT_INFORMATIVE", "INCONCLUSIVE")
-APPROX_MEASURES = ("r_bp", "net_bp", "net_bp_stress", "net_bp_as_sensitivity", "r_alt_bp")
-SIM_MEASURES = ("sim_net_bp", "sim_net_bp_stress")
-GENERATORS = ("funding", "fixed_time", "us_open", "explicit")
-SIGN_KINDS = ("constant", "field_sign", "return_sign", "premium_wavg")
-PREMIUM_FIELDS = {"premium_mark_index": "history", "premium_okx": "capture"}
-CONDITION_FIELDS = ("price_return", "premium_mark_index", "premium_okx", "funding_rate")
-CONDITION_OPS = {">": np.greater, "<": np.less, ">=": np.greater_equal, "<=": np.less_equal, "abs>": lambda a, b: np.abs(a) > b, "abs<": lambda a, b: np.abs(a) < b}
-LOOKAHEAD_PATHS = ("condition", "sign", "control_sign")
-SIM_STATUS = ("filled", "unfilled", "stale", "crossed", "skipped_size", "funding_unknown", "no_exit_quote", "unavailable")
+CRITERIA = ("C1", "C2", "C3", "C4", "C5", "C6", "C7")
+UTC = timezone.utc
+NEW_YORK = "America/New_York"
 
-# The versioned whitelist (xii). A spec names the capabilities it relies on in `requires`; an unknown name is refused, and so is
-# a spec using a capability it does not declare.
+# The versioned whitelist of capabilities (B xviii). Each key is a (B) function of the protocol, implemented here.
 CAPABILITIES: dict[str, str] = {
-    "price_source_last": "(B) i: mandatory price_source, one source, no fallback, mixed-source returns excluded and counted",
-    "funding_rate_sign_dead_zone": "(B) ii: sign / condition on the realized funding rate with a dead zone; predicted rates never used",
-    "interval_8h_filter": "(B) ii: funding generator keeps settlements whose previous and next gaps equal interval_hours ± tolerance",
-    "control_sign_premium_wavg": "(B) iii: premium_wavg sign (weights 1..n, coverage floor, thresholds) as sign or control_sign; κ (C6)",
-    "controls_same_days_minute_zero": "(B) iv: controls on the type's event days, at a fixed minute of drawn hours; union exclusion",
-    "controls_minute_of_hour": "per-type minute of the hour of the controls (quant review B2)",
-    "controls_window_exclusion": "controls.exclusion_on = window: the whole control window kept away from every excluded instant",
-    "n_unit_instant": "(B) v: unit = instant, mean over instruments present, n = unique instants",
-    "execution_role_costs": "(B) vi: execution_role, adverse selection per maker leg, slippage, stress on every cost term",
-    "us_open_exclude_dates": "(B) vii: frozen exclude_dates lists",
-    "verdict_c2_c6": "(B) viii: C1-C6, INCONCLUSIVE, FAIL annotation",
-    "days_per_year": "(B) ix: economic reading with days_per_year per type and S_eco",
-    "gate2_lp_sim_roles": "(B) x: capture simulation, maker or taker entry, passive exit then taker, funding fill grace",
-    "declared_lookahead": "B2: a field observed after arm_min only through a named declaration",
-    "premium_named_fields": "M2: premium_mark_index (history) and premium_okx (capture) are distinct fields",
-    "coverage_restriction": "M1: restrict_to_coverage (D_cov of the named streams), funding_unknown, assumed hours outside coverage",
-    "quality_rules": "§4.5: missing-window share, proxy share, fetch error share, funding_unknown share",
-    "eligibility_days_after_list": "§3.2 (i): instrument eligible from listTime + days (quant review B3)",
-    "zero_volume_exclusion": "quant review M3: exclude an observation whose arming, window or sign candle has vol = 0",
-    "programme_family": "GATES §2.3: PASS_PROGRAMME immediate test p <= alpha / m_max",
+    "spec_schema_g5_v2_strict_keys": "(B) xviii: schema g5-spec/2, key whitelist at every level, implemented values only",
+    "status_frozen_required_for_market_data": "(B) xviii: FROZEN status and a complete freeze_fill before any market value is read",
+    "end_exclusive_constant_check": "(B) xviii: end_exclusive_utc equal to g5_fetch.END_EXCLUSIVE, quarantine floor equal to xperp_capture's",
+    "universe_from_spec_checked_against_snapshot": "(B) xviii, vii: universe.analysed checked against the freeze snapshot (listTime, tickSz, ctVal, uly)",
+    "eligibility_list_time_plus_days": "(B) vii: instrument-instant only if its footprint starts at listTime + days or later (events and controls)",
+    "price_source_last_only": "(B) i: reference price candles_1m.close; mark and index for the classifier only; no mixed-source return",
+    "candle_confirm_and_vol_zero_exclusion": "(B) viii: confirm = 0 dropped and counted; vol = 0 on a key candle excludes the instrument-instant",
+    "unit_instant_equal_weight": "(B) ix: unit = instant, equal weight within an instant, n = unique event instants",
+    "generator_funding_settlements_interval_filter": "(B) ii: T01 instants = fundingTime with 8 h ± 1 min to both neighbours, realized rate required",
+    "funding_coverage_window": "(B) iii: D_cov from the sealed manifest; T01 events and controls inside D_cov; unknown D_cov => INCONCLUSIVE",
+    "classifier_premium_wavg_at_arm": "(B) iv: one classifier P_hat(t_arm), weights 1..480, coverage >= 90 %, +-0.0009, events and controls",
+    "classifier_validation_confusion_3x3": "(B) v: C6 matrix P_hat class x R_h class, sensitivity, false positives, denominators",
+    "fill_proxy_through_candles": "(B) vi: through fill proxy on the candles opening from t_arm to h, events and controls",
+    "generator_local_time_exclude_dates": "(B) x: T05 at 09:30 America/New_York on frozen NYSE days, CPI / Employment Situation excluded",
+    "controls_minute_of_hour_all_admissible": "(B) xi: controls at the type's minute of the hour, every admissible hour, no draw",
+    "exclusion_by_footprint_with_margin": "(B) xi: admissibility by footprints at margin_min of every exclusion footprint",
+    "sessions_local_time_dst": "(B) xii: sessions converted from local time with zoneinfo (DST)",
+    "macro_filter_new_york_time": "(B) xii: CPI / Employment Situation / FOMC in New York time, checked against events.us_dst_active",
+    "costs_by_execution_role": "(B) xiii: maker_maker / taker_maker cost terms, stress on every term, expected totals checked",
+    "funding_unknown_outside_coverage_counted": "(B) xiv: funding outside D_cov assumed zero and counted; control funding computed",
+    "no_information_after_decision": "(B) xvii: no condition, classifier or sign observed after arm_min",
+    "verdict_c1_c7_precedence": "(B) xv: INCONCLUSIVE > NOT_INFORMATIVE > C1-C7 then Holm; FAIL annotation",
+    "holm_local_and_programme_fields": "(B) xvi: holm_local_confirmed (K = 2) and pass_programme_immediate (p <= alpha / m_max)",
+    "sealed_statistics_for_inconclusive_and_not_informative": "(B) xx: sealed/<type>.json for INCONCLUSIVE and NOT_INFORMATIVE, sha256 printed",
+    "economic_reading_days_per_year": "(B) xx: plafond_USD_an with the type's days per year, S_eco, pursued / not pursued",
+    "bootstrap_day_blocks": "(B) xx: day-block bootstrap, events and controls jointly, seed and resamples of the spec",
+    "descriptive_reports_g5_v2": "(B) xx: the descriptive reports of section 9, warning at the head of the Markdown",
+    "gate2_capture_simulation": "(B) xxi: capture source, simulated entry and exit on the captured book, P_hat on capture mark and index, C6 on the channel rate",
 }
-ALWAYS_USED = ("price_source_last", "n_unit_instant", "execution_role_costs", "verdict_c2_c6", "days_per_year", "quality_rules")
-RENAMED_KEYS = {
-    "fee_stress_multiplier": "cost_stress_multiplier (the stress multiplies every cost term, not the fees only)",
-    "premium": "premium_mark_index (history: (mark - index) / index) or premium_okx (capture: the funding channel's premium)",
-    "mid_return": "price_return (the return of the reference price price_source)",
+HISTORY_REQUIRES = tuple(k for k in CAPABILITIES if k != "gate2_capture_simulation")
+CAPTURE_REQUIRES = tuple(CAPABILITIES)
+
+# Texts that state an implemented rule: the spec must carry exactly these (a different text would be a different rule).
+PRICE_RULES = {
+    "history": {"source": "last", "series": "candles_1m.close", "boundary_convention": "c(t) = close of the candle opening at t - 60 s"},
+    "capture": {"source": "last", "series": "trades.last_print_of_minute", "boundary_convention": "c(t) = last print of the minute ending at t"},
 }
+PRICE_FIXED = {"mixing_sources": "refused", "mark_and_index_use": "classifier_premium_proxy_only", "confirm_zero_rows": "drop_and_count",
+               "missing_key_price": "exclude_instrument_instant_and_count", "forward_fill": "none", "above_max_missing_share": "exclude_instrument_from_type_and_count"}
+FROZEN_CANDLE = {"history": {"rule": "exclude_instrument_instant_if_vol_eq_0_on_any_key_candle", "key_candles": "events[].key_candles_end_min",
+                             "count_field": "excluded_vol_zero", "report": "share_by_instrument"},
+                 "capture": {"rule": "not_applicable_capture_has_no_candles", "key_candles": "events[].key_candles_end_min", "count_field": "excluded_vol_zero",
+                             "report": "share_by_instrument"}}
+UNIT_FIXED = {"kind": "instant", "instant": "minute-aligned UTC timestamp", "instrument_weight": "equal_within_instant", "instant_weight": "equal",
+              "n_definition": "number of unique event instants with >= min_instruments_per_instant retained instruments"}
+UNIT_REPORTS = ("instruments_per_instant_distribution", "stratum_min_instruments_3")
+STAT_DIFFERENCE = "D = mean over event instants - mean over control instants"
+P_VALUE_RULE = "share of resamples with D* <= 0"
+FUNDING_RULES = {"history": {"source": "funding_hist.realized_rate"}, "capture": {"source": "funding.settled_rate"}}
+FUNDING_FIXED = {"formula": "funding_bp = -side * sum(realized rates of the instrument's settlements T with entry < T <= exit) * 1e4",
+                 "outside_coverage": "assumed_zero_not_observed_and_counted", "count_field": "funding_unknown", "cap_stress": "descriptive_only"}
+CONTROLS_FIXED = {"candidates": "every hour of the type's control days at controls.minute_of_hour", "selection": "all_admissible",
+                  "admissible_if": "control footprint end <= exclusion start - margin_min or control footprint start >= exclusion end + margin_min, for every exclusion footprint",
+                  "funding_at_controls": "computed; expected 0; any non-zero count reported as anomaly"}
+SESSION_DAYS = ("nyse_trading_days", "mon_fri", "all", "fri")
+PREMIUM_PROXY = {"history": "pi(g) = (m(g) - idx(g)) / idx(g) at minute boundary g, m and idx = closes of mark_1m and index_1m candles ending at g",
+                 "capture": "pi(g) = (m(g) - idx(g)) / idx(g) at minute boundary g, m = last captured mark of the minute ending at g, idx = close of the index_1m candle ending at g"}
+FILL_PROXY_FIXED = {"limit_price": "c(t_arm)", "long_filled_if": "min(low) < c(t_arm) - tick_sz", "short_filled_if": "max(high) > c(t_arm) + tick_sz",
+                    "unfilled": "exclude_from_primary_and_count", "report": "fill_rate_events_and_controls"}
+VALIDATION_FIXED = {"report": "3x3 matrix (classifier class x rate class), always printed", "sensitivity": "share of rate class != 0 with classifier class == rate class",
+                    "false_positive_rate": "share of rate class == 0 with classifier class != 0"}
+CRITERIA_TEXT = {
+    "C1": "D point >= threshold_bp and LB90(D) > 0",
+    "C2": "mean event net_bp (point, costs included) > 0",
+    "C3": "mean event net_bp at stress_multiplier_all_cost_terms (point) > 0",
+    "C4": "D point > 0 in each half ; halves = sorted distinct event days of the type cut at the lower median day (first half = days <= median) ; controls of the same days",
+    "C6": "T01 only: validation of the classifier (events[].validation)",
+    "C7": "T01 only: D point > 0 on the event instants at 16:00 UTC against the controls of the same UTC days",
+}
+C5_RE = re.compile(r"^LB90\(D\) > 0 after removing the ceil\((?P<share>0\.\d+) n\) event instants with the highest per-instant net ; controls unchanged ; same bootstrap seed and resamples$")
+INCONCLUSIVE_GLOBAL = ("spec_sha256_mismatch", "code_digest_mismatch", "status_not_frozen", "freeze_fill_null", "stream_end_reason_missing")
+FETCH_ERROR_RE = re.compile(r"^fetch_job_error_share_gt_(?P<a>\d)_(?P<b>\d+)$")
+INCONCLUSIVE_TYPE_FIXED = ("funding_coverage_unknown", "C6_failed_or_not_computable", "index_source_none")
+PROXY_MISSING_RE = re.compile(r"^proxy_missing_instrument_day_share_gt_(?P<a>\d)_(?P<b>\d+)$")
+SEALING_PRINTED = ("verdict", "reasons", "n_instants", "n_days", "exclusion_counts", "fill_rate", "validation_matrix")
+SEALING_SEALED = ("D", "lb90", "ub90", "p_one_sided", "event_mean", "control_mean", "criteria_values", "halves", "c5", "c7", "by_month", "by_instrument", "by_hour",
+                  "economic", "type_descriptives")
+GATE2_INSCRIPTION_VALUES = {"PASS": ("inscribed",), "NOT_INFORMATIVE": ("inscribed_automatically_without_futility",),
+                            "INCONCLUSIVE": ("inscribed_automatically_without_futility",), "FAIL": ("not_inscribed",)}
+ECONOMIC_FIXED = {
+    "admission_order_within_instant": "inst_id_ascending",
+    "fills_per_day": "admitted filled orders / number of days of the type's calendar (T01: calendar days of funding_coverage ; T05: NYSE trading days of the window with >= 1 eligible instrument, macro days included in the denominator)",
+    "formula": "plafond_usd_an = fills_per_day * order_notional_usd * mean_event_net_bp / 1e4 * days_per_year",
+    "measure": "absolute event net_bp (round trip), never D",
+    "pursued_if": "point >= s_eco and (ub90 >= 2 * s_eco or lb90 > 0)",
+    "pos_mode": "both hypotheses reported",
+}
+BREAK_EVEN_RE = re.compile(r"^(?P<type>[A-Za-z0-9]+_[A-Za-z0-9_]+?)_(?P<k>\d+)_fills_per_(?P<unit>event_day|day)$")
+DESCRIPTIVE_REPORTS = (
+    "T01_classified_by_realized_rate", "T01_dead_zone_thresholds_0_0006_minus_0_0005", "T01_without_fill_proxy", "T01_dose_abs_rate",
+    "T01_v_shape_minus15_0_plus15", "T01_by_photo_hour_00_08_16", "T01_friday_0800", "T01_us_business_day_vs_not", "T01_stratum_T02_4h_2h_1h",
+    "T01_mark_reference_inside_coverage", "T01_premium_balance_events_vs_controls", "T01_funding_cap_stress",
+    "T05_horizons_15_30", "T05_move_ge_1_tick", "T05_macro_days_separately", "T05_ten_am_et_release_days", "T05_brr_adjacency",
+    "by_month", "by_instrument", "by_sign", "regime_rv24_above_median", "instruments_per_instant_ge_3", "excluded_share_by_instrument",
+    "block_days_7", "minute_zero_T07", "hourly_seasonality_last_price", "weekday_seasonality", "funding_intervals_histogram", "portfolio_reading")
+COMMON_REPORTS = ("minute_zero_T07", "hourly_seasonality_last_price", "weekday_seasonality", "funding_intervals_histogram")
+PER_TYPE_REPORTS = ("by_month", "by_instrument", "by_sign", "regime_rv24_above_median", "instruments_per_instant_ge_3", "excluded_share_by_instrument", "block_days_7",
+                    "portfolio_reading")
+DEAD_ZONE_RE = re.compile(r"^(?P<label>T\d+)_dead_zone_thresholds_(?P<hi_a>\d)_(?P<hi_b>\d+)_minus_(?P<lo_a>\d)_(?P<lo_b>\d+)$")
+HORIZONS_RE = re.compile(r"^(?P<label>T\d+)_horizons_(?P<h>\d+(?:_\d+)*)$")
+FETCH_END_TEXT = "g5_fetch.END_EXCLUSIVE (module constant, never a parameter)"
+ESTIMATE_RE = re.compile(r"^coverage_start = (?P<date>\d{4}-\d{2}-\d{2})\b")
+SETTLEMENT_EXCLUSION_RE = re.compile(r"^settlements of the instrument read in (?P<stream>funding_hist|funding) \(all intervals\), footprint \[s(?P<a>[+-]\d+) ; s(?P<b>[+-]\d+)\]$")
+GRID_EXCLUSION_RE = re.compile(r"^default settlement grid of the type \(controls\.default_settlement_grid_utc_hours\), every day, footprint \[s(?P<a>[+-]\d+) ; s(?P<b>[+-]\d+)\]$")
+TYPE_EXCLUSION_RE = re.compile(r"^(?P<label>\S+) event instants \(generator of (?P<type>[A-Za-z0-9_]+)\), footprint \[h(?P<a>[+-]\d+)? ; h(?P<b>[+-]\d+)?\], for every instrument$")
+SESSIONS_EXCLUSION = "sessions (frozen list, local time, DST-aware)"
+MACRO_EXCLUSION = "macro releases (macro_filter, New York time)"
+CLASS_RE = re.compile(r"^\+1 if (?P<field>P_hat\(t_arm\)|realized_rate) >= (?P<hi>\d+(?:\.\d+)?), -1 if <= (?P<lo>-\d+(?:\.\d+)?), 0 otherwise$")
+POPULATION_RE = re.compile(r"^raw (?P<label>\S+) instrument-settlements \(eligible, interval filter passed, realized rate present, classifier computable\)$")
+CONTROL_DAYS_RE = {"funding_settlements": re.compile(r"^days on which the instrument has >= 1 raw (?P<label>\S+) event \(before classifier and fill proxy\)$"),
+                   "local_time": re.compile(r"^days on which the instrument has a raw (?P<label>\S+) event$")}
+WEIGHTS_TEXT = "k = 1..{n}, oldest = 1, boundary t_arm = {n} ; renormalised over present minutes"
+COVERAGE_START_TEXT = "first settlement of funding_hist whose predecessor is also served (manifest coverage_start_us, end_reason required)"
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class SpecError(ValueError):
@@ -155,144 +229,53 @@ def _json_default(value):
     if isinstance(value, np.integer):
         return int(value)
     if isinstance(value, np.floating):
-        return None if np.isnan(value) else float(value)
+        return None if not np.isfinite(value) else float(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
     if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, (set, frozenset, tuple)):
-        return sorted(value) if isinstance(value, (set, frozenset)) else list(value)
-    if isinstance(value, float) and math.isnan(value):
+        return [_json_default(v) if isinstance(v, (np.generic, float)) else v for v in value.tolist()]
+    if isinstance(value, (set, frozenset)):
+        return sorted(value)
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, float) and not math.isfinite(value):
         return None
     raise TypeError(f"not serialisable: {type(value)}")
 
 
-def _finite(value) -> float | None:
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        return None
-    return value if math.isfinite(value) else None
+def _clean(value):
+    """A JSON-safe copy: non-finite floats → None, numpy scalars → Python, tuples → lists."""
+    if isinstance(value, dict):
+        return {str(k): _clean(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_clean(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return [_clean(v) for v in value.tolist()]
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        return float(value) if math.isfinite(float(value)) else None
+    if isinstance(value, np.bool_):
+        return bool(value)
+    return value
 
 
 def _fmean(values) -> float | None:
-    values = [float(v) for v in np.asarray(values, dtype=np.float64).ravel().tolist() if math.isfinite(v)]
-    return math.fsum(values) / len(values) if values else None
+    vals = [float(v) for v in np.asarray(values, dtype=np.float64).ravel().tolist() if math.isfinite(v)]
+    return math.fsum(vals) / len(vals) if vals else None
 
 
-# ----------------------------------------------------------------------------- specification: strict reading
+def _fsum(values) -> float:
+    return math.fsum(float(v) for v in np.asarray(values, dtype=np.float64).ravel().tolist() if math.isfinite(v))
 
 
-@dataclass(frozen=True)
-class EventSpec:
-    type: str
-    primary: bool
-    evaluate: bool
-    generator: dict
-    condition: dict | None = None
-    sign: dict | None = None
-    control_sign: dict | None = None
-    from_min: int = 0
-    to_min: int = 0
-    arm_min: int = 0
-    rest_until_min: int = 0
-    exit_until_min: int | None = None
-    execution_role: str | None = None
-    days_per_year: float | None = None
-    restrict_to_coverage: tuple = ()
-    control_minute_of_hour: int = 0
-    declared_lookahead: tuple = ()
-    observed_min: dict = field(default_factory=dict)  # path → minute (relative to h) at which the field is observed
-    description: str = ""
-
-    @property
-    def price_offsets(self) -> tuple[int, ...]:
-        """Minute offsets (relative to h) where the reference price must exist: arming, window ends, sign and condition windows."""
-        offsets = {self.arm_min, self.from_min, self.to_min}
-        if self.sign and self.sign["kind"] == "return_sign":
-            offsets |= {self.sign["from_min"], self.sign["to_min"]}
-        if self.condition and self.condition["field"] == "price_return":
-            offsets |= {self.condition["from_min"], self.condition["to_min"]}
-        return tuple(sorted(offsets))
-
-    @property
-    def lo_min(self) -> int:
-        lows = list(self.price_offsets)
-        for block in (self.sign, self.condition):
-            if block and "at_min" in block and block.get("field") != "funding_rate":
-                lows.append(int(block["at_min"]))
-        return min(lows)
-
-    @property
-    def wavg(self) -> dict | None:
-        """The premium_wavg block the type relies on (its sign, else its control sign)."""
-        if self.sign and self.sign["kind"] == "premium_wavg":
-            return self.sign
-        return self.control_sign
+def _iso(ts_us: int | None) -> str | None:
+    if ts_us is None:
+        return None
+    return datetime.fromtimestamp(int(ts_us) / tape.SECOND_US, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-@dataclass(frozen=True)
-class Spec:
-    spec_id: str
-    source: str
-    requires: tuple
-    price_source: str
-    start: str  # YYYY-MM-DD
-    end_exclusive: str  # YYYY-MM-DD
-    alpha: float
-    threshold_bp: float
-    min_instants: int
-    min_days: int
-    primary_measure: str
-    resamples: int
-    seed: int
-    block_days: int
-    execution: dict
-    controls: dict
-    quality: dict
-    economic: dict
-    eligibility_days: float | None
-    assumed_hours: tuple | None
-    programme_m_max: int | None
-    events: tuple
-    used: tuple
-    raw: dict = field(default_factory=dict, compare=False)
-
-    @property
-    def dates(self) -> list[str]:
-        last = tape.date_of_day(tape.day_of_date(self.end_exclusive) - 1)
-        return tape.parse_dates(f"{self.start}..{last}")
-
-    @property
-    def start_us(self) -> int:
-        return tape.day_of_date(self.start) * DAY_US
-
-    @property
-    def end_us(self) -> int:
-        return tape.day_of_date(self.end_exclusive) * DAY_US
-
-    @property
-    def pad_start_us(self) -> int:
-        pad = self.start_us - PAD_DAYS * DAY_US
-        return max(pad, QUARANTINE_END_US) if self.source == "capture" else pad
-
-    @property
-    def simulated(self) -> bool:
-        return self.source == "capture" and self.execution.get("sim") is not None
-
-    @property
-    def measures(self) -> tuple[str, ...]:
-        return APPROX_MEASURES + (SIM_MEASURES if self.simulated else ())
-
-    @property
-    def net_measure(self) -> str:
-        return "sim_net_bp" if self.primary_measure == "sim_net_bp" else "net_bp"
-
-    @property
-    def stress_measure(self) -> str:
-        return "sim_net_bp_stress" if self.primary_measure == "sim_net_bp" else "net_bp_stress"
-
-    @property
-    def evaluated(self) -> tuple:
-        return tuple(e for e in self.events if e.evaluate)
+# ----------------------------------------------------------------------------- strict reading: helpers
 
 
 def _check_keys(document, where: str, required=(), optional=()) -> dict:
@@ -301,8 +284,7 @@ def _check_keys(document, where: str, required=(), optional=()) -> dict:
     allowed = set(required) | set(optional)
     unknown = sorted(k for k in document if k not in allowed)
     if unknown:
-        hints = [f"{k!r} -> {RENAMED_KEYS[k]}" for k in unknown if k in RENAMED_KEYS]
-        raise SpecError(f"{where}: unknown key(s) {unknown}; {EVALUATOR_VERSION} refuses what it does not implement" + (f" (renamed: {'; '.join(hints)})" if hints else ""))
+        raise SpecError(f"{where}: unknown key(s) {unknown}; {EVALUATOR_VERSION} refuses what it does not implement")
     missing = [k for k in required if k not in document]
     if missing:
         raise SpecError(f"{where}: missing key(s) {missing}")
@@ -330,41 +312,66 @@ def _num(document: dict, key: str, where: str, lo: float | None = None, hi: floa
     return value
 
 
-def _bool(document: dict, key: str, where: str) -> bool:
+def _bool(document: dict, key: str, where: str, only: bool | None = None) -> bool:
     value = document[key]
     if not isinstance(value, bool):
         raise SpecError(f"{where}.{key}: expected true or false, got {value!r}")
+    if only is not None and value is not only:
+        raise SpecError(f"{where}.{key}: only {str(only).lower()} is implemented")
     return value
 
 
-def _str(document: dict, key: str, where: str, choices=None) -> str:
+def _text(document: dict, key: str, where: str) -> str:
     value = document[key]
     if not isinstance(value, str) or not value.strip():
         raise SpecError(f"{where}.{key}: expected a non-empty string, got {value!r}")
-    if choices is not None and value not in choices:
-        hint = f" (renamed: {RENAMED_KEYS[value]})" if value in RENAMED_KEYS else ""
-        raise SpecError(f"{where}.{key}: {value!r} not in {tuple(choices)}{hint}")
     return value
 
 
-def _list(document: dict, key: str, where: str) -> list:
+def _choice(document: dict, key: str, where: str, choices) -> str:
+    value = _text(document, key, where)
+    if value not in tuple(choices):
+        raise SpecError(f"{where}.{key}: {value!r} is not implemented (implemented: {tuple(choices)})")
+    return value
+
+
+def _exact(document: dict, key: str, where: str, expected: str) -> str:
+    value = _text(document, key, where)
+    if value != expected:
+        raise SpecError(f"{where}.{key}: {value!r} is not the implemented rule {expected!r}")
+    return value
+
+
+def _list(document: dict, key: str, where: str, nonempty: bool = True) -> list:
     value = document[key]
-    if not isinstance(value, list):
-        raise SpecError(f"{where}.{key}: expected a list")
+    if not isinstance(value, list) or (nonempty and not value):
+        raise SpecError(f"{where}.{key}: expected a{' non-empty' if nonempty else ''} list")
     return value
 
 
-def _parse_hhmm(text: str, where: str) -> int:
-    parts = str(text).strip().split(":")
-    if len(parts) != 2 or not all(p.isdigit() for p in parts):
-        raise SpecError(f"{where}: time {text!r} is not HH:MM")
-    hour, minute = int(parts[0]), int(parts[1])
-    if hour > 23 or minute > 59:
-        raise SpecError(f"{where}: time {text!r} out of range")
-    return hour * 60 + minute
+def _str_list(document: dict, key: str, where: str, choices=None, nonempty: bool = True) -> tuple[str, ...]:
+    items = _list(document, key, where, nonempty)
+    if any(not isinstance(i, str) or not i.strip() for i in items) or len(set(items)) != len(items):
+        raise SpecError(f"{where}.{key}: expected distinct non-empty strings")
+    if choices is not None:
+        unknown = [i for i in items if i not in tuple(choices)]
+        if unknown:
+            raise SpecError(f"{where}.{key}: {unknown} not implemented (implemented: {tuple(choices)})")
+    return tuple(items)
 
 
-def _hours(values: list, where: str) -> tuple[int, ...]:
+def _int_pair(document: dict, key: str, where: str) -> tuple[int, int]:
+    value = document[key]
+    if not isinstance(value, list) or len(value) != 2 or any(isinstance(v, bool) or not isinstance(v, int) for v in value):
+        raise SpecError(f"{where}.{key}: expected [from, to] integers")
+    if value[0] >= value[1]:
+        raise SpecError(f"{where}.{key}: from must be < to")
+    return int(value[0]), int(value[1])
+
+
+def _hours(values, where: str) -> tuple[int, ...]:
+    if not isinstance(values, list) or not values:
+        raise SpecError(f"{where}: expected a non-empty list of hours")
     out = []
     for value in values:
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 23:
@@ -372,426 +379,1185 @@ def _hours(values: list, where: str) -> tuple[int, ...]:
         out.append(int(value))
     if len(set(out)) != len(out):
         raise SpecError(f"{where}: duplicate hours")
-    return tuple(out)
+    return tuple(sorted(out))
 
 
-def _date_days(values: list, where: str) -> tuple[int, ...]:
-    days = []
-    for text in values:
-        if not isinstance(text, str):
-            raise SpecError(f"{where}: dates must be 'YYYY-MM-DD' strings, got {text!r}")
-        try:
-            datetime.strptime(text, "%Y-%m-%d")
-        except ValueError:
-            raise SpecError(f"{where}: {text!r} is not a YYYY-MM-DD date") from None
-        days.append(tape.day_of_date(text))
+def _hhmm(text, where: str) -> int:
+    parts = str(text).strip().split(":")
+    if len(parts) != 2 or not all(p.isdigit() and len(p) == 2 for p in parts):
+        raise SpecError(f"{where}: time {text!r} is not HH:MM")
+    hour, minute = int(parts[0]), int(parts[1])
+    if hour > 23 or minute > 59:
+        raise SpecError(f"{where}: time {text!r} out of range")
+    return hour * 60 + minute
+
+
+def _date(text, where: str) -> _date:
+    if not isinstance(text, str):
+        raise SpecError(f"{where}: dates must be 'YYYY-MM-DD' strings, got {text!r}")
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        raise SpecError(f"{where}: {text!r} is not a YYYY-MM-DD date") from None
+
+
+def _dates(values, where: str) -> tuple[_date, ...]:
+    if not isinstance(values, list):
+        raise SpecError(f"{where}: expected a list of dates")
+    days = [_date(v, where) for v in values]
     if len(set(days)) != len(days):
         raise SpecError(f"{where}: duplicate dates")
     return tuple(sorted(days))
 
 
-def _parse_generator(generator, where: str, used: set) -> dict:
-    kind = _str(_check_keys(generator, where, ("kind",), ("fallback_hours", "interval_hours", "interval_tolerance_min", "times", "weekdays", "exclude_dates", "skip_dates", "instants")),
-                "kind", where, GENERATORS)
-    if kind == "funding":
-        _check_keys(generator, where, ("kind",), ("fallback_hours", "interval_hours", "interval_tolerance_min"))
-        out = {"kind": kind, "fallback_hours": _hours(_list(generator, "fallback_hours", where), f"{where}.fallback_hours") if "fallback_hours" in generator else ()}
-        if "interval_hours" in generator:
-            if "interval_tolerance_min" not in generator:
-                raise SpecError(f"{where}: interval_hours needs interval_tolerance_min")
-            out["interval_hours"] = _num(generator, "interval_hours", where, 0.0, 24.0, lo_open=True)
-            out["interval_tolerance_min"] = _num(generator, "interval_tolerance_min", where, 0.0, 60.0)
-            used.add("interval_8h_filter")
-        elif "interval_tolerance_min" in generator:
-            raise SpecError(f"{where}: interval_tolerance_min without interval_hours")
-        return out
-    if kind == "fixed_time":
-        _check_keys(generator, where, ("kind", "times"), ("weekdays", "exclude_dates", "skip_dates"))
-        minutes = tuple(sorted({_parse_hhmm(t, f"{where}.times") for t in _list(generator, "times", where)}))
-        weekdays = _list(generator, "weekdays", where) if "weekdays" in generator else list(range(7))
-        if any(isinstance(d, bool) or not isinstance(d, int) or not 0 <= d <= 6 for d in weekdays):
-            raise SpecError(f"{where}.weekdays must be integers within 0..6 (Monday = 0)")
-        out = {"kind": kind, "minutes": minutes, "weekdays": tuple(sorted(set(weekdays))), "exclude_days": (), "skip_days": ()}
-        for key, name in (("exclude_dates", "exclude_days"), ("skip_dates", "skip_days")):
-            if key in generator:
-                out[name] = _date_days(_list(generator, key, where), f"{where}.{key}")
-                used.add("us_open_exclude_dates")
-        if set(out["exclude_days"]) & set(out["skip_days"]):
-            raise SpecError(f"{where}: a date cannot be both excluded (no session) and skipped (session, not traded)")
-        return out
-    if kind == "us_open":
-        _check_keys(generator, where, ("kind", "exclude_dates"), ("skip_dates",))
-        used.add("us_open_exclude_dates")
-        out = {"kind": kind, "exclude_days": _date_days(_list(generator, "exclude_dates", where), f"{where}.exclude_dates"),
-               "skip_days": _date_days(_list(generator, "skip_dates", where), f"{where}.skip_dates") if "skip_dates" in generator else ()}
-        if set(out["exclude_days"]) & set(out["skip_days"]):
-            raise SpecError(f"{where}: a date cannot be both excluded (no session) and skipped (session, not traded)")
-        return out
-    _check_keys(generator, where, ("kind", "instants"))
-    instants = []
-    for text in _list(generator, "instants", where):
-        try:
-            instants.append(tape.parse_iso_utc(str(text)))
-        except ValueError:
-            raise SpecError(f"{where}.instants: {text!r} is not an ISO UTC instant") from None
-    return {"kind": kind, "instants_us": tuple(instants)}
+def _iso_us(text, where: str) -> int:
+    if not isinstance(text, str) or not text.endswith("Z"):
+        raise SpecError(f"{where}: {text!r} is not an ISO UTC instant ending in Z")
+    try:
+        return tape.parse_iso_utc(text)
+    except ValueError:
+        raise SpecError(f"{where}: {text!r} is not an ISO UTC instant") from None
 
 
-def _check_premium_field(name: str, source: str, where: str, used: set) -> None:
-    if name not in PREMIUM_FIELDS:
-        raise SpecError(f"{where}: {name!r} is not a premium field {tuple(PREMIUM_FIELDS)}")
-    if PREMIUM_FIELDS[name] != source:
-        raise SpecError(f"{where}: {name!r} exists on the {PREMIUM_FIELDS[name]} only, not on a {source} source (two different quantities; CTO M2)")
-    used.add("premium_named_fields")
+def _tz(name, where: str) -> ZoneInfo:
+    if not isinstance(name, str) or not name:
+        raise SpecError(f"{where}: expected a time-zone name")
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise SpecError(f"{where}: unknown time zone {name!r}") from None
 
 
-def _dead_zone(block: dict, where: str) -> tuple[float, float, float]:
-    zone = block["dead_zone"]
-    if not isinstance(zone, list) or len(zone) != 2 or any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in zone):
-        raise SpecError(f"{where}.dead_zone must be [low, high]")
-    low, high = float(zone[0]), float(zone[1])
-    if low > high:
-        raise SpecError(f"{where}.dead_zone: low > high")
-    return low, high, _num(block, "eps", where, 0.0)
+def _min_offset(text: str | None) -> int:
+    return int(text) if text else 0
 
 
-def _parse_condition(condition, where: str, spec_source: str, used: set) -> tuple[dict | None, int | None]:
-    if condition is None:
-        return None, None
-    if not isinstance(condition, dict):
-        raise SpecError(f"{where} must be an object or null")
-    if "field" not in condition or "op" not in condition:
-        raise SpecError(f"{where}: missing key(s) field / op")
-    name = _str(condition, "field", where, CONDITION_FIELDS)
-    op = _str(condition, "op", where, tuple(CONDITION_OPS) + ("outside_dead_zone",))
-    value_keys = ("low", "high", "eps") if op == "outside_dead_zone" else ("value",)
-    if name == "price_return":
-        _check_keys(condition, where, ("field", "op", "from_min", "to_min") + value_keys)
-        out = {"field": name, "op": op, "from_min": _int(condition, "from_min", where), "to_min": _int(condition, "to_min", where)}
-        if out["from_min"] >= out["to_min"]:
-            raise SpecError(f"{where}: from_min must be < to_min")
-        observed = out["to_min"]
-    elif name == "funding_rate":
-        _check_keys(condition, where, ("field", "op") + value_keys, ("require_realized",))
-        if "require_realized" in condition and _bool(condition, "require_realized", where) is not True:
-            raise SpecError(f"{where}.require_realized: only true is implemented (a predicted rate is never used)")
-        out = {"field": name, "op": op}
-        observed = FUNDING_RATE_OBSERVED_MIN
-        used.add("funding_rate_sign_dead_zone")
-    else:
-        _check_keys(condition, where, ("field", "op", "at_min") + value_keys)
-        _check_premium_field(name, spec_source, where, used)
-        out = {"field": name, "op": op, "at_min": _int(condition, "at_min", where)}
-        observed = out["at_min"]
-    if op == "outside_dead_zone":
-        low, high = _num(condition, "low", where), _num(condition, "high", where)
-        if low > high:
-            raise SpecError(f"{where}: low > high")
-        out.update({"low": low, "high": high, "eps": _num(condition, "eps", where, 0.0)})
-    else:
-        out["value"] = _num(condition, "value", where)
-    return out, observed
+def _share_of(match) -> float:
+    return float(f"{match.group('a')}.{match.group('b')}")
 
 
-def _parse_wavg(block: dict, where: str, spec_source: str, used: set, control: bool) -> dict:
-    required = ("kind", "base", "at_min", "minutes", "min_coverage", "upper", "lower") + (("concordance_min", "concordance_on") if control else ())
-    _check_keys(block, where, required, () if control else ("multiplier",))
-    base = _str(block, "base", where)
-    _check_premium_field(base, spec_source, f"{where}.base", used)
-    out = {"kind": "premium_wavg", "base": base, "at_min": _int(block, "at_min", where), "minutes": _int(block, "minutes", where, 1, 10_000),
-           "min_coverage": _num(block, "min_coverage", where, 0.0, 1.0, lo_open=True), "upper": _num(block, "upper", where), "lower": _num(block, "lower", where),
-           "multiplier": _int(block, "multiplier", where) if "multiplier" in block else 1}
-    if out["lower"] > out["upper"]:
-        raise SpecError(f"{where}: lower > upper")
-    if out["multiplier"] not in (1, -1):
-        raise SpecError(f"{where}.multiplier must be +1 or -1")
-    if control:
-        out["concordance_min"] = _num(block, "concordance_min", where, 0.0, 1.0)
-        out["concordance_on"] = _str(block, "concordance_on", where, ("class", "sign"))
-    used.add("control_sign_premium_wavg")
+# ----------------------------------------------------------------------------- the specification
+
+
+@dataclass(frozen=True)
+class Instrument:
+    inst_id: str
+    index_id: str
+    list_time_us: int
+    eligible_from_us: int
+    ct_val: float
+    tick_sz: float
+
+
+@dataclass(frozen=True)
+class TypeSpec:
+    name: str
+    label: str  # "T01", "T05": the prefix of the type name, used by the spec's texts
+    position: int
+    role: str
+    expected_cost_bp: float
+    expected_cost_bp_stress: float
+    days_per_year: float
+    window_rule: str  # funding_coverage | spec_window
+    generator: dict
+    footprint: tuple
+    arm_min: int
+    rest_until_min: int | None
+    classifier: dict | None
+    fill_proxy: dict | None
+    sign: dict | None
+    entry: dict
+    exit: dict
+    return_window: tuple
+    key_candles: tuple
+    validation: dict | None
+    controls: dict
+    c7: dict | None
+    criteria: tuple
+    inconclusive_if: tuple
+    proxy_missing_share_max: float | None
+    audit_expected: dict
+    gate2: dict | None
+    raw: dict = field(default_factory=dict, compare=False)
+
+    @property
+    def key_price_offsets(self) -> tuple:
+        """Minute offsets (relative to h) where the reference price must exist: decision, return window, sign window."""
+        offsets = {self.arm_min, self.return_window[0], self.return_window[1]}
+        if self.sign is not None:
+            offsets |= {self.sign["from_min"], self.sign["to_min"]}
+        return tuple(sorted(offsets))
+
+    @property
+    def lookback_min(self) -> int:
+        """Lowest offset read (the classifier looks back from t_arm)."""
+        lows = [self.footprint[0], self.arm_min]
+        if self.classifier is not None:
+            lows.append(self.arm_min - int(self.classifier["lookback_min"]) + 1)
+        return min(lows)
+
+
+@dataclass(frozen=True)
+class Spec:
+    raw: dict
+    spec_id: str
+    version: str
+    status: str
+    source: str
+    dataset_id: str
+    protocol: str
+    gate: str  # "G5_GATE1_" | "G5_GATE2_"
+    start: _date
+    end_exclusive: _date
+    requires: tuple
+    freeze_fill: dict
+    universe: tuple
+    excluded: tuple
+    eligibility_days: float
+    eligibility_count_field: str
+    price: dict
+    frozen_candle: dict
+    unit: dict
+    statistics: dict
+    power: dict
+    costs: dict
+    controls_common: dict
+    sessions: tuple
+    calendars: dict
+    macro: tuple
+    types: tuple
+    verdict: dict
+    multiplicity: dict
+    sealing: dict
+    gate2_inscription: dict
+    economic: dict
+    descriptive: dict
+    fetch_plan: dict | None
+    gate2: dict | None
+    audit: dict
+    notes: dict = field(default_factory=dict)  # the spec's descriptive texts, copied into every report
+
+    @property
+    def start_us(self) -> int:
+        return tape.day_of_date(self.start.isoformat()) * DAY_US
+
+    @property
+    def end_us(self) -> int:
+        return tape.day_of_date(self.end_exclusive.isoformat()) * DAY_US
+
+    @property
+    def pad_start_us(self) -> int:
+        pad = self.start_us - PAD_DAYS * DAY_US
+        return max(pad, QUARANTINE_END_US) if self.source == "capture" else pad
+
+    @property
+    def frozen(self) -> bool:
+        return self.status == "FROZEN"
+
+    def instrument(self, inst_id: str) -> Instrument:
+        for item in self.universe:
+            if item.inst_id == inst_id:
+                return item
+        raise KeyError(inst_id)
+
+    def type(self, name: str) -> TypeSpec:
+        for item in self.types:
+            if item.name == name:
+                return item
+        raise KeyError(name)
+
+    @property
+    def family(self) -> tuple:
+        return tuple(self.multiplicity["family"])
+
+
+# ----------------------------------------------------------------------------- calendars and local time
+
+
+def local_to_utc_us(day: _date, minute_of_day: int, tz: ZoneInfo) -> int:
+    """The UTC instant (µs) of a local wall-clock time; New York is checked against `events.us_dst_active` (B xii)."""
+    hour, minute = divmod(int(minute_of_day), 60)
+    moment = datetime(day.year, day.month, day.day, hour, minute, tzinfo=tz)
+    if getattr(tz, "key", "") == NEW_YORK:
+        expected_h = -4 if ev.us_dst_active(day) else -5
+        if moment.utcoffset() != timedelta(hours=expected_h):
+            raise SpecError(f"{day} {hour:02d}:{minute:02d} {NEW_YORK}: zoneinfo offset {moment.utcoffset()} differs from events.us_dst_active ({expected_h} h)")
+    return int(moment.astimezone(UTC).timestamp()) * tape.SECOND_US
+
+
+def day_matches(rule: str, day: _date, calendars: dict) -> bool:
+    if rule == "all":
+        return True
+    if rule == "fri":
+        return day.weekday() == 4
+    if rule == "mon_fri":
+        return day.weekday() < 5
+    if rule == "nyse_trading_days":
+        return day.weekday() < 5 and day not in calendars["nyse_holidays"]
+    raise SpecError(f"unknown day rule {rule!r}")
+
+
+def _local_days(lo_us: int, hi_us: int) -> list[_date]:
+    first = datetime.fromtimestamp(lo_us / tape.SECOND_US, tz=UTC).date() - timedelta(days=2)
+    last = datetime.fromtimestamp(hi_us / tape.SECOND_US, tz=UTC).date() + timedelta(days=2)
+    return [first + timedelta(days=i) for i in range((last - first).days + 1)]
+
+
+def session_intervals(spec: Spec, lo_us: int, hi_us: int) -> list[tuple[int, int, str]]:
+    """Every session of the frozen list as UTC [start, end] intervals intersecting [lo, hi) (local time, DST-aware)."""
+    out = []
+    for session in spec.sessions:
+        for day in _local_days(lo_us, hi_us):
+            if not day_matches(session["days"], day, spec.calendars):
+                continue
+            a = local_to_utc_us(day, session["start_min"], session["tz_info"])
+            b = local_to_utc_us(day, session["end_min"], session["tz_info"])
+            if b >= lo_us - DAY_US and a < hi_us + DAY_US:
+                out.append((a, b, session["name"]))
     return out
 
 
-def _parse_sign(sign, where: str, spec_source: str, used: set) -> tuple[dict, int | None]:
-    if not isinstance(sign, dict):
-        raise SpecError(f"{where} must be an object")
-    kind = _str(_check_keys(sign, where, ("kind",), ("value", "field", "at_min", "multiplier", "dead_zone", "eps", "from_min", "to_min", "base", "minutes", "min_coverage", "upper", "lower")),
-                "kind", where, SIGN_KINDS)
-    if kind == "constant":
-        _check_keys(sign, where, ("kind", "value"))
-        value = _int(sign, "value", where)
-        if value not in (1, -1):
-            raise SpecError(f"{where}.value must be +1 or -1")
-        return {"kind": kind, "value": value}, None
-    if kind == "premium_wavg":
-        return _parse_wavg(sign, where, spec_source, used, control=False), int(sign["at_min"])
-    multiplier = _int(sign, "multiplier", where) if "multiplier" in sign else 1
-    if multiplier not in (1, -1):
-        raise SpecError(f"{where}.multiplier must be +1 or -1")
-    if kind == "return_sign":
-        _check_keys(sign, where, ("kind", "from_min", "to_min"), ("multiplier",))
-        out = {"kind": kind, "from_min": _int(sign, "from_min", where), "to_min": _int(sign, "to_min", where), "multiplier": multiplier}
-        if out["from_min"] >= out["to_min"]:
-            raise SpecError(f"{where}: from_min must be < to_min")
-        return out, out["to_min"]
-    name = _str(sign, "field", where, ("funding_rate",) + tuple(PREMIUM_FIELDS))
-    if name == "funding_rate":
-        _check_keys(sign, where, ("kind", "field", "dead_zone", "eps"), ("at_min", "multiplier"))
-        if "at_min" in sign and _int(sign, "at_min", where) != 0:
-            raise SpecError(f"{where}.at_min: the funding rate is the one settled at h (at_min 0)")
-        low, high, eps = _dead_zone(sign, where)
-        used.add("funding_rate_sign_dead_zone")
-        return {"kind": kind, "field": name, "at_min": 0, "dead_zone": (low, high), "eps": eps, "multiplier": multiplier}, FUNDING_RATE_OBSERVED_MIN
-    _check_keys(sign, where, ("kind", "field", "at_min"), ("multiplier", "dead_zone", "eps"))
-    _check_premium_field(name, spec_source, where, used)
-    out = {"kind": kind, "field": name, "at_min": _int(sign, "at_min", where), "multiplier": multiplier, "dead_zone": None, "eps": 0.0}
-    if "dead_zone" in sign:
-        if "eps" not in sign:
-            raise SpecError(f"{where}: dead_zone needs eps")
-        low, high, eps = _dead_zone(sign, where)
-        out.update({"dead_zone": (low, high), "eps": eps})
-    elif "eps" in sign:
-        raise SpecError(f"{where}: eps without dead_zone")
-    return out, out["at_min"]
+def macro_intervals(spec: Spec, lo_us: int, hi_us: int) -> list[tuple[int, int, str]]:
+    """The macro releases (T11 filter) as UTC [time, time + duration] intervals, from New York time."""
+    out = []
+    for release in spec.macro:
+        for day in spec.calendars[release["dates_ref"]]:
+            a = local_to_utc_us(day, release["time_min"], release["tz_info"])
+            b = a + int(release["duration_min"]) * MINUTE_US
+            if b >= lo_us - DAY_US and a < hi_us + DAY_US:
+                out.append((a, b, release["name"]))
+    return out
 
 
-def _parse_lookahead(value, where: str) -> tuple[dict, ...]:
-    items = [value] if isinstance(value, dict) else value
-    if not isinstance(items, list):
-        raise SpecError(f"{where} must be an object {{field, reason}} or a list of them")
-    out, seen = [], set()
+def local_time_instants(tspec: TypeSpec, spec: Spec, lo_us: int | None = None, hi_us: int | None = None, apply_exclusions: bool = True) -> list[tuple[int, _date, bool]]:
+    """Instants of a `local_time` generator inside [lo, hi) (default: the spec window): `(utc_us, local_date, excluded)`, the
+    excluded flag set on the dates of `exclude_dates_ref` (CPI / Employment Situation for T05); with `apply_exclusions` those are dropped."""
+    gen = tspec.generator
+    lo_us = spec.start_us if lo_us is None else lo_us
+    hi_us = spec.end_us if hi_us is None else hi_us
+    out = []
+    for day in _local_days(lo_us, hi_us):
+        if not day_matches(gen["days"], day, spec.calendars):
+            continue
+        moment = local_to_utc_us(day, gen["minute_of_day"], gen["tz_info"])
+        if not lo_us <= moment < hi_us:
+            continue
+        excluded = day in gen["exclude_days"]
+        if excluded and apply_exclusions:
+            continue
+        out.append((moment, day, excluded))
+    return out
+
+
+# ----------------------------------------------------------------------------- strict reading: blocks
+
+
+def _parse_requires(document: dict, source: str) -> tuple:
+    items = _str_list(document, "requires", "spec")
+    unknown = sorted(set(items) - set(CAPABILITIES))
+    if unknown:
+        raise SpecError(f"requires {unknown}: not implemented by {EVALUATOR_VERSION} (implemented: {sorted(CAPABILITIES)})")
+    expected = HISTORY_REQUIRES if source == "history" else CAPTURE_REQUIRES
+    extra = sorted(set(items) - set(expected))
+    if extra:
+        raise SpecError(f"requires {extra}: not applicable to a {source} spec")
+    missing = sorted(set(expected) - set(items))
+    if missing:
+        raise SpecError(f"the spec relies on {missing} without declaring it in requires (the version lock of (B) xviii)")
+    return items
+
+
+def _parse_freeze_fill(block, status: str) -> dict:
+    keys = ("instruments_snapshot_path", "instruments_snapshot_sha256", "calendars_verified_utc", "code_digest_sha256", "decision_ref_p_g5_1")
+    _check_keys(block, "freeze_fill", keys + ("rule",))
+    out = {"rule": _text(block, "rule", "freeze_fill")}
+    for key in keys:
+        value = block[key]
+        if value is None:
+            out[key] = None
+            continue
+        if not isinstance(value, str) or not value.strip():
+            raise SpecError(f"freeze_fill.{key}: expected a non-empty string or null")
+        if key.endswith("sha256") and not SHA256_RE.match(value):
+            raise SpecError(f"freeze_fill.{key}: expected a lower-case sha256")
+        if key == "calendars_verified_utc":
+            _iso_us(value, "freeze_fill.calendars_verified_utc")
+        out[key] = value
+    nulls = [k for k in keys if out[k] is None]
+    out["null"] = nulls
+    if status == "FROZEN" and nulls:
+        raise SpecError(f"freeze_fill: a FROZEN spec has no null value ({nulls}); {out['rule']}")
+    return out
+
+
+def _parse_universe(block, eligibility_days: float, end_us: int, source: str) -> tuple[tuple, tuple]:
+    _check_keys(block, "universe", ("rule", "selection_bias_declared", "analysed", "excluded_never_eligible", "mismatch_with_snapshot"))
+    _text(block, "rule", "universe")
+    _text(block, "selection_bias_declared", "universe")
+    _choice(block, "mismatch_with_snapshot", "universe", ("refuse_run",))
+    days_us = int(round(eligibility_days * DAY_US))
+    analysed, seen = [], set()
+    for i, item in enumerate(_list(block, "analysed", "universe")):
+        where = f"universe.analysed[{i}]"
+        _check_keys(item, where, ("inst_id", "index_id", "list_time_utc", "eligible_from_utc", "ct_val", "tick_sz"))
+        inst = _text(item, "inst_id", where)
+        if not xc.XPERP_RE.match(inst):
+            raise SpecError(f"{where}.inst_id: {inst!r} is not an X-Perp id")
+        if inst in seen:
+            raise SpecError(f"{where}: duplicate instrument {inst}")
+        seen.add(inst)
+        index_id = _text(item, "index_id", where)
+        if index_id != g5_fetch.index_id_of({"instId": inst}):
+            raise SpecError(f"{where}.index_id: {index_id!r} is not the <BASE>-USD index of {inst}")
+        listed = _iso_us(item["list_time_utc"], f"{where}.list_time_utc")
+        eligible = _iso_us(item["eligible_from_utc"], f"{where}.eligible_from_utc")
+        if eligible != listed + days_us:
+            raise SpecError(f"{where}.eligible_from_utc: {item['eligible_from_utc']} is not list_time_utc + {eligibility_days:g} days")
+        if eligible >= end_us:
+            raise SpecError(f"{where}: no eligible minute before the end ({_iso(end_us)}): it belongs to excluded_never_eligible")
+        analysed.append(Instrument(inst, index_id, listed, eligible, _num(item, "ct_val", where, 0.0, lo_open=True), _num(item, "tick_sz", where, 0.0, lo_open=True)))
+    excluded = []
+    for i, item in enumerate(_list(block, "excluded_never_eligible", "universe", nonempty=False)):
+        where = f"universe.excluded_never_eligible[{i}]"
+        _check_keys(item, where, ("inst_id", "list_time_utc", "reason", "fetched"))
+        inst = _text(item, "inst_id", where)
+        if inst in seen:
+            raise SpecError(f"{where}: {inst} is both analysed and excluded")
+        seen.add(inst)
+        listed = _iso_us(item["list_time_utc"], f"{where}.list_time_utc")
+        _choice(item, "reason", where, ("no_eligible_minute_before_end_exclusive",))
+        _bool(item, "fetched", where, only=False)
+        if listed + days_us < end_us:
+            raise SpecError(f"{where}: {inst} has eligible minutes before the end: it cannot be excluded as never eligible")
+        excluded.append({"inst_id": inst, "list_time_us": listed})
+    return tuple(analysed), tuple(excluded)
+
+
+def _parse_price(block, source: str) -> dict:
+    keys = ("source", "series", "boundary_convention") + tuple(PRICE_FIXED) + ("max_missing_share_in_event_footprints_per_instrument",)
+    _check_keys(block, "price", keys)
+    for key, value in PRICE_RULES[source].items():
+        _exact(block, key, "price", value)
+    for key, value in PRICE_FIXED.items():
+        _exact(block, key, "price", value)
+    return {"max_missing_share": _num(block, "max_missing_share_in_event_footprints_per_instrument", "price", 0.0, 1.0), "series": block["series"]}
+
+
+def _parse_frozen_candle(block, source: str) -> dict:
+    _check_keys(block, "frozen_candle", tuple(FROZEN_CANDLE[source]))
+    for key, value in FROZEN_CANDLE[source].items():
+        _exact(block, key, "frozen_candle", value)
+    return {"applies": source == "history", "count_field": block["count_field"]}
+
+
+def _parse_unit(block) -> dict:
+    _check_keys(block, "unit", tuple(UNIT_FIXED) + ("min_instruments_per_instant", "report"))
+    for key, value in UNIT_FIXED.items():
+        _exact(block, key, "unit", value)
+    reports = _str_list(block, "report", "unit", UNIT_REPORTS)
+    return {"min_instruments": _int(block, "min_instruments_per_instant", "unit", 1), "reports": reports}
+
+
+def _parse_statistics(block) -> dict:
+    _check_keys(block, "statistics", ("measure", "difference", "alpha_one_sided", "threshold_bp", "bootstrap", "descriptive_sensitivity"))
+    _choice(block, "measure", "statistics", ("net_bp",))
+    _exact(block, "difference", "statistics", STAT_DIFFERENCE)
+    alpha = _num(block, "alpha_one_sided", "statistics", 0.0, 1.0, lo_open=True)
+    boot = _check_keys(block["bootstrap"], "statistics.bootstrap", ("kind", "block_days", "resamples", "seed", "events_and_controls_jointly", "lb_quantile", "ub_quantile", "p_value"))
+    _choice(boot, "kind", "statistics.bootstrap", ("day_block",))
+    _bool(boot, "events_and_controls_jointly", "statistics.bootstrap", only=True)
+    _exact(boot, "p_value", "statistics.bootstrap", P_VALUE_RULE)
+    lb, ub = _num(boot, "lb_quantile", "statistics.bootstrap", 0.0, 1.0), _num(boot, "ub_quantile", "statistics.bootstrap", 0.0, 1.0)
+    if abs(lb - alpha) > 1e-12 or abs(ub - (1.0 - alpha)) > 1e-12:
+        raise SpecError(f"statistics.bootstrap: lb_quantile / ub_quantile ({lb:g} / {ub:g}) must be alpha / 1 - alpha ({alpha:g}): LB90 > 0 is the one-sided test at alpha")
+    sens = _check_keys(block["descriptive_sensitivity"], "statistics.descriptive_sensitivity", ("block_days",))
+    return {"alpha": alpha, "threshold_bp": _num(block, "threshold_bp", "statistics"), "block_days": _int(boot, "block_days", "statistics.bootstrap", 1),
+            "resamples": _int(boot, "resamples", "statistics.bootstrap", 100), "seed": _int(boot, "seed", "statistics.bootstrap"), "lb_quantile": lb, "ub_quantile": ub,
+            "sensitivity_block_days": _int(sens, "block_days", "statistics.descriptive_sensitivity", 1)}
+
+
+def _parse_power(block, gate: str) -> dict:
+    _check_keys(block, "power_floor", ("min_instants", "min_days", "below_floor", "extension_on_result"))
+    _exact(block, "below_floor", "power_floor", gate + "NOT_INFORMATIVE")
+    _bool(block, "extension_on_result", "power_floor", only=False)
+    return {"min_instants": _int(block, "min_instants", "power_floor", 1), "min_days": _int(block, "min_days", "power_floor", 1)}
+
+
+def _parse_costs(block, source: str) -> dict:
+    keys = ("maker_fee_bp", "taker_fee_bp", "adverse_selection_bp_per_maker_leg", "slippage_bp_per_round_trip", "taker_entry_half_spread_bp", "stress_multiplier_all_cost_terms")
+    _check_keys(block, "costs", keys + ("g2_table_substitution", "funding", "margin_opportunity_cost"))
+    out = {key: _num(block, key, "costs", 0.0) for key in keys}
+    if out["stress_multiplier_all_cost_terms"] < 1.0:
+        raise SpecError("costs.stress_multiplier_all_cost_terms must be >= 1")
+    if not _text(block, "g2_table_substitution", "costs").startswith("none"):
+        raise SpecError("costs.g2_table_substitution: only 'none…' is implemented (G5 is frozen before the G2 reading, P-G5-9)")
+    funding = _check_keys(block["funding"], "costs.funding", ("source", "formula", "outside_coverage", "count_field", "cap_stress"))
+    for key, value in {**FUNDING_RULES[source], **FUNDING_FIXED}.items():
+        _exact(funding, key, "costs.funding", value)
+    out["margin_opportunity_cost"] = _choice(block, "margin_opportunity_cost", "costs", ("negligible_reported",))
+    out["funding_count_field"] = funding["count_field"]
+    out["g2_table_substitution"] = block["g2_table_substitution"]
+    return out
+
+
+def cost_terms(role: str, costs: dict) -> dict:
+    """Round-trip cost terms of an execution role (bp, LP-G5 §6): fees at the role, adverse selection on each maker leg, the
+    taker entry half-spread, slippage; `stress_total_bp` multiplies every term."""
+    if role == "maker_maker":
+        fees, maker_legs, half_spread = 2.0 * costs["maker_fee_bp"], 2, 0.0
+    elif role == "taker_maker":
+        fees, maker_legs, half_spread = costs["taker_fee_bp"] + costs["maker_fee_bp"], 1, costs["taker_entry_half_spread_bp"]
+    else:
+        raise SpecError(f"unknown execution role {role!r}")
+    adverse = maker_legs * costs["adverse_selection_bp_per_maker_leg"]
+    terms = {"fees_bp": fees, "adverse_selection_bp": adverse, "taker_entry_half_spread_bp": half_spread, "slippage_bp": costs["slippage_bp_per_round_trip"]}
+    total = math.fsum(terms.values())
+    mult = costs["stress_multiplier_all_cost_terms"]
+    return {"role": role, **terms, "maker_legs": maker_legs, "total_bp": total, "stress_multiplier": mult, "stress_total_bp": math.fsum(v * mult for v in terms.values())}
+
+
+def _parse_controls_common(block, source: str) -> dict:
+    _check_keys(block, "controls_common", ("rule", "candidates", "selection", "random_draws", "admissible_if", "margin_min", "exclusions", "funding_at_controls"))
+    _text(block, "rule", "controls_common")
+    for key, value in CONTROLS_FIXED.items():
+        _exact(block, key, "controls_common", value)
+    if _int(block, "random_draws", "controls_common") != 0:
+        raise SpecError("controls_common.random_draws: only 0 is implemented (every admissible hour, no draw)")
+    components: dict = {}
+    for i, text in enumerate(_str_list(block, "exclusions", "controls_common")):
+        where = f"controls_common.exclusions[{i}]"
+        if (m := SETTLEMENT_EXCLUSION_RE.match(text)) is not None:
+            stream = "funding_hist" if source == "history" else "funding"
+            if m.group("stream") != stream:
+                raise SpecError(f"{where}: the settlements of a {source} spec are read in {stream}")
+            name, value = "settlements", (int(m.group("a")), int(m.group("b")))
+        elif (m := GRID_EXCLUSION_RE.match(text)) is not None:
+            name, value = "default_grid", (int(m.group("a")), int(m.group("b")))
+        elif (m := TYPE_EXCLUSION_RE.match(text)) is not None:
+            name, value = "type_instants", (m.group("type"), _min_offset(m.group("a")), _min_offset(m.group("b")), m.group("label"))
+        elif text == SESSIONS_EXCLUSION:
+            name, value = "sessions", True
+        elif text == MACRO_EXCLUSION:
+            name, value = "macro", True
+        else:
+            raise SpecError(f"{where}: {text!r} is not an implemented exclusion")
+        if name in components:
+            raise SpecError(f"{where}: exclusion {name} listed twice")
+        components[name] = value
+    for name in ("settlements", "default_grid"):
+        if name in components and components[name][0] >= components[name][1]:
+            raise SpecError(f"controls_common.exclusions: footprint of {name} is empty")
+    return {"margin_us": _int(block, "margin_min", "controls_common", 0) * MINUTE_US, "margin_min": block["margin_min"], "components": components}
+
+
+def _parse_sessions(items) -> tuple:
+    if not isinstance(items, list) or not items:
+        raise SpecError("sessions must be a non-empty list")
+    out, names = [], set()
     for i, item in enumerate(items):
-        w = f"{where}[{i}]"
-        _check_keys(item, w, ("field", "reason"))
-        name = _str(item, "field", w, LOOKAHEAD_PATHS)
-        if name in seen:
-            raise SpecError(f"{w}: {name} declared twice")
-        seen.add(name)
-        out.append({"field": name, "reason": _str(item, "reason", w)})
+        where = f"sessions[{i}]"
+        _check_keys(item, where, ("name", "tz", "start", "end", "days"), ("verify_at_freeze",))
+        name = _text(item, "name", where)
+        if name in names:
+            raise SpecError(f"{where}: duplicate session {name}")
+        names.add(name)
+        start, end = _hhmm(item["start"], f"{where}.start"), _hhmm(item["end"], f"{where}.end")
+        if end < start:
+            raise SpecError(f"{where}: end before start (a session spans one local day)")
+        out.append({"name": name, "tz": item["tz"], "tz_info": _tz(item["tz"], f"{where}.tz"), "start_min": start, "end_min": end,
+                    "days": _choice(item, "days", where, SESSION_DAYS), "verify_at_freeze": _bool(item, "verify_at_freeze", where) if "verify_at_freeze" in item else False})
     return tuple(out)
 
 
-_EVAL_REQUIRED = ("type", "generator", "sign", "window", "arm_min", "rest_until_min", "execution_role", "days_per_year")
-_EVAL_OPTIONAL = ("primary", "evaluate", "description", "condition", "control_sign", "exit_until_min", "declared_lookahead", "restrict_to_coverage", "control_minute_of_hour")
+def _parse_calendars(block) -> dict:
+    lists = ("nyse_holidays", "cpi", "employment_situation", "fomc_statement")
+    _check_keys(block, "calendars", ("tz",) + lists + ("sources", "read_by"))
+    if _text(block, "tz", "calendars") != NEW_YORK:
+        raise SpecError(f"calendars.tz: the frozen dates are New York dates ({NEW_YORK}); {block['tz']!r} is not implemented")
+    out = {name: frozenset(_dates(block[name], f"calendars.{name}")) for name in lists}
+    out["sources"] = _str_list(block, "sources", "calendars")
+    out["read_by"] = _text(block, "read_by", "calendars")
+    return out
 
 
-def _parse_event(item, index: int, source: str, simulated: bool, used: set) -> EventSpec:
-    where = f"events[{index}]"
-    if not isinstance(item, dict):
-        raise SpecError(f"{where} must be an object")
-    evaluate = _bool(item, "evaluate", where) if "evaluate" in item else True
-    if not evaluate:
-        _check_keys(item, where, ("type", "evaluate", "generator"), ("primary", "description"))
-        if "primary" in item and _bool(item, "primary", where):
-            raise SpecError(f"{where}: an evaluate:false type cannot be primary")
-        etype = _str(item, "type", where)
-        return EventSpec(etype, False, False, _parse_generator(item["generator"], f"{where}.generator", used), description=str(item.get("description", "")))
-    _check_keys(item, where, _EVAL_REQUIRED, _EVAL_OPTIONAL)
-    etype = _str(item, "type", where)
-    primary = _bool(item, "primary", where) if "primary" in item else False
-    generator = _parse_generator(item["generator"], f"{where}.generator", used)
-    condition, cond_obs = _parse_condition(item.get("condition"), f"{where}.condition", source, used)
-    sign, sign_obs = _parse_sign(item["sign"], f"{where}.sign", source, used)
-    control_sign, cs_obs = None, None
-    if item.get("control_sign") is not None:
-        block = item["control_sign"]
-        if not isinstance(block, dict) or block.get("kind") != "premium_wavg":
-            raise SpecError(f"{where}.control_sign: only kind 'premium_wavg' is implemented")
-        control_sign = _parse_wavg(block, f"{where}.control_sign", source, used, control=True)
-        cs_obs = control_sign["at_min"]
-    window = _check_keys(item["window"], f"{where}.window", ("from_min", "to_min"))
-    from_min, to_min = _int(window, "from_min", f"{where}.window"), _int(window, "to_min", f"{where}.window")
-    if from_min >= to_min:
-        raise SpecError(f"{where}.window: from_min must be < to_min")
-    arm_min = _int(item, "arm_min", where)
-    if arm_min > from_min:
-        raise SpecError(f"{where}.arm_min must be <= window.from_min (the order is armed before the window)")
-    if arm_min == -1:
-        raise SpecError(f"{where}.arm_min = -1 is forbidden (the minute before the instant is the toxic one; use -5 or -2)")
-    rest_until_min = _int(item, "rest_until_min", where)
-    if rest_until_min <= arm_min or rest_until_min > to_min:
-        raise SpecError(f"{where}.rest_until_min must be in (arm_min, to_min]")
-    exit_until_min = None
-    if simulated:
-        if "exit_until_min" not in item:
-            raise SpecError(f"{where}: a simulated capture type needs exit_until_min (end of the passive exit; remainder taker)")
-        exit_until_min = _int(item, "exit_until_min", where)
-        if exit_until_min <= to_min:
-            raise SpecError(f"{where}.exit_until_min must be > window.to_min")
-    elif "exit_until_min" in item:
-        raise SpecError(f"{where}.exit_until_min is a simulated-capture (Gate 2) key; it would be ignored here")
-    role = _str(item, "execution_role", where, ROLES)
-    days_per_year = _num(item, "days_per_year", where, 0.0, 366.0, lo_open=True)
-    coverage = ()
-    if "restrict_to_coverage" in item:
-        if source != "history":
-            raise SpecError(f"{where}.restrict_to_coverage: history only (the capture is continuous by construction)")
-        names = _list(item, "restrict_to_coverage", where)
-        if not names or any(n not in tape.HISTORY_LAYOUTS for n in names) or len(set(names)) != len(names):
-            raise SpecError(f"{where}.restrict_to_coverage must list distinct streams among {tape.HISTORY_LAYOUTS}")
-        coverage = tuple(names)
-        used.add("coverage_restriction")
-    minute = 0
-    if "control_minute_of_hour" in item:
-        minute = _int(item, "control_minute_of_hour", where, 0, 59)
-        used.add("controls_minute_of_hour")
-    reads_funding = (condition is not None and condition["field"] == "funding_rate") or sign.get("field") == "funding_rate"
-    if reads_funding and generator["kind"] != "funding":
-        raise SpecError(f"{where}: funding_rate exists only at settlement instants (generator kind 'funding')")
-    if reads_funding and control_sign is None:
-        raise SpecError(f"{where}: the sign / condition reads funding_rate, which does not exist at the controls: a control_sign is required")
-    if control_sign is not None and not reads_funding:
-        raise SpecError(f"{where}: control_sign replaces only a funding_rate sign / condition at the controls; otherwise the same rule applies at the controls")
-    if source == "history":
-        # M1: a type is bounded to the D_cov of the streams it reads (the funding history keeps three months; mark and index make the proxy).
-        needed = set()
-        if reads_funding:
-            needed.add("funding_hist")
-        reads_mark_index = any(b is not None and (b.get("field") == "premium_mark_index" or b.get("base") == "premium_mark_index") for b in (condition, sign, control_sign))
-        if reads_mark_index:
-            needed |= {"mark_1m", "index_1m"}
-        missing_cov = sorted(needed - set(coverage))
-        if missing_cov:
-            raise SpecError(f"{where}: the type reads {missing_cov} and must be bounded to their coverage: list them in restrict_to_coverage (D_cov, CTO M1)")
-    observed = {path: value for path, value in (("condition", cond_obs), ("sign", sign_obs), ("control_sign", cs_obs)) if value is not None}
-    late = {path: value for path, value in observed.items() if value > arm_min}
-    declared = _parse_lookahead(item["declared_lookahead"], f"{where}.declared_lookahead") if "declared_lookahead" in item else ()
-    declared_names = {d["field"] for d in declared}
-    for path in sorted(set(late) - declared_names):
-        raise SpecError(f"{where}.{path} is observed at h{late[path]:+d}, after the decision at arm_min h{arm_min:+d} (look-ahead): move it at or before arm_min, "
-                        f"or declare it by name in declared_lookahead {{field, reason}}")
-    for path in sorted(declared_names - set(late)):
-        raise SpecError(f"{where}.declared_lookahead names {path!r}, which is not observed after arm_min: nothing to declare")
-    if declared:
-        used.add("declared_lookahead")
-    return EventSpec(etype, primary, True, generator, condition, sign, control_sign, from_min, to_min, arm_min, rest_until_min, exit_until_min, role, days_per_year, coverage, minute,
-                     declared, observed, str(item.get("description", "")))
+def _calendar_ref(text: str, where: str, calendars: dict) -> str:
+    if not isinstance(text, str) or not text.startswith("calendars."):
+        raise SpecError(f"{where}: {text!r} is not a calendars.<list> reference")
+    name = text[len("calendars."):]
+    if name not in calendars or name in ("sources", "read_by"):
+        raise SpecError(f"{where}: {text!r} names no date list of calendars")
+    return name
 
 
-_TOP_REQUIRED = ("spec_id", "source", "requires", "unit", "window", "price_source", "alpha", "threshold_bp", "min_instants", "min_days", "primary_measure", "bootstrap",
-                 "execution", "controls", "quality", "economic", "events")
-_TOP_OPTIONAL = ("description", "eligibility", "funding_outside_coverage", "programme")
+def _parse_macro(block, calendars: dict) -> tuple:
+    _check_keys(block, "macro_filter", ("type", "evaluate", "tz", "releases", "use", "ten_am_et_releases"))
+    _text(block, "type", "macro_filter")
+    _bool(block, "evaluate", "macro_filter", only=False)
+    tz = _tz(block["tz"], "macro_filter.tz")
+    if block["tz"] != NEW_YORK:
+        raise SpecError(f"macro_filter.tz: the releases are in New York time ({NEW_YORK})")
+    _text(block, "use", "macro_filter")
+    _text(block, "ten_am_et_releases", "macro_filter")
+    out, names = [], set()
+    for i, item in enumerate(_list(block, "releases", "macro_filter")):
+        where = f"macro_filter.releases[{i}]"
+        _check_keys(item, where, ("name", "time", "duration_min", "dates_ref"))
+        name = _text(item, "name", where)
+        if name in names:
+            raise SpecError(f"{where}: duplicate release {name}")
+        names.add(name)
+        out.append({"name": name, "time_min": _hhmm(item["time"], f"{where}.time"), "duration_min": _int(item, "duration_min", where, 0, 24 * 60), "tz_info": tz,
+                    "dates_ref": _calendar_ref(item["dates_ref"], f"{where}.dates_ref", calendars)})
+    return tuple(out)
+
+
+_TYPE_REQUIRED = ("type", "decisive", "primary", "execution_role", "expected_cost_bp", "expected_cost_bp_stress", "days_per_year", "window_rule", "generator",
+                  "footprint_min", "arm_min", "entry", "exit", "return_window_min", "key_candles_end_min", "controls", "criteria")
+_TYPE_OPTIONAL = ("funding_coverage", "rest_until_min", "classifier", "fill_proxy", "sign", "validation", "c7", "inconclusive_if", "audit_expected", "gate2")
+AUDIT_KEYS = {"local_time": ("nyse_days_with_eligible_instrument", "raw_instants", "raw_instants_with_ge_3_instruments", "first_instant_utc", "halves_by_lower_median_day"),
+              "funding_settlements": ("not_informative_expected_if_f_inst_below",)}
+RAW_UPPER_RE = re.compile(r"^raw_instants_upper_bound_if_funding_fetched_(?P<y>\d{4})_(?P<m>\d{2})_(?P<d>\d{2})$")
+
+
+def _parse_generator(block, where: str, source: str, calendars: dict) -> dict:
+    kind = _choice(_check_keys(block, where, ("kind",), ("stream", "require_realized_rate", "interval_filter", "fallback_hours", "tz", "time", "days", "exclude_dates_ref")),
+                   "kind", where, ("funding_settlements", "local_time"))
+    if kind == "funding_settlements":
+        _check_keys(block, where, ("kind", "stream", "require_realized_rate", "interval_filter", "fallback_hours"))
+        _choice(block, "stream", where, ("funding_hist",) if source == "history" else ("funding",))
+        _bool(block, "require_realized_rate", where, only=True)
+        _choice(block, "fallback_hours", where, ("none",))
+        f = _check_keys(block["interval_filter"], f"{where}.interval_filter", ("previous_gap_h", "next_gap_h", "tolerance_min", "unknown_neighbour"))
+        _choice(f, "unknown_neighbour", f"{where}.interval_filter", ("exclude_and_count",))
+        return {"kind": kind, "stream": block["stream"], "previous_gap_us": int(round(_num(f, "previous_gap_h", f"{where}.interval_filter", 0.0, 24.0, lo_open=True) * HOUR_US)),
+                "next_gap_us": int(round(_num(f, "next_gap_h", f"{where}.interval_filter", 0.0, 24.0, lo_open=True) * HOUR_US)),
+                "tolerance_us": int(round(_num(f, "tolerance_min", f"{where}.interval_filter", 0.0, 60.0) * MINUTE_US))}
+    _check_keys(block, where, ("kind", "tz", "time", "days", "exclude_dates_ref"))
+    refs = [_calendar_ref(r, f"{where}.exclude_dates_ref", calendars) for r in _str_list(block, "exclude_dates_ref", where, nonempty=False)]
+    exclude = frozenset(d for r in refs for d in calendars[r])
+    return {"kind": kind, "tz": block["tz"], "tz_info": _tz(block["tz"], f"{where}.tz"), "minute_of_day": _hhmm(block["time"], f"{where}.time"),
+            "days": _choice(block, "days", where, ("nyse_trading_days", "mon_fri", "all")), "exclude_refs": tuple(refs), "exclude_days": exclude}
+
+
+def _parse_classifier(block, where: str, source: str, arm_min: int) -> dict:
+    keys = ("kind", "evaluated_at", "applies_to", "premium_proxy", "lookback_min", "weights", "min_coverage_share", "long_if_ge", "short_if_le", "else", "threshold_origin")
+    _check_keys(block, where, keys)
+    _choice(block, "kind", where, ("premium_wavg",))
+    # (B) xvii: the classifier is read at the decision, never later.
+    if block["evaluated_at"] != "t_arm":
+        raise SpecError(f"{where}.evaluated_at: {block['evaluated_at']!r} — the classifier is evaluated at t_arm (h{arm_min:+d}) only: anything later is information after the decision")
+    if list(_str_list(block, "applies_to", where)) != ["events", "controls"]:
+        raise SpecError(f"{where}.applies_to: the one classifier applies to the events and the controls alike")
+    _exact(block, "premium_proxy", where, PREMIUM_PROXY[source])
+    lookback = _int(block, "lookback_min", where, 1, 10_000)
+    _exact(block, "weights", where, WEIGHTS_TEXT.format(n=lookback))
+    _choice(block, "else", where, ("exclude_and_count",))
+    _text(block, "threshold_origin", where)
+    hi, lo = _num(block, "long_if_ge", where, 0.0, lo_open=True), _num(block, "short_if_le", where)
+    if lo >= 0:
+        raise SpecError(f"{where}.short_if_le must be negative")
+    return {"kind": "premium_wavg", "lookback_min": lookback, "min_coverage": _num(block, "min_coverage_share", where, 0.0, 1.0, lo_open=True), "high": hi, "low": lo,
+            "threshold_origin": block["threshold_origin"]}
+
+
+def _parse_sign(block, where: str, arm_min: int, footprint: tuple) -> dict:
+    _check_keys(block, where, ("kind", "from_min", "to_min", "price", "zero"))
+    _choice(block, "kind", where, ("return_sign",))
+    _choice(block, "price", where, ("last",))
+    _choice(block, "zero", where, ("exclude_and_count",))
+    a, b = _int(block, "from_min", where), _int(block, "to_min", where)
+    if a >= b:
+        raise SpecError(f"{where}: from_min must be < to_min")
+    if b > arm_min:
+        raise SpecError(f"{where}.to_min = h{b:+d} is observed after the decision at arm_min h{arm_min:+d} (look-ahead, (B) xvii)")
+    if a < footprint[0]:
+        raise SpecError(f"{where}: the sign window starts before the footprint")
+    return {"kind": "return_sign", "from_min": a, "to_min": b}
+
+
+def _parse_fill_proxy(block, where: str, source: str, arm_min: int, rest_until_min: int) -> dict:
+    if source == "capture":
+        _check_keys(block, where, ("kind", "applies_to", "unfilled", "report"))
+        _choice(block, "kind", where, ("lp_sim",))
+        if list(_str_list(block, "applies_to", where)) != ["events", "controls"]:
+            raise SpecError(f"{where}.applies_to: events and controls alike")
+        _exact(block, "unfilled", where, FILL_PROXY_FIXED["unfilled"])
+        _exact(block, "report", where, FILL_PROXY_FIXED["report"])
+        return {"kind": "lp_sim"}
+    _check_keys(block, where, ("kind", "applies_to", "candles_open_from_min", "candles_open_to_min") + tuple(FILL_PROXY_FIXED))
+    _choice(block, "kind", where, ("through_candles",))
+    if list(_str_list(block, "applies_to", where)) != ["events", "controls"]:
+        raise SpecError(f"{where}.applies_to: events and controls alike")
+    for key, value in FILL_PROXY_FIXED.items():
+        _exact(block, key, where, value)
+    a, b = _int(block, "candles_open_from_min", where), _int(block, "candles_open_to_min", where)
+    if a != arm_min or b != rest_until_min - 1:
+        raise SpecError(f"{where}: the order rests from t_arm (h{arm_min:+d}) to h{rest_until_min:+d}: the candles open from {arm_min} to {rest_until_min - 1}")
+    return {"kind": "through_candles", "open_from_min": a, "open_to_min": b}
+
+
+def _parse_validation(block, where: str, label: str, classifier: dict, gate: str) -> dict:
+    keys = ("criterion", "population", "classifier_class", "rate_class") + tuple(VALIDATION_FIXED) + ("sensitivity_min", "false_positive_rate_max", "min_denominator",
+                                                                                                      "fail_or_not_computable")
+    _check_keys(block, where, keys)
+    _choice(block, "criterion", where, ("C6",))
+    m = POPULATION_RE.match(_text(block, "population", where))
+    if m is None or m.group("label") != label:
+        raise SpecError(f"{where}.population: not the implemented population of {label} (raw instrument-settlements: eligible, interval filter, realized rate, classifier computable)")
+    for key, value in VALIDATION_FIXED.items():
+        _exact(block, key, where, value)
+    c = CLASS_RE.match(_text(block, "classifier_class", where))
+    if c is None or c.group("field") != "P_hat(t_arm)" or float(c.group("hi")) != classifier["high"] or float(c.group("lo")) != classifier["low"]:
+        raise SpecError(f"{where}.classifier_class: must state the classifier's own thresholds ({classifier['high']:g} / {classifier['low']:g}) at t_arm")
+    r = CLASS_RE.match(_text(block, "rate_class", where))
+    if r is None or r.group("field") != "realized_rate":
+        raise SpecError(f"{where}.rate_class: '+1 if realized_rate >= x, -1 if <= -y, 0 otherwise' is the implemented rule")
+    _exact(block, "fail_or_not_computable", where, gate + "INCONCLUSIVE")
+    return {"rate_high": float(r.group("hi")), "rate_low": float(r.group("lo")), "sensitivity_min": _num(block, "sensitivity_min", where, 0.0, 1.0),
+            "false_positive_rate_max": _num(block, "false_positive_rate_max", where, 0.0, 1.0), "min_denominator": _int(block, "min_denominator", where, 1)}
+
+
+def _parse_type(item, position: int, source: str, gate: str, calendars: dict) -> TypeSpec:
+    where = f"events[{position}]"
+    _check_keys(item, where, _TYPE_REQUIRED, _TYPE_OPTIONAL)
+    name = _text(item, "type", where)
+    label = name.split("_", 1)[0]
+    if not re.match(r"^T\d+$", label):
+        raise SpecError(f"{where}.type: {name!r} must start with its T<nn> label")
+    _bool(item, "decisive", where, only=True)
+    _bool(item, "primary", where, only=True)
+    role = _choice(item, "execution_role", where, ROLES)
+    window_rule = _choice(item, "window_rule", where, ("funding_coverage", "spec_window") if source == "history" else ("spec_window",))
+    generator = _parse_generator(item["generator"], f"{where}.generator", source, calendars)
+    footprint = _int_pair(item, "footprint_min", where)
+    arm = _int(item, "arm_min", where)
+    if not footprint[0] <= arm <= footprint[1]:
+        raise SpecError(f"{where}.arm_min must lie inside the footprint")
+    if arm == -1:
+        raise SpecError(f"{where}.arm_min = -1 is forbidden (the minute before the instant is the toxic one, LP-G5 §5.4, trap 4)")
+    rest = None
+    if role == "maker_maker":
+        if "rest_until_min" not in item:
+            raise SpecError(f"{where}: a maker_maker type needs rest_until_min (the resting order's end)")
+        rest = _int(item, "rest_until_min", where)
+        if not arm < rest <= footprint[1]:
+            raise SpecError(f"{where}.rest_until_min must be in (arm_min, footprint end]")
+    elif "rest_until_min" in item:
+        raise SpecError(f"{where}.rest_until_min: a taker entry does not rest")
+    if ("classifier" in item) == ("sign" in item):
+        raise SpecError(f"{where}: exactly one of classifier (side from P_hat at t_arm) and sign (side from a return before the decision)")
+    classifier = _parse_classifier(item["classifier"], f"{where}.classifier", source, arm) if "classifier" in item else None
+    sign = _parse_sign(item["sign"], f"{where}.sign", arm, footprint) if "sign" in item else None
+    if (role == "maker_maker") != ("fill_proxy" in item):
+        raise SpecError(f"{where}: a resting (maker_maker) entry needs fill_proxy; a taker entry has none")
+    fill = _parse_fill_proxy(item["fill_proxy"], f"{where}.fill_proxy", source, arm, rest) if "fill_proxy" in item else None
+    rw = _int_pair(item, "return_window_min", where)
+    if rw[0] != arm or not footprint[0] <= rw[0] < rw[1] <= footprint[1]:
+        raise SpecError(f"{where}.return_window_min: the return runs from the decision (arm_min) to an exit inside the footprint")
+    entry = _check_keys(item["entry"], f"{where}.entry", ("kind", "price"), ("half_spread_bp",))
+    if role == "maker_maker":
+        _check_keys(entry, f"{where}.entry", ("kind", "price"))
+        _choice(entry, "kind", f"{where}.entry", ("passive_limit",))
+    else:
+        _check_keys(entry, f"{where}.entry", ("kind", "price", "half_spread_bp"))
+        _choice(entry, "kind", f"{where}.entry", ("taker",))
+        _exact(entry, "half_spread_bp", f"{where}.entry", "costs.taker_entry_half_spread_bp")
+    _exact(entry, "price", f"{where}.entry", f"c(h{arm:+d})")
+    exit_ = _check_keys(item["exit"], f"{where}.exit", ("kind", "price"))
+    _choice(exit_, "kind", f"{where}.exit", ("passive_assumed",))
+    _exact(exit_, "price", f"{where}.exit", f"c(h{rw[1]:+d})")
+    keys = item["key_candles_end_min"]
+    if not isinstance(keys, list) or not keys or any(isinstance(k, bool) or not isinstance(k, int) for k in keys) or len(set(keys)) != len(keys):
+        raise SpecError(f"{where}.key_candles_end_min: expected distinct integers")
+    keys = tuple(sorted(int(k) for k in keys))
+    needed = {rw[0], rw[1]} | ({sign["from_min"], sign["to_min"]} if sign else set())
+    if not needed <= set(keys) or any(not footprint[0] <= k <= footprint[1] for k in keys):
+        raise SpecError(f"{where}.key_candles_end_min: must contain the ends of the return and sign windows {sorted(needed)}, inside the footprint")
+    criteria = _str_list(item, "criteria", where, CRITERIA)
+    if list(criteria) != [c for c in CRITERIA if c in criteria] or not {"C1", "C2", "C3", "C4", "C5"} <= set(criteria):
+        raise SpecError(f"{where}.criteria: C1-C5 are required for every type, in order (C6, C7 for T01)")
+    validation = None
+    if "C6" in criteria:
+        if classifier is None or "validation" not in item:
+            raise SpecError(f"{where}: C6 validates the classifier: classifier and validation required")
+        validation = _parse_validation(item["validation"], f"{where}.validation", label, classifier, gate)
+    elif "validation" in item:
+        raise SpecError(f"{where}.validation without C6 in criteria")
+    c7 = None
+    if "C7" in criteria:
+        if "c7" not in item:
+            raise SpecError(f"{where}: C7 needs its c7 block")
+        block = _check_keys(item["c7"], f"{where}.c7", ("event_hour_utc", "controls", "require_point_gt_bp"))
+        _choice(block, "controls", f"{where}.c7", ("same_utc_days",))
+        c7 = {"event_hour_utc": _int(block, "event_hour_utc", f"{where}.c7", 0, 23), "require_point_gt_bp": _num(block, "require_point_gt_bp", f"{where}.c7")}
+    elif "c7" in item:
+        raise SpecError(f"{where}.c7 without C7 in criteria")
+    ct = _check_keys(item["controls"], f"{where}.controls", ("minute_of_hour", "days", "within", "default_settlement_grid_utc_hours"))
+    m = CONTROL_DAYS_RE[generator["kind"]].match(_text(ct, "days", f"{where}.controls"))
+    if m is None or m.group("label") != label:
+        raise SpecError(f"{where}.controls.days: not the implemented rule for a {generator['kind']} type ({label})")
+    if _text(ct, "within", f"{where}.controls") != window_rule:
+        raise SpecError(f"{where}.controls.within must equal window_rule ({window_rule}): events and controls share the window")
+    controls = {"minute_of_hour": _int(ct, "minute_of_hour", f"{where}.controls", 0, 59), "grid_hours": _hours(ct["default_settlement_grid_utc_hours"], f"{where}.controls.default_settlement_grid_utc_hours"),
+                "within": window_rule}
+    if window_rule == "funding_coverage":
+        fc = _check_keys(item.get("funding_coverage"), f"{where}.funding_coverage", ("start", "end", "unknown"))
+        _exact(fc, "start", f"{where}.funding_coverage", COVERAGE_START_TEXT)
+        _exact(fc, "end", f"{where}.funding_coverage", "end_exclusive_utc")
+        _exact(fc, "unknown", f"{where}.funding_coverage", gate + "INCONCLUSIVE for this type")
+        if generator["kind"] != "funding_settlements":
+            raise SpecError(f"{where}: window_rule funding_coverage belongs to a funding_settlements type")
+    elif "funding_coverage" in item:
+        raise SpecError(f"{where}.funding_coverage without window_rule funding_coverage")
+    inconclusive, proxy_share = (), None
+    if "inconclusive_if" in item:
+        items = _str_list(item, "inconclusive_if", where)
+        for cond in items:
+            if (pm := PROXY_MISSING_RE.match(cond)) is not None:
+                if classifier is None:
+                    raise SpecError(f"{where}.inconclusive_if: {cond} needs a classifier")
+                proxy_share = _share_of(pm)
+            elif cond not in INCONCLUSIVE_TYPE_FIXED:
+                raise SpecError(f"{where}.inconclusive_if: {cond!r} is not implemented")
+        inconclusive = items
+    if window_rule == "funding_coverage" and "funding_coverage_unknown" not in inconclusive:
+        raise SpecError(f"{where}.inconclusive_if: funding_coverage_unknown must be listed (funding_coverage.unknown)")
+    if validation is not None and "C6_failed_or_not_computable" not in inconclusive:
+        raise SpecError(f"{where}.inconclusive_if: C6_failed_or_not_computable must be listed (validation.fail_or_not_computable)")
+    if "funding_coverage_unknown" in inconclusive and window_rule != "funding_coverage":
+        raise SpecError(f"{where}.inconclusive_if: funding_coverage_unknown without window_rule funding_coverage")
+    if "C6_failed_or_not_computable" in inconclusive and validation is None:
+        raise SpecError(f"{where}.inconclusive_if: C6_failed_or_not_computable without C6")
+    if "index_source_none" in inconclusive and (source != "capture" or classifier is None):
+        raise SpecError(f"{where}.inconclusive_if: index_source_none is a capture classifier condition")
+    audit = {}
+    if "audit_expected" in item:
+        block = item["audit_expected"]
+        if not isinstance(block, dict):
+            raise SpecError(f"{where}.audit_expected must be an object")
+        for key, value in block.items():
+            if key not in AUDIT_KEYS[generator["kind"]] and not (generator["kind"] == "funding_settlements" and RAW_UPPER_RE.match(key)):
+                raise SpecError(f"{where}.audit_expected: unknown key {key!r}")
+            audit[key] = value
+    gate2 = None
+    if source == "capture":
+        g = _check_keys(item.get("gate2"), f"{where}.gate2", ("exit_until_min",))
+        gate2 = {"exit_until_min": _int(g, "exit_until_min", f"{where}.gate2")}
+        if gate2["exit_until_min"] <= rw[1]:
+            raise SpecError(f"{where}.gate2.exit_until_min must be after the passive exit start h{rw[1]:+d}")
+    elif "gate2" in item:
+        raise SpecError(f"{where}.gate2: a capture (Gate 2) key in a history spec")
+    return TypeSpec(name, label, position, role, _num(item, "expected_cost_bp", where, 0.0), _num(item, "expected_cost_bp_stress", where, 0.0),
+                    _num(item, "days_per_year", where, 0.0, 366.0, lo_open=True), window_rule, generator, footprint, arm, rest, classifier, fill, sign,
+                    {"kind": entry["kind"], "price": entry["price"]}, {"kind": exit_["kind"], "price": exit_["price"]}, rw, keys, validation, controls, c7, criteria,
+                    inconclusive, proxy_share, audit, gate2, raw=item)
+
+
+def _parse_verdict(block, gate: str, types: tuple) -> dict:
+    _check_keys(block, "verdict", ("precedence", "inconclusive_global", "criteria", "pass", "fail", "fail_annotation", "closure_scope"))
+    if list(_str_list(block, "precedence", "verdict")) != [gate + "INCONCLUSIVE", gate + "NOT_INFORMATIVE", "criteria_then_holm"]:
+        raise SpecError(f"verdict.precedence: only [{gate}INCONCLUSIVE, {gate}NOT_INFORMATIVE, criteria_then_holm] is implemented")
+    conditions, fetch_share = [], None
+    for cond in _str_list(block, "inconclusive_global", "verdict"):
+        if (m := FETCH_ERROR_RE.match(cond)) is not None:
+            fetch_share = _share_of(m)
+        elif cond not in INCONCLUSIVE_GLOBAL:
+            raise SpecError(f"verdict.inconclusive_global: {cond!r} is not implemented")
+        conditions.append(cond)
+    crit = block["criteria"]
+    if not isinstance(crit, dict):
+        raise SpecError("verdict.criteria must be an object")
+    used = sorted({c for t in types for c in t.criteria}, key=CRITERIA.index)
+    if sorted(crit, key=lambda c: CRITERIA.index(c) if c in CRITERIA else 99) != used:
+        raise SpecError(f"verdict.criteria: keys {sorted(crit)} must be the criteria the types use {used}")
+    texts, trim = {}, None
+    for key in used:
+        text = _text(crit, key, "verdict.criteria")
+        if key == "C5":
+            m = C5_RE.match(text)
+            if m is None:
+                raise SpecError("verdict.criteria.C5: not the implemented rule (LB90 after removing ceil(x n) best event instants, same draws)")
+            trim = float(m.group("share"))
+        elif text != CRITERIA_TEXT[key]:
+            raise SpecError(f"verdict.criteria.{key}: {text!r} is not the implemented rule {CRITERIA_TEXT[key]!r}")
+        texts[key] = text
+    _exact(block, "pass", "verdict", f"{gate}PASS(type) iff every criterion of the type holds and holm_local_confirmed(type)")
+    _exact(block, "fail", "verdict", f"{gate}FAIL(type) otherwise, once no inconclusive condition holds and the floor is met")
+    ann = _check_keys(block["fail_annotation"], "verdict.fail_annotation", ("ub90_ge_threshold", "ub90_lt_threshold"))
+    return {"conditions": tuple(conditions), "fetch_error_share_max": fetch_share, "criteria_text": texts, "c5_trim_share": trim,
+            "annotation_ge": _text(ann, "ub90_ge_threshold", "verdict.fail_annotation"), "annotation_lt": _text(ann, "ub90_lt_threshold", "verdict.fail_annotation"),
+            "closure_scope": _text(block, "closure_scope", "verdict")}
+
+
+def _parse_multiplicity(block, gate: str, types: tuple, alpha: float) -> dict:
+    _check_keys(block, "multiplicity", ("local_holm", "programme", "forbidden_field_names"))
+    lh = _check_keys(block["local_holm"], "multiplicity.local_holm", ("alpha", "family", "p_for_inconclusive_or_not_informative", "field", "gate2_effect"))
+    family = _str_list(lh, "family", "multiplicity.local_holm")
+    if list(family) != [t.name for t in types]:
+        raise SpecError(f"multiplicity.local_holm.family {list(family)} must be the decisive types {[t.name for t in types]}")
+    if _num(lh, "p_for_inconclusive_or_not_informative", "multiplicity.local_holm", 0.0, 1.0) != 1.0:
+        raise SpecError("multiplicity.local_holm.p_for_inconclusive_or_not_informative: only 1.0 is implemented (GATES 2.1)")
+    _exact(lh, "field", "multiplicity.local_holm", "holm_local_confirmed")
+    _exact(lh, "gate2_effect", "multiplicity.local_holm", f"required for {gate}PASS")
+    pr = _check_keys(block["programme"], "multiplicity.programme", ("m_max", "immediate_if_p_le", "otherwise", "field", "gate2_effect"))
+    m_max = _int(pr, "m_max", "multiplicity.programme", 1)
+    local_alpha = _num(lh, "alpha", "multiplicity.local_holm", 0.0, 1.0, lo_open=True)
+    immediate = _num(pr, "immediate_if_p_le", "multiplicity.programme", 0.0, 1.0)
+    if abs(immediate - local_alpha / m_max) > 1e-6:
+        raise SpecError(f"multiplicity.programme.immediate_if_p_le {immediate:g} is not alpha / m_max = {local_alpha / m_max:.7f}")
+    _text(pr, "otherwise", "multiplicity.programme")
+    _exact(pr, "field", "multiplicity.programme", "pass_programme_immediate")
+    _choice(pr, "gate2_effect", "multiplicity.programme", ("none",))
+    forbidden = _str_list(block, "forbidden_field_names", "multiplicity")
+    if "pass_programme" not in forbidden:
+        raise SpecError("multiplicity.forbidden_field_names must forbid pass_programme (quant B4)")
+    return {"alpha": local_alpha, "family": family, "m_max": m_max, "immediate_if_p_le": immediate, "otherwise": pr["otherwise"], "forbidden": forbidden}
+
+
+def _parse_sealing(block, gate: str) -> dict:
+    _check_keys(block, "sealing", ("applies_to_verdicts", "printed", "sealed", "file", "print_sha256", "open_after"))
+    if set(_str_list(block, "applies_to_verdicts", "sealing")) != {gate + "INCONCLUSIVE", gate + "NOT_INFORMATIVE"}:
+        raise SpecError(f"sealing.applies_to_verdicts: only {gate}INCONCLUSIVE and {gate}NOT_INFORMATIVE are implemented (LP-G5 section 8)")
+    printed = _str_list(block, "printed", "sealing", SEALING_PRINTED)
+    sealed = _str_list(block, "sealed", "sealing", SEALING_SEALED)
+    if set(printed) != set(SEALING_PRINTED) or set(sealed) != set(SEALING_SEALED):
+        raise SpecError(f"sealing: printed must be {SEALING_PRINTED} and sealed {SEALING_SEALED} (the implemented split)")
+    _exact(block, "file", "sealing", "sealed/<type>.json")
+    _bool(block, "print_sha256", "sealing", only=True)
+    return {"verdicts": ("INCONCLUSIVE", "NOT_INFORMATIVE"), "printed": printed, "sealed": sealed, "open_after": _text(block, "open_after", "sealing")}
+
+
+def _parse_gate2_inscription(block, gate: str) -> dict:
+    keys = tuple(gate + v for v in VERDICTS)
+    _check_keys(block, "gate2_inscription", keys + ("discretion",))
+    _choice(block, "discretion", "gate2_inscription", ("none",))
+    return {v: _choice(block, gate + v, "gate2_inscription", GATE2_INSCRIPTION_VALUES[v]) for v in VERDICTS}
+
+
+def _parse_economic(block) -> dict:
+    keys = ("s_eco_usd_per_year", "capital_usd", "leverage", "max_live", "order_notional_usd") + tuple(ECONOMIC_FIXED) + ("readings", "audit_break_even_net_bp")
+    _check_keys(block, "economic", keys)
+    for key, value in ECONOMIC_FIXED.items():
+        _exact(block, key, "economic", value)
+    readings = _str_list(block, "readings", "economic")
+    if len(readings) != 3 or not readings[0].startswith("PASS, poursuivi") or not readings[1].startswith("PASS, non poursuivi") or readings[2] != "FAIL":
+        raise SpecError("economic.readings: [\"PASS, poursuivi\", \"PASS, non poursuivi (…)\", \"FAIL\"] (GATES 1.4)")
+    out = {"s_eco": _num(block, "s_eco_usd_per_year", "economic", 0.0), "capital": _num(block, "capital_usd", "economic", 0.0, lo_open=True),
+           "leverage": _num(block, "leverage", "economic", 0.0, lo_open=True), "max_live": _int(block, "max_live", "economic", 1),
+           "notional": _num(block, "order_notional_usd", "economic", 0.0, lo_open=True), "readings": readings}
+    if out["max_live"] * out["notional"] / out["leverage"] > out["capital"] + 1e-9:
+        raise SpecError("economic: max_live × order_notional_usd / leverage exceeds capital_usd (the portfolio reading is not feasible)")
+    be = block["audit_break_even_net_bp"]
+    if not isinstance(be, dict):
+        raise SpecError("economic.audit_break_even_net_bp must be an object")
+    out["break_even"] = dict(be)
+    return out
+
+
+def _parse_descriptive(block, labels: set) -> dict:
+    _check_keys(block, "descriptive", ("rule", "reports"))
+    reports = _str_list(block, "reports", "descriptive", DESCRIPTIVE_REPORTS)
+    for name in reports:
+        label = name.split("_", 1)[0]
+        if re.match(r"^T\d+$", label) and label not in labels:
+            raise SpecError(f"descriptive.reports: {name} names no type of the spec")
+    return {"rule": _text(block, "rule", "descriptive"), "reports": reports}
+
+
+def _parse_fetch_plan(block, universe: tuple, eligibility_days: float) -> dict:
+    _check_keys(block, "fetch_plan", ("host", "instruments", "end_exclusive", "pre_freeze", "post_freeze", "requests_total_estimate", "estimate_assumption",
+                                      "rate_scale_default", "rate_scale_proposed", "max_requests"))
+    _exact(block, "host", "fetch_plan", g5_fetch.DEFAULT_HOST)
+    _exact(block, "instruments", "fetch_plan", "universe.analysed")
+    _exact(block, "end_exclusive", "fetch_plan", FETCH_END_TEXT)
+    pre = _check_keys(block["pre_freeze"], "fetch_plan.pre_freeze", ("streams", "mode", "printed", "sealed", "requests_estimate", "register_status"))
+    if tuple(_str_list(pre, "streams", "fetch_plan.pre_freeze")) != g5_fetch.SEALED_STREAMS:
+        raise SpecError(f"fetch_plan.pre_freeze.streams: only {list(g5_fetch.SEALED_STREAMS)} is fetched before the freeze (P-G5-3)")
+    _choice(pre, "mode", "fetch_plan.pre_freeze", ("sealed",))
+    if tuple(_str_list(pre, "printed", "fetch_plan.pre_freeze")) != g5_fetch.SEALED_PRINTED:
+        raise SpecError(f"fetch_plan.pre_freeze.printed: the sealed fetcher prints {list(g5_fetch.SEALED_PRINTED)} only")
+    _text(pre, "sealed", "fetch_plan.pre_freeze")
+    _choice(pre, "register_status", "fetch_plan.pre_freeze", ("unread",))
+    post = block["post_freeze"]
+    _check_keys(post, "fetch_plan.post_freeze", g5_fetch.PHASES["post_freeze"])
+    pages, starts, estimates = {}, {}, {"funding_hist": _int(pre, "requests_estimate", "fetch_plan.pre_freeze", 0)}
+    expected_rule = {"candles_1m": "eligibility_minus_1d", "mark_1m": "max_coverage_eligibility_minus_1d", "index_1m": "max_coverage_eligibility_minus_1d"}
+    for stream in g5_fetch.PHASES["post_freeze"]:
+        where = f"fetch_plan.post_freeze.{stream}"
+        item = _check_keys(post[stream], where, ("start", "page", "requests_estimate"), ("inst_id",) if stream == "index_1m" else ())
+        rule = g5_fetch.START_RULES.get(_text(item, "start", where))
+        if rule != expected_rule[stream]:
+            raise SpecError(f"{where}.start: {item['start']!r} is not the implemented start of {stream} (LP-G5 §4.3)")
+        if stream == "index_1m":
+            _exact(_check_keys(item, where, ("start", "page", "requests_estimate", "inst_id")), "inst_id", where, "index_id")
+        pages[stream] = _int(item, "page", where, 1)
+        if pages[stream] != g5_fetch.STREAMS[stream].limit_max:
+            raise SpecError(f"{where}.page {pages[stream]} is not the documented maximum {g5_fetch.STREAMS[stream].limit_max}")
+        starts[stream] = rule
+        estimates[stream] = _int(item, "requests_estimate", where, 0)
+    pages["funding_hist"] = g5_fetch.STREAMS["funding_hist"].limit_max
+    total = _int(block, "requests_total_estimate", "fetch_plan", 0)
+    if total != sum(estimates.values()):
+        raise SpecError(f"fetch_plan.requests_total_estimate {total} is not the sum of the streams' estimates {sum(estimates.values())}")
+    m = ESTIMATE_RE.match(_text(block, "estimate_assumption", "fetch_plan"))
+    if m is None:
+        raise SpecError("fetch_plan.estimate_assumption must start with 'coverage_start = YYYY-MM-DD'")
+    assumed_us = tape.day_of_date(m.group("date")) * DAY_US
+    fetched = re.search(r"funding fetched on (\d{4}-\d{2}-\d{2})", block["estimate_assumption"])
+    default_scale = g5_fetch.FetchConfig.__dataclass_fields__["rate_scale"].default
+    if _num(block, "rate_scale_default", "fetch_plan", 0.0, 1.0, lo_open=True) != default_scale:
+        raise SpecError(f"fetch_plan.rate_scale_default must be the fetcher's default {default_scale}")
+    proposed = _num(block, "rate_scale_proposed", "fetch_plan", 0.0, 1.0, lo_open=True)
+    _text(block, "max_requests", "fetch_plan")
+    # Calcul d'audit (no data): the spec's request estimates recomputed from its universe and the assumed D_cov.
+    rows = [{"instId": i.inst_id, "uly": i.index_id, "listTime": str(i.list_time_us // 1000)} for i in universe]
+    computed = g5_fetch.spec_estimate(rows, eligibility_days, assumed_us, pages)
+    if computed != estimates:
+        raise SpecError(f"fetch_plan: request estimates {estimates} differ from the recomputation {computed} (universe, eligibility, pages, coverage_start {m.group('date')})")
+    return {"host": block["host"], "pages": pages, "starts": starts, "estimates": estimates, "total": total, "estimate_coverage_start_us": assumed_us,
+            "estimate_fetched_on": fetched.group(1) if fetched else None, "rate_scale_proposed": proposed, "post_freeze": {s: {"page": pages[s], "start": starts[s]} for s in starts}}
+
+
+def _parse_gate2(block) -> dict:
+    _check_keys(block, "gate2", ("sim", "index_source", "validation_rate_source"))
+    sim = _check_keys(block["sim"], "gate2.sim", ("rule", "latency_ms", "stale_s", "funding_fill_grace_min"))
+    _choice(block, "validation_rate_source", "gate2", ("funding_channel_settled_rate",))
+    return {"sim": {"rule": _choice(sim, "rule", "gate2.sim", lp_sim.RULES), "latency_ms": _num(sim, "latency_ms", "gate2.sim", 0.0),
+                    "stale_s": _num(sim, "stale_s", "gate2.sim", 0.0, lo_open=True), "funding_fill_grace_min": _num(sim, "funding_fill_grace_min", "gate2.sim", 0.0, 60.0)},
+            "index_source": _choice(block, "index_source", "gate2", ("history_index_candles", "none"))}
+
+
+# ----------------------------------------------------------------------------- parse-time audits (calcul d'audit: the spec's own lists, no data)
+
+
+def audit_local_time(tspec: TypeSpec, spec_like) -> dict:
+    """T05 calendar audit: NYSE days of the window with >= 1 eligible instrument at h, raw instants (exclusions applied), instants
+    with >= 3 eligible instruments, the first instant and the lower-median halves (LP-G5 Annexe C)."""
+    eligible = sorted(i.eligible_from_us for i in spec_like.universe)
+    rows = []
+    for moment, _, excluded in local_time_instants(tspec, spec_like, apply_exclusions=False):
+        count = int(np.searchsorted(np.array(eligible, dtype=np.int64), moment + tspec.footprint[0] * MINUTE_US, side="right"))
+        if count >= 1:
+            rows.append((moment, count, excluded))
+    raw = [(m, c) for m, c, e in rows if not e]
+    first_half = (len(raw) - 1) // 2 + 1 if raw else 0
+    return {"nyse_days_with_eligible_instrument": len(rows), "raw_instants": len(raw), "raw_instants_with_ge_3_instruments": sum(1 for _, c in raw if c >= 3),
+            "first_instant_utc": _iso(raw[0][0]) if raw else None, "halves_by_lower_median_day": [first_half, len(raw) - first_half]}
+
+
+def audit_funding_settlements(tspec: TypeSpec, d_cov_us: int, end_us: int, min_instants: int) -> dict:
+    """T01 instant audit: settlements of the default grid served from the assumed D_cov to END, kept when both neighbours are
+    served at the filter's gaps (the first and the last fall: LP-G5 §4.4), and the f_inst below which NOT_INFORMATIVE is expected."""
+    first_day, last_day = d_cov_us // DAY_US, (end_us - 1) // DAY_US
+    served = sorted(d * DAY_US + h * HOUR_US for d in range(int(first_day), int(last_day) + 1) for h in tspec.controls["grid_hours"])
+    served = [s for s in served if d_cov_us <= s < end_us]
+    present = set(served)
+    gen = tspec.generator
+    kept = [s for s in served if (s - gen["previous_gap_us"]) in present and (s + gen["next_gap_us"]) in present]
+    return {"raw_instants_upper_bound": len(kept), "not_informative_expected_if_f_inst_below": (min_instants / len(kept)) if kept else None}
+
+
+def _check_audits(types: tuple, spec_like, fetch_plan: dict | None, economic: dict, power: dict) -> dict:
+    out: dict = {}
+    for t in types:
+        if t.generator["kind"] == "local_time":
+            computed = audit_local_time(t, spec_like)
+            for key, value in t.audit_expected.items():
+                if computed[key] != value:
+                    raise SpecError(f"{t.name}.audit_expected.{key} = {value!r} but the spec's calendars and universe give {computed[key]!r} (calcul d'audit)")
+            out[t.name] = computed
+        else:
+            if t.audit_expected and fetch_plan is None:
+                raise SpecError(f"{t.name}.audit_expected needs the fetch plan's assumed D_cov")
+            if fetch_plan is None:
+                continue
+            computed = audit_funding_settlements(t, fetch_plan["estimate_coverage_start_us"], spec_like.end_us, power["min_instants"])
+            for key, value in t.audit_expected.items():
+                m = RAW_UPPER_RE.match(key)
+                if m is not None:
+                    day = f"{m.group('y')}-{m.group('m')}-{m.group('d')}"
+                    if fetch_plan.get("estimate_fetched_on") != day:
+                        raise SpecError(f"{t.name}.audit_expected.{key}: the fetch plan assumes the funding fetched on {fetch_plan.get('estimate_fetched_on')}")
+                    if computed["raw_instants_upper_bound"] != value:
+                        raise SpecError(f"{t.name}.audit_expected.{key} = {value!r} but the grid from the assumed D_cov gives {computed['raw_instants_upper_bound']}")
+                elif key == "not_informative_expected_if_f_inst_below":
+                    if computed[key] is None or abs(float(value) - computed[key]) > 5e-4:
+                        raise SpecError(f"{t.name}.audit_expected.{key} = {value!r} but min_instants / raw instants = {computed[key]}")
+            out[t.name] = computed
+    by_name = {t.name: t for t in types}
+    for key, value in economic["break_even"].items():
+        m = BREAK_EVEN_RE.match(key)
+        if m is None or m.group("type") not in by_name or isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise SpecError(f"economic.audit_break_even_net_bp.{key}: '<type>_<k>_fills_per_day|event_day' with a number is the implemented form")
+        t, k = by_name[m.group("type")], int(m.group("k"))
+        if m.group("unit") == "event_day":
+            audit = out.get(t.name)
+            if not audit or "raw_instants" not in audit or not audit["nyse_days_with_eligible_instrument"]:
+                raise SpecError(f"economic.audit_break_even_net_bp.{key}: per event day needs the local-time audit of {t.name}")
+            per_day = k * audit["raw_instants"] / audit["nyse_days_with_eligible_instrument"]
+        else:
+            per_day = float(k)
+        computed = economic["s_eco"] / (per_day * economic["notional"] / 1e4 * t.days_per_year)
+        if abs(computed - float(value)) > 0.006:
+            raise SpecError(f"economic.audit_break_even_net_bp.{key} = {value} but S_eco / (fills/day × notional / 1e4 × days/year) = {computed:.4f}")
+        out.setdefault("break_even", {})[key] = computed
+    return out
+
+
+# ----------------------------------------------------------------------------- the specification: entry point
+
+
+_TOP_REQUIRED = ("spec_id", "spec_schema", "spec_version", "status", "protocol", "note", "source", "dataset_id", "end_exclusive_utc", "quarantine_floor_utc", "window",
+                 "requires", "freeze_fill", "universe", "eligibility", "price", "frozen_candle", "unit", "statistics", "power_floor", "costs", "controls_common", "sessions",
+                 "sessions_note", "calendars", "macro_filter", "events", "verdict", "multiplicity", "sealing", "gate2_inscription", "economic", "descriptive")
+_TOP_OPTIONAL = ("fetch_plan", "gate2")
+
+
+@dataclass(frozen=True)
+class _Partial:
+    """What the calendar functions need while the spec is being read."""
+    start: _date
+    end_exclusive: _date
+    universe: tuple
+    calendars: dict
+    sessions: tuple = ()
+    macro: tuple = ()
+
+    @property
+    def start_us(self) -> int:
+        return tape.day_of_date(self.start.isoformat()) * DAY_US
+
+    @property
+    def end_us(self) -> int:
+        return tape.day_of_date(self.end_exclusive.isoformat()) * DAY_US
 
 
 def parse_spec(document) -> Spec:
+    """The strict reader of `g5-spec/2` (B xviii). Raises `SpecError` on any unknown key, unknown value, missing key, unimplemented
+    capability or internal inconsistency; returns the parsed `Spec` otherwise."""
+    if not isinstance(document, dict):
+        raise SpecError("spec must be an object")
+    if document.get("spec_schema") != SPEC_SCHEMA:
+        raise SpecError(f"spec_schema {document.get('spec_schema')!r} is not implemented ({EVALUATOR_VERSION} reads {SPEC_SCHEMA} only)")
     _check_keys(document, "spec", _TOP_REQUIRED, _TOP_OPTIONAL)
-    used: set[str] = set(ALWAYS_USED)
-    spec_id = _str(document, "spec_id", "spec")
-    source = _str(document, "source", "spec", ("history", "capture"))
-    if _str(document, "unit", "spec", ("instant",)) != "instant":
-        raise SpecError("unit must be 'instant'")
+    spec_id = _text(document, "spec_id", "spec")
+    version = _text(document, "spec_version", "spec")
+    status = _choice(document, "status", "spec", STATUSES)
+    if status == "FROZEN" and "draft" in version.lower():
+        raise SpecError(f"spec_version {version!r}: a FROZEN spec carries a final version")
+    source = _choice(document, "source", "spec", ("history", "capture"))
+    gate = "G5_GATE1_" if source == "history" else "G5_GATE2_"
+    if ("GATE1" if source == "history" else "GATE2") not in spec_id:
+        raise SpecError(f"spec_id {spec_id!r} does not name the {'Gate 1' if source == 'history' else 'Gate 2'} of a {source} spec")
+    _text(document, "protocol", "spec")
+    _text(document, "note", "spec")
+    dataset_id = _text(document, "dataset_id", "spec")
+    _exact(document, "end_exclusive_utc", "spec", g5_fetch.END_EXCLUSIVE)
+    _exact(document, "quarantine_floor_utc", "spec", xc.QUARANTINE_FLOOR)
     window = _check_keys(document["window"], "window", ("start", "end_exclusive"))
-    start, end_exclusive = _str(window, "start", "window"), _str(window, "end_exclusive", "window")
-    for text in (start, end_exclusive):
-        _date_days([text], "window")
-    if tape.day_of_date(start) >= tape.day_of_date(end_exclusive):
+    start, end_exclusive = _date(window["start"], "window.start"), _date(window["end_exclusive"], "window.end_exclusive")
+    if start >= end_exclusive:
         raise SpecError("window.start must be before window.end_exclusive")
-    price_source = _str(document, "price_source", "spec", tuple(PRICE_CODE))
-    alpha = _num(document, "alpha", "spec", 0.0, 1.0, lo_open=True)
-    if alpha >= 1.0:
-        raise SpecError("alpha must be in (0, 1)")
-    threshold_bp = _num(document, "threshold_bp", "spec")
-    min_instants = _int(document, "min_instants", "spec", 1)
-    min_days = _int(document, "min_days", "spec", 1)
-    boot = _check_keys(document["bootstrap"], "bootstrap", ("resamples", "seed", "block_days"))
-    resamples, seed, block_days = _int(boot, "resamples", "bootstrap", 1), _int(boot, "seed", "bootstrap"), _int(boot, "block_days", "bootstrap", 1)
-    ex = _check_keys(document["execution"], "execution", ("maker_bp", "taker_bp", "half_spread_bp", "adverse_selection_bp_per_leg", "slippage_bp", "cost_stress_multiplier"),
-                     ("adverse_selection_sensitivity_bp_per_leg", "half_spread_from_book", "sim"))
-    execution = {key: _num(ex, key, "execution", 0.0) for key in ("maker_bp", "taker_bp", "half_spread_bp", "adverse_selection_bp_per_leg", "slippage_bp")}
-    execution["cost_stress_multiplier"] = _num(ex, "cost_stress_multiplier", "execution", 1.0)
-    execution["adverse_selection_sensitivity_bp_per_leg"] = _num(ex, "adverse_selection_sensitivity_bp_per_leg", "execution", 0.0) if "adverse_selection_sensitivity_bp_per_leg" in ex else None
-    execution["half_spread_from_book"] = False
-    if "half_spread_from_book" in ex:
-        if source != "capture":
-            raise SpecError("execution.half_spread_from_book: the history carries no book")
-        execution["half_spread_from_book"] = _bool(ex, "half_spread_from_book", "execution")
-    execution["sim"] = None
-    if "sim" in ex:
-        if source != "capture":
-            raise SpecError("execution.sim: the simulation needs a captured book (source capture)")
-        sim = _check_keys(ex["sim"], "execution.sim", ("rule", "latency_ms", "funding_fill_grace_min", "stale_s"))
-        execution["sim"] = {"rule": _str(sim, "rule", "execution.sim", lp_sim.RULES), "latency_ms": _num(sim, "latency_ms", "execution.sim", 0.0),
-                            "funding_fill_grace_min": _num(sim, "funding_fill_grace_min", "execution.sim", 0.0, 60.0), "stale_s": _num(sim, "stale_s", "execution.sim", 0.0, lo_open=True)}
-        used.add("gate2_lp_sim_roles")
-    primary_measure = _str(document, "primary_measure", "spec", ("net_bp", "r_bp", "sim_net_bp"))
-    if primary_measure == "sim_net_bp" and execution["sim"] is None:
-        raise SpecError("primary_measure sim_net_bp needs execution.sim (source capture)")
-    ct = _check_keys(document["controls"], "controls", ("hours", "random_per_day", "exclusion_min", "seed", "minute_zero_only", "same_days_as_events"), ("exclusion_on",))
-    controls = {"hours": _hours(_list(ct, "hours", "controls"), "controls.hours"), "random_per_day": _int(ct, "random_per_day", "controls", 0, 23),
-                "exclusion_min": _int(ct, "exclusion_min", "controls", 0), "seed": _int(ct, "seed", "controls"), "minute_zero_only": _bool(ct, "minute_zero_only", "controls"),
-                "same_days_as_events": _bool(ct, "same_days_as_events", "controls"), "exclusion_on": _str(ct, "exclusion_on", "controls", ("instant", "window")) if "exclusion_on" in ct else "instant"}
-    if controls["minute_zero_only"] or controls["same_days_as_events"]:
-        used.add("controls_same_days_minute_zero")
-    if controls["exclusion_on"] == "window":
-        used.add("controls_window_exclusion")
-    q = _check_keys(document["quality"], "quality", ("max_missing_window_share", "max_proxy_missing_share", "max_fetch_error_share", "max_funding_unknown_share", "exclude_zero_volume"))
-    quality = {key: _num(q, key, "quality", 0.0, 1.0) for key in ("max_missing_window_share", "max_proxy_missing_share", "max_fetch_error_share", "max_funding_unknown_share")}
-    quality["exclude_zero_volume"] = _bool(q, "exclude_zero_volume", "quality")
-    if quality["exclude_zero_volume"]:
-        if source != "history":
-            raise SpecError("quality.exclude_zero_volume: the per-minute volume exists on the history candles only")
-        used.add("zero_volume_exclusion")
-    eco = _check_keys(document["economic"], "economic", ("s_eco_usd_per_year", "max_fills_per_instant", "order_notional_usd"))
-    economic = {"s_eco_usd_per_year": _num(eco, "s_eco_usd_per_year", "economic", 0.0), "max_fills_per_instant": _int(eco, "max_fills_per_instant", "economic", 1),
-                "order_notional_usd": _num(eco, "order_notional_usd", "economic", 0.0, lo_open=True)}
-    eligibility_days = None
-    if "eligibility" in document:
-        el = _check_keys(document["eligibility"], "eligibility", ("days_after_list",))
-        eligibility_days = _num(el, "days_after_list", "eligibility", 0.0)
-        used.add("eligibility_days_after_list")
-    assumed_hours = None
-    if "funding_outside_coverage" in document:
-        if source != "history":
-            raise SpecError("funding_outside_coverage: history only")
-        fo = _check_keys(document["funding_outside_coverage"], "funding_outside_coverage", ("assumed_hours",))
-        assumed_hours = _hours(_list(fo, "assumed_hours", "funding_outside_coverage"), "funding_outside_coverage.assumed_hours")
-        used.add("coverage_restriction")
-    programme_m_max = None
-    if "programme" in document:
-        pr = _check_keys(document["programme"], "programme", ("m_max",))
-        programme_m_max = _int(pr, "m_max", "programme", 1)
-        used.add("programme_family")
+    start_us, end_us = tape.day_of_date(start.isoformat()) * DAY_US, tape.day_of_date(end_exclusive.isoformat()) * DAY_US
+    if start_us < QUARANTINE_END_US and end_us > QUARANTINE_START_US:
+        raise SpecError(f"window {start}..{end_exclusive} touches the quarantine [{g5_fetch.END_EXCLUSIVE}, {xc.QUARANTINE_FLOOR})")
+    if source == "history" and end_us > g5_fetch.END_EXCLUSIVE_US:
+        raise SpecError(f"a history window ends at or before END_EXCLUSIVE {g5_fetch.END_EXCLUSIVE}")
+    if source == "capture" and start_us < QUARANTINE_END_US:
+        raise SpecError(f"a capture window starts at or after the quarantine floor {xc.QUARANTINE_FLOOR}")
+    requires = _parse_requires(document, source)
+    freeze_fill = _parse_freeze_fill(document["freeze_fill"], status)
+    el = _check_keys(document["eligibility"], "eligibility", ("days_after_list_time", "reference", "applies_to", "count_field"))
+    eligibility_days = _num(el, "days_after_list_time", "eligibility", 0.0)
+    _choice(el, "reference", "eligibility", ("footprint_start",))
+    if list(_str_list(el, "applies_to", "eligibility")) != ["events", "controls"]:
+        raise SpecError("eligibility.applies_to: the rule applies to the events and the controls alike")
+    count_field = _text(el, "count_field", "eligibility")
+    universe, excluded = _parse_universe(document["universe"], eligibility_days, end_us, source)
+    price = _parse_price(document["price"], source)
+    frozen_candle = _parse_frozen_candle(document["frozen_candle"], source)
+    unit = _parse_unit(document["unit"])
+    statistics = _parse_statistics(document["statistics"])
+    power = _parse_power(document["power_floor"], gate)
+    costs = _parse_costs(document["costs"], source)
+    controls_common = _parse_controls_common(document["controls_common"], source)
+    sessions = _parse_sessions(document["sessions"])
+    _text(document, "sessions_note", "spec")
+    calendars = _parse_calendars(document["calendars"])
+    macro = _parse_macro(document["macro_filter"], calendars)
     items = _list(document, "events", "spec")
-    if not items:
-        raise SpecError("events must not be empty")
-    events = tuple(_parse_event(item, i, source, execution["sim"] is not None, used) for i, item in enumerate(items))
-    names = [e.type for e in events]
-    if len(set(names)) != len(names):
-        raise SpecError(f"duplicate event types: {sorted({n for n in names if names.count(n) > 1})}")
-    if not any(e.primary and e.evaluate for e in events):
-        raise SpecError("at least one evaluated event must be flagged primary (the Holm family)")
-    requires = _list(document, "requires", "spec")
-    if any(not isinstance(r, str) for r in requires) or len(set(requires)) != len(requires):
-        raise SpecError("requires must be a list of distinct capability names")
-    unknown = sorted(set(requires) - set(CAPABILITIES))
-    if unknown:
-        raise SpecError(f"requires {unknown}: not implemented by {EVALUATOR_VERSION} (implemented: {sorted(CAPABILITIES)})")
-    undeclared = sorted(used - set(requires))
-    if undeclared:
-        raise SpecError(f"the spec uses {undeclared} without declaring it in requires (the version lock of (B) xii)")
-    return Spec(spec_id, source, tuple(requires), price_source, start, end_exclusive, alpha, threshold_bp, min_instants, min_days, primary_measure, resamples, seed, block_days,
-                execution, controls, quality, economic, eligibility_days, assumed_hours, programme_m_max, events, tuple(sorted(used)), raw=document)
+    types = tuple(_parse_type(item, i, source, gate, calendars) for i, item in enumerate(items))
+    names = [t.name for t in types]
+    if len(set(names)) != len(names) or len({t.label for t in types}) != len(types):
+        raise SpecError(f"duplicate event types or labels: {names}")
+    if "type_instants" in controls_common["components"]:
+        target = controls_common["components"]["type_instants"]
+        if target[0] not in names or target[3] != target[0].split("_", 1)[0] or next(t for t in types if t.name == target[0]).generator["kind"] != "local_time":
+            raise SpecError(f"controls_common.exclusions: {target[0]} is not a local_time type of the spec (labelled {target[3]})")
+    for t in types:
+        costs_t = cost_terms(t.role, costs)
+        if abs(costs_t["total_bp"] - t.expected_cost_bp) > 1e-9 or abs(costs_t["stress_total_bp"] - t.expected_cost_bp_stress) > 1e-9:
+            raise SpecError(f"{t.name}: expected_cost_bp {t.expected_cost_bp:g} / stress {t.expected_cost_bp_stress:g} differ from the cost terms of {t.role} "
+                            f"({costs_t['total_bp']:g} / {costs_t['stress_total_bp']:g}) (CTO B1-vi)")
+    verdict = _parse_verdict(document["verdict"], gate, types)
+    if verdict["fetch_error_share_max"] is None and source == "history":
+        raise SpecError("verdict.inconclusive_global: a history spec states fetch_job_error_share_gt_<x> (LP-G5 §4.5)")
+    multiplicity = _parse_multiplicity(document["multiplicity"], gate, types, statistics["alpha"])
+    sealing = _parse_sealing(document["sealing"], gate)
+    gate2_inscription = _parse_gate2_inscription(document["gate2_inscription"], gate)
+    economic = _parse_economic(document["economic"])
+    descriptive = _parse_descriptive(document["descriptive"], {t.label for t in types})
+    fetch_plan = None
+    if source == "history":
+        if "fetch_plan" not in document:
+            raise SpecError("spec: missing key(s) ['fetch_plan'] (a history spec carries its fetch plan)")
+        fetch_plan = _parse_fetch_plan(document["fetch_plan"], universe, eligibility_days)
+        if "gate2" in document:
+            raise SpecError("spec.gate2: a capture (Gate 2) block in a history spec")
+    else:
+        if "fetch_plan" in document:
+            raise SpecError("spec.fetch_plan: the capture is not fetched by g5_fetch")
+        if "gate2" not in document:
+            raise SpecError("spec: missing key(s) ['gate2'] (a capture spec states its simulation)")
+    gate2 = _parse_gate2(document["gate2"]) if source == "capture" else None
+    partial = _Partial(start, end_exclusive, universe, calendars, sessions, macro)
+    audit = _check_audits(types, partial, fetch_plan, economic, power)
+    notes = {"note": document["note"], "universe.rule": document["universe"]["rule"], "universe.selection_bias_declared": document["universe"]["selection_bias_declared"],
+             "controls_common.rule": document["controls_common"]["rule"], "sessions_note": document["sessions_note"], "calendars.sources": list(calendars["sources"]),
+             "calendars.read_by": calendars["read_by"], "macro_filter.type": document["macro_filter"]["type"], "macro_filter.use": document["macro_filter"]["use"],
+             "macro_filter.ten_am_et_releases": document["macro_filter"]["ten_am_et_releases"], "costs.g2_table_substitution": costs["g2_table_substitution"],
+             "verdict.closure_scope": verdict["closure_scope"], "multiplicity.programme.otherwise": multiplicity["otherwise"], "sealing.open_after": sealing["open_after"],
+             "freeze_fill.rule": freeze_fill["rule"], "gate2_inscription.discretion": document["gate2_inscription"]["discretion"],
+             "sessions_to_verify_at_freeze": [s["name"] for s in sessions if s["verify_at_freeze"]],
+             "classifier.threshold_origin": {t.name: t.classifier["threshold_origin"] for t in types if t.classifier is not None}}
+    if fetch_plan is not None:
+        notes.update({"fetch_plan.max_requests": document["fetch_plan"]["max_requests"], "fetch_plan.pre_freeze.sealed": document["fetch_plan"]["pre_freeze"]["sealed"],
+                      "fetch_plan.estimate_assumption": document["fetch_plan"]["estimate_assumption"], "fetch_plan.rate_scale_proposed": fetch_plan["rate_scale_proposed"]})
+    return Spec(document, spec_id, version, status, source, dataset_id, document["protocol"], gate, start, end_exclusive, requires, freeze_fill, universe, excluded,
+                eligibility_days, count_field, price, frozen_candle, unit, statistics, power, costs, controls_common, sessions, calendars, macro, types, verdict,
+                multiplicity, sealing, gate2_inscription, economic, descriptive, fetch_plan, gate2, audit, notes)
 
 
 def load_spec(path: Path) -> tuple[Spec, str]:
-    text = Path(path).read_text()
+    """The spec file and its sha256 (of the exact bytes read)."""
+    data = Path(path).read_bytes()
     try:
-        document = json.loads(text)
-    except ValueError as error:
+        document = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
         raise SpecError(f"{path}: not JSON ({error})") from None
-    return parse_spec(document), g5_fetch.sha256_text(text)
+    return parse_spec(document), g5_fetch.sha256_bytes(data)
 
 
 def guard_window(spec: Spec) -> dict:
-    """Refuses a window touching the quarantine; a history window must end at or before END_EXCLUSIVE."""
+    """The quarantine guard of a run (also checked at parse time)."""
     if spec.start_us < QUARANTINE_END_US and spec.end_us > QUARANTINE_START_US:
-        raise SystemExit(f"quarantine: the window {spec.start}..{spec.end_exclusive} touches [{g5_fetch.END_EXCLUSIVE}, {xc.QUARANTINE_FLOOR}); nothing dated there is ever read")
+        raise SystemExit(f"quarantine: the window {spec.start}..{spec.end_exclusive} touches [{g5_fetch.END_EXCLUSIVE}, {xc.QUARANTINE_FLOOR})")
     if spec.source == "history" and spec.end_us > g5_fetch.END_EXCLUSIVE_US:
         raise SystemExit(f"history window must end at or before END_EXCLUSIVE {g5_fetch.END_EXCLUSIVE}")
     if spec.source == "capture" and spec.start_us < QUARANTINE_END_US:
         raise SystemExit(f"a capture window must start at or after the quarantine floor {xc.QUARANTINE_FLOOR}")
-    return {"end_exclusive": g5_fetch.END_EXCLUSIVE, "quarantine_floor": xc.QUARANTINE_FLOOR, "window": [spec.start, spec.end_exclusive], "source": spec.source,
-            "read_from": tape.iso_utc(spec.pad_start_us)}
+    return {"end_exclusive": g5_fetch.END_EXCLUSIVE, "quarantine_floor": xc.QUARANTINE_FLOOR, "window": [spec.start.isoformat(), spec.end_exclusive.isoformat()],
+            "source": spec.source, "read_from": tape.iso_utc(spec.pad_start_us)}
 
 
 # ----------------------------------------------------------------------------- minute series
@@ -799,39 +1565,121 @@ def guard_window(spec: Spec) -> dict:
 
 @dataclass
 class Series:
-    inst: str
-    grid_us: np.ndarray  # minute boundaries g_k, k = 0..N (from the padded start to the window end)
-    price: np.ndarray  # reference price at g_k: close of the candle ending at g_k (history), last value of the minute (capture)
-    price_code: np.ndarray  # PRICE_CODE of the value at g_k, 0 when missing
-    alt_price: np.ndarray  # the other price, descriptive
-    volume: np.ndarray | None  # vol of the last-price candle ending at g_k (history)
-    premium: dict  # premium field name → array at g_k
-    range_bp: np.ndarray  # (high − low) / close of the reference candle ending at g_k, bp
-    funding: lp_sim.FundingSchedule  # settlements with a known (realized / settled) rate
-    settlements_all: np.ndarray  # every settlement instant read, rate known or not
-    funding_unknown_ts: np.ndarray  # settlement instants whose rate is unknown (no realizedRate / not settled)
-    assumed_unknown_ts: np.ndarray  # assumed settlement instants outside the funding coverage (and at / after END_EXCLUSIVE)
-    coverage_start_us: dict  # history layout → start of D_cov (None: no coverage)
-    eligible_from_us: int | None
-    eligibility_known: bool
-    window_start_us: int
-    half_spread_bp: np.ndarray | None = None
+    """One instrument on the minute grid g_k (k = 0..N, from the padded start to the window end): every array holds, at g_k,
+    the value of the candle ending at g_k (history) or of the minute ending at g_k (capture); NaN when missing."""
+    meta: Instrument
+    source: str
+    grid_us: np.ndarray
+    close: np.ndarray
+    low: np.ndarray
+    high: np.ndarray
+    vol: np.ndarray
+    mark: np.ndarray
+    index: np.ndarray
+    settlements_us: np.ndarray  # every settlement instant read (rate known or not), sorted, unique
+    settlement_rates: np.ndarray  # realized (history) / settled (capture) rate per settlement, NaN when unknown
+    d_cov_start_us: int | None  # first settlement whose predecessor is served (history); None: unknown
+    coverage: dict = field(default_factory=dict)
     book: lp_sim.Book | None = None
     prints: lp_sim.Prints | None = None
     inst_spec: lp_sim.InstrumentSpec | None = None
-    spec_row: dict | None = None
-    coverage: dict = field(default_factory=dict)
+    cache: dict = field(default_factory=dict, repr=False)
+
+    @property
+    def inst(self) -> str:
+        return self.meta.inst_id
 
     @property
     def size(self) -> int:
         return int(self.grid_us.size)
 
-    def index_of(self, instants_us: np.ndarray) -> np.ndarray:
+    def index_of(self, instants_us) -> np.ndarray:
         return ((np.asarray(instants_us, dtype=np.int64) - int(self.grid_us[0])) // MINUTE_US).astype(np.int64)
 
+    @property
+    def premium(self) -> np.ndarray:
+        if "premium" not in self.cache:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                self.cache["premium"] = (self.mark - self.index) / self.index
+        return self.cache["premium"]
 
-def _grid(start_us: int, end_us: int) -> np.ndarray:
-    return np.arange(start_us, end_us + MINUTE_US, MINUTE_US, dtype=np.int64)
+    def at(self, array: np.ndarray, k: np.ndarray) -> np.ndarray:
+        """`array[k]`, NaN outside the grid."""
+        k = np.asarray(k, dtype=np.int64)
+        out = np.full(k.size, np.nan)
+        ok = (k >= 0) & (k < self.size)
+        out[ok] = array[k[ok]]
+        return out
+
+    def rate_at(self, instants_us) -> np.ndarray:
+        """The known rate of the settlement at exactly each instant (NaN: no settlement, or its rate unknown)."""
+        instants = np.asarray(instants_us, dtype=np.int64)
+        out = np.full(instants.size, np.nan)
+        ts = self.settlements_us
+        if ts.size == 0 or instants.size == 0:
+            return out
+        pos = np.searchsorted(ts, instants)
+        hit = pos < ts.size
+        hit[hit] = ts[pos[hit]] == instants[hit]
+        out[hit] = self.settlement_rates[pos[hit]]
+        return out
+
+    def funding_crossed(self, open_us: np.ndarray, close_us: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Per window (open, close]: settlements crossed, fsum of their known rates, and how many have an unknown rate."""
+        open_us, close_us = np.asarray(open_us, dtype=np.int64), np.asarray(close_us, dtype=np.int64)
+        lo = np.searchsorted(self.settlements_us, open_us, side="right")
+        hi = np.searchsorted(self.settlements_us, close_us, side="right")
+        count = (hi - lo).astype(np.int64)
+        total = np.zeros(open_us.size)
+        unknown = np.zeros(open_us.size, dtype=np.int64)
+        for i in np.nonzero(count > 0)[0].tolist():
+            rates = self.settlement_rates[lo[i]: hi[i]]
+            known = np.isfinite(rates)
+            unknown[i] = int((~known).sum())
+            total[i] = math.fsum(rates[known].tolist())
+        return count, total, unknown
+
+    def p_hat(self, k_arm: np.ndarray, block: dict) -> np.ndarray:
+        """(B) iv — P̂ at the boundaries `k_arm`: Σ_{j=1..n} j·π(k_arm − n + j) / Σ j over the present boundaries (π = (m − idx) / idx,
+        the closes of the mark and index candles ending there), NaN when fewer than `min_coverage` × n are present. Nothing after
+        k_arm is read. Cached per (k, n, coverage): the same value serves the events, the controls and the descriptive variants."""
+        n, cover = int(block["lookback_min"]), float(block["min_coverage"])
+        base = self.premium
+        weights = np.arange(1, n + 1, dtype=np.float64)
+        out = np.full(np.asarray(k_arm).size, np.nan)
+        cache = self.cache.setdefault(("p_hat", n, cover), {})
+        for i, kk in enumerate(np.asarray(k_arm, dtype=np.int64).tolist()):
+            if kk in cache:
+                out[i] = cache[kk]
+                continue
+            value = math.nan
+            lo = kk - n + 1
+            if lo >= 0 and kk < base.size:
+                window = base[lo: kk + 1]
+                ok = np.isfinite(window)
+                if ok.sum() >= cover * n:
+                    value = math.fsum((weights[ok] * window[ok]).tolist()) / math.fsum(weights[ok].tolist())
+            cache[kk] = value
+            out[i] = value
+        return out
+
+
+def make_series(meta: Instrument, grid_us, close, low=None, high=None, vol=None, mark=None, index=None, settlements_us=(), rates=(), d_cov_start_us: int | None = None,
+                source: str = "history", coverage: dict | None = None) -> Series:
+    """A `Series` from arrays (synthetic tests): `low` / `high` default to `close`, `vol` to 1, mark / index to NaN."""
+    grid = np.asarray(grid_us, dtype=np.int64)
+    close = np.asarray(close, dtype=np.float64)
+    nan = np.full(grid.size, np.nan)
+    ts = np.asarray(settlements_us, dtype=np.int64)
+    rt = np.asarray(rates, dtype=np.float64) if len(rates) else np.full(ts.size, np.nan)
+    order = np.argsort(ts, kind="stable")
+    return Series(meta, source, grid, close, close.copy() if low is None else np.asarray(low, dtype=np.float64), close.copy() if high is None else np.asarray(high, dtype=np.float64),
+                  np.ones(grid.size) if vol is None else np.asarray(vol, dtype=np.float64), nan.copy() if mark is None else np.asarray(mark, dtype=np.float64),
+                  nan.copy() if index is None else np.asarray(index, dtype=np.float64), ts[order], rt[order], d_cov_start_us, coverage or {})
+
+
+def spec_grid(spec: Spec) -> np.ndarray:
+    return np.arange(spec.pad_start_us, spec.end_us + MINUTE_US, MINUTE_US, dtype=np.int64)
 
 
 def _dates_between(start_us: int, end_us: int) -> list[str]:
@@ -839,119 +1687,82 @@ def _dates_between(start_us: int, end_us: int) -> list[str]:
     return [tape.date_of_day(d) for d in range(int(first), int(last) + 1)]
 
 
-def _place_closes(grid: np.ndarray, open_ts_us: np.ndarray, values: np.ndarray, target: np.ndarray) -> int:
-    """`target[k] = value` for the candle opening at g_{k−1} (ending at g_k); returns how many rows fell outside the grid."""
+def _place(grid: np.ndarray, open_ts_us: np.ndarray, values: np.ndarray, target: np.ndarray) -> int:
+    """`target[k] = value` for the candle opening at g_{k−1} (ending at g_k); returns the rows outside the grid."""
     k = (open_ts_us - int(grid[0])) // MINUTE_US + 1
     inside = (k >= 0) & (k < grid.size) & ((open_ts_us - int(grid[0])) % MINUTE_US == 0)
     target[k[inside]] = values[inside]
     return int((~inside).sum())
 
 
-def _drop_after_end(rows: np.ndarray) -> tuple[np.ndarray, int]:
-    keep = rows["ts_us"] < g5_fetch.END_EXCLUSIVE_US
-    return rows[keep], int((~keep).sum())
+def d_cov_of(settlements_us: np.ndarray, state: dict | None) -> tuple[int | None, str]:
+    """D_cov start of one instrument (LP-G5 §4.4): its first settlement whose predecessor is also served, known only when the
+    job ended `reached_start` or `server_empty_before_start` (`end_reason`, CTO M1)."""
+    if not state or state.get("end_reason") not in g5_fetch.COMPLETE_REASONS or not state.get("complete"):
+        return None, f"unknown (end_reason {None if not state else state.get('end_reason')!r})"
+    ts = np.unique(np.asarray(settlements_us, dtype=np.int64))
+    if ts.size < 2:
+        return None, "unknown (fewer than two settlements served)"
+    return int(ts[1]), f"second settlement served ({state.get('end_reason')})"
 
 
-def stream_coverage(manifest: dict | None, key: str, layout: str, rows_ts: np.ndarray) -> dict:
-    """D_cov start of one (instrument, stream) of a `g5_fetch` tape: the job's floor when it reached it, its `coverage_start_us`
-    when the server stopped earlier, the oldest row stored when the job did not end; without a manifest state, the oldest row read."""
-    oldest = int(np.min(rows_ts)) if np.asarray(rows_ts).size else None
-    state = ((manifest or {}).get("g5_streams") or {}).get(f"{key}:{layout}")
-    if state is None:
-        return {"start_us": oldest, "source": "rows", "end_reason": None, "truncated": None}
-    reason = state.get("end_reason")
-    if state.get("complete") and reason == "reached_start":
-        start = int(state["start_us"])
-    elif state.get("coverage_start_us") is not None:
-        start = int(state["coverage_start_us"])
-    elif state.get("oldest_ts_us") is not None:
-        start = int(state["oldest_ts_us"])
-    else:
-        start = None
-    return {"start_us": start, "source": f"manifest:{reason}", "end_reason": reason, "truncated": state.get("truncated"), "complete": bool(state.get("complete"))}
-
-
-def _eligibility(row: dict | None, spec: Spec) -> tuple[int | None, bool]:
-    if spec.eligibility_days is None:
-        return None, True
-    listed = xc._i((row or {}).get("listTime"), 0)
-    if listed <= 0:
-        return None, False
-    return listed * 1000 + int(round(spec.eligibility_days * DAY_US)), True
-
-
-def _assumed_unknown(spec: Spec, funding_start_us: int | None) -> np.ndarray:
-    if not spec.assumed_hours:
-        return np.zeros(0, dtype=np.int64)
-    first, last = spec.pad_start_us // DAY_US, (spec.end_us + DAY_US) // DAY_US
-    moments = np.array([d * DAY_US + h * HOUR_US for d in range(int(first), int(last) + 1) for h in spec.assumed_hours], dtype=np.int64)
-    unknown = moments >= g5_fetch.END_EXCLUSIVE_US
-    unknown |= (moments < funding_start_us) if funding_start_us is not None else True
-    return np.unique(moments[unknown])
-
-
-def load_history_series(tape_dir: Path, inst: str, index_id: str, spec: Spec, manifest: dict | None = None, row: dict | None = None, allow_pending: bool = False) -> Series:
-    grid = _grid(spec.pad_start_us, spec.end_us)
+def load_history_series(tape_dir: Path, meta: Instrument, spec: Spec, manifest: dict | None, sealed_manifest: dict | None) -> Series:
+    """One instrument of a `g5_fetch` tape: last-price candles, mark and index candles from the tape, the funding history from its
+    sealed store (`sealed-funding/`). Rows at or after END_EXCLUSIVE dropped and counted; `confirm = 0` dropped and counted."""
+    grid = spec_grid(spec)
     dates = _dates_between(spec.pad_start_us, spec.end_us)
-    cov: dict = {"rows_at_or_after_end_dropped": 0, "rows_outside_grid": 0, "unconfirmed_dropped": {}, "confirm_unknown": {}, "index_id": index_id, "minutes": int(grid.size)}
+    cov: dict = {"rows_at_or_after_end_dropped": 0, "rows_outside_grid": 0, "unconfirmed_dropped": {}, "confirm_unknown": {}, "index_id": meta.index_id, "minutes": int(grid.size)}
 
     def candles(layout: str, key: str) -> np.ndarray:
-        rows, _ = tape.load_days(tape_dir, layout, key, dates, allow_pending)
-        rows, dropped = _drop_after_end(rows)
-        cov["rows_at_or_after_end_dropped"] += dropped
-        unconfirmed = rows["confirm"] == 0 if rows.size else np.zeros(0, dtype=bool)
+        rows, _ = tape.load_days(tape_dir, layout, key, dates, allow_pending=False)
+        keep = rows["ts_us"] < g5_fetch.END_EXCLUSIVE_US
+        cov["rows_at_or_after_end_dropped"] += int((~keep).sum())
+        rows = rows[keep]
+        unconfirmed = rows["confirm"] == 0
         cov["unconfirmed_dropped"][layout] = int(unconfirmed.sum())
-        cov["confirm_unknown"][layout] = int((rows["confirm"] < 0).sum()) if rows.size else 0
-        return rows[~unconfirmed] if rows.size else rows
+        cov["confirm_unknown"][layout] = int((rows["confirm"] < 0).sum())
+        return rows[~unconfirmed]
 
-    def closes(rows: np.ndarray, column: str = "close") -> np.ndarray:
+    def place(rows: np.ndarray, column: str) -> np.ndarray:
         out = np.full(grid.size, np.nan)
         if rows.size:
-            cov["rows_outside_grid"] += _place_closes(grid, rows["ts_us"].astype(np.int64), rows[column].astype(np.float64), out)
+            cov["rows_outside_grid"] += _place(grid, rows["ts_us"].astype(np.int64), rows[column].astype(np.float64), out)
         return out
 
-    last_rows, mark_rows, index_rows = candles("candles_1m", inst), candles("mark_1m", inst), candles("index_1m", index_id)
-    last, mark, index_px = closes(last_rows), closes(mark_rows), closes(index_rows)
-    volume = closes(last_rows, "vol")
-    ref_rows = last_rows if spec.price_source == "last" else mark_rows
-    range_bp = np.full(grid.size, np.nan)
-    if ref_rows.size:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            rng = ((ref_rows["high"] - ref_rows["low"]) / ref_rows["close"] * 1e4).astype(np.float64)
-        _place_closes(grid, ref_rows["ts_us"].astype(np.int64), rng, range_bp)
-    price, alt = (last, mark) if spec.price_source == "last" else (mark, last)
-    code = np.where(np.isfinite(price), PRICE_CODE[spec.price_source], 0).astype(np.int8)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        premium = (mark - index_px) / index_px
-    cov.update({"price_source": spec.price_source, "price_minutes": int(np.isfinite(price).sum()), "alt_price_minutes": int(np.isfinite(alt).sum()),
-                "premium_mark_index_minutes": int(np.isfinite(premium).sum()), "zero_volume_minutes": int((volume == 0).sum())})
-    funding_dates = _dates_between(spec.pad_start_us, min(spec.end_us + DAY_US, g5_fetch.END_EXCLUSIVE_US))
-    frows, _ = tape.load_days(tape_dir, "funding_hist", inst, funding_dates, allow_pending)
-    frows, dropped = _drop_after_end(frows)
-    cov["rows_at_or_after_end_dropped"] += dropped
-    ts = frows["ts_us"].astype(np.int64) if frows.size else np.zeros(0, dtype=np.int64)
-    realized = frows["realized_rate"].astype(np.float64) if frows.size else np.zeros(0)
-    known = np.isfinite(realized)
-    funding = lp_sim.FundingSchedule(ts[known], realized[known], source="funding_hist realizedRate (predicted fundingRate never used)")
-    cov.update({"funding_rows": int(frows.size), "funding_rows_without_realized": int((~known).sum()), "funding_realized_share": float(known.mean()) if known.size else None})
-    coverage = {"candles_1m": stream_coverage(manifest, inst, "candles_1m", last_rows["ts_us"] if last_rows.size else np.zeros(0)),
-                "mark_1m": stream_coverage(manifest, inst, "mark_1m", mark_rows["ts_us"] if mark_rows.size else np.zeros(0)),
-                "index_1m": stream_coverage(manifest, index_id, "index_1m", index_rows["ts_us"] if index_rows.size else np.zeros(0)),
-                "funding_hist": stream_coverage(manifest, inst, "funding_hist", ts)}
-    cov["streams"] = {k: {**v, "start": tape.iso_utc(v["start_us"]) if v["start_us"] is not None else None} for k, v in coverage.items()}
-    starts = {k: v["start_us"] for k, v in coverage.items()}
-    eligible_from, eligibility_known = _eligibility(row, spec)
-    cov["eligible_from"] = tape.iso_utc(eligible_from) if eligible_from is not None else (None if eligibility_known else "UNKNOWN (no listTime): excluded")
-    return Series(inst, grid, price, code, alt, volume, {"premium_mark_index": premium}, range_bp, funding, np.unique(ts), np.unique(ts[~known]),
-                  _assumed_unknown(spec, starts["funding_hist"]), starts, eligible_from, eligibility_known, spec.start_us, spec_row=row, coverage=cov)
+    last, mark_rows, index_rows = candles("candles_1m", meta.inst_id), candles("mark_1m", meta.inst_id), candles("index_1m", meta.index_id)
+    close, low, high, vol = place(last, "close"), place(last, "low"), place(last, "high"), place(last, "vol")
+    mark, index_px = place(mark_rows, "close"), place(index_rows, "close")
+    sealed_dir = Path(tape_dir) / g5_fetch.SEALED_DIR_NAME
+    funding_dates = _dates_between(spec.pad_start_us - DAY_US, g5_fetch.END_EXCLUSIVE_US)
+    frows, _ = tape.load_days(sealed_dir, "funding_hist", meta.inst_id, funding_dates, allow_pending=False) if sealed_dir.exists() else (tape.empty_rows("funding_hist"), [])
+    keep = frows["ts_us"] < g5_fetch.END_EXCLUSIVE_US
+    cov["rows_at_or_after_end_dropped"] += int((~keep).sum())
+    frows = frows[keep]
+    ts = frows["ts_us"].astype(np.int64)
+    realized = frows["realized_rate"].astype(np.float64)
+    states = (manifest or {}).get("g5_streams") or {}
+    sealed_states = (sealed_manifest or {}).get("g5_streams") or {}
+    fstate = sealed_states.get(f"{meta.inst_id}:funding_hist")
+    d_cov, d_cov_source = d_cov_of(ts, fstate)
+    if fstate and fstate.get("d_cov_start_us") is not None and d_cov is not None and int(fstate["d_cov_start_us"]) != d_cov:
+        cov["d_cov_manifest_mismatch"] = True
+    cov.update({"close_minutes": int(np.isfinite(close).sum()), "mark_minutes": int(np.isfinite(mark).sum()), "index_minutes": int(np.isfinite(index_px).sum()),
+                "zero_volume_minutes": int((vol == 0).sum()), "funding_rows": int(frows.size), "funding_rows_without_realized": int((~np.isfinite(realized)).sum()),
+                "d_cov_start": _iso(d_cov), "d_cov_source": d_cov_source,
+                "end_reasons": {"candles_1m": (states.get(f"{meta.inst_id}:candles_1m") or {}).get("end_reason"), "mark_1m": (states.get(f"{meta.inst_id}:mark_1m") or {}).get("end_reason"),
+                                "index_1m": (states.get(f"{meta.index_id}:index_1m") or {}).get("end_reason"), "funding_hist": (fstate or {}).get("end_reason")}})
+    return make_series(meta, grid, close, low, high, vol, mark, index_px, ts, realized, d_cov, "history", cov)
 
 
-def load_capture_series(tape_dir: Path, inst: str, spec: Spec, row: dict | None = None, allow_pending: bool = False) -> Series:
-    grid = _grid(spec.pad_start_us, spec.end_us)
+def load_capture_series(tape_dir: Path, meta: Instrument, spec: Spec, row: dict | None = None) -> Series:
+    """One instrument of the capture tape (Gate 2): the last print and the last mark of each minute, the index candles of
+    `index_1m/<index_id>` when `gate2.index_source` is `history_index_candles`, the settlements and settled rates of the funding
+    channel, the book and the prints for the simulation."""
+    grid = spec_grid(spec)
     dates = _dates_between(spec.pad_start_us, spec.end_us)
-    cov: dict = {"minutes": int(grid.size), "price_source": spec.price_source}
+    cov: dict = {"minutes": int(grid.size), "index_id": meta.index_id}
 
-    def last_per_minute(ts_us: np.ndarray, values: np.ndarray, ffill_min: int = 0) -> np.ndarray:
+    def last_per_minute(ts_us: np.ndarray, values: np.ndarray) -> np.ndarray:
         out = np.full(grid.size, np.nan)
         if ts_us.size == 0:
             return out
@@ -960,461 +1771,347 @@ def load_capture_series(tape_dir: Path, inst: str, spec: Spec, row: dict | None 
         idx = np.searchsorted(ts_us, grid, side="right") - 1
         valid = idx >= 0
         age = np.where(valid, grid - ts_us[np.where(valid, idx, 0)], np.iinfo(np.int64).max)
-        ok = valid & (age <= (ffill_min + 1) * MINUTE_US)
+        ok = valid & (age < MINUTE_US)
         out[ok] = values[idx[ok]]
         return out
 
-    mark_rows, _ = tape.load_days(tape_dir, "mark", inst, dates, allow_pending)
-    mark = last_per_minute(mark_rows["ts_us"].astype(np.int64), mark_rows["mark_px"].astype(np.float64)) if mark_rows.size else np.full(grid.size, np.nan)
-    trade_rows, _ = tape.load_days(tape_dir, "trades", inst, dates, allow_pending)
-    last = last_per_minute(trade_rows["ts_us"].astype(np.int64), trade_rows["price"].astype(np.float64)) if trade_rows.size else np.full(grid.size, np.nan)
-    prints = lp_sim.Prints.from_rows(trade_rows) if trade_rows.size else None
-    price, alt = (last, mark) if spec.price_source == "last" else (mark, last)
-    code = np.where(np.isfinite(price), PRICE_CODE[spec.price_source], 0).astype(np.int8)
-    funding_rows, _ = tape.load_days(tape_dir, "funding", inst, dates, allow_pending)
-    premium = np.full(grid.size, np.nan)
-    settled_ts, settled_rate, moments = [], [], set()
-    if funding_rows.size:
-        premium = last_per_minute(funding_rows["ts_us"].astype(np.int64), funding_rows["premium"].astype(np.float64), ffill_min=PREMIUM_FFILL_MIN)
-        rates: dict[int, float] = {}
-        for item in funding_rows:
-            for column in ("funding_time_us", "next_funding_time_us"):
-                if int(item[column]) > 0:
-                    moments.add(int(item[column]))
-            if int(item["sett_state"]) == 1 and math.isfinite(float(item["sett_funding_rate"])) and int(item["funding_time_us"]) > 0:
-                rates[int(item["funding_time_us"])] = float(item["sett_funding_rate"])
-        settled_ts, settled_rate = sorted(rates), [rates[m] for m in sorted(rates)]
-    funding = lp_sim.FundingSchedule(np.array(settled_ts, dtype=np.int64), np.array(settled_rate, dtype=np.float64), source="capture settled rate (sett_state = settled)")
-    all_ts = np.array(sorted(moments), dtype=np.int64)
-    unknown = np.setdiff1d(all_ts, np.array(settled_ts, dtype=np.int64)) if all_ts.size else np.zeros(0, dtype=np.int64)
-    book_rows, _ = tape.load_days(tape_dir, "books5", inst, dates, allow_pending)
-    half_spread, book = None, None
-    if book_rows.size:
-        book = lp_sim.Book.from_rows(book_rows)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            hs = (book.ask - book.bid) / (book.ask + book.bid) * 1e4
-        half_spread = last_per_minute(book.ts, hs.astype(np.float64))
-    cov.update({"price_minutes": int(np.isfinite(price).sum()), "alt_price_minutes": int(np.isfinite(alt).sum()), "premium_okx_minutes": int(np.isfinite(premium).sum()),
-                "funding_rows": int(funding_rows.size), "settlements": int(all_ts.size), "settlements_unknown_rate": int(unknown.size), "book_rows": int(book_rows.size),
-                "trade_rows": int(trade_rows.size)})
-    inst_spec = None
-    if row and row.get("tickSz") not in (None, "") and row.get("ctVal") not in (None, ""):
-        inst_spec = lp_sim.InstrumentSpec.from_okx_row(row)
-    eligible_from, eligibility_known = _eligibility(row, spec)
-    return Series(inst, grid, price, code, alt, None, {"premium_okx": premium}, np.full(grid.size, np.nan), funding, all_ts, unknown, np.zeros(0, dtype=np.int64), {},
-                  eligible_from, eligibility_known, spec.start_us, half_spread_bp=half_spread, book=book, prints=prints, inst_spec=inst_spec, spec_row=row, coverage=cov)
+    trades, _ = tape.load_days(tape_dir, "trades", meta.inst_id, dates, allow_pending=False)
+    marks, _ = tape.load_days(tape_dir, "mark", meta.inst_id, dates, allow_pending=False)
+    close = last_per_minute(trades["ts_us"].astype(np.int64), trades["price"].astype(np.float64))
+    mark = last_per_minute(marks["ts_us"].astype(np.int64), marks["mark_px"].astype(np.float64))
+    index_px = np.full(grid.size, np.nan)
+    if spec.gate2 and spec.gate2["index_source"] == "history_index_candles":
+        rows, _ = tape.load_days(tape_dir, "index_1m", meta.index_id, dates, allow_pending=False)
+        if rows.size:
+            _place(grid, rows["ts_us"].astype(np.int64), rows["close"].astype(np.float64), index_px)
+    funding, _ = tape.load_days(tape_dir, "funding", meta.inst_id, dates, allow_pending=False)
+    moments, rates = set(), {}
+    for item in funding:
+        for column in ("funding_time_us", "next_funding_time_us"):
+            if int(item[column]) > 0:
+                moments.add(int(item[column]))
+        if int(item["sett_state"]) == 1 and math.isfinite(float(item["sett_funding_rate"])) and int(item["funding_time_us"]) > 0:
+            rates[int(item["funding_time_us"])] = float(item["sett_funding_rate"])
+    ts = np.array(sorted(moments), dtype=np.int64)
+    rate = np.array([rates.get(int(t), math.nan) for t in ts.tolist()], dtype=np.float64)
+    books, _ = tape.load_days(tape_dir, "books5", meta.inst_id, dates, allow_pending=False)
+    row = dict(row or {})
+    inst_spec = lp_sim.InstrumentSpec(meta.inst_id, meta.tick_sz, meta.ct_val, float(row.get("lotSz") or 1.0), float(row.get("minSz") or row.get("lotSz") or 1.0))
+    cov.update({"close_minutes": int(np.isfinite(close).sum()), "mark_minutes": int(np.isfinite(mark).sum()), "index_minutes": int(np.isfinite(index_px).sum()),
+                "settlements": int(ts.size), "settled": int(np.isfinite(rate).sum()), "book_rows": int(books.size), "trade_rows": int(trades.size),
+                "index_source": spec.gate2["index_source"] if spec.gate2 else None})
+    series = make_series(meta, grid, close, close, close, np.full(grid.size, np.nan), mark, index_px, ts, rate, spec.pad_start_us, "capture", cov)
+    series.book = lp_sim.Book.from_rows(books) if books.size else None
+    series.prints = lp_sim.Prints.from_rows(trades) if trades.size else None
+    series.inst_spec = inst_spec
+    return series
 
 
-# ----------------------------------------------------------------------------- instants
+# ----------------------------------------------------------------------------- instants: generators and restrictions
 
 
-def generate_instants(gen: dict, series: Series, spec: Spec) -> tuple[np.ndarray, str, dict]:
-    """Minute-aligned instants (µs) of one generator inside the window, the source actually used, and its diagnostics."""
-    kind = gen["kind"]
-    start_us, end_us = spec.start_us, spec.end_us
-    diag: dict = {}
-    if kind == "funding":
-        all_ts = np.unique(series.settlements_all)
-        moments = all_ts[(all_ts >= start_us) & (all_ts < end_us)]
-        diag["misaligned"] = int((moments % MINUTE_US != 0).sum())
-        moments = moments[moments % MINUTE_US == 0]
-        if moments.size == 0 and gen.get("fallback_hours"):
-            gen = {"kind": "fixed_time", "minutes": tuple(h * 60 for h in gen["fallback_hours"]), "weekdays": tuple(range(7)), "exclude_days": (), "skip_days": ()}
-            kind, source = "fixed_time", "fixed_hours_fallback"
-        else:
-            diag["settlements"] = int(moments.size)
-            if "interval_hours" in gen and moments.size:
-                pos = np.searchsorted(all_ts, moments)
-                prev_gap = np.where(pos > 0, moments - all_ts[np.maximum(pos - 1, 0)], -1)
-                next_gap = np.where(pos + 1 < all_ts.size, all_ts[np.minimum(pos + 1, all_ts.size - 1)] - moments, -1)
-                target, tol = gen["interval_hours"] * HOUR_US, gen["interval_tolerance_min"] * MINUTE_US
-                prev_ok = (prev_gap >= 0) & (np.abs(prev_gap - target) <= tol)
-                next_ok = (next_gap >= 0) & (np.abs(next_gap - target) <= tol)
-                other = ((prev_gap >= 0) & ~prev_ok) | ((next_gap >= 0) & ~next_ok)
-                keep = prev_ok & next_ok
-                diag.update({"interval_kept": int(keep.sum()), "interval_other": int(other.sum()), "interval_unknown": int((~keep & ~other).sum()),
-                             "interval_rule": f"{gen['interval_hours']:g} h ± {gen['interval_tolerance_min']:g} min to the previous and the next fundingTime (the next one is read from the following row)"})
-                moments = moments[keep]
-            return moments, "instrument_settlements", diag
-    else:
-        source = kind
-    if kind in ("fixed_time", "us_open"):
-        # `exclude_dates`: no session that day (a holiday): neither an instant nor a day of the economic reading.
-        # `skip_dates`: the session exists but the type does not trade it (CPI / Employment Situation for T05): no instant, but a
-        # candidate day of the economic reading (its fills / day are per session day, the unit of `days_per_year`).
-        weekdays = set(gen["weekdays"]) if kind == "fixed_time" else {0, 1, 2, 3, 4}
-        excluded, skips = set(gen.get("exclude_days", ())), set(gen.get("skip_days", ()))
-        items, skipped_items, n_excluded = [], [], 0
-        for date in spec.dates:
-            day = tape.day_of_date(date)
-            calendar = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            if calendar.weekday() not in weekdays:
-                continue
-            if day in excluded:
-                n_excluded += 1
-                continue
-            minutes = gen["minutes"] if kind == "fixed_time" else (ev.us_open_utc_minutes(calendar.date()),)
-            moments = [day * DAY_US + m * MINUTE_US for m in minutes]
-            (skipped_items if day in skips else items).extend(moments)
-        diag.update({"excluded_dates": n_excluded, "skipped_dates": len({t // DAY_US for t in skipped_items}), "skipped_instants": sorted(set(skipped_items))})
-        return np.array(sorted(set(items)), dtype=np.int64), (source if kind == "fixed_time" else "us_open_dst_aware"), diag
-    moments = (np.array(gen["instants_us"], dtype=np.int64) // MINUTE_US) * MINUTE_US
-    moments = moments[(moments >= start_us) & (moments < end_us)]
-    return np.unique(moments), "explicit_list", diag
+def settlement_instants(series: Series, tspec: TypeSpec, spec: Spec) -> tuple[np.ndarray, dict, np.ndarray]:
+    """(B) ii — settlements of the instrument inside the window kept when the gaps to the previous and to the next settlement
+    match the filter (8 h ± 1 min), with a known realized rate. Returns the kept instants, the counts and the settlements with
+    another (known) interval and a known rate (the descriptive T02 stratum: 4 h, 2 h, 1 h)."""
+    gen = tspec.generator
+    every = np.unique(series.settlements_us)
+    inside = every[(every >= spec.start_us) & (every < spec.end_us)]
+    counts = {"settlements": int(inside.size), "misaligned": int((inside % MINUTE_US != 0).sum())}
+    inside = inside[inside % MINUTE_US == 0]
+    pos = np.searchsorted(every, inside)
+    prev_gap = np.where(pos > 0, inside - every[np.maximum(pos - 1, 0)], -1)
+    next_gap = np.where(pos + 1 < every.size, every[np.minimum(pos + 1, every.size - 1)] - inside, -1)
+    known = (prev_gap >= 0) & (next_gap >= 0)
+    ok = known & (np.abs(prev_gap - gen["previous_gap_us"]) <= gen["tolerance_us"]) & (np.abs(next_gap - gen["next_gap_us"]) <= gen["tolerance_us"])
+    rate = series.rate_at(inside)
+    has_rate = np.isfinite(rate)
+    counts["unknown_neighbour"] = int((~known).sum())
+    counts["interval_other"] = int((known & ~ok).sum())
+    counts["realized_rate_missing"] = int((ok & ~has_rate).sum())
+    kept = inside[ok & has_rate]
+    counts["kept"] = int(kept.size)
+    other = inside[known & ~ok & has_rate]
+    return kept, counts, other
 
 
-def restrict(instants: np.ndarray, series: Series, espec: EventSpec, spec: Spec) -> tuple[np.ndarray, dict]:
-    """Instants of a type that the eligibility rule and the type's coverage restriction admit (events and controls alike)."""
+def generator_instants(series: Series, tspec: TypeSpec, spec: Spec, common: dict) -> tuple[np.ndarray, dict, np.ndarray]:
+    if tspec.generator["kind"] == "funding_settlements":
+        return settlement_instants(series, tspec, spec)
+    instants = common["local_time"][tspec.name]
+    return instants.copy(), {"generated": int(instants.size)}, np.zeros(0, dtype=np.int64)
+
+
+def restrict(series: Series, instants: np.ndarray, tspec: TypeSpec, spec: Spec) -> tuple[np.ndarray, dict]:
+    """(B) vii, iii — an instrument-instant exists only if its footprint starts at or after the instrument's eligibility and, for a
+    funding_coverage type, its instant lies in D_cov = [first settlement whose predecessor is served ; END_EXCLUSIVE) (LP-G5 §4.4:
+    the settlement that opens D_cov is an instant of T01 — the audit count of 211 includes it) with its footprint before the end;
+    events and controls alike."""
     instants = np.asarray(instants, dtype=np.int64)
+    start = instants + tspec.footprint[0] * MINUTE_US
+    end = instants + tspec.footprint[1] * MINUTE_US
     keep = np.ones(instants.size, dtype=bool)
-    counts: dict = {"generated": int(instants.size)}
-    if spec.eligibility_days is not None:
-        if not series.eligibility_known:
-            counts["eligibility_unknown"] = int(keep.sum())
+    counts = {"candidates": int(instants.size)}
+    eligible = start >= series.meta.eligible_from_us
+    counts[spec.eligibility_count_field] = int((~eligible).sum())
+    keep &= eligible
+    if tspec.window_rule == "funding_coverage":
+        if series.d_cov_start_us is None:
+            counts["funding_coverage_unknown"] = int(keep.sum())
             keep[:] = False
         else:
-            early = keep & (instants < int(series.eligible_from_us))
-            counts["before_eligibility"] = int(early.sum())
-            keep &= ~early
-    for layout in espec.restrict_to_coverage:
-        start = series.coverage_start_us.get(layout)
-        if start is None:
-            counts[f"no_coverage_{layout}"] = int(keep.sum())
-            keep[:] = False
-        else:
-            early = keep & (instants < int(start))
-            counts[f"before_coverage_{layout}"] = int(early.sum())
-            keep &= ~early
+            inside = (instants >= series.d_cov_start_us) & (end <= spec.end_us)
+            counts["outside_funding_coverage"] = int((keep & ~inside).sum())
+            keep &= inside
+    else:
+        inside = end <= spec.end_us
+        counts["outside_window"] = int((keep & ~inside).sum())
+        keep &= inside
     counts["kept"] = int(keep.sum())
     return instants[keep], counts
 
 
-def _near(union: np.ndarray, cands: np.ndarray, lo_us: int, hi_us: int, excl_us: int) -> np.ndarray:
-    """True where an excluded instant lies within [c + lo − excl, c + hi + excl]."""
-    if union.size == 0 or cands.size == 0:
-        return np.zeros(cands.size, dtype=bool)
-    left = np.searchsorted(union, cands + lo_us - excl_us, side="left")
-    right = np.searchsorted(union, cands + hi_us + excl_us, side="right")
-    return right > left
-
-
-def control_instants(series: Series, spec: Spec, espec: EventSpec, type_index: int, union_us: np.ndarray, event_days=None) -> tuple[np.ndarray, dict]:
-    """Controls of one type on one instrument: at minute `control_minute_of_hour` of the fixed hours and of `random_per_day`
-    hours drawn per day (seed per type and day, the same for every instrument), on the type's event days when
-    `same_days_as_events`, admitted by the type's eligibility / coverage restriction, and away from every excluded instant."""
-    ct = spec.controls
-    excl = int(ct["exclusion_min"]) * MINUTE_US
-    union = np.unique(np.asarray(union_us, dtype=np.int64))
-    lo, hi = (espec.lo_min * MINUTE_US, espec.to_min * MINUTE_US) if ct["exclusion_on"] == "window" else (0, 0)
-    minute = int(espec.control_minute_of_hour) * MINUTE_US
-    if ct["same_days_as_events"]:
-        days = sorted({int(d) for d in np.asarray(event_days if event_days is not None else [], dtype=np.int64).tolist()})
-    else:
-        days = [tape.day_of_date(d) for d in spec.dates]
-    first_day, end_day = spec.start_us // DAY_US, spec.end_us // DAY_US
-    fixed_hours = set(ct["hours"])
-    others = [h for h in range(24) if h not in fixed_hours]
-    fixed, random = [], []
-    diag = {"days": len(days), "near_excluded": 0, "restricted": 0}
-    for day in days:
-        if not first_day <= day < end_day:
-            continue
-        midnight = day * DAY_US
-        rng = np.random.default_rng([int(ct["seed"]), int(type_index), int(day)])
-        cands_fixed = np.array([midnight + h * HOUR_US + minute for h in ct["hours"]], dtype=np.int64)
-        if ct["minute_zero_only"]:
-            order = rng.permutation(len(others)) if others else np.zeros(0, dtype=np.int64)
-            cands_random = np.array([midnight + others[i] * HOUR_US + minute for i in order], dtype=np.int64)
-        else:  # any minute of the day (not the pre-registered rule; kept for descriptive specs)
-            cands_random = midnight + rng.integers(0, tape.DAY_S // 60, size=4 * ct["random_per_day"] + 8) * MINUTE_US
-        fixed_today: set[int] = set()
-        for cands, out, limit in ((cands_fixed, fixed, None), (cands_random, random, ct["random_per_day"])):
-            if cands.size == 0 or (limit is not None and limit <= 0):
-                continue
-            near = _near(union, cands, lo, hi, excl)
-            diag["near_excluded"] += int(near.sum())
-            cands = cands[~near]
-            admitted, _ = restrict(cands, series, espec, spec)
-            diag["restricted"] += int(cands.size - admitted.size)
-            if limit is None:
-                fixed_today = set(admitted.tolist())
-            else:
-                taken: list[int] = []
-                for c in admitted.tolist():
-                    if c not in fixed_today and c not in taken:
-                        taken.append(c)
-                    if len(taken) >= limit:
-                        break
-                admitted = np.array(taken, dtype=np.int64)
-            out.extend(admitted.tolist())
-    fixed_arr, random_arr = np.array(fixed, dtype=np.int64), np.array(random, dtype=np.int64)
-    both = np.unique(np.concatenate([fixed_arr, random_arr]))
-    diag.update({"fixed": int(fixed_arr.size), "random": int(random_arr.size), "hours": list(ct["hours"]), "random_per_day": ct["random_per_day"], "minute_of_hour": espec.control_minute_of_hour,
-                 "exclusion_min": ct["exclusion_min"], "exclusion_on": ct["exclusion_on"], "seed": ct["seed"], "same_days_as_events": ct["same_days_as_events"]})
-    return both, diag
-
-
-# ----------------------------------------------------------------------------- measures
-
-
-def _log_return_bp(series: Series, k_from: np.ndarray, k_to: np.ndarray, prices: np.ndarray | None = None) -> np.ndarray:
-    prices = series.price if prices is None else prices
-    n = series.size
-    ok = (k_from >= 0) & (k_to >= 0) & (k_from < n) & (k_to < n)
-    out = np.full(k_from.size, np.nan)
-    a = prices[np.where(ok, k_from, 0)]
-    b = prices[np.where(ok, k_to, 0)]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        out[ok] = (np.log(b) - np.log(a))[ok] * 1e4
+def common_instants(spec: Spec) -> dict:
+    """Instrument-independent instants: the local-time generators over the padded window (for the events: the spec window)."""
+    out = {"local_time": {}, "local_time_padded": {}, "macro_excluded": {}}
+    for t in spec.types:
+        if t.generator["kind"] == "local_time":
+            out["local_time"][t.name] = np.array([m for m, _, _ in local_time_instants(t, spec)], dtype=np.int64)
+            out["local_time_padded"][t.name] = np.array([m for m, _, _ in local_time_instants(t, spec, spec.pad_start_us - DAY_US, spec.end_us + DAY_US)], dtype=np.int64)
+            out["macro_excluded"][t.name] = np.array([m for m, _, e in local_time_instants(t, spec, apply_exclusions=False) if e], dtype=np.int64)
     return out
 
 
-def _settlement_rate(series: Series, instants: np.ndarray) -> np.ndarray:
-    """The known (realized / settled) rate of the settlement at each instant, NaN when there is none or its rate is unknown."""
-    out = np.full(instants.size, np.nan)
-    ts = series.funding.ts_us
-    if ts.size == 0 or instants.size == 0:
-        return out
-    pos = np.searchsorted(ts, instants)
-    hit = pos < ts.size
-    hit[hit] = ts[pos[hit]] == instants[hit]
-    out[hit] = series.funding.rate[pos[hit]]
+# ----------------------------------------------------------------------------- controls (B xi, xii)
+
+
+def exclusion_intervals(series: Series, tspec: TypeSpec, spec: Spec, common: dict) -> dict:
+    """The exclusion union of one type's controls on one instrument, by component: `name → (starts, ends)` in µs."""
+    comps = spec.controls_common["components"]
+    lo, hi = spec.pad_start_us - DAY_US, spec.end_us + DAY_US
+    out: dict = {}
+    if "settlements" in comps:
+        a, b = comps["settlements"]
+        s = np.unique(series.settlements_us)
+        out["settlements"] = (s + a * MINUTE_US, s + b * MINUTE_US)
+    if "default_grid" in comps:
+        a, b = comps["default_grid"]
+        days = range(int(lo // DAY_US), int(hi // DAY_US) + 1)
+        s = np.array([d * DAY_US + h * HOUR_US for d in days for h in tspec.controls["grid_hours"]], dtype=np.int64)
+        out["default_grid"] = (s + a * MINUTE_US, s + b * MINUTE_US)
+    if "type_instants" in comps:
+        name, a, b, _ = comps["type_instants"]
+        s = common["local_time_padded"][name]
+        out["type_instants"] = (s + a * MINUTE_US, s + b * MINUTE_US)
+    if comps.get("sessions"):
+        items = session_intervals(spec, lo, hi)
+        out["sessions"] = (np.array([i[0] for i in items], dtype=np.int64), np.array([i[1] for i in items], dtype=np.int64))
+    if comps.get("macro"):
+        items = macro_intervals(spec, lo, hi)
+        out["macro"] = (np.array([i[0] for i in items], dtype=np.int64), np.array([i[1] for i in items], dtype=np.int64))
     return out
 
 
-def premium_wavg_at(series: Series, k: np.ndarray, block: dict) -> np.ndarray:
-    """P̂ at boundaries k: Σ j·π(k − n + j) / Σ j over the present minutes of the n ending at k (weights 1…n), NaN when fewer
-    than `min_coverage` × n minutes are present or the look-back leaves the grid."""
-    base = series.premium.get(block["base"])
-    out = np.full(np.asarray(k).size, np.nan)
-    if base is None:
-        return out
-    n = int(block["minutes"])
-    weights = np.arange(1, n + 1, dtype=np.float64)
-    for i, kk in enumerate(np.asarray(k, dtype=np.int64).tolist()):
-        lo = kk - n + 1
-        if lo < 0 or kk >= base.size:
-            continue
-        window = base[lo: kk + 1]
-        ok = np.isfinite(window)
-        if ok.sum() < block["min_coverage"] * n:
-            continue
-        out[i] = math.fsum((weights[ok] * window[ok]).tolist()) / math.fsum(weights[ok].tolist())
+def violates(starts: np.ndarray, ends: np.ndarray, a: np.ndarray, b: np.ndarray, margin_us: int) -> np.ndarray:
+    """True where the footprint [a, b] is within `margin_us` of some interval [x, y]: x − margin < b and y + margin > a
+    (admissible iff b ≤ x − margin or a ≥ y + margin for every interval)."""
+    a, b = np.asarray(a, dtype=np.int64), np.asarray(b, dtype=np.int64)
+    if np.asarray(starts).size == 0 or a.size == 0:
+        return np.zeros(a.size, dtype=bool)
+    order = np.argsort(starts, kind="stable")
+    xs, ys = np.asarray(starts, dtype=np.int64)[order], np.asarray(ends, dtype=np.int64)[order]
+    prefix_max = np.maximum.accumulate(ys)
+    idx = np.searchsorted(xs, b + margin_us, side="left")
+    out = np.zeros(a.size, dtype=bool)
+    some = idx > 0
+    out[some] = prefix_max[idx[some] - 1] > a[some] - margin_us
     return out
 
 
-def _classify(values: np.ndarray, high: float, low: float, eps: float = 0.0) -> np.ndarray:
-    """+1 above high + eps, −1 below low − eps, 0 inside the dead zone or unknown."""
+def control_instants(series: Series, tspec: TypeSpec, spec: Spec, raw_events: np.ndarray, union: dict) -> tuple[np.ndarray, dict]:
+    """(B) xi — every hour of the instrument's event days at the type's minute of the hour, kept when inside the window, eligible
+    (and inside D_cov for a funding_coverage type) and admissible against every footprint of the exclusion union."""
+    days = np.unique(np.asarray(raw_events, dtype=np.int64) // DAY_US)
+    minute = tspec.controls["minute_of_hour"] * MINUTE_US
+    cands = np.array([d * DAY_US + h * HOUR_US + minute for d in days.tolist() for h in range(24)], dtype=np.int64)
+    diag: dict = {"days": int(days.size), "candidates": int(cands.size), "minute_of_hour": tspec.controls["minute_of_hour"], "margin_min": spec.controls_common["margin_min"]}
+    cands = cands[(cands >= spec.start_us) & (cands < spec.end_us)]
+    a = cands + tspec.footprint[0] * MINUTE_US
+    b = cands + tspec.footprint[1] * MINUTE_US
+    margin = spec.controls_common["margin_us"]
+    bad = np.zeros(cands.size, dtype=bool)
+    excluded_by = {}
+    for name, (xs, ys) in union.items():
+        hit = violates(xs, ys, a, b, margin)
+        excluded_by[name] = int(hit.sum())
+        bad |= hit
+    diag["excluded_by_component"] = excluded_by
+    diag["excluded_union"] = int(bad.sum())
+    admitted, rcounts = restrict(series, cands[~bad], tspec, spec)
+    diag["restriction"] = rcounts
+    diag["kept"] = int(admitted.size)
+    return np.unique(admitted), diag
+
+
+# ----------------------------------------------------------------------------- measures (B i, iv, vi, viii, xiii, xiv)
+
+SIM_STATUS = ("filled", "unfilled", "stale", "crossed", "skipped_size", "funding_unknown", "no_exit_quote", "unavailable")
+
+
+def classify(values: np.ndarray, high: float, low: float) -> np.ndarray:
+    """+1 at or above `high`, −1 at or below `low`, 0 in between or unknown."""
+    values = np.asarray(values, dtype=np.float64)
     out = np.zeros(values.size, dtype=np.int8)
     finite = np.isfinite(values)
-    out[finite & (values > high + eps)] = 1
-    out[finite & (values < low - eps)] = -1
+    out[finite & (values >= high)] = 1
+    out[finite & (values <= low)] = -1
     return out
 
 
-def _condition(series: Series, k0: np.ndarray, instants: np.ndarray, cond: dict) -> tuple[np.ndarray, np.ndarray]:
-    """`(passes, known)`: the condition at each instant and whether its field was available."""
-    if cond["field"] == "price_return":
-        values = _log_return_bp(series, k0 + cond["from_min"], k0 + cond["to_min"])
-    elif cond["field"] == "funding_rate":
-        values = _settlement_rate(series, instants)
-    else:
-        base = series.premium.get(cond["field"])
-        k = k0 + cond["at_min"]
-        values = np.full(k0.size, np.nan)
-        if base is not None:
-            ok = (k >= 0) & (k < base.size)
-            values[ok] = base[k[ok]]
-    known = np.isfinite(values)
-    passes = np.zeros(k0.size, dtype=bool)
-    if cond["op"] == "outside_dead_zone":
-        passes[known] = (values[known] > cond["high"] + cond["eps"]) | (values[known] < cond["low"] - cond["eps"])
-    else:
-        passes[known] = CONDITION_OPS[cond["op"]](values[known], float(cond["value"]))
-    return passes, known
-
-
-def _sign(series: Series, k0: np.ndarray, instants: np.ndarray, sign: dict) -> tuple[np.ndarray, np.ndarray]:
-    """`(sign, known)`: −1 / 0 / +1 per instant (0 = excluded) and whether the field it reads was available."""
-    if sign["kind"] == "constant":
-        return np.full(k0.size, int(sign["value"]), dtype=np.int8), np.ones(k0.size, dtype=bool)
-    if sign["kind"] == "return_sign":
-        values = _log_return_bp(series, k0 + sign["from_min"], k0 + sign["to_min"])
-        return (np.sign(np.nan_to_num(values, nan=0.0)) * sign["multiplier"]).astype(np.int8), np.isfinite(values)
-    if sign["kind"] == "premium_wavg":
-        values = premium_wavg_at(series, k0 + sign["at_min"], sign)
-        return (_classify(values, sign["upper"], sign["lower"]) * sign.get("multiplier", 1)).astype(np.int8), np.isfinite(values)
-    if sign["field"] == "funding_rate":
-        values = _settlement_rate(series, instants)
-    else:
-        base = series.premium.get(sign["field"])
-        k = k0 + sign["at_min"]
-        values = np.full(k0.size, np.nan)
-        if base is not None:
-            ok = (k >= 0) & (k < base.size)
-            values[ok] = base[k[ok]]
-    if sign.get("dead_zone") is not None:
-        low, high = sign["dead_zone"]
-        cls = _classify(values, high, low, sign["eps"])
-    else:
-        cls = np.sign(np.nan_to_num(values, nan=0.0)).astype(np.int8)
-    return (cls * sign["multiplier"]).astype(np.int8), np.isfinite(values)
-
-
-def cost_terms(espec: EventSpec, spec: Spec) -> dict:
-    """Round-trip cost terms of the type's execution role (bp): fees at the role, adverse selection on each maker leg,
-    slippage; `stress` multiplies every term; `sensitivity` uses the sensitivity value of the adverse selection."""
-    ex = spec.execution
-    if espec.execution_role == "maker_maker":
-        fees, maker_legs = 2.0 * ex["maker_bp"], 2
-    else:
-        fees, maker_legs = ex["taker_bp"] + ex["maker_bp"], 1
-    adverse = maker_legs * ex["adverse_selection_bp_per_leg"]
-    total = math.fsum([fees, adverse, ex["slippage_bp"]])
-    sens = ex["adverse_selection_sensitivity_bp_per_leg"]
-    return {"role": espec.execution_role, "fees_bp": fees, "adverse_selection_bp": adverse, "maker_legs": maker_legs, "slippage_bp": ex["slippage_bp"], "total_bp": total,
-            "stress_multiplier": ex["cost_stress_multiplier"], "stress_total_bp": total * ex["cost_stress_multiplier"],
-            "sensitivity_total_bp": math.fsum([fees, maker_legs * sens, ex["slippage_bp"]]) if sens is not None else None}
-
-
-def _crossed_count(moments: np.ndarray, open_us: np.ndarray, close_us: np.ndarray) -> np.ndarray:
-    """Number of `moments` T with open < T ≤ close, per window."""
-    if moments.size == 0:
-        return np.zeros(np.asarray(open_us).size, dtype=np.int64)
-    return np.searchsorted(moments, close_us, side="right") - np.searchsorted(moments, open_us, side="right")
-
-
-def measure(series: Series, instants_us: np.ndarray, espec: EventSpec, spec: Spec, role: str = "event") -> dict:
-    """Per-observation measures (arrays aligned on the kept instants) and the exclusion counts, each observation counted in
-    the first rule that excludes it. At the controls of a type with a `control_sign`, the control sign replaces the funding
-    sign and the funding condition (fields that only exist at settlements); every other rule is identical."""
-    instants = np.asarray(instants_us, dtype=np.int64)
-    counts = {key: 0 for key in ("instants", "misaligned", "out_of_range", "missing_price", "mixed_source", "zero_volume", "condition_unknown", "condition_failed",
-                                 "sign_unknown", "zero_sign", "funding_unknown", "funding_unknown_end_edge", "kept", "funding_not_observed", "funding_end_edge_not_observed")}
-    counts["instants"] = int(instants.size)
-    aligned = instants % MINUTE_US == 0
-    counts["misaligned"] = int((~aligned).sum())
-    instants = instants[aligned]
-    k0 = series.index_of(instants)
-    n = series.size
-    alive = (k0 + espec.lo_min >= 0) & (k0 + espec.to_min < n)
-    counts["out_of_range"] = int((~alive).sum())
-    offsets = espec.price_offsets
-    present = np.ones(instants.size, dtype=bool)
-    codes = []
-    for off in offsets:
-        k = np.clip(k0 + off, 0, n - 1)
-        present &= np.isfinite(series.price[k]) & (series.price_code[k] > 0)
-        codes.append(series.price_code[k])
-    missing = alive & ~present
-    counts["missing_price"] = int(missing.sum())
-    alive &= present
-    same = np.all(np.vstack(codes) == codes[0], axis=0) if codes else np.ones(instants.size, dtype=bool)
-    counts["mixed_source"] = int((alive & ~same).sum())
-    alive &= same
-    if spec.quality["exclude_zero_volume"] and series.volume is not None:
-        zero = np.zeros(instants.size, dtype=bool)
-        for off in offsets:
-            zero |= series.volume[np.clip(k0 + off, 0, n - 1)] == 0
-        counts["zero_volume"] = int((alive & zero).sum())
-        alive &= ~zero
-    control_side = role == "control" and espec.control_sign is not None
-    condition = espec.condition
-    if condition is not None and not (control_side and condition["field"] == "funding_rate"):
-        passes, known = _condition(series, k0, instants, condition)
-        counts["condition_unknown"] = int((alive & ~known).sum())
-        alive &= known
-        counts["condition_failed"] = int((alive & ~passes).sum())
-        alive &= passes
-    sign, sign_known = _sign(series, k0, instants, espec.control_sign if control_side else espec.sign)
-    counts["sign_unknown"] = int((alive & ~sign_known).sum())
-    alive &= sign_known
-    counts["zero_sign"] = int((alive & (sign == 0)).sum())
-    alive &= sign != 0
-    open_us = instants + espec.arm_min * MINUTE_US
-    close_us = instants + espec.to_min * MINUTE_US
-    unknown_rate = _crossed_count(series.funding_unknown_ts, open_us, close_us) > 0
-    assumed = _crossed_count(series.assumed_unknown_ts, open_us, close_us) > 0
-    at_end = close_us >= g5_fetch.END_EXCLUSIVE_US  # the settlement of exactly END_EXCLUSIVE is never known (m4)
-    unknown = unknown_rate | assumed
-    counts["funding_unknown"] = int((alive & unknown).sum())
-    counts["funding_unknown_end_edge"] = int((alive & at_end & assumed).sum())
-    alive &= ~unknown
-    fund_start = series.coverage_start_us.get("funding_hist") if series.coverage_start_us else None
-    if spec.source == "history" and not spec.assumed_hours:
-        # Without assumed hours a window outside the funding coverage has F = 0 assumed, not observed: kept and counted.
-        outside = (open_us < fund_start) if fund_start is not None else np.ones(instants.size, dtype=bool)
-        counts["funding_not_observed"] = int((alive & outside).sum())
-        counts["funding_end_edge_not_observed"] = int((alive & at_end).sum())
-    keep = alive
-    instants, k0, sign = instants[keep], k0[keep], sign[keep].astype(np.float64)
-    counts["kept"] = int(instants.size)
-    out: dict = {"instants_us": instants, "inst": series.inst, "sign": sign.astype(np.int8), "counts": counts}
-    out["r_bp"] = _log_return_bp(series, k0 + espec.from_min, k0 + espec.to_min) * sign
-    out["r_alt_bp"] = _log_return_bp(series, k0 + espec.from_min, k0 + espec.to_min, series.alt_price) * sign
-    price_arm, price_to = series.price[np.clip(k0 + espec.arm_min, 0, n - 1)], series.price[np.clip(k0 + espec.to_min, 0, n - 1)]
-    hs = spec.execution["half_spread_bp"] / 1e4
-    if spec.execution["half_spread_from_book"] and series.half_spread_bp is not None:
-        observed = series.half_spread_bp[np.clip(k0 + espec.arm_min, 0, n - 1)] / 1e4
-        hs = np.where(np.isfinite(observed), observed, hs)
-    entry = price_arm * (1.0 - sign * hs) if espec.execution_role == "maker_maker" else price_arm * (1.0 + sign * hs)
-    exit_px = price_to * (1.0 + sign * hs)
+def _log_bp(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     with np.errstate(divide="ignore", invalid="ignore"):
-        rt = sign * (exit_px - entry) / entry * 1e4
-    costs = cost_terms(espec, spec)
-    funding_bp = np.zeros(instants.size)
-    settlements = np.zeros(instants.size, dtype=np.int32)
-    for i in range(instants.size):
-        count, rate_sum = series.funding.crossed(int(instants[i]) + espec.arm_min * MINUTE_US, int(instants[i]) + espec.to_min * MINUTE_US)
-        settlements[i] = count
-        funding_bp[i] = -sign[i] * rate_sum * 1e4
-    rt_list, f_list = rt.tolist(), funding_bp.tolist()
-    out["rt_bp"] = rt
-    out["funding_bp"] = funding_bp
-    out["settlements"] = settlements
-    out["net_bp"] = np.array([math.fsum([a, -costs["total_bp"], b]) for a, b in zip(rt_list, f_list)], dtype=np.float64)
-    out["net_bp_stress"] = np.array([math.fsum([a, -costs["stress_total_bp"], b]) for a, b in zip(rt_list, f_list)], dtype=np.float64)
-    sens = costs["sensitivity_total_bp"]
-    out["net_bp_as_sensitivity"] = np.array([math.fsum([a, -sens, b]) for a, b in zip(rt_list, f_list)], dtype=np.float64) if sens is not None else np.full(instants.size, np.nan)
-    out["funding_rate_at"] = _settlement_rate(series, instants)
-    out["costs"] = costs
-    out["execution"] = "approx_price_half_spread_from_book" if spec.execution["half_spread_from_book"] and series.half_spread_bp is not None else "approx_price_half_spread"
-    if role == "event" and espec.control_sign is not None:
-        values = premium_wavg_at(series, k0 + espec.control_sign["at_min"], espec.control_sign)
-        out["proxy_value"] = values
-        out["proxy_class"] = _classify(values, espec.control_sign["upper"], espec.control_sign["lower"])
-    if spec.simulated:
-        sim, status = simulate_clock_scalp(series, instants, sign.astype(np.int8), espec, spec)
-        out.update(sim)
+        return (np.log(b) - np.log(a)) * 1e4
+
+
+def measure(series: Series, instants_us, tspec: TypeSpec, spec: Spec, role: str = "event", options: dict | None = None) -> dict:
+    """Per instrument-instant measures of one type (arrays aligned on the kept instants) and the exclusion counts, each excluded
+    instant counted in the first rule that excludes it: out of grid → missing key price → zero-volume key candle → classifier
+    (not computable, inside the zone) or sign (zero) → fill proxy (window missing, unfilled) → unknown rate crossed. The same
+    rules at the events and at the controls. `options` (descriptive variants only): `thresholds` (hi, lo) of the classifier,
+    `fill` (False: no fill proxy), `side_from_rate` (hi, lo): events signed by the class of R_h, `price` ('mark'), `exit_min`,
+    `tick_move` (T05: |c(h+5) − c(h)| ≥ 1 tick)."""
+    options = options or {}
+    instants = np.unique(np.asarray(instants_us, dtype=np.int64))
+    n = series.size
+    counts = {key: 0 for key in ("instants", "out_of_grid", "missing_key_price", spec.frozen_candle["count_field"], "classifier_not_computable", "classifier_inside_zone",
+                                 "zero_sign", "move_below_one_tick", "fill_window_missing", "unfilled", "funding_rate_missing", "kept")}
+    counts["instants"] = int(instants.size)
+    k0 = series.index_of(instants)
+    exit_min = int(options.get("exit_min", tspec.return_window[1]))
+    entry_min = tspec.return_window[0]
+    alive = (k0 + min(tspec.footprint[0], entry_min) >= 0) & (k0 + max(tspec.footprint[1], exit_min) < n)
+    counts["out_of_grid"] = int((~alive).sum())
+    prices = series.mark if options.get("price") == "mark" else series.close
+    offsets = sorted(set(tspec.key_price_offsets) | {exit_min})
+    present = np.ones(instants.size, dtype=bool)
+    for off in offsets:
+        present &= np.isfinite(series.at(prices, k0 + off))
+    counts["missing_key_price"] = int((alive & ~present).sum())
+    alive &= present
+    if spec.frozen_candle["applies"]:
+        zero = np.zeros(instants.size, dtype=bool)
+        for off in tspec.key_candles:
+            zero |= series.at(series.vol, k0 + off) == 0
+        counts[spec.frozen_candle["count_field"]] = int((alive & zero).sum())
+        alive &= ~zero
+    p_hat = np.full(instants.size, np.nan)
+    side = np.zeros(instants.size, dtype=np.int8)
+    if tspec.classifier is not None:
+        hi, lo = options.get("thresholds") or (tspec.classifier["high"], tspec.classifier["low"])
+        p_hat = series.p_hat(k0 + tspec.arm_min, tspec.classifier)  # (B) iv: at t_arm, events and controls alike
+        computable = np.isfinite(p_hat)
+        counts["classifier_not_computable"] = int((alive & ~computable).sum())
+        alive &= computable
+        side = classify(p_hat, hi, lo)
+        if role == "event" and options.get("side_from_rate") is not None:
+            r_hi, r_lo = options["side_from_rate"]
+            side = classify(series.rate_at(instants), r_hi, r_lo)
+        counts["classifier_inside_zone"] = int((alive & (side == 0)).sum())
+        alive &= side != 0
+    else:
+        a, b = series.at(series.close, k0 + tspec.sign["from_min"]), series.at(series.close, k0 + tspec.sign["to_min"])
+        move = _log_bp(a, b)
+        side = np.sign(np.nan_to_num(move, nan=0.0)).astype(np.int8)
+        counts["zero_sign"] = int((alive & (side == 0)).sum())
+        alive &= side != 0
+        if options.get("tick_move"):
+            big = np.abs(b - a) >= series.meta.tick_sz * (1.0 - 1e-6)
+            counts["move_below_one_tick"] = int((alive & ~big).sum())
+            alive &= big
+    fill_attempted = int(alive.sum())
+    use_fill = tspec.fill_proxy is not None and tspec.fill_proxy["kind"] == "through_candles" and options.get("fill", True)
+    if use_fill:
+        ks = [k0 + j + 1 for j in range(tspec.fill_proxy["open_from_min"], tspec.fill_proxy["open_to_min"] + 1)]  # candles opening at h+j end at h+j+1
+        lows = np.vstack([series.at(series.low, k) for k in ks])
+        highs = np.vstack([series.at(series.high, k) for k in ks])
+        known = np.all(np.isfinite(lows), axis=0) & np.all(np.isfinite(highs), axis=0)
+        counts["fill_window_missing"] = int((alive & ~known).sum())
+        alive &= known
+        limit = series.at(series.close, k0 + tspec.arm_min)
+        eps = series.meta.tick_sz * 1e-6
+        with np.errstate(invalid="ignore"):
+            long_fill = np.nanmin(np.where(np.isfinite(lows), lows, np.inf), axis=0) < limit - series.meta.tick_sz - eps
+            short_fill = np.nanmax(np.where(np.isfinite(highs), highs, -np.inf), axis=0) > limit + series.meta.tick_sz + eps
+        filled = ((side > 0) & long_fill) | ((side < 0) & short_fill)
+        counts["unfilled"] = int((alive & ~filled).sum())
+        alive &= filled
+    open_us = instants + entry_min * MINUTE_US
+    close_us = instants + exit_min * MINUTE_US
+    f_count, f_sum, f_unknown = series.funding_crossed(open_us, close_us)
+    if series.d_cov_start_us is None:
+        outside = np.ones(instants.size, dtype=bool)
+    else:
+        outside = open_us < int(series.d_cov_start_us)
+    missing_rate = (f_unknown > 0) & ~outside
+    counts["funding_rate_missing"] = int((alive & missing_rate).sum())
+    alive &= ~missing_rate
+    counts["kept"] = int(alive.sum())
+    keep = alive
+    s = side[keep].astype(np.float64)
+    kk = k0[keep]
+    r_unsigned = _log_bp(series.at(prices, kk + entry_min), series.at(prices, kk + exit_min))
+    funding_bp = np.where(outside[keep], 0.0, -s * f_sum[keep] * 1e4)
+    costs = cost_terms(tspec.role, spec.costs)
+    r_bp = s * r_unsigned
+    net = np.array([math.fsum([a, b, -costs["total_bp"]]) for a, b in zip(r_bp.tolist(), funding_bp.tolist())], dtype=np.float64)
+    stress = np.array([math.fsum([a, b, -costs["stress_total_bp"]]) for a, b in zip(r_bp.tolist(), funding_bp.tolist())], dtype=np.float64)
+    out = {"inst": series.inst, "instants_us": instants[keep], "sign": side[keep], "r_bp": r_bp, "funding_bp": funding_bp, "net_bp": net, "net_stress_bp": stress,
+           "p_hat": p_hat[keep], "rate_at_h": series.rate_at(instants[keep]), "counts": counts, "costs": costs,
+           "fill": {"attempted": fill_attempted if use_fill else 0, "filled": counts["kept"] + counts["funding_rate_missing"] if use_fill else 0},
+           "funding_settlements_crossed": f_count[keep], "funding_outside_coverage": int(outside[keep].sum()), "funding_nonzero": int((f_count[keep] > 0).sum()),
+           "execution": "candles"}
+    out["counts"][spec.costs["funding_count_field"]] = int(outside[keep].sum())
+    if spec.source == "capture":
+        sim, status = measure_lp_sim(series, instants[keep], side[keep], tspec, spec)
+        filled = np.isfinite(sim["sim_net_bp"])
+        for key in ("instants_us", "sign", "p_hat", "rate_at_h", "funding_settlements_crossed"):
+            out[key] = out[key][filled]
+        out["r_bp"], out["funding_bp"], out["net_bp"], out["net_stress_bp"] = sim["sim_rt_bp"][filled], sim["sim_funding_bp"][filled], sim["sim_net_bp"][filled], sim["sim_net_bp_stress"][filled]
         out["sim_status"] = status
+        out["fill"] = {"attempted": int(keep.sum()), "filled": int(status["filled"])}
+        out["counts"]["unfilled"] = int(keep.sum()) - int(status["filled"])
+        out["counts"]["kept"] = int(filled.sum())
+        out["execution"] = "lp_sim"
+        out["funding_nonzero"] = int((out["funding_bp"] != 0).sum())
     return out
 
 
-def simulate_clock_scalp(series: Series, instants: np.ndarray, signs: np.ndarray, espec: EventSpec, spec: Spec) -> tuple[dict, dict]:
-    """(B) x — capture only, on the real book and prints (`lp_sim` primitives, rule from the spec): entry decided at h + arm_min,
-    post-only at the own touch resting until h + rest_until_min (`maker_maker`) or taker at the opposite touch after the
-    latency (`taker_maker`, plus slippage); passive exit at the opposite touch from h + to_min until h + exit_until_min,
-    remainder taker; funding of the settlements in (first fill − grace, exit] (a fill within the grace after a settlement
-    crosses it, "may take up to a minute"); an unfilled entry is no observation (counted). Returns NaN where not filled."""
+def measure_lp_sim(series: Series, instants: np.ndarray, signs: np.ndarray, tspec: TypeSpec, spec: Spec) -> tuple[dict, dict]:
+    """(B) xxi — Gate 2, on the captured book and prints (`lp_sim` primitives, `gate2.sim`): entry decided at h + arm_min,
+    post-only at the own touch resting until h + rest_until_min (`maker_maker`; a fill in [h ; h + grace) crosses the settlement
+    at h, "may take up to a minute") or taker at the opposite touch after the latency plus slippage (`taker_maker`); passive exit at
+    the opposite touch from h + exit offset until h + gate2.exit_until_min, remainder taker; adverse selection measured by the
+    simulation itself; funding of the settlements in (first fill − grace, exit]. NaN where not filled."""
     n_obs = int(np.asarray(instants).size)
-    out = {"sim_net_bp": np.full(n_obs, np.nan), "sim_net_bp_stress": np.full(n_obs, np.nan), "sim_rt_bp": np.full(n_obs, np.nan), "sim_fee_bp": np.full(n_obs, np.nan),
-           "sim_funding_bp": np.full(n_obs, np.nan)}
+    out = {k: np.full(n_obs, np.nan) for k in ("sim_net_bp", "sim_net_bp_stress", "sim_rt_bp", "sim_fee_bp", "sim_funding_bp")}
     status = {key: 0 for key in SIM_STATUS}
     book, prints, ispec = series.book, series.prints, series.inst_spec
-    if book is None or prints is None or ispec is None or book.size == 0:
+    if book is None or prints is None or ispec is None or book.size == 0 or spec.gate2 is None:
         status["unavailable"] = n_obs
         return out, status
-    sim, ex = spec.execution["sim"], spec.execution
+    sim, costs = spec.gate2["sim"], spec.costs
     latency = int(round(sim["latency_ms"] * 1000))
     stale = int(round(sim["stale_s"] * tape.SECOND_US))
     grace = int(round(sim["funding_fill_grace_min"] * MINUTE_US))
     tol = ispec.tick * 1e-6
-    slip = ex["slippage_bp"]
-    notional = spec.economic["order_notional_usd"]
+    slip = costs["slippage_bp_per_round_trip"]
+    maker_bp, taker_bp, mult = costs["maker_fee_bp"], costs["taker_fee_bp"], costs["stress_multiplier_all_cost_terms"]
+    notional = spec.economic["notional"]
     last_ts = int(book.ts[-1])
+    exit_min, until_min = tspec.return_window[1], int(tspec.gate2["exit_until_min"])
     for i in range(n_obs):
         h, s = int(instants[i]), int(signs[i])
-        d = h + espec.arm_min * MINUTE_US
+        d = h + tspec.arm_min * MINUTE_US
         a = d + latency
         k = book.index_at(d)
         if k < 0 or d - int(book.ts[k]) > stale:
@@ -1428,7 +2125,7 @@ def simulate_clock_scalp(series: Series, instants: np.ndarray, signs: np.ndarray
         if ka < 0:
             status["stale"] += 1
             continue
-        if espec.execution_role == "maker_maker":
+        if tspec.role == "maker_maker":
             price = round((bid if s > 0 else ask) / ispec.tick) * ispec.tick
             size = ispec.size_for_notional(notional, price)
             if size <= 0:
@@ -1437,12 +2134,12 @@ def simulate_clock_scalp(series: Series, instants: np.ndarray, signs: np.ndarray
             if (s > 0 and price >= float(book.ask[ka]) - tol) or (s < 0 and price <= float(book.bid[ka]) + tol):
                 status["crossed"] += 1
                 continue
-            first_fill, fill_ts, filled = lp_sim._fill(book, prints, s, price, size, a, h + espec.rest_until_min * MINUTE_US, book.displayed(s, price, ka, tol), sim["rule"], tol)
+            first_fill, fill_ts, filled = lp_sim._fill(book, prints, s, price, size, a, h + int(tspec.rest_until_min) * MINUTE_US, book.displayed(s, price, ka, tol), sim["rule"], tol)
             if filled <= 0:
                 status["unfilled"] += 1
                 continue
-            tau = fill_ts if fill_ts >= 0 else h + espec.rest_until_min * MINUTE_US
-            entry_px, entry_fee, entry_slip = price, ex["maker_bp"], 0.0
+            tau = fill_ts if fill_ts >= 0 else h + int(tspec.rest_until_min) * MINUTE_US
+            entry_px, entry_fee, entry_slip = price, maker_bp, 0.0
         else:
             price = float(book.ask[ka]) if s > 0 else float(book.bid[ka])
             size = ispec.size_for_notional(notional, price)
@@ -1450,89 +2147,100 @@ def simulate_clock_scalp(series: Series, instants: np.ndarray, signs: np.ndarray
                 status["skipped_size"] += 1
                 continue
             first_fill, tau, filled = a, a, size
-            entry_px, entry_fee, entry_slip = price, ex["taker_bp"], slip
-        ex_end = min(h + int(espec.exit_until_min) * MINUTE_US, last_ts)
-        ex_start = min(max(tau + latency, h + espec.to_min * MINUTE_US), ex_end)
+            entry_px, entry_fee, entry_slip = price, taker_bp, slip
+        ex_end = min(h + until_min * MINUTE_US, last_ts)
+        ex_start = min(max(tau + latency, h + exit_min * MINUTE_US), ex_end)
         ke = book.index_at(ex_start)
         if ke < 0:
             status["no_exit_quote"] += 1
             continue
-        ex_bid, ex_ask = float(book.bid[ke]), float(book.ask[ke])
-        exit_price = round((ex_ask if s > 0 else ex_bid) / ispec.tick) * ispec.tick
+        exit_price = round(((float(book.ask[ke])) if s > 0 else float(book.bid[ke])) / ispec.tick) * ispec.tick
         _, ex_fill_ts, ex_filled = lp_sim._fill(book, prints, -s, exit_price, filled, ex_start, ex_end, book.displayed(-s, exit_price, ke, tol), sim["rule"], tol)
         ex_filled = max(0.0, min(float(ex_filled), float(filled)))
         if ex_fill_ts >= 0:
-            exit_ts, exit_px, exit_fee, exit_slip = int(ex_fill_ts), exit_price, ex["maker_bp"], 0.0
+            exit_ts, exit_px, exit_fee, exit_slip = int(ex_fill_ts), exit_price, maker_bp, 0.0
         else:
             kl = book.index_at(ex_end)
             taker_px = float(book.bid[kl]) if s > 0 else float(book.ask[kl])
             rest = float(filled) - ex_filled
             exit_px = (ex_filled * exit_price + rest * taker_px) / float(filled)
-            exit_fee = (ex_filled * ex["maker_bp"] + rest * ex["taker_bp"]) / float(filled)
+            exit_fee = (ex_filled * maker_bp + rest * taker_bp) / float(filled)
             exit_slip = slip * rest / float(filled)
             exit_ts = ex_end
         open_f, close_f = int(first_fill) - grace, int(exit_ts)
-        if _crossed_count(series.funding_unknown_ts, np.array([open_f]), np.array([close_f]))[0] > 0:
+        count, rate_sum, unknown = series.funding_crossed(np.array([open_f]), np.array([close_f]))
+        if unknown[0] > 0:
             status["funding_unknown"] += 1
             continue
-        _, rate_sum = series.funding.crossed(open_f, close_f)
-        funding_bp = -s * rate_sum * 1e4
+        funding_bp = -s * float(rate_sum[0]) * 1e4
         rt = s * (exit_px - entry_px) / entry_px * 1e4
         fees, slip_cost = entry_fee + exit_fee, entry_slip + exit_slip
         out["sim_rt_bp"][i], out["sim_fee_bp"][i], out["sim_funding_bp"][i] = rt, fees, funding_bp
         out["sim_net_bp"][i] = math.fsum([rt, -fees, -slip_cost, funding_bp])
-        out["sim_net_bp_stress"][i] = math.fsum([rt, -ex["cost_stress_multiplier"] * (fees + slip_cost), funding_bp])
+        out["sim_net_bp_stress"][i] = math.fsum([rt, -mult * (fees + slip_cost), funding_bp])
         status["filled"] += 1
     return out, status
 
 
-# ----------------------------------------------------------------------------- statistics
+# ----------------------------------------------------------------------------- statistics (B ix, xv, xvi, xx)
 
 
-def day_block_bootstrap(ev_values, ev_days, ct_values=None, ct_days=None, resamples: int = 1000, seed: int = 20261102, block_days: int = 1) -> dict:
-    """Mean of the events (minus the mean of the controls when given), resampling calendar-day blocks with replacement —
-    events and controls of a block move together. Returns the point, LB90 / UB90 and the one-sided p = P*(D* ≤ 0)."""
+def _group_fsum(keys: np.ndarray, values: np.ndarray, universe: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per key of `universe` (sorted): fsum of the values and their count."""
+    sums, counts = np.zeros(universe.size), np.zeros(universe.size)
+    if keys.size == 0:
+        return sums, counts
+    order = np.argsort(keys, kind="stable")
+    keys, values = keys[order], values[order]
+    uniq, first, cnt = np.unique(keys, return_index=True, return_counts=True)
+    pos = np.searchsorted(universe, uniq)
+    for p, f, c in zip(pos.tolist(), first.tolist(), cnt.tolist()):
+        sums[p] = math.fsum(values[f: f + c].tolist())
+        counts[p] = c
+    return sums, counts
+
+
+def day_block_bootstrap(ev_values, ev_days, ct_values=None, ct_days=None, resamples: int = 1000, seed: int = 20261102, block_days: int = 1, lb_q: float = 0.10,
+                        ub_q: float = 0.90, blocks=None) -> dict:
+    """Mean of the events minus the mean of the controls (when given), resampling blocks of `block_days` UTC days with replacement —
+    the events and the controls of a block move together (LP-G5 §7.3). `blocks` fixes the block universe (C5: the same draws after
+    trimming). Returns the point, LB / UB at the spec's quantiles and the one-sided p = P*(D* ≤ 0); no statistic below two blocks."""
     ev_values = np.asarray(ev_values, dtype=np.float64)
-    ev_days = np.asarray(ev_days, dtype=np.int64) // max(1, int(block_days))
+    ev_blocks = np.asarray(ev_days, dtype=np.int64) // max(1, int(block_days))
     keep = np.isfinite(ev_values)
-    ev_values, ev_days = ev_values[keep], ev_days[keep]
+    ev_values, ev_blocks = ev_values[keep], ev_blocks[keep]
     with_control = ct_values is not None and ct_days is not None
     if with_control:
         ct_values = np.asarray(ct_values, dtype=np.float64)
-        ct_days = np.asarray(ct_days, dtype=np.int64) // max(1, int(block_days))
+        ct_blocks = np.asarray(ct_days, dtype=np.int64) // max(1, int(block_days))
         keep = np.isfinite(ct_values)
-        ct_values, ct_days = ct_values[keep], ct_days[keep]
-    out = {"n": int(ev_values.size), "n_control": int(ct_values.size) if with_control else None, "point": None, "event_mean": None, "control_mean": None, "event_median": None,
-           "lb90": None, "ub90": None, "p_one_sided": None, "blocks": 0, "resamples": int(resamples), "block_days": int(block_days)}
+        ct_values, ct_blocks = ct_values[keep], ct_blocks[keep]
+    out = {"n": int(ev_values.size), "n_control": int(ct_values.size) if with_control else None, "point": None, "event_mean": None, "control_mean": None, "lb90": None,
+           "ub90": None, "p_one_sided": None, "blocks": 0, "resamples": int(resamples), "block_days": int(block_days), "seed": int(seed)}
     if ev_values.size == 0 or (with_control and ct_values.size == 0):
         return out
-    ev_mean = math.fsum(ev_values.tolist()) / ev_values.size
-    out["event_mean"] = ev_mean
-    out["event_median"] = float(np.median(ev_values))
-    ct_mean = math.fsum(ct_values.tolist()) / ct_values.size if with_control else 0.0
-    out["control_mean"] = ct_mean if with_control else None
-    out["point"] = ev_mean - ct_mean
-    blocks = np.unique(np.concatenate([ev_days, ct_days]) if with_control else ev_days)
-    out["blocks"] = int(blocks.size)
-    if blocks.size < 2:
-        out["lb90"], out["ub90"], out["p_one_sided"] = out["point"], out["point"], (1.0 if out["point"] <= 0 else None)
+    out["event_mean"] = math.fsum(ev_values.tolist()) / ev_values.size
+    out["control_mean"] = math.fsum(ct_values.tolist()) / ct_values.size if with_control else None
+    out["point"] = out["event_mean"] - (out["control_mean"] if with_control else 0.0)
+    if blocks is None:
+        universe = np.unique(np.concatenate([ev_blocks, ct_blocks]) if with_control else ev_blocks)
+    else:
+        universe = np.unique(np.asarray(blocks, dtype=np.int64) // max(1, int(block_days)))
+    out["blocks"] = int(universe.size)
+    if universe.size < 2:
         return out
-    ev_idx = np.searchsorted(blocks, ev_days)
-    ev_sum = np.bincount(ev_idx, weights=ev_values, minlength=blocks.size)
-    ev_cnt = np.bincount(ev_idx, minlength=blocks.size).astype(np.float64)
+    ev_sum, ev_cnt = _group_fsum(ev_blocks, ev_values, universe)
     rng = np.random.default_rng(int(seed))
-    draws = rng.integers(0, blocks.size, size=(int(resamples), blocks.size))
-    picked = np.zeros((int(resamples), blocks.size), dtype=np.float64)  # how often each block is drawn in each resample
+    draws = rng.integers(0, universe.size, size=(int(resamples), universe.size))
+    picked = np.zeros((int(resamples), universe.size))
     rows = np.arange(int(resamples))
-    for j in range(blocks.size):
-        picked[rows, draws[:, j]] += 1.0  # one draw per resample and column: no repeated index within an assignment
+    for j in range(universe.size):
+        picked[rows, draws[:, j]] += 1.0
     e_cnt = picked @ ev_cnt
     with np.errstate(divide="ignore", invalid="ignore"):
         stats = (picked @ ev_sum) / e_cnt
         if with_control:
-            ct_idx = np.searchsorted(blocks, ct_days)
-            ct_sum = np.bincount(ct_idx, weights=ct_values, minlength=blocks.size)
-            ct_cnt = np.bincount(ct_idx, minlength=blocks.size).astype(np.float64)
+            ct_sum, ct_cnt = _group_fsum(ct_blocks, ct_values, universe)
             c_cnt = picked @ ct_cnt
             stats = stats - (picked @ ct_sum) / c_cnt
             stats[c_cnt <= 0] = np.nan
@@ -1540,16 +2248,15 @@ def day_block_bootstrap(ev_values, ev_days, ct_values=None, ct_days=None, resamp
     stats = stats[np.isfinite(stats)]
     if stats.size == 0:
         return out
-    out["lb90"] = float(np.quantile(stats, 0.10))
-    out["ub90"] = float(np.quantile(stats, 0.90))
+    out["lb90"] = float(np.quantile(stats, lb_q))
+    out["ub90"] = float(np.quantile(stats, ub_q))
     out["p_one_sided"] = float(np.mean(stats <= 0.0))
     out["resamples_effective"] = int(stats.size)
     return out
 
 
 def holm(pvalues: dict, alpha: float) -> dict:
-    """Step-down Holm at level `alpha` (one-sided p-values); a missing p counts as 1 and never passes. Returns, per test,
-    its rank, the threshold it faced and whether it is confirmed; the walk stops at the first failure."""
+    """Step-down Holm at `alpha` over one-sided p-values; a missing p counts as 1. The walk stops at the first failure."""
     items = sorted(((1.0 if p is None or not math.isfinite(p) else float(p)), name) for name, p in pvalues.items())
     m = len(items)
     out: dict = {"alpha": alpha, "m": m, "tests": {}, "confirmed": []}
@@ -1557,466 +2264,765 @@ def holm(pvalues: dict, alpha: float) -> dict:
     for j, (p, name) in enumerate(items, start=1):
         threshold = alpha / (m - j + 1)
         passed = (not failed) and p <= threshold
-        if not passed:
-            failed = True
+        failed = failed or not passed
         out["tests"][name] = {"p": p, "rank": j, "threshold": threshold, "confirmed": passed}
         if passed:
             out["confirmed"].append(name)
     return out
 
 
-def instant_means(parts: list[dict], measure_name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """(B) v — `(instants, values, instruments)`: per unique instant, the fsum mean of the measure over the instruments present."""
-    ts = [np.asarray(p["instants_us"], dtype=np.int64) for p in parts if p["instants_us"].size]
-    vals = [np.asarray(p[measure_name], dtype=np.float64) for p in parts if p["instants_us"].size]
+def instant_means(parts: list[dict], key: str, min_instruments: int = 1) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(B) ix — `(instants, values, instruments)`: per unique instant, the fsum mean over the instruments retained there (equal
+    weights); instants with fewer than `min_instruments` dropped."""
+    ts = [np.asarray(p["instants_us"], dtype=np.int64) for p in parts if np.asarray(p["instants_us"]).size]
+    vals = [np.asarray(p[key], dtype=np.float64) for p in parts if np.asarray(p["instants_us"]).size]
     if not ts:
         return np.zeros(0, dtype=np.int64), np.zeros(0), np.zeros(0, dtype=np.int64)
     ts_all, v_all = np.concatenate(ts), np.concatenate(vals)
     ok = np.isfinite(v_all)
     ts_all, v_all = ts_all[ok], v_all[ok]
-    if ts_all.size == 0:
-        return np.zeros(0, dtype=np.int64), np.zeros(0), np.zeros(0, dtype=np.int64)
     order = np.argsort(ts_all, kind="stable")
     ts_all, v_all = ts_all[order], v_all[order]
     uniq, first, counts = np.unique(ts_all, return_index=True, return_counts=True)
     values = np.array([math.fsum(v_all[f: f + c].tolist()) / c for f, c in zip(first.tolist(), counts.tolist())], dtype=np.float64)
-    return uniq, values, counts.astype(np.int64)
+    keep = counts >= int(min_instruments)
+    return uniq[keep], values[keep], counts[keep].astype(np.int64)
 
 
-def _stat(ev_ts, ev_v, ct_ts=None, ct_v=None, spec: Spec | None = None) -> dict:
-    if ct_ts is None:
-        return day_block_bootstrap(ev_v, ev_ts // DAY_US, None, None, spec.resamples, spec.seed, spec.block_days)
-    return day_block_bootstrap(ev_v, ev_ts // DAY_US, ct_v, ct_ts // DAY_US, spec.resamples, spec.seed, spec.block_days)
+def boot(spec: Spec, ev_ts, ev_v, ct_ts=None, ct_v=None, block_days: int | None = None, blocks=None) -> dict:
+    st = spec.statistics
+    return day_block_bootstrap(ev_v, np.asarray(ev_ts, dtype=np.int64) // DAY_US, ct_v, None if ct_ts is None else np.asarray(ct_ts, dtype=np.int64) // DAY_US,
+                               st["resamples"], st["seed"], block_days or st["block_days"], st["lb_quantile"], st["ub_quantile"], blocks)
 
 
-def criteria_for(spec: Spec, espec: EventSpec, inst_level: dict, kappa: dict | None) -> tuple[dict, dict]:
-    """C1–C6 of `LP-G5` §7.5 at the instant level. `inst_level[m] = (ev_ts, ev_v, ct_ts, ct_v)`."""
-    ev_ts, ev_v, ct_ts, ct_v = inst_level[spec.primary_measure]
-    diff = _stat(ev_ts, ev_v, ct_ts, ct_v, spec)
-    point, lb90 = diff.get("point"), diff.get("lb90")
-    c1 = point is not None and lb90 is not None and point >= spec.threshold_bp and lb90 > 0
-    net_mean = _fmean(inst_level[spec.net_measure][1])
-    stress_mean = _fmean(inst_level[spec.stress_measure][1])
-    halves = {}
-    c4 = False
-    if ev_ts.size:
-        days = ev_ts // DAY_US
-        cut = (int(days.min()) + int(days.max())) // 2
-        for label, sel, c_sel in (("first_half", days <= cut, (ct_ts // DAY_US) <= cut), ("second_half", days > cut, (ct_ts // DAY_US) > cut)):
-            e_mean, c_mean = _fmean(ev_v[sel]), _fmean(ct_v[c_sel])
-            halves[label] = {"n": int(sel.sum()), "n_control": int(c_sel.sum()), "point": (e_mean - c_mean) if e_mean is not None and c_mean is not None else None}
-        c4 = all(h["point"] is not None and h["point"] > 0 for h in halves.values()) and len(halves) == 2
+def _point(ev_v, ct_v) -> float | None:
+    e, c = _fmean(ev_v), _fmean(ct_v)
+    return None if e is None or c is None else e - c
+
+
+def validation_c6(series_by_inst: dict, raw_by_inst: dict, tspec: TypeSpec, spec: Spec) -> dict:
+    """(B) v — on the raw instrument-settlements (eligible, interval filter, realized rate, classifier computable): the 3 × 3 matrix
+    class of P̂(t_arm) × class of R_h, the sensitivity, the false-positive rate, their denominators; always reported."""
+    v, c = tspec.validation, tspec.classifier
+    matrix = {f"{p}|{r}": 0 for p in (-1, 0, 1) for r in (-1, 0, 1)}
+    not_computable = 0
+    for inst, s in series_by_inst.items():
+        raw = raw_by_inst.get(inst, np.zeros(0, dtype=np.int64))
+        if raw.size == 0:
+            continue
+        values = s.p_hat(s.index_of(raw) + tspec.arm_min, c)
+        rates = s.rate_at(raw)
+        ok = np.isfinite(values) & np.isfinite(rates)
+        not_computable += int((~ok).sum())
+        pc, rc = classify(values[ok], c["high"], c["low"]), classify(rates[ok], v["rate_high"], v["rate_low"])
+        for p_, r_ in zip(pc.tolist(), rc.tolist()):
+            matrix[f"{p_}|{r_}"] += 1
+    outside = sum(n for k, n in matrix.items() if not k.endswith("|0"))
+    inside = sum(n for k, n in matrix.items() if k.endswith("|0"))
+    agree = matrix["1|1"] + matrix["-1|-1"]
+    false_pos = matrix["1|0"] + matrix["-1|0"]
+    sens = agree / outside if outside else None
+    fpr = false_pos / inside if inside else None
+    computable = outside >= v["min_denominator"] and inside >= v["min_denominator"]
+    passed = bool(computable and sens is not None and fpr is not None and sens >= v["sensitivity_min"] and fpr <= v["false_positive_rate_max"])
+    return {"matrix_classifier_class|rate_class": matrix, "population": int(outside + inside), "not_computable": not_computable, "sensitivity": sens,
+            "false_positive_rate": fpr, "denominator_rate_outside_zone": outside, "denominator_rate_inside_zone": inside, "min_denominator": v["min_denominator"],
+            "sensitivity_min": v["sensitivity_min"], "false_positive_rate_max": v["false_positive_rate_max"], "computable": bool(computable), "pass": passed,
+            "thresholds": {"classifier": [c["high"], c["low"]], "rate": [v["rate_high"], v["rate_low"]]}}
+
+
+def criteria_for(spec: Spec, tspec: TypeSpec, inst: dict, validation: dict | None) -> tuple[dict, dict]:
+    """C1–C7 of LP-G5 §7.5 at the instant level. `inst` holds the instant-level arrays `ev_ts`, `ev`, `ev_stress`, `ct_ts`, `ct`."""
+    st = spec.statistics
+    ev_ts, ev_v, ct_ts, ct_v = inst["ev_ts"], inst["ev"], inst["ct_ts"], inst["ct"]
+    diff = boot(spec, ev_ts, ev_v, ct_ts, ct_v)
+    out: dict = {}
+    point, lb = diff.get("point"), diff.get("lb90")
+    out["C1"] = {"pass": bool(point is not None and lb is not None and point >= st["threshold_bp"] and lb > 0), "point": point, "lb90": lb, "ub90": diff.get("ub90"),
+                 "threshold_bp": st["threshold_bp"], "p_one_sided": diff.get("p_one_sided")}
+    mean_net, mean_stress = _fmean(ev_v), _fmean(inst["ev_stress"])
+    out["C2"] = {"pass": bool(mean_net is not None and mean_net > 0), "event_net_mean": mean_net}
+    out["C3"] = {"pass": bool(mean_stress is not None and mean_stress > 0), "event_net_stress_mean": mean_stress, "multiplier": spec.costs["stress_multiplier_all_cost_terms"]}
+    days = np.unique(ev_ts // DAY_US)
+    halves: dict = {}
+    if days.size:
+        cut = int(days[(days.size - 1) // 2])  # lower median day: first half = days <= it
+        first_days, second_days = set(days[days <= cut].tolist()), set(days[days > cut].tolist())
+        for label, chosen in (("first_half", first_days), ("second_half", second_days)):
+            e_sel = np.isin(ev_ts // DAY_US, list(chosen))
+            c_sel = np.isin(ct_ts // DAY_US, list(chosen))
+            halves[label] = {"days": len(chosen), "n": int(e_sel.sum()), "n_control": int(c_sel.sum()), "point": _point(ev_v[e_sel], ct_v[c_sel])}
         halves["cut_day"] = tape.date_of_day(cut)
+    out["C4"] = {"pass": bool(len(halves) == 3 and all(halves[h]["point"] is not None and halves[h]["point"] > 0 for h in ("first_half", "second_half"))), "halves": halves}
     trimmed = None
-    c5 = False
     if ev_v.size:
-        drop = int(math.ceil(0.05 * ev_v.size))
+        drop = int(math.ceil(spec.verdict["c5_trim_share"] * ev_v.size))
         order = np.argsort(ev_v, kind="stable")
-        keep = np.sort(order[: ev_v.size - drop])
-        trimmed = _stat(ev_ts[keep], ev_v[keep], ct_ts, ct_v, spec)
+        keep = np.sort(order[: max(0, ev_v.size - drop)])
+        blocks = np.unique(np.concatenate([ev_ts // DAY_US, ct_ts // DAY_US]))
+        trimmed = boot(spec, ev_ts[keep], ev_v[keep], ct_ts, ct_v, blocks=blocks)
         trimmed["dropped_best"] = drop
-        c5 = trimmed.get("lb90") is not None and trimmed["lb90"] > 0
-    out = {"C1": {"pass": bool(c1), "point": point, "lb90": lb90, "ub90": diff.get("ub90"), "threshold_bp": spec.threshold_bp, "p_one_sided": diff.get("p_one_sided")},
-           "C2": {"pass": net_mean is not None and net_mean > 0, "event_net_mean": net_mean, "measure": spec.net_measure},
-           "C3": {"pass": stress_mean is not None and stress_mean > 0, "event_net_stress_mean": stress_mean, "measure": spec.stress_measure, "multiplier": spec.execution["cost_stress_multiplier"]},
-           "C4": {"pass": bool(c4), "halves": halves},
-           "C5": {"pass": bool(c5), "lb90_without_best_5pct": trimmed.get("lb90") if trimmed else None, "dropped_best": trimmed.get("dropped_best") if trimmed else 0}}
-    if espec.control_sign is not None:
-        value = None if kappa is None else kappa.get("kappa")
-        out["C6"] = {"pass": value is not None and value >= espec.control_sign["concordance_min"], "kappa": value, "concordance_min": espec.control_sign["concordance_min"],
-                     "on": espec.control_sign["concordance_on"]}
-    else:
-        out["C6"] = {"pass": True, "applies": False}
-    return out, diff
+    out["C5"] = {"pass": bool(trimmed is not None and trimmed.get("lb90") is not None and trimmed["lb90"] > 0), "lb90_without_best": trimmed.get("lb90") if trimmed else None,
+                 "dropped_best": trimmed.get("dropped_best") if trimmed else 0, "trim_share": spec.verdict["c5_trim_share"]}
+    if "C6" in tspec.criteria:
+        out["C6"] = {"pass": bool(validation and validation["pass"]), "sensitivity": (validation or {}).get("sensitivity"),
+                     "false_positive_rate": (validation or {}).get("false_positive_rate"), "computable": bool(validation and validation["computable"])}
+    if "C7" in tspec.criteria:
+        hour = tspec.c7["event_hour_utc"]
+        sel = (ev_ts % DAY_US) // HOUR_US == hour
+        sel &= (ev_ts % HOUR_US) == 0
+        chosen = set((ev_ts[sel] // DAY_US).tolist())
+        c_sel = np.isin(ct_ts // DAY_US, list(chosen))
+        p7 = _point(ev_v[sel], ct_v[c_sel])
+        out["C7"] = {"pass": bool(p7 is not None and p7 > tspec.c7["require_point_gt_bp"]), "point": p7, "event_hour_utc": hour, "n": int(sel.sum()), "n_control": int(c_sel.sum()),
+                     "days": len(chosen)}
+    return {k: out[k] for k in tspec.criteria}, diff
 
 
-def verdict_for(spec: Spec, n_instants: int, n_days: int, diff: dict, criteria: dict, device: list[str]) -> tuple[str, list[str], str | None]:
-    """INCONCLUSIVE (device defect) → NOT_INFORMATIVE (power gate) → PASS (C1–C5, C6 being a device test) → FAIL."""
-    if device:
-        return "INCONCLUSIVE", device, None
-    reasons = []
-    if n_instants < spec.min_instants:
-        reasons.append(f"n={n_instants} < min_instants={spec.min_instants}")
-    if n_days < spec.min_days:
-        reasons.append(f"days={n_days} < min_days={spec.min_days}")
-    if diff.get("point") is None or diff.get("lb90") is None:
-        reasons.append("no statistic")
-    if reasons:
-        return "NOT_INFORMATIVE", reasons, None
-    failed = [name for name in ("C1", "C2", "C3", "C4", "C5") if not criteria[name]["pass"]]
-    if not failed:
-        return "PASS", [f"C1 point={diff['point']:.2f} >= {spec.threshold_bp:g} bp and lb90={diff['lb90']:.2f} > 0", "C2-C5 pass"], None
-    ub90 = diff.get("ub90")
-    annotation = "effet exclu" if ub90 is not None and ub90 < spec.threshold_bp else "non détecté"
-    return "FAIL", [f"{name} fails" for name in failed], annotation
-
-
-def economic_reading(parts: list[dict], measure_name: str, espec: EventSpec, spec: Spec, candidate_days: int, verdict: str) -> dict:
-    """(B) ix — portfolio reading (`GATES` §1, §4): at each event instant at most `max_fills_per_instant` fills, admitted in
-    instrument-id order; plafond_USD_an = fills/day × notional × net / 1e4 × days_per_year (point, LB90, UB90 of the
-    admitted fills' net, day-block bootstrap); « poursuivi » ⇔ point ≥ S_éco and (UB90 ≥ 2 S_éco or LB90 > 0)."""
+def economic_reading(parts: list[dict], tspec: TypeSpec, spec: Spec, calendar_days: int, verdict: str) -> dict:
+    """GATES §1, LP-G5 §7.6 — at each event instant at most `max_live` filled orders, admitted in instrument-id order;
+    plafond_USD_an = fills/day × notional × mean event net_bp / 1e4 × days/year (the absolute round trip, never D), point and
+    LB90 / UB90 (day-block bootstrap of the admitted fills); « poursuivi » ⇔ point ≥ S_éco and (UB90 ≥ 2 S_éco or LB90 > 0)."""
     eco = spec.economic
     by_instant: dict[int, list[tuple[str, float]]] = {}
     for p in parts:
-        for t, v in zip(np.asarray(p["instants_us"]).tolist(), np.asarray(p[measure_name], dtype=np.float64).tolist()):
+        for t, v in zip(np.asarray(p["instants_us"]).tolist(), np.asarray(p["net_bp"], dtype=np.float64).tolist()):
             if math.isfinite(v):
                 by_instant.setdefault(int(t), []).append((str(p["inst"]), float(v)))
     fills_ts, fills_v = [], []
     for t in sorted(by_instant):
-        for _, v in sorted(by_instant[t])[: eco["max_fills_per_instant"]]:
+        for _, v in sorted(by_instant[t])[: eco["max_live"]]:  # inst_id ascending
             fills_ts.append(t)
             fills_v.append(v)
-    out = {"measure": measure_name, "max_fills_per_instant": eco["max_fills_per_instant"], "order_notional_usd": eco["order_notional_usd"], "days_per_year": espec.days_per_year,
-           "candidate_days": int(candidate_days), "s_eco_usd_per_year": eco["s_eco_usd_per_year"], "fills": len(fills_v), "fills_uncapped": sum(len(v) for v in by_instant.values())}
-    if not fills_v or candidate_days <= 0:
-        out.update({"fills_per_day": 0.0, "usd_per_year_point": None, "usd_per_year_lb90": None, "usd_per_year_ub90": None, "pursued": False,
-                    "reading": "FAIL" if verdict == "FAIL" else verdict})
-        return out
-    stat = day_block_bootstrap(np.array(fills_v), np.array(fills_ts, dtype=np.int64) // DAY_US, None, None, spec.resamples, spec.seed, spec.block_days)
-    per_day = len(fills_v) / candidate_days
-
-    def usd(value):
-        return None if value is None else per_day * eco["order_notional_usd"] * float(value) / 1e4 * espec.days_per_year
-
-    point, lb90, ub90 = usd(stat["event_mean"]), usd(stat["lb90"]), usd(stat["ub90"])
-    s_eco = eco["s_eco_usd_per_year"]
-    pursued = point is not None and point >= s_eco and ((ub90 is not None and ub90 >= 2 * s_eco) or (lb90 is not None and lb90 > 0))
-    if verdict == "PASS":
-        reading = "PASS, poursuivi" if pursued else "PASS, non poursuivi (sous S_éco)"
+    out = {"measure": "net_bp (absolute round trip)", "max_live": eco["max_live"], "order_notional_usd": eco["notional"], "leverage": eco["leverage"], "capital_usd": eco["capital"],
+           "days_per_year": tspec.days_per_year, "calendar_days": int(calendar_days), "s_eco_usd_per_year": eco["s_eco"], "fills": len(fills_v),
+           "fills_uncapped": sum(len(v) for v in by_instant.values())}
+    if not fills_v or calendar_days <= 0:
+        out.update({"fills_per_day": 0.0, "usd_per_year_point": None, "usd_per_year_lb90": None, "usd_per_year_ub90": None, "pursued": False})
     else:
-        reading = "FAIL" if verdict == "FAIL" else verdict
-    out.update({"fills_per_day": per_day, "net_bp_mean": stat["event_mean"], "net_bp_lb90": stat["lb90"], "net_bp_ub90": stat["ub90"], "usd_per_year_point": point,
-                "usd_per_year_lb90": lb90, "usd_per_year_ub90": ub90, "pursued": bool(pursued), "reading": reading,
-                "note": "lecture portefeuille : 1×, aucun impact de marché supposé ; net = aller-retour au rôle déclaré, coûts du spec, funding réel"})
+        stat = boot(spec, np.array(fills_ts, dtype=np.int64), np.array(fills_v))
+        per_day = len(fills_v) / calendar_days
+
+        def usd(value):
+            return None if value is None else per_day * eco["notional"] * float(value) / 1e4 * tspec.days_per_year
+
+        point, lb, ub = usd(stat["event_mean"]), usd(stat["lb90"]), usd(stat["ub90"])
+        pursued = point is not None and point >= eco["s_eco"] and ((ub is not None and ub >= 2 * eco["s_eco"]) or (lb is not None and lb > 0))
+        out.update({"fills_per_day": per_day, "net_bp_mean": stat["event_mean"], "net_bp_lb90": stat["lb90"], "net_bp_ub90": stat["ub90"], "usd_per_year_point": point,
+                    "usd_per_year_lb90": lb, "usd_per_year_ub90": ub, "pursued": bool(pursued)})
+    readings = eco["readings"]
+    reading = (readings[0] if out["pursued"] else readings[1]) if verdict == "PASS" else (readings[2] if verdict == "FAIL" else spec.gate + verdict)
+    overlaps = _same_instrument_overlaps(parts, tspec)
+    minutes = tspec.return_window[1] - tspec.return_window[0]
+    out.update({"reading": reading, "pos_mode": {"net_mode": reading, "long_short_mode": reading, "overlapping_positions_same_instrument": overlaps,
+                                                 "note": "identical readings when no two positions of one instrument overlap (windows of a type never do)"},
+                "margin_opportunity_cost": {"rule": spec.costs.get("margin_opportunity_cost", "negligible_reported"), "minutes_per_position": minutes,
+                                            "usd_per_position_at_5pct": eco["notional"] / eco["leverage"] * minutes / (365 * 24 * 60) * 0.05,
+                                            "note": "notional / leverage × window / 365 days × a 5 % rate (SOFR order of magnitude): reported, not subtracted (GATES §5.2)"}})
     return out
 
 
-# ----------------------------------------------------------------------------- descriptive reports
+def _same_instrument_overlaps(parts: list[dict], tspec: TypeSpec) -> int:
+    span = (tspec.return_window[1] - tspec.return_window[0]) * MINUTE_US
+    total = 0
+    for p in parts:
+        ts = np.sort(np.asarray(p["instants_us"], dtype=np.int64))
+        if ts.size > 1:
+            total += int((np.diff(ts) < span).sum())
+    return total
 
 
-def descriptive_reports(series_by_inst: dict, window_start_us: int | None = None) -> dict:
-    """Minute-0 effect, hourly and weekday seasonality of the 1-minute |return| of the reference price and of the candle range,
-    spread seasonality when a book exists, funding intervals. Pooled over instruments, window part only; no verdict."""
-    abs_ret, minute_of_hour, hour_of_day, weekday, ranges, spreads, spread_hours = [], [], [], [], [], [], []
-    funding_intervals: dict = {}
+# ----------------------------------------------------------------------------- descriptive reports (LP-G5 §9; no p-value, no verdict)
+
+
+def _d_summary(ev_ts, ev_v, ct_ts, ct_v) -> dict:
+    e, c = _fmean(ev_v), _fmean(ct_v)
+    return {"n": int(np.asarray(ev_ts).size), "n_control": int(np.asarray(ct_ts).size), "event_mean": e, "control_mean": c,
+            "point": None if e is None or c is None else e - c}
+
+
+def _subset_d(run: dict, ev_sel, ct_sel) -> dict:
+    inst = run["instant"]
+    return _d_summary(inst["ev_ts"][ev_sel], inst["ev"][ev_sel], inst["ct_ts"][ct_sel], inst["ct"][ct_sel])
+
+
+def _same_days(run: dict, ev_sel) -> np.ndarray:
+    inst = run["instant"]
+    days = set((inst["ev_ts"][ev_sel] // DAY_US).tolist())
+    return np.isin(inst["ct_ts"] // DAY_US, list(days))
+
+
+def _variant_d(run: dict, spec: Spec, ev_options: dict | None, ct_options: dict | None = None, events_override: dict | None = None, controls_override: dict | None = None) -> dict:
+    tspec = run["tspec"]
+    ev_parts, ct_parts = [], []
+    for inst, s in run["series"].items():
+        ev_parts.append(measure(s, (events_override or run["events"]).get(inst, np.zeros(0, dtype=np.int64)), tspec, spec, "event", ev_options))
+        ct_parts.append(measure(s, (controls_override or run["controls"]).get(inst, np.zeros(0, dtype=np.int64)), tspec, spec, "control", ct_options if ct_options is not None else ev_options))
+    mi = spec.unit["min_instruments"]
+    ev_ts, ev_v, _ = instant_means(ev_parts, "net_bp", mi)
+    ct_ts, ct_v, _ = instant_means(ct_parts, "net_bp", mi)
+    out = _d_summary(ev_ts, ev_v, ct_ts, ct_v)
+    attempted = sum(p["fill"]["attempted"] for p in ev_parts)
+    out["fill_rate_events"] = (sum(p["fill"]["filled"] for p in ev_parts) / attempted) if attempted else None
+    return out
+
+
+def _pooled(parts: list[dict], key: str) -> np.ndarray:
+    arrays = [np.asarray(p[key], dtype=np.float64) for p in parts if np.asarray(p[key]).size]
+    return np.concatenate(arrays) if arrays else np.zeros(0)
+
+
+def _quartiles(values) -> dict:
+    v = np.asarray(values, dtype=np.float64)
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return {"n": 0}
+    return {"n": int(v.size), "mean": _fmean(v), "q25": float(np.quantile(v, 0.25)), "median": float(np.median(v)), "q75": float(np.quantile(v, 0.75))}
+
+
+def _signed_path_bp(series: Series, instants: np.ndarray, signs: np.ndarray, a_min: int, b_min: int) -> np.ndarray:
+    k0 = series.index_of(instants)
+    return np.asarray(signs, dtype=np.float64) * _log_bp(series.at(series.close, k0 + a_min), series.at(series.close, k0 + b_min))
+
+
+def _rv24_bp(series: Series, k_end: np.ndarray) -> np.ndarray:
+    """Realised volatility of the 1-minute log returns of the last price over the 1 440 minutes ending at k_end (bp; ≥ 90 % present)."""
+    if "r1" not in series.cache:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r = np.diff(np.log(series.close)) * 1e4
+        series.cache["r1"] = np.concatenate([[np.nan], r])
+    r1 = series.cache["r1"]
+    out = np.full(np.asarray(k_end).size, np.nan)
+    for i, k in enumerate(np.asarray(k_end, dtype=np.int64).tolist()):
+        lo = k - 1439
+        if lo < 1 or k >= series.size:
+            continue
+        window = r1[lo: k + 1]
+        ok = np.isfinite(window)
+        if ok.sum() >= 0.9 * 1440:
+            out[i] = math.sqrt(math.fsum((window[ok] ** 2).tolist()))
+    return out
+
+
+def report_regime_rv24(run: dict, spec: Spec) -> dict:
+    """rv24 at each retained instrument-instant against the median of the instrument's daily rv24 over the ≤ 30 eligible days before
+    (undefined before 7 days): stress (above) / calm strata of the instant-level D (T14)."""
+    flags_ev, flags_ct = [], []
+    for side, parts, flags in (("event", run["ev_parts"], flags_ev), ("control", run["ct_parts"], flags_ct)):
+        for p in parts:
+            s = run["series"][p["inst"]]
+            k = s.index_of(p["instants_us"])
+            rv = _rv24_bp(s, k)
+            first_day = int(max(s.meta.eligible_from_us, int(s.grid_us[0])) // DAY_US) + 1
+            days = np.arange(first_day, int(spec.end_us // DAY_US) + 1)
+            daily = _rv24_bp(s, s.index_of(days * DAY_US))
+            med = np.full(rv.size, np.nan)
+            for i, t in enumerate(np.asarray(p["instants_us"]).tolist()):
+                d = t // DAY_US
+                sel = (days <= d) & (days > d - 30)
+                vals = daily[sel]
+                vals = vals[np.isfinite(vals)]
+                if vals.size >= 7:
+                    med[i] = float(np.median(vals))
+            flag = np.where(np.isfinite(rv) & np.isfinite(med), np.where(rv > med, 1, 0), -1)
+            flags.append({"inst": p["inst"], "instants_us": p["instants_us"], "net_bp": p["net_bp"], "flag": flag})
+    out = {"rule": "rv24 > median of the instrument's daily rv24 over the <= 30 previous eligible days (>= 7 days), else undefined"}
+    mi = spec.unit["min_instruments"]
+    for label, value in (("stress", 1), ("calm", 0), ("undefined", -1)):
+        ev = [{"inst": f["inst"], "instants_us": f["instants_us"][f["flag"] == value], "net_bp": f["net_bp"][f["flag"] == value]} for f in flags_ev]
+        ct = [{"inst": f["inst"], "instants_us": f["instants_us"][f["flag"] == value], "net_bp": f["net_bp"][f["flag"] == value]} for f in flags_ct]
+        ets, ev_v, _ = instant_means(ev, "net_bp", mi)
+        cts, ct_v, _ = instant_means(ct, "net_bp", mi)
+        out[label] = _d_summary(ets, ev_v, cts, ct_v)
+    return out
+
+
+def report_portfolio(run: dict, spec: Spec, calendar_days: int) -> dict:
+    """§9.6 — admitted instants (≤ max_live per instant, instrument-id order), fills per day, net PnL in USD, the catastrophe cut at
+    3 σ15 (σ15 = σ of the 1-minute returns of the 24 h before h × √15; never tighter), under both posMode hypotheses."""
+    eco, tspec = spec.economic, run["tspec"]
+    rows = []
+    for p in run["ev_parts"]:
+        for t, s, v in zip(np.asarray(p["instants_us"]).tolist(), np.asarray(p["sign"]).tolist(), np.asarray(p["net_bp"]).tolist()):
+            rows.append((int(t), str(p["inst"]), int(s), float(v)))
+    rows.sort()
+    admitted, by_t = [], {}
+    for t, inst, s, v in rows:
+        if len(by_t.setdefault(t, [])) < eco["max_live"]:
+            by_t[t].append(inst)
+            admitted.append((t, inst, s, v))
+    cuts, pnl, pnl_cut = 0, [], []
+    a, b = tspec.return_window
+    for t, inst, s, v in admitted:
+        series = run["series"][inst]
+        k0 = int(series.index_of(np.array([t]))[0])
+        r1 = series.cache.get("r1")
+        if r1 is None:
+            _rv24_bp(series, np.array([k0]))
+            r1 = series.cache["r1"]
+        window = r1[max(1, k0 - 1439): k0 + 1]
+        window = window[np.isfinite(window)]
+        sigma15 = float(np.std(window)) * math.sqrt(15) if window.size > 1 else math.nan
+        path = s * _log_bp(series.at(series.close, np.full(b - a, k0 + a)), series.at(series.close, k0 + np.arange(a + 1, b + 1)))
+        hit = np.nonzero(np.isfinite(path) & (path <= -3.0 * sigma15))[0] if math.isfinite(sigma15) else np.zeros(0, dtype=np.int64)
+        pnl.append(v * eco["notional"] / 1e4)
+        if hit.size:
+            cuts += 1
+            pnl_cut.append((v - (s * _log_bp(np.array([series.close[k0 + a]]), np.array([series.close[k0 + b]]))[0]) + float(path[hit[0]])) * eco["notional"] / 1e4)
+        else:
+            pnl_cut.append(v * eco["notional"] / 1e4)
+    reading = {"admitted_instants": len(by_t), "fills": len(admitted), "fills_per_day": (len(admitted) / calendar_days) if calendar_days else None,
+               "pnl_usd": math.fsum(pnl), "pnl_usd_with_cut_3_sigma15": math.fsum(pnl_cut), "cuts_triggered": cuts, "calendar_days": calendar_days}
+    return {"net_mode": reading, "long_short_mode": reading, "overlapping_positions_same_instrument": _same_instrument_overlaps(run["ev_parts"], tspec),
+            "note": "the two posMode hypotheses coincide when no two positions of one instrument overlap; no market impact assumed"}
+
+
+def common_reports(series_by_inst: dict, spec: Spec, names: tuple) -> dict:
+    """Reports that belong to no type (printed even when a type is sealed): minute 0 (T07), hourly and weekday seasonality of the
+    1-minute |return| of the last price, histogram of the funding intervals."""
+    out: dict = {}
+    abs_ret, moh, hod, wd = [], [], [], []
+    intervals: dict = {}
     for inst, s in series_by_inst.items():
-        start = int(window_start_us if window_start_us is not None else s.window_start_us)
-        k_first = max(0, int((start - int(s.grid_us[0])) // MINUTE_US))
-        grid, price = s.grid_us[k_first:], s.price[k_first:]
-        if grid.size > 1:
-            with np.errstate(divide="ignore", invalid="ignore"):
-                r = np.abs(np.diff(np.log(price))) * 1e4
-            ends = grid[1:]
-            ok = np.isfinite(r)
-            abs_ret.append(r[ok])
-            minute_of_hour.append(((ends[ok] // MINUTE_US) % 60).astype(np.int64))
-            hour_of_day.append(((ends[ok] // tape.SECOND_US) % tape.DAY_S // 3600).astype(np.int64))
-            weekday.append(((ends[ok] // DAY_US + 3) % 7).astype(np.int64))  # 1970-01-01 was a Thursday: Monday = 0
-            ranges.append(s.range_bp[k_first:][1:][ok])
-        if s.half_spread_bp is not None:
-            hs = s.half_spread_bp[k_first:]
-            ok = np.isfinite(hs)
-            spreads.append(hs[ok])
-            spread_hours.append(((grid[ok] // tape.SECOND_US) % tape.DAY_S // 3600).astype(np.int64))
-        settled = s.settlements_all[s.settlements_all >= start]
+        k_first = max(1, int((spec.start_us - int(s.grid_us[0])) // MINUTE_US))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r = np.abs(np.diff(np.log(s.close[k_first - 1:]))) * 1e4
+        ends = s.grid_us[k_first:]
+        ok = np.isfinite(r)
+        abs_ret.append(r[ok])
+        starts = ends[ok] - MINUTE_US  # the minute starting at hh:mm ends at hh:mm+1
+        moh.append(((starts // MINUTE_US) % 60).astype(np.int64))
+        hod.append(((starts % DAY_US) // HOUR_US).astype(np.int64))
+        wd.append(((starts // DAY_US + 3) % 7).astype(np.int64))  # 1970-01-01 was a Thursday: Monday = 0
+        settled = s.settlements_us[(s.settlements_us >= spec.start_us) & (s.settlements_us < spec.end_us)]
         if settled.size > 1:
-            diffs_h = np.diff(settled) / HOUR_US
-            values, counts = np.unique(np.round(diffs_h, 2), return_counts=True)
-            rates = s.funding.rate[s.funding.ts_us >= start]
-            funding_intervals[inst] = {"settlements": int(settled.size), "interval_h_histogram": {f"{v:g}": int(c) for v, c in zip(values.tolist(), counts.tolist())},
-                                       "rate_known": int(rates.size), "rate_mean": _fmean(rates), "rate_abs_mean": _fmean(np.abs(rates)), "source": s.funding.source}
-    out: dict = {"note": "descriptif, aucun verdict ; ces tables larges sont un crible de fait pour les types du Gate 2 : GATES §9.7 interdit de les promouvoir en test",
-                 "funding_intervals": funding_intervals}
-    if not abs_ret:
-        return out
-    r, moh, hod, wd, rg = (np.concatenate(x) for x in (abs_ret, minute_of_hour, hour_of_day, weekday, ranges))
+            values, counts = np.unique(np.round(np.diff(settled) / HOUR_US, 2), return_counts=True)
+            intervals[inst] = {"settlements": int(settled.size), "interval_h_histogram": {f"{v:g}": int(c) for v, c in zip(values.tolist(), counts.tolist())}}
+    r = np.concatenate(abs_ret) if abs_ret else np.zeros(0)
 
-    def by(keys: np.ndarray, size: int, labels) -> dict:
-        table = {}
-        for k in range(size):
-            sel = keys == k
-            if not sel.any():
-                continue
-            entry = {"n": int(sel.sum()), "abs_return_bp_mean": _fmean(r[sel])}
-            if np.isfinite(rg[sel]).any():
-                entry["range_bp_mean"] = _fmean(rg[sel])
-            table[str(labels(k))] = entry
-        return table
+    def table(keys, size, label):
+        keys = np.concatenate(keys) if keys else np.zeros(0, dtype=np.int64)
+        return {label(k): {"n": int((keys == k).sum()), "abs_return_bp_mean": _fmean(r[keys == k])} for k in range(size) if (keys == k).any()}
 
-    minute0, others = r[moh == 1], r[moh != 1]  # the minute starting at hh:00 ends at hh:01
-    m0, mo = _fmean(minute0), _fmean(others)
-    out["minute_zero"] = {"abs_return_bp_mean_minute_0": m0, "abs_return_bp_mean_other_minutes": mo, "ratio": (m0 / mo) if m0 is not None and mo else None,
-                          "n_minute_0": int(minute0.size), "by_minute_of_hour": by(moh, 60, lambda k: f"{(k - 1) % 60:02d}")}
-    out["hourly_seasonality"] = {"overall_abs_return_bp_mean": _fmean(r), "by_hour_utc": by(hod, 24, lambda k: f"{k:02d}")}
-    out["weekday_seasonality"] = {"by_weekday": by(wd, 7, lambda k: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][k])}
-    if spreads:
-        sp, sh = np.concatenate(spreads), np.concatenate(spread_hours)
-        out["spread_seasonality"] = {"half_spread_bp_mean": _fmean(sp), "by_hour_utc": {f"{h:02d}": {"n": int((sh == h).sum()), "half_spread_bp_mean": _fmean(sp[sh == h])}
-                                                                                       for h in range(24) if (sh == h).any()}}
-    else:
-        out["spread_seasonality"] = "UNAVAILABLE: the 1-minute history carries no book; measured on the capture only"
+    if "minute_zero_T07" in names:
+        m = np.concatenate(moh) if moh else np.zeros(0, dtype=np.int64)
+        m0, mo = _fmean(r[m == 0]), _fmean(r[m != 0])
+        out["minute_zero_T07"] = {"abs_return_bp_minute_0": m0, "abs_return_bp_other_minutes": mo, "ratio": (m0 / mo) if m0 is not None and mo else None,
+                                  "by_minute_of_hour": table(moh, 60, lambda k: f"{k:02d}")}
+    if "hourly_seasonality_last_price" in names:
+        out["hourly_seasonality_last_price"] = {"by_hour_utc": table(hod, 24, lambda k: f"{k:02d}"), "spread_seasonality": "UNAVAILABLE on the 1-minute history (no book)"}
+    if "weekday_seasonality" in names:
+        out["weekday_seasonality"] = {"by_weekday": table(wd, 7, lambda k: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][k])}
+    if "funding_intervals_histogram" in names:
+        out["funding_intervals_histogram"] = intervals
+    return out
+
+
+def type_reports(run: dict, spec: Spec, names: tuple, calendar_days: int) -> dict:
+    """The descriptive reports of one type (sealed with the type when it is INCONCLUSIVE or NOT_INFORMATIVE)."""
+    tspec, inst = run["tspec"], run["instant"]
+    out: dict = {}
+    mine = [n for n in names if n.split("_", 1)[0] == tspec.label] + [n for n in names if n in PER_TYPE_REPORTS]
+    ev_hour = (inst["ev_ts"] % DAY_US) // HOUR_US
+    for name in mine:
+        if name == "T01_classified_by_realized_rate" or name.endswith("_classified_by_realized_rate"):
+            v = tspec.validation or {"rate_high": 0.0004, "rate_low": -0.0004}
+            out[name] = {"rule": "events signed by the class of R_h (old classifier, a look-ahead of 4 minutes); controls by P_hat(t_arm)",
+                         **_variant_d(run, spec, {"side_from_rate": (v["rate_high"], v["rate_low"])}, {})}
+        elif (m := DEAD_ZONE_RE.match(name)) is not None:
+            hi, lo = float(f"{m.group('hi_a')}.{m.group('hi_b')}"), -float(f"{m.group('lo_a')}.{m.group('lo_b')}")
+            out[name] = {"thresholds": [hi, lo], **_variant_d(run, spec, {"thresholds": (hi, lo)})}
+        elif name.endswith("_without_fill_proxy"):
+            out[name] = {"rule": "unconditional drift: the fill proxy off at events and controls", **_variant_d(run, spec, {"fill": False})}
+        elif name.endswith("_dose_abs_rate"):
+            rates = np.abs(_pooled(run["ev_parts"], "rate_at_h")) * 1e4
+            net = _pooled(run["ev_parts"], "net_bp")
+            buckets = {}
+            for lo_, hi_ in ((0.0, 4.0), (4.0, 10.0), (10.0, 25.0), (25.0, math.inf)):
+                sel = (rates >= lo_) & (rates < hi_)
+                buckets[f"{lo_:g}-{hi_:g}bp"] = {"observations": int(sel.sum()), "net_bp_mean": _fmean(net[sel])}
+            out[name] = {"unit": "instrument-instant", "by_abs_realized_rate": buckets}
+        elif name.endswith("_v_shape_minus15_0_plus15"):
+            res = {}
+            for side, parts in (("events", run["ev_parts"]), ("controls", run["ct_parts"])):
+                pre = [_signed_path_bp(run["series"][p["inst"]], p["instants_us"], p["sign"], -15, 0) for p in parts]
+                post = [_signed_path_bp(run["series"][p["inst"]], p["instants_us"], p["sign"], 0, 15) for p in parts]
+                res[side] = {"signed_return_bp_h_minus_15_to_h": _fmean(np.concatenate(pre)) if pre else None, "signed_return_bp_h_to_h_plus_15": _fmean(np.concatenate(post)) if post else None}
+            out[name] = res
+        elif name.endswith("_by_photo_hour_00_08_16"):
+            out[name] = {f"{h:02d}:00": _subset_d(run, ev_hour == h, _same_days(run, ev_hour == h)) for h in (0, 8, 16)}
+        elif name.endswith("_friday_0800"):
+            fri = ((inst["ev_ts"] // DAY_US + 3) % 7) == 4
+            sel_f, sel_o = (ev_hour == 8) & fri, (ev_hour == 8) & ~fri
+            out[name] = {"friday_08:00": _subset_d(run, sel_f, _same_days(run, sel_f)), "other_08:00": _subset_d(run, sel_o, _same_days(run, sel_o))}
+        elif name.endswith("_us_business_day_vs_not"):
+            ny = ZoneInfo(NEW_YORK)
+            business = np.array([day_matches("nyse_trading_days", datetime.fromtimestamp(t / tape.SECOND_US, tz=UTC).astimezone(ny).date(), spec.calendars)
+                                 for t in inst["ev_ts"].tolist()], dtype=bool)
+            out[name] = {"us_business_day": _subset_d(run, business, _same_days(run, business)), "weekend_or_holiday": _subset_d(run, ~business, _same_days(run, ~business))}
+        elif name.endswith("_stratum_T02_4h_2h_1h"):
+            parts = [measure(run["series"][i], run["other_interval"].get(i, np.zeros(0, dtype=np.int64)), tspec, spec, "event") for i in run["series"]]
+            gaps = {}
+            for i, s in run["series"].items():
+                for t in run["other_interval"].get(i, np.zeros(0, dtype=np.int64)).tolist():
+                    pos = int(np.searchsorted(s.settlements_us, t))
+                    if pos > 0:
+                        key = f"{(t - int(s.settlements_us[pos - 1])) / HOUR_US:g}h"
+                        gaps[key] = gaps.get(key, 0) + 1
+            out[name] = {"settlements_other_interval": int(sum(np.asarray(v).size for v in run["other_interval"].values())), "previous_gap_histogram": gaps,
+                         "observations": int(sum(p["counts"]["kept"] for p in parts)), "net_bp_mean": _fmean(_pooled(parts, "net_bp")), "funding_bp_mean": _fmean(_pooled(parts, "funding_bp"))}
+        elif name.endswith("_mark_reference_inside_coverage"):
+            out[name] = {"price": "mark_1m.close", **_variant_d(run, spec, {"price": "mark"})}
+        elif name.endswith("_premium_balance_events_vs_controls"):
+            out[name] = {"abs_p_hat_events": _quartiles(np.abs(_pooled(run["ev_parts"], "p_hat"))), "abs_p_hat_controls": _quartiles(np.abs(_pooled(run["ct_parts"], "p_hat")))}
+        elif name.endswith("_funding_cap_stress"):
+            stressed = []
+            for p in run["ev_parts"]:
+                s = run["series"][p["inst"]]
+                known = s.settlement_rates[np.isfinite(s.settlement_rates)]
+                cap = float(np.max(np.abs(known))) if known.size else math.nan
+                stressed.append(np.asarray(p["net_bp"]) - np.asarray(p["funding_bp"]) - abs(cap) * 1e4)
+            out[name] = {"rule": "funding at the instrument's largest observed |rate| against the position (proxy of the cap: the history carries no cap)",
+                         "event_net_bp_mean": _fmean(np.concatenate(stressed)) if stressed else None}
+        elif (m := HORIZONS_RE.match(name)) is not None:
+            out[name] = {f"exit_h{tspec.arm_min + int(h):+d}": _variant_d(run, spec, {"exit_min": tspec.arm_min + int(h)}) for h in m.group("h").split("_")}
+        elif name.endswith("_move_ge_1_tick"):
+            out[name] = {"rule": "|c(h+to) - c(h+from)| >= tick_sz at events and controls", **_variant_d(run, spec, {"tick_move": True})}
+        elif name.endswith("_macro_days_separately"):
+            events, controls = {}, {}
+            for i, s in run["series"].items():
+                ev_i, _ = restrict(s, run["macro_excluded"], tspec, spec)
+                events[i] = ev_i
+                controls[i], _ = control_instants(s, tspec, spec, ev_i, exclusion_intervals(s, tspec, spec, run["common"]))
+            out[name] = {"rule": "the type's rule on the excluded macro dates (never in the test)", **_variant_d(run, spec, None, None, events, controls)}
+        elif name.endswith("_ten_am_et_release_days"):
+            out[name] = {"status": "UNAVAILABLE", "reason": "calendars carries no frozen list of the 10:00 ET releases (JOLTS, ISM; P-G5-5 pending)"}
+        elif name.endswith("_brr_adjacency"):
+            brr = [x for x in session_intervals(spec, spec.pad_start_us, spec.end_us) if "brr" in x[2]]
+            starts, ends = np.array([x[0] for x in brr], dtype=np.int64), np.array([x[1] for x in brr], dtype=np.int64)
+
+            def overlap(ts):
+                a = np.asarray(ts, dtype=np.int64) + tspec.return_window[0] * MINUTE_US
+                b = np.asarray(ts, dtype=np.int64) + tspec.return_window[1] * MINUTE_US
+                return violates(starts, ends, a, b, 0) if starts.size else np.zeros(np.asarray(ts).size, dtype=bool)
+
+            ev_o, ct_o = overlap(inst["ev_ts"]), overlap(inst["ct_ts"])
+            out[name] = {"overlapping_brr_window": _subset_d(run, ev_o, ct_o), "not_overlapping": _subset_d(run, ~ev_o, ~ct_o)}
+        elif name == "by_month":
+            months = sorted({tape.date_of_day(int(d))[:7] for d in (inst["ev_ts"] // DAY_US).tolist()})
+            ev_m = np.array([tape.date_of_day(int(d))[:7] for d in (inst["ev_ts"] // DAY_US).tolist()])
+            ct_m = np.array([tape.date_of_day(int(d))[:7] for d in (inst["ct_ts"] // DAY_US).tolist()])
+            out[name] = {m_: _subset_d(run, ev_m == m_, ct_m == m_) for m_ in months}
+        elif name == "by_instrument":
+            res = {}
+            for ep, cp in zip(run["ev_parts"], run["ct_parts"]):
+                res[ep["inst"]] = {"observations": ep["counts"]["kept"], "control_observations": cp["counts"]["kept"], "event_net_bp_mean": _fmean(ep["net_bp"]),
+                                   "control_net_bp_mean": _fmean(cp["net_bp"]), "point": _point(ep["net_bp"], cp["net_bp"])}
+            out[name] = res
+        elif name == "by_sign":
+            res = {}
+            for label, value in (("long", 1), ("short", -1)):
+                ev = [{"inst": p["inst"], "instants_us": p["instants_us"][p["sign"] == value], "net_bp": p["net_bp"][p["sign"] == value]} for p in run["ev_parts"]]
+                ct = [{"inst": p["inst"], "instants_us": p["instants_us"][p["sign"] == value], "net_bp": p["net_bp"][p["sign"] == value]} for p in run["ct_parts"]]
+                ets, ev_v, _ = instant_means(ev, "net_bp", spec.unit["min_instruments"])
+                cts, ct_v, _ = instant_means(ct, "net_bp", spec.unit["min_instruments"])
+                res[label] = _d_summary(ets, ev_v, cts, ct_v)
+            out[name] = res
+        elif name == "regime_rv24_above_median":
+            out[name] = report_regime_rv24(run, spec)
+        elif name == "instruments_per_instant_ge_3":
+            out[name] = _subset_d(run, inst["ev_n"] >= 3, inst["ct_n"] >= 3)
+        elif name == "excluded_share_by_instrument":
+            out[name] = {p["inst"]: {k: (v / p["counts"]["instants"]) if p["counts"]["instants"] else None for k, v in p["counts"].items() if k not in ("instants",)}
+                         for p in run["ev_parts"]}
+        elif name == "block_days_7":
+            st = boot(spec, inst["ev_ts"], inst["ev"], inst["ct_ts"], inst["ct"], block_days=spec.statistics["sensitivity_block_days"])
+            out[name] = {"block_days": spec.statistics["sensitivity_block_days"], "lb90": st.get("lb90"), "ub90": st.get("ub90"), "blocks": st.get("blocks"),
+                         "note": "sensitivity only: no p-value"}
+        elif name == "portfolio_reading":
+            out[name] = report_portfolio(run, spec, calendar_days)
     return out
 
 
 # ----------------------------------------------------------------------------- the study
 
 
-def _month_of(day: int) -> str:
-    return tape.date_of_day(int(day))[:7]
+def _missing_share(series: Series, raw: np.ndarray, tspec: TypeSpec) -> float:
+    if raw.size == 0:
+        return 0.0
+    k0 = series.index_of(raw)
+    ks = (k0[:, None] + np.arange(tspec.footprint[0], tspec.footprint[1] + 1)[None, :]).ravel()
+    return float(np.mean(~np.isfinite(series.at(series.close, ks))))
 
 
-def _proxy_share_missing(series: Series, block: dict, event_days: np.ndarray) -> tuple[int, int]:
-    """Instrument-days (days with ≥ 1 event) whose base premium covers fewer than `min_coverage` of the day's minutes."""
-    base = series.premium.get(block["base"])
-    days = np.unique(np.asarray(event_days, dtype=np.int64))
-    if base is None or days.size == 0:
-        return int(days.size), int(days.size)
-    k_day = (series.grid_us[1:] - MINUTE_US) // DAY_US  # the day of the candle ending at g_k
-    first = int(k_day[0])
-    idx = (k_day - first).astype(np.int64)
-    present = np.bincount(idx, weights=np.isfinite(base[1:]).astype(np.float64))
-    total = np.bincount(idx).astype(np.float64)
-    pos = days - first
-    inside = (pos >= 0) & (pos < total.size)
-    share = np.zeros(days.size)
-    share[inside] = present[pos[inside]] / np.maximum(total[pos[inside]], 1.0)
-    return int((share < block["min_coverage"]).sum()), int(days.size)
-
-
-def _kappa(event_parts: list[dict], block: dict) -> dict | None:
-    signs = np.concatenate([p["sign"] for p in event_parts if "proxy_class" in p and p["sign"].size]) if event_parts else np.zeros(0)
-    if signs.size == 0:
-        return None
-    values = np.concatenate([p["proxy_value"] for p in event_parts if "proxy_class" in p and p["sign"].size])
-    classes = np.concatenate([p["proxy_class"] for p in event_parts if "proxy_class" in p and p["sign"].size])
-    computable = np.isfinite(values)
-    if block["concordance_on"] == "class":
-        agree = (classes == signs) & computable
-    else:
-        agree = (np.sign(np.nan_to_num(values, nan=0.0)).astype(np.int8) == signs) & computable
-    return {"kappa": float(agree.sum() / signs.size), "observations": int(signs.size), "proxy_not_computable": int((~computable).sum()), "on": block["concordance_on"],
-            "unit": "instrument-instant (the proxy classifies one instrument)", "note": "a non-computable proxy counts as a disagreement"}
-
-
-def _proxy_table(series_by_inst: dict, restricted: dict, espec: EventSpec) -> dict:
-    """Descriptive 3 × 3 table at the settlements of the type: class of the realized rate (dead zone of the sign) × class of P̂."""
-    block = espec.control_sign
-    if block is None or espec.sign.get("field") != "funding_rate":
-        return {}
-    low, high = espec.sign["dead_zone"]
-    table = {f"{r}|{p}": 0 for r in (-1, 0, 1) for p in (-1, 0, 1)}
-    unknown = 0
+def _proxy_missing(series_by_inst: dict, raw_by_inst: dict, tspec: TypeSpec) -> tuple[int, int]:
+    """Instrument-days (days with >= 1 raw event) on which P̂ is computable at none of the day's raw events."""
+    missing, total = 0, 0
     for inst, s in series_by_inst.items():
-        instants = restricted.get(inst, np.zeros(0, dtype=np.int64))
-        if instants.size == 0:
+        raw = raw_by_inst.get(inst, np.zeros(0, dtype=np.int64))
+        if raw.size == 0:
             continue
-        rate = _settlement_rate(s, instants)
-        r_cls = _classify(rate, high, low, espec.sign["eps"])
-        values = premium_wavg_at(s, s.index_of(instants) + block["at_min"], block)
-        p_cls = _classify(values, block["upper"], block["lower"])
-        for rc, pc, rv, pv in zip(r_cls.tolist(), p_cls.tolist(), rate.tolist(), values.tolist()):
-            if not (math.isfinite(rv) and math.isfinite(pv)):
-                unknown += 1
-                continue
-            table[f"{rc}|{pc}"] += 1
-    outside_r = sum(v for k, v in table.items() if not k.startswith("0|"))
-    inside_r = sum(v for k, v in table.items() if k.startswith("0|"))
-    sens = sum(v for k, v in table.items() if not k.startswith("0|") and not k.endswith("|0")) / outside_r if outside_r else None
-    false_pos = sum(v for k, v in table.items() if k.startswith("0|") and not k.endswith("|0")) / inside_r if inside_r else None
-    return {"realized_class|proxy_class": table, "unknown": unknown, "sensitivity_outside": sens, "false_positive_inside_dead_zone": false_pos,
-            "note": "descriptif (relecture quant B1) : part des règlements hors zone morte que le proxy classe hors zone, et part des règlements en zone morte qu'il classe hors zone"}
+        ok = np.isfinite(s.p_hat(s.index_of(raw) + tspec.arm_min, tspec.classifier))
+        days = raw // DAY_US
+        for d in np.unique(days).tolist():
+            total += 1
+            missing += int(not ok[days == d].any())
+    return missing, total
 
 
-def fetch_quality(manifest: dict | None, spec: Spec) -> dict:
-    """§4.5 — share of (instrument, stream) jobs of the fetch manifest that ended in error (`errors`, `malformed_page`, `error`,
-    `max_requests_reached`, or not complete)."""
-    if spec.source != "history":
-        return {"jobs": 0, "error_share": 0.0, "note": "capture tape: no fetch manifest"}
-    states = ((manifest or {}).get("g5_streams") or {})
-    if not states:
-        return {"jobs": 0, "error_share": 0.0, "note": "no g5_streams in the manifest (not fetched by g5_fetch, or synthetic)"}
-    bad = sorted(key for key, s in states.items() if s.get("errors") or s.get("end_reason") in ("malformed_page", "error", "max_requests_reached") or not s.get("complete"))
-    reasons: dict[str, int] = {}
-    for s in states.values():
-        reasons[str(s.get("end_reason"))] = reasons.get(str(s.get("end_reason")), 0) + 1
-    return {"jobs": len(states), "jobs_in_error": len(bad), "error_share": len(bad) / len(states), "jobs_in_error_keys": bad[:50], "end_reasons": reasons,
-            "truncated": sorted(k for k, s in states.items() if s.get("truncated"))}
+def _calendar_days(spec: Spec, tspec: TypeSpec, series_by_inst: dict, d_cov_global: int | None) -> int:
+    """Denominator of fills / day (LP-G5 §7.6): calendar days of D_cov (T01), NYSE days of the window with >= 1 eligible instrument
+    at h, macro days included (T05)."""
+    if tspec.window_rule == "funding_coverage":
+        start = d_cov_global
+        if start is None:
+            known = [s.d_cov_start_us for s in series_by_inst.values() if s.d_cov_start_us is not None]
+            start = min(known) if known else None
+        return 0 if start is None else int((spec.end_us - (int(start) // DAY_US) * DAY_US) // DAY_US)
+    if tspec.generator["kind"] == "local_time":
+        eligible = [s.meta.eligible_from_us for s in series_by_inst.values()]
+        return sum(1 for m, _, _ in local_time_instants(tspec, spec, apply_exclusions=False) if any(m + tspec.footprint[0] * MINUTE_US >= e for e in eligible))
+    days = set()
+    for s in series_by_inst.values():
+        days |= set((np.arange(max(spec.start_us, s.meta.eligible_from_us), spec.end_us, DAY_US) // DAY_US).tolist())
+    return len(days)
 
 
-def exclusion_union(series: Series, raw_by_type: dict, extra=()) -> np.ndarray:
-    """(B) iv — the instants every control keeps away from: every settlement of the instrument (all intervals, rate known or
-    not, floored to the minute), the assumed settlement hours outside the funding coverage, every instant of every type
-    (including the `evaluate: false` filters) and `extra` (the clock instants of the `skip_dates` sessions: still an open)."""
-    parts = [(np.asarray(series.settlements_all, dtype=np.int64) // MINUTE_US) * MINUTE_US, np.asarray(series.assumed_unknown_ts, dtype=np.int64),
-             *[np.asarray(v, dtype=np.int64) for v in raw_by_type.values()], np.asarray(list(extra), dtype=np.int64)]
-    return np.unique(np.concatenate(parts))
+def _sum_counts(parts: list[dict]) -> dict:
+    total: dict = {}
+    for p in parts:
+        for key, value in p["counts"].items():
+            total[key] = total.get(key, 0) + int(value)
+    return total
 
 
-def run_study(series_by_inst: dict, spec: Spec, fetch: dict | None = None) -> dict:
-    """Every evaluated type on every instrument: instants, restrictions, controls, measures, instant-level statistics,
-    criteria, verdicts, economic reading, Holm."""
-    fetch = fetch or {"jobs": 0, "error_share": 0.0}
-    measures = spec.measures
-    raw: dict[str, dict[str, np.ndarray]] = {}
-    gen_diag: dict[str, dict[str, dict]] = {}
-    union: dict[str, np.ndarray] = {}
+def evaluate_type(series_by_inst: dict, tspec: TypeSpec, spec: Spec, common: dict) -> dict:
+    """Instants, restrictions, controls and measures of one type on every instrument; the instant-level arrays."""
+    events, controls, raw_all, other, by_inst = {}, {}, {}, {}, {}
+    excluded_instruments = []
+    gen_totals, restrict_totals, control_totals = {}, {}, {"candidates": 0, "kept": 0, "excluded_union": 0, "excluded_by_component": {}}
     for inst, s in series_by_inst.items():
-        raw[inst], gen_diag[inst] = {}, {}
-        for espec in spec.events:
-            instants, source, diag = generate_instants(espec.generator, s, spec)
-            raw[inst][espec.type] = instants
-            gen_diag[inst][espec.type] = {"source": source, **diag}
-        union[inst] = exclusion_union(s, raw[inst], [t for d in gen_diag[inst].values() for t in d.get("skipped_instants", [])])
-    global_device = []
-    if fetch.get("error_share", 0.0) > spec.quality["max_fetch_error_share"]:
-        global_device.append(f"fetch: {fetch.get('jobs_in_error')} of {fetch.get('jobs')} (instrument, stream) jobs in error > max_fetch_error_share={spec.quality['max_fetch_error_share']:g} (§4.5)")
-    types_out: dict[str, dict] = {}
-    pvalues: dict[str, float | None] = {}
-    for t_index, espec in enumerate(spec.events):
-        if not espec.evaluate:
-            types_out[espec.type] = {"evaluate": False, "description": espec.description, "generator": espec.generator, "role": "exclusion union of the controls only",
-                                     "instants": {inst: int(raw[inst][espec.type].size) for inst in raw}}
-            continue
-        ev_parts, ct_parts, by_inst = [], [], {}
-        restricted_all: dict[str, np.ndarray] = {}
-        totals = {"event": {}, "control": {}, "restriction": {}, "sim_event": {}, "sim_control": {}}
-        excluded_instruments = {"missing_window": [], "no_proxy": []}
-        proxy_missing, proxy_days = 0, 0
-        candidate_days: set[int] = set()
-        costs = cost_terms(espec, spec)
-        for inst, s in series_by_inst.items():
-            events, rcounts = restrict(raw[inst][espec.type], s, espec, spec)
-            for key, value in rcounts.items():
-                totals["restriction"][key] = totals["restriction"].get(key, 0) + int(value)
-            restricted_all[inst] = events
-            entry = {"generator": {k: v for k, v in gen_diag[inst][espec.type].items() if k != "skipped_instants"}, "restriction": rcounts}
-            # §4.5: an instrument missing more than the declared share of its event-window minutes leaves the type.
-            k0 = s.index_of(events)
-            offsets = np.arange(min(espec.lo_min, espec.arm_min), espec.to_min + 1)
-            if events.size:
-                ks = (k0[:, None] + offsets[None, :]).ravel()
-                inside = (ks >= 0) & (ks < s.size)
-                missing_share = float((~np.isfinite(s.price[ks[inside]])).mean()) if inside.any() else 1.0
-            else:
-                missing_share = 0.0
-            entry["missing_window_share"] = missing_share
-            if events.size and missing_share > spec.quality["max_missing_window_share"]:
-                excluded_instruments["missing_window"].append(inst)
-                entry["excluded"] = f"missing_window_share={missing_share:.3f} > {spec.quality['max_missing_window_share']:g}"
-                by_inst[inst] = entry
-                continue
-            block = espec.wavg
-            if block is not None:
-                miss, days = _proxy_share_missing(s, block, events // DAY_US)
-                proxy_missing += miss
-                proxy_days += days
-                if events.size and not np.isfinite(s.premium.get(block["base"], np.zeros(0))).any():
-                    excluded_instruments["no_proxy"].append(inst)
-                    entry["excluded"] = "no proxy: the base premium is absent (mark or index missing)"
-                    by_inst[inst] = entry
-                    continue
-            candidate_days |= set((events // DAY_US).tolist())
-            skipped = np.array(gen_diag[inst][espec.type].get("skipped_instants", []), dtype=np.int64)
-            if skipped.size:
-                candidate_days |= set((restrict(skipped, s, espec, spec)[0] // DAY_US).tolist())
-            controls, cdiag = control_instants(s, spec, espec, t_index, union[inst], events // DAY_US)
-            e = measure(s, events, espec, spec, "event")
-            c = measure(s, controls, espec, spec, "control")
-            ev_parts.append(e)
-            ct_parts.append(c)
-            for side, m in (("event", e), ("control", c)):
-                for key, value in m["counts"].items():
-                    totals[side][key] = totals[side].get(key, 0) + int(value)
-                for key, value in m.get("sim_status", {}).items():
-                    totals[f"sim_{side}"][key] = totals[f"sim_{side}"].get(key, 0) + int(value)
-            entry.update({"n_observations": int(e["counts"]["kept"]), "n_control": int(c["counts"]["kept"]), "controls": cdiag, "exclusions_event": e["counts"],
-                          "net_bp_mean": _fmean(e["net_bp"]), "control_net_bp_mean": _fmean(c["net_bp"])})
+        instants, gdiag, other_i = generator_instants(s, tspec, spec, common)
+        raw, rdiag = restrict(s, instants, tspec, spec)
+        other[inst], _ = restrict(s, other_i, tspec, spec)
+        raw_all[inst] = raw
+        for key, value in gdiag.items():
+            gen_totals[key] = gen_totals.get(key, 0) + int(value)
+        for key, value in rdiag.items():
+            restrict_totals[key] = restrict_totals.get(key, 0) + int(value)
+        share = _missing_share(s, raw, tspec)
+        entry = {"generator": gdiag, "restriction": rdiag, "missing_share_event_footprints": share}
+        if raw.size and share > spec.price["max_missing_share"]:
+            excluded_instruments.append(inst)
+            entry["excluded"] = f"missing share {share:.3f} > {spec.price['max_missing_share']:g} of the event-footprint minutes"
             by_inst[inst] = entry
-        inst_level = {}
-        stats = {}
-        for m in measures:
-            ev_ts, ev_v, ev_n = instant_means(ev_parts, m)
-            ct_ts, ct_v, _ = instant_means(ct_parts, m)
-            inst_level[m] = (ev_ts, ev_v, ct_ts, ct_v)
-            stats[m] = {"event": _stat(ev_ts, ev_v, spec=spec), "diff_vs_control": _stat(ev_ts, ev_v, ct_ts, ct_v, spec), "n_instants": int(ev_ts.size), "n_control_instants": int(ct_ts.size)}
-        p_ts, p_v, p_n = instant_means(ev_parts, spec.primary_measure)
-        n_instants, n_days = int(p_ts.size), int(np.unique(p_ts // DAY_US).size)
-        kappa = _kappa(ev_parts, espec.control_sign) if espec.control_sign is not None else None
-        criteria, diff = criteria_for(spec, espec, inst_level, kappa)
-        device = list(global_device)
-        if espec.wavg is not None:
-            share = proxy_missing / proxy_days if proxy_days else 1.0
-            if share > spec.quality["max_proxy_missing_share"]:
-                device.append(f"proxy: {proxy_missing} of {proxy_days} instrument-days without the premium proxy > max_proxy_missing_share={spec.quality['max_proxy_missing_share']:g} (§4.5)")
-        unknown, kept = totals["event"].get("funding_unknown", 0), totals["event"].get("kept", 0)
-        funding_unknown_share = unknown / (unknown + kept) if (unknown + kept) else 0.0
-        if funding_unknown_share > spec.quality["max_funding_unknown_share"]:
-            device.append(f"funding: {unknown} event windows cross a settlement of unknown rate ({funding_unknown_share:.3f} > max_funding_unknown_share={spec.quality['max_funding_unknown_share']:g})")
-        if espec.control_sign is not None and n_instants and not criteria["C6"]["pass"]:
-            device.append(f"C6: κ={criteria['C6']['kappa']} < concordance_min={espec.control_sign['concordance_min']:g} (the proxy does not follow the contractual premium)")
-        verdict, reasons, annotation = verdict_for(spec, n_instants, n_days, diff, criteria, device)
-        if espec.primary:
-            pvalues[espec.type] = diff.get("p_one_sided") if verdict in ("PASS", "FAIL") else None
-        gate = "G5_GATE1_" if spec.source == "history" else "G5_GATE2_"
-        economic = economic_reading(ev_parts, spec.net_measure, espec, spec, len(candidate_days), verdict)
-        months = {}
-        ev_ts, ev_v, ct_ts, ct_v = inst_level[spec.primary_measure]
-        for month in sorted({_month_of(d) for d in (ev_ts // DAY_US).tolist()}):
-            sel = np.array([_month_of(d) == month for d in (ev_ts // DAY_US).tolist()])
-            c_sel = np.array([_month_of(d) == month for d in (ct_ts // DAY_US).tolist()], dtype=bool) if ct_ts.size else np.zeros(0, dtype=bool)
-            e_mean, c_mean = _fmean(ev_v[sel]), _fmean(ct_v[c_sel]) if c_sel.size else None
-            months[month] = {"n": int(sel.sum()), "n_control": int(c_sel.sum()), "event_mean": e_mean, "control_mean": c_mean,
-                             "point": (e_mean - c_mean) if e_mean is not None and c_mean is not None else None}
-        signs = np.concatenate([p["sign"] for p in ev_parts]) if ev_parts else np.zeros(0, dtype=np.int8)
-        pooled = {m: np.concatenate([p[m] for p in ev_parts]) if ev_parts else np.zeros(0) for m in ("r_bp", "net_bp")}
-        rate_at = np.concatenate([p["funding_rate_at"] for p in ev_parts]) if ev_parts else np.zeros(0)
-        by_sign = {label: {"observations": int(sel.sum()), "r_bp_mean": _fmean(pooled["r_bp"][sel]), "net_bp_mean": _fmean(pooled["net_bp"][sel])}
-                   for label, sel in (("long", signs > 0), ("short", signs < 0)) if sel.any()}
-        by_funding_sign = {label: {"observations": int(sel.sum()), "r_bp_mean": _fmean(pooled["r_bp"][sel]), "net_bp_mean": _fmean(pooled["net_bp"][sel])}
-                           for label, sel in (("rate_positive", rate_at > 0), ("rate_negative", rate_at < 0), ("rate_unknown_or_none", ~np.isfinite(rate_at))) if sel.any()}
-        funding_bp = np.concatenate([p["funding_bp"] for p in ev_parts]) if ev_parts else np.zeros(0)
-        settle = np.concatenate([p["settlements"] for p in ev_parts]) if ev_parts else np.zeros(0)
-        sim_block = None
-        if spec.simulated:
-            sim_block = {"status_event": totals["sim_event"], "status_control": totals["sim_control"], "rule": spec.execution["sim"]["rule"], "role": espec.execution_role,
-                         "funding_fill_grace_min": spec.execution["sim"]["funding_fill_grace_min"], "exit_until_min": espec.exit_until_min}
-        types_out[espec.type] = {
-            "evaluate": True, "primary": espec.primary, "description": espec.description, "generator": espec.generator, "condition": espec.condition, "sign": espec.sign,
-            "control_sign": espec.control_sign, "window_min": [espec.from_min, espec.to_min], "arm_min": espec.arm_min, "rest_until_min": espec.rest_until_min,
-            "exit_until_min": espec.exit_until_min, "execution_role": espec.execution_role, "costs_bp": costs, "days_per_year": espec.days_per_year,
-            "observed_min": espec.observed_min, "declared_lookahead": list(espec.declared_lookahead), "restrict_to_coverage": list(espec.restrict_to_coverage),
-            "control_minute_of_hour": espec.control_minute_of_hour, "execution": sorted({p["execution"] for p in ev_parts}) if ev_parts else [],
-            "n_instants": n_instants, "n_days": n_days, "n_observations": int(totals["event"].get("kept", 0)), "n_control_instants": int(inst_level[spec.primary_measure][2].size),
-            "instruments_per_instant": {"min": int(p_n.min()) if p_n.size else None, "median": float(np.median(p_n)) if p_n.size else None, "max": int(p_n.max()) if p_n.size else None,
-                                        "share_below_5": float(np.mean(p_n < 5)) if p_n.size else None},
-            "exclusions": {"event": totals["event"], "control": totals["control"], "restriction": totals["restriction"], "instruments": excluded_instruments,
-                           "funding_unknown_share": funding_unknown_share, "proxy_missing_instrument_days": [proxy_missing, proxy_days] if espec.wavg is not None else None},
-            "settlements_crossed_share": float(np.mean(settle > 0)) if settle.size else None, "funding_bp_mean": _fmean(funding_bp),
-            "statistics_bp": stats, "primary_measure": spec.primary_measure, "primary_statistic": diff, "criteria": criteria, "kappa": kappa,
-            "proxy_table": _proxy_table(series_by_inst, restricted_all, espec), "verdict": verdict, "verdict_label": gate + verdict, "verdict_reasons": reasons,
-            "fail_annotation": annotation, "reading": economic["reading"], "economic": economic, "lp_sim": sim_block,
-            "robustness": {"by_month": months, "by_sign": by_sign, "by_funding_sign": by_funding_sign,
-                           "alt_price": {"measure": "r_alt_bp", "price": "mark" if spec.price_source == "last" else "last", "diff": stats["r_alt_bp"]["diff_vs_control"]},
-                           "as_sensitivity": stats["net_bp_as_sensitivity"]["event"], "note": "descriptif : aucune p-value ni verdict"},
-            "by_instrument": by_inst,
-        }
-    family = holm(pvalues, spec.alpha)
-    for name, result in types_out.items():
-        if not result.get("evaluate"):
             continue
-        test = family["tests"].get(name)
-        result["holm"] = test
-        result["holm_local_confirmed"] = bool(test and test["confirmed"] and result["verdict"] == "PASS")
-        p = result["primary_statistic"].get("p_one_sided")
-        result["programme_immediate"] = (bool(result["verdict"] == "PASS" and p is not None and p <= spec.alpha / spec.programme_m_max) if spec.programme_m_max else None)
-    evaluated = {n: r for n, r in types_out.items() if r.get("evaluate")}
-    summary = {"types": len(evaluated), "primary_types": sum(1 for e in spec.evaluated if e.primary), "pass_local": [n for n, r in evaluated.items() if r["verdict"] == "PASS"],
-               "holm_local_confirmed": [n for n, r in evaluated.items() if r["holm_local_confirmed"]],
-               "programme_immediate": [n for n, r in evaluated.items() if r.get("programme_immediate")] if spec.programme_m_max else None,
-               "fail": [n for n, r in evaluated.items() if r["verdict"] == "FAIL"], "not_informative": [n for n, r in evaluated.items() if r["verdict"] == "NOT_INFORMATIVE"],
-               "inconclusive": [n for n, r in evaluated.items() if r["verdict"] == "INCONCLUSIVE"], "readings": {n: r["reading"] for n, r in evaluated.items()},
-               "global_device_defects": global_device}
-    return {"types": types_out, "holm": family, "summary": summary, "fetch_quality": fetch}
+        union = exclusion_intervals(s, tspec, spec, common)
+        ct, cdiag = control_instants(s, tspec, spec, raw, union)
+        events[inst], controls[inst] = raw, ct
+        for key in ("candidates", "kept", "excluded_union"):
+            control_totals[key] += int(cdiag[key])
+        for key, value in cdiag["excluded_by_component"].items():
+            control_totals["excluded_by_component"][key] = control_totals["excluded_by_component"].get(key, 0) + int(value)
+        entry["controls"] = cdiag
+        by_inst[inst] = entry
+    used = {i: s for i, s in series_by_inst.items() if i in events}
+    ev_parts = [measure(s, events[i], tspec, spec, "event") for i, s in used.items()]
+    ct_parts = [measure(s, controls[i], tspec, spec, "control") for i, s in used.items()]
+    mi = spec.unit["min_instruments"]
+    ev_ts, ev_v, ev_n = instant_means(ev_parts, "net_bp", mi)
+    ev_ts_s, ev_s, _ = instant_means(ev_parts, "net_stress_bp", mi)
+    ct_ts, ct_v, ct_n = instant_means(ct_parts, "net_bp", mi)
+    raw_instants = np.unique(np.concatenate([v for v in raw_all.values()])) if raw_all else np.zeros(0, dtype=np.int64)
+    raw_obs = int(sum(v.size for v in raw_all.values()))
+    kept_obs = int(sum(p["counts"]["kept"] for p in ev_parts))
+    attempted = {side: sum(p["fill"]["attempted"] for p in parts) for side, parts in (("events", ev_parts), ("controls", ct_parts))}
+    filled = {side: sum(p["fill"]["filled"] for p in parts) for side, parts in (("events", ev_parts), ("controls", ct_parts))}
+    vol_field = spec.frozen_candle["count_field"]
+    vol_share = {p["inst"]: (p["counts"].get(vol_field, 0) / p["counts"]["instants"]) if p["counts"]["instants"] else None for p in ev_parts}
+    return {"tspec": tspec, "series": used, "events": events, "controls": controls, "raw": raw_all, "other_interval": other, "ev_parts": ev_parts, "ct_parts": ct_parts,
+            "instant": {"ev_ts": ev_ts, "ev": ev_v, "ev_stress": ev_s, "ev_n": ev_n, "ct_ts": ct_ts, "ct": ct_v, "ct_n": ct_n},
+            "exclusions": {"generator": gen_totals, "restriction": restrict_totals, "instruments_excluded_missing_share": excluded_instruments,
+                           "event": _sum_counts(ev_parts), "control": _sum_counts(ct_parts), "controls": control_totals,
+                           "raw_instrument_instants": raw_obs, "raw_instants": int(raw_instants.size), "kept_instrument_instants": kept_obs,
+                           "f_obs": (kept_obs / raw_obs) if raw_obs else None, "f_inst": (int(ev_ts.size) / int(raw_instants.size)) if raw_instants.size else None,
+                           "control_funding_nonzero_anomalies": int(sum(p["funding_nonzero"] for p in ct_parts)),
+                           f"{vol_field}_share_by_instrument": vol_share if spec.frozen_candle["applies"] else None,
+                           "by_instrument": by_inst},
+            "fill_rate": {side: {"attempted": attempted[side], "filled": filled[side], "rate": (filled[side] / attempted[side]) if attempted[side] else None} for side in attempted}
+            if tspec.fill_proxy is not None else None,
+            "macro_excluded": common["macro_excluded"].get(tspec.name, np.zeros(0, dtype=np.int64)), "common": common}
+
+
+def _instruments_per_instant(counts: np.ndarray) -> dict:
+    if counts.size == 0:
+        return {"instants": 0}
+    values, freq = np.unique(counts, return_counts=True)
+    return {"instants": int(counts.size), "distribution": {str(int(v)): int(f) for v, f in zip(values.tolist(), freq.tolist())}, "share_ge_3": float(np.mean(counts >= 3))}
+
+
+def _by_hour(run: dict) -> dict:
+    inst = run["instant"]
+    hours = (inst["ev_ts"] % DAY_US) // HOUR_US
+    return {f"{h:02d}": _subset_d(run, hours == h, _same_days(run, hours == h)) for h in sorted(set(hours.tolist()))}
+
+
+def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> dict:
+    """Every type on every instrument: instants, controls, measures, instant-level statistics, C6, criteria, verdicts, Holm, the
+    economic reading, the descriptive reports, the sealing. `context`: `device` (global INCONCLUSIVE conditions that hold, with
+    their reasons), `d_cov_global_us` (the receipt's D_cov; None: unknown), `fetch_quality`, `mode` (`synthetic` | `tape`)."""
+    context = dict(context or {})
+    mode = context.get("mode", "synthetic")
+    device_global = list(context.get("device", []))
+    if "d_cov_global_us" in context:
+        d_cov_global = context["d_cov_global_us"]
+    else:
+        known = [s.d_cov_start_us for s in series_by_inst.values() if s.d_cov_start_us is not None]
+        d_cov_global = min(known) if known else None
+    common = common_instants(spec)
+    runs, pre = {}, {}
+    for tspec in spec.types:
+        run = evaluate_type(series_by_inst, tspec, spec, common)
+        runs[tspec.name] = run
+        device = list(device_global)
+        validation = None
+        if tspec.validation is not None:  # on the raw instrument-settlements of every instrument (an instrument left out for missing prices included)
+            validation = validation_c6(series_by_inst, run["raw"], tspec, spec)
+        proxy = None
+        if tspec.proxy_missing_share_max is not None:
+            miss, total = _proxy_missing(series_by_inst, run["raw"], tspec)
+            proxy = {"instrument_days_without_p_hat": miss, "instrument_days": total, "share": (miss / total) if total else None, "max": tspec.proxy_missing_share_max}
+        for cond in tspec.inconclusive_if:
+            if cond == "funding_coverage_unknown" and d_cov_global is None:
+                device.append("funding_coverage_unknown: D_cov unknown (no sealed receipt coverage, or no instrument with a complete funding history)")
+            elif cond == "C6_failed_or_not_computable" and not (validation and validation["pass"]):
+                v = validation or {}
+                device.append(f"C6_failed_or_not_computable: sensitivity {v.get('sensitivity')} (min {tspec.validation['sensitivity_min']}), false positives "
+                              f"{v.get('false_positive_rate')} (max {tspec.validation['false_positive_rate_max']}), denominators {v.get('denominator_rate_outside_zone')} / "
+                              f"{v.get('denominator_rate_inside_zone')} (min {tspec.validation['min_denominator']})")
+            elif PROXY_MISSING_RE.match(cond) and proxy is not None and (proxy["share"] is None or proxy["share"] > proxy["max"]):
+                device.append(f"{cond}: {proxy['instrument_days_without_p_hat']} of {proxy['instrument_days']} instrument-days without P_hat")
+            elif cond == "index_source_none" and spec.gate2 is not None and spec.gate2["index_source"] == "none":
+                device.append("index_source_none: no index source at the capture (P-G5-10 ii): the classifier cannot be computed")
+        inst = run["instant"]
+        n_instants, n_days = int(inst["ev_ts"].size), int(np.unique(inst["ev_ts"] // DAY_US).size)
+        criteria, diff = criteria_for(spec, tspec, inst, validation)
+        if device:
+            verdict, reasons = "INCONCLUSIVE", device
+        else:
+            reasons = []
+            if n_instants < spec.power["min_instants"]:
+                reasons.append(f"n_instants={n_instants} < min_instants={spec.power['min_instants']}")
+            if n_days < spec.power["min_days"]:
+                reasons.append(f"n_days={n_days} < min_days={spec.power['min_days']}")
+            if diff.get("point") is None or diff.get("lb90") is None:
+                reasons.append("no statistic (no control instant, or fewer than two day blocks)")
+            verdict = "NOT_INFORMATIVE" if reasons else "PENDING"
+        pre[tspec.name] = {"verdict": verdict, "reasons": reasons, "criteria": criteria, "diff": diff, "validation": validation, "proxy": proxy, "n_instants": n_instants, "n_days": n_days}
+    pvalues = {name: (pre[name]["diff"].get("p_one_sided") if pre[name]["verdict"] == "PENDING" else 1.0) for name in spec.family}
+    family = holm(pvalues, spec.multiplicity["alpha"])
+    types_out, sealed_payloads = {}, {}
+    for tspec in spec.types:
+        name, p, run = tspec.name, pre[tspec.name], runs[tspec.name]
+        test = family["tests"].get(name, {})
+        holm_ok = bool(test.get("confirmed")) and p["verdict"] == "PENDING"
+        all_criteria = all(c["pass"] for c in p["criteria"].values())
+        annotation = None
+        if p["verdict"] == "PENDING":
+            verdict = "PASS" if all_criteria and holm_ok else "FAIL"
+            failed = [k for k, c in p["criteria"].items() if not c["pass"]]
+            reasons = (["every criterion of the type holds", "holm_local_confirmed"] if verdict == "PASS" else
+                       [f"{k} fails" for k in failed] + ([] if failed or holm_ok else ["non confirmé par Holm"]))
+            if verdict == "FAIL":
+                ub = p["diff"].get("ub90")
+                annotation = spec.verdict["annotation_lt"] if ub is not None and ub < spec.statistics["threshold_bp"] else spec.verdict["annotation_ge"]
+        else:
+            verdict, reasons = p["verdict"], p["reasons"]
+        p_value = p["diff"].get("p_one_sided")
+        immediate = bool(verdict == "PASS" and p_value is not None and p_value <= spec.multiplicity["immediate_if_p_le"])
+        calendar_days = _calendar_days(spec, tspec, run["series"], d_cov_global)
+        economic = economic_reading(run["ev_parts"], tspec, spec, calendar_days, verdict)
+        descriptive = type_reports(run, spec, spec.descriptive["reports"], calendar_days)
+        descriptive["instruments_per_instant"] = {"events": _instruments_per_instant(run["instant"]["ev_n"]), "controls": _instruments_per_instant(run["instant"]["ct_n"])}
+        for report in spec.unit["reports"]:  # unit.report (B ix)
+            if report == "instruments_per_instant_distribution":
+                descriptive[report] = descriptive["instruments_per_instant"]
+            elif report == "stratum_min_instruments_3":
+                descriptive[report] = _subset_d(run, run["instant"]["ev_n"] >= 3, run["instant"]["ct_n"] >= 3)
+        statistic = {"D": p["diff"].get("point"), "lb90": p["diff"].get("lb90"), "ub90": p["diff"].get("ub90"), "p_one_sided": p_value,
+                     "event_mean": p["diff"].get("event_mean"), "control_mean": p["diff"].get("control_mean"), "n_control_instants": int(run["instant"]["ct_ts"].size),
+                     "blocks": p["diff"].get("blocks"), "resamples": p["diff"].get("resamples"), "seed": p["diff"].get("seed")}
+        criteria = p["criteria"]
+        result = {"type": name, "label": tspec.label, "decisive": True, "role": tspec.role, "costs_bp": cost_terms(tspec.role, spec.costs), "days_per_year": tspec.days_per_year,
+                  "window_rule": tspec.window_rule, "verdict": verdict, "verdict_label": spec.gate + verdict, "verdict_reasons": reasons, "n_instants": p["n_instants"],
+                  "n_days": p["n_days"], "exclusions": {**run["exclusions"], "proxy_missing": p["proxy"]}, "fill_rate": run["fill_rate"], "validation": p["validation"],
+                  "gate2_inscription": spec.gate2_inscription[verdict], "fail_annotation": annotation, "closure_scope": spec.verdict["closure_scope"] if verdict == "FAIL" else None,
+                  "holm": {"p_used": pvalues.get(name), "rank": test.get("rank"), "threshold": test.get("threshold"), "confirmed": bool(test.get("confirmed"))},
+                  "holm_local_confirmed": holm_ok, "pass_programme_immediate": immediate, "reading": economic["reading"],
+                  "statistic": statistic, "criteria": criteria, "halves": criteria.get("C4", {}).get("halves"), "c5": criteria.get("C5"), "c7": criteria.get("C7"),
+                  "by_month": descriptive.get("by_month"), "by_instrument": descriptive.get("by_instrument"), "by_hour": _by_hour(run), "economic": economic,
+                  "descriptive": descriptive}
+        if verdict in spec.sealing["verdicts"]:
+            public, sealed = _seal(result, spec)
+            text = json.dumps(_clean(sealed), indent=1, sort_keys=True, ensure_ascii=False) + "\n"
+            public["sealed"] = {"file": f"sealed/{name}.json", "sha256": g5_fetch.sha256_text(text), "open_after": spec.sealing["open_after"]}
+            sealed_payloads[name] = text
+            types_out[name] = public
+        else:
+            types_out[name] = result
+    common_out = common_reports(series_by_inst, spec, spec.descriptive["reports"])
+    summary = {"verdicts": {n: r["verdict_label"] for n, r in types_out.items()}, "holm_local_confirmed": [n for n, r in types_out.items() if r["holm_local_confirmed"]],
+               "pass_programme_immediate": [n for n, r in types_out.items() if r["pass_programme_immediate"]],
+               "gate2_inscription": {n: r["gate2_inscription"] for n, r in types_out.items()}, "readings": {n: r["reading"] for n, r in types_out.items()},
+               "sealed_sha256": {n: r["sealed"]["sha256"] for n, r in types_out.items() if "sealed" in r}, "global_device_defects": device_global, "mode": mode,
+               "gate2_inscription_discretion": spec.notes.get("gate2_inscription.discretion"), "pass_programme_otherwise": spec.multiplicity["otherwise"]}
+    holm_public = {"alpha": family["alpha"], "m": family["m"], "tests": {n: {k: v for k, v in t.items() if k != "p" or n not in sealed_payloads} for n, t in family["tests"].items()}}
+    document = {"types": types_out, "holm": holm_public, "summary": summary, "common_descriptive": common_out, "fetch_quality": context.get("fetch_quality"),
+                "d_cov_global": _iso(d_cov_global), "_sealed_payloads": sealed_payloads}
+    check_forbidden(document, spec)
+    return document
+
+
+def _seal(result: dict, spec: Spec) -> tuple[dict, dict]:
+    """(B) xx — the printed part of a sealed type (`sealing.printed` + the type's identity, inscription and the p = 1 used in Holm) and
+    the sealed part (`sealing.sealed`)."""
+    printed_map = {"verdict": ("verdict", "verdict_label"), "reasons": ("verdict_reasons",), "n_instants": ("n_instants",), "n_days": ("n_days",),
+                   "exclusion_counts": ("exclusions",), "fill_rate": ("fill_rate",), "validation_matrix": ("validation",)}
+    sealed_map = {"D": ("statistic", "D"), "lb90": ("statistic", "lb90"), "ub90": ("statistic", "ub90"), "p_one_sided": ("statistic", "p_one_sided"),
+                  "event_mean": ("statistic", "event_mean"), "control_mean": ("statistic", "control_mean"), "criteria_values": ("criteria",), "halves": ("halves",), "c5": ("c5",),
+                  "c7": ("c7",), "by_month": ("by_month",), "by_instrument": ("by_instrument",), "by_hour": ("by_hour",), "economic": ("economic",), "type_descriptives": ("descriptive",)}
+    public = {k: result[k] for k in ("type", "label", "decisive", "role", "costs_bp", "days_per_year", "window_rule", "gate2_inscription")}
+    for name in spec.sealing["printed"]:
+        for key in printed_map[name]:
+            public[key] = result[key]
+    public["holm"] = {"p_used": 1.0, "confirmed": False, "note": "p = 1 for a sealed type (GATES 2.1)"}
+    public["holm_local_confirmed"] = False
+    public["pass_programme_immediate"] = False
+    public["fail_annotation"] = None
+    public["closure_scope"] = None
+    public["reading"] = result["verdict_label"]
+    sealed = {"type": result["type"], "verdict_label": result["verdict_label"]}
+    for name in spec.sealing["sealed"]:
+        path = sealed_map[name]
+        value = result[path[0]]
+        sealed[name] = value.get(path[1]) if len(path) > 1 and isinstance(value, dict) else value
+    sealed["statistic"] = result["statistic"]
+    return public, sealed
+
+
+def check_forbidden(document, spec: Spec, where: str = "document") -> None:
+    """(B) xvi — no key named in `multiplicity.forbidden_field_names` anywhere in the output."""
+    forbidden = set(spec.multiplicity["forbidden"])
+    stack = [(document, where)]
+    while stack:
+        value, path = stack.pop()
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in forbidden:
+                    raise RuntimeError(f"forbidden field {key!r} at {path} (multiplicity.forbidden_field_names)")
+                stack.append((item, f"{path}.{key}"))
+        elif isinstance(value, (list, tuple)):
+            stack.extend((item, f"{path}[{i}]") for i, item in enumerate(value))
 
 
 # ----------------------------------------------------------------------------- reports
@@ -2030,114 +3036,125 @@ def _fmt(value, digits: int = 2, signed: bool = True) -> str:
 
 def render_markdown(document: dict) -> str:
     spec = document["spec"]
-    lines = [f"# G5 — étude d'événements `{spec['spec_id']}` ({document['source']})", "",
-             "> **Rapports descriptifs larges** (minute de l'heure, heure, jour, mois, instrument) : sur une lecture unique, ils forment un crible de fait "
-             "pour les types du Gate 2. `GATES` §9.7 interdit de promouvoir l'un d'eux en test, de baisser un seuil ou d'allonger une fenêtre après cette lecture.", "",
-             f"Généré le {document['generated_at']} par `{document['evaluator']}` ; spec sha256 `{spec['sha256']}` ; digest du code `{document.get('code_digest')}` ; "
-             f"fenêtre {spec['window'][0]} → {spec['window'][1]} (exclu) ; prix de référence `{spec['price_source']}` ; instruments : {len(document['instruments'])} ; "
-             f"mesure primaire `{spec['primary_measure']}` ; seuil {spec['threshold_bp']:g} pb ; α = {spec['alpha']:g} (Holm sur les types primaires évalués) ; "
-             f"unité : l'instant ; capacités : {', '.join(spec['requires'])}.", "",
-             "Aucun paramètre n'a été recherché : signes, fenêtres, conditions, contrôles, coûts et seuils viennent de la spécification gelée.", "",
-             "## Verdicts par type", "",
-             "| type | primaire | n instants | jours | n contrôles | D (pb) | LB90 | UB90 | p | C1 | C2 | C3 | C4 | C5 | C6 | verdict | lecture | Holm |",
-             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
-
-    def mark(c: dict) -> str:
-        if c.get("applies") is False:
-            return "n/a"
-        return "oui" if c.get("pass") else "non"
-
+    rule = spec["descriptive_rule"]
+    lines = [f"# G5 — `{spec['spec_id']}` ({spec['source']}) — {EVALUATOR_VERSION}", "", f"> **Rapports descriptifs** : {rule}", "",
+             "> `GATES` §9.7 interdit de promouvoir un descriptif en test, de baisser un seuil ou d'allonger une fenêtre après cette lecture.", "",
+             f"Généré le {document['generated_at']} ; spec sha256 `{spec['sha256']}` (statut `{spec['status']}`) ; digest du code `{document.get('code_digest')}` ; "
+             f"fenêtre {spec['window'][0]} → {spec['window'][1]} (exclu) ; instruments : {len(document.get('instruments', []))} ; D_cov global : {document.get('d_cov_global')} ; "
+             f"mode : {document['summary']['mode']}.", "",
+             "Aucun paramètre n'a été recherché : signes, fenêtres, classifieur, contrôles, coûts et seuils viennent du spec.", "",
+             "## Verdicts", "", "| type | verdict | raisons | n instants | jours | D (pb) | LB90 | UB90 | p | Holm local | PASS_PROGRAMME immédiat | Gate 2 | lecture |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for name, r in document["types"].items():
-        if not r.get("evaluate"):
-            continue
-        p, c = r["primary_statistic"], r["criteria"]
-        holm_text = "confirmé" if r["holm_local_confirmed"] else ("—" if not r.get("holm") else "non")
-        lines.append(f"| `{name}` | {'oui' if r['primary'] else 'non'} | {r['n_instants']} | {r['n_days']} | {r['n_control_instants']} | {_fmt(p['point'])} | {_fmt(p['lb90'])} | "
-                     f"{_fmt(p['ub90'])} | {_fmt(p['p_one_sided'], 3, signed=False)} | {mark(c['C1'])} | {mark(c['C2'])} | {mark(c['C3'])} | {mark(c['C4'])} | {mark(c['C5'])} | "
-                     f"{mark(c['C6'])} | **{r['verdict_label']}**{(' (' + r['fail_annotation'] + ')') if r['fail_annotation'] else ''} | {r['reading']} | {holm_text} |")
-    summary = document["summary"]
-    lines += ["", f"PASS local : {summary['pass_local'] or 'aucun'} ; confirmés par Holm dans ce protocole : {summary['holm_local_confirmed'] or 'aucun'} ; "
-              f"FAIL : {summary['fail'] or 'aucun'} ; NOT_INFORMATIVE : {summary['not_informative'] or 'aucun'} ; INCONCLUSIVE : {summary['inconclusive'] or 'aucun'}."]
-    if summary.get("programme_immediate") is not None:
-        lines.append(f"`PASS_PROGRAMME` immédiat (p ≤ α / m_max, `GATES` §2.3) : {summary['programme_immediate'] or 'aucun'}.")
-    lines += ["", "La confirmation Holm locale n'est pas `PASS_PROGRAMME` : ce statut se lit au niveau de la famille du programme (`GATES` §2.3).", ""]
+        sealed = "sealed" in r
+        st = r.get("statistic", {})
+        cells = ["scellé"] * 4 if sealed else [_fmt(st.get("D")), _fmt(st.get("lb90")), _fmt(st.get("ub90")), _fmt(st.get("p_one_sided"), 3, signed=False)]
+        lines.append(f"| `{name}` | **{r['verdict_label']}**{(' (' + r['fail_annotation'] + ')') if r.get('fail_annotation') else ''} | {' ; '.join(r['verdict_reasons'])} | "
+                     f"{r['n_instants']} | {r['n_days']} | {' | '.join(cells)} | {'oui' if r['holm_local_confirmed'] else 'non'} | {'oui' if r['pass_programme_immediate'] else 'non'} | "
+                     f"{r['gate2_inscription']} | {r['reading']} |")
+    lines += ["", "`holm_local_confirmed` est la confirmation Holm locale (K = 2) ; `pass_programme_immediate` le test immédiat du programme (p ≤ α / m_max) : "
+              "il n'a aucun effet sur l'inscription au Gate 2.", ""]
     for name, r in document["types"].items():
-        if not r.get("evaluate"):
-            lines += [f"## `{name}` (filtre, non évalué)", "", f"{r.get('description') or ''}".strip(), "", f"- Instants par instrument : {json.dumps(r['instants'])}.", ""]
-            continue
-        lines += [f"## `{name}`", "", f"{r['description'] or ''}".strip(), "",
-                  f"- Fenêtre [h{r['window_min'][0]:+d} ; h{r['window_min'][1]:+d}] min, armement h{r['arm_min']:+d}, repos jusqu'à h{r['rest_until_min']:+d} ; rôle `{r['execution_role']}` ; "
-                  f"coûts {json.dumps(r['costs_bp'])} ; jours/an {r['days_per_year']:g}.",
-                  f"- Signe : `{json.dumps(r['sign'], default=_json_default)}` ; condition : `{json.dumps(r['condition'], default=_json_default)}` ; signe de contrôle : "
-                  f"`{json.dumps(r['control_sign'], default=_json_default)}` ; générateur : `{json.dumps(r['generator'], default=_json_default)}`.",
-                  f"- Minutes d'observation : {json.dumps(r['observed_min'])} ; regard en avant déclaré : {json.dumps(r['declared_lookahead'], ensure_ascii=False) if r['declared_lookahead'] else 'aucun'}.",
-                  f"- Couverture imposée : {r['restrict_to_coverage'] or 'aucune'} ; minute des contrôles : {r['control_minute_of_hour']:02d}.",
-                  f"- Verdict **{r['verdict_label']}** : {' ; '.join(r['verdict_reasons'])}{(' — FAIL ' + r['fail_annotation']) if r['fail_annotation'] else ''}. Lecture : **{r['reading']}**.",
-                  f"- Critères : {json.dumps(r['criteria'], default=_json_default, ensure_ascii=False)}.",
-                  f"- κ : {json.dumps(r['kappa'], default=_json_default)} ; table proxy : {json.dumps(r['proxy_table'], default=_json_default, ensure_ascii=False)}.",
-                  f"- Instruments par instant : {json.dumps(r['instruments_per_instant'])} ; observations (instrument-instants) : {r['n_observations']}.",
-                  f"- Exclusions : {json.dumps(r['exclusions'], default=_json_default)}.",
-                  f"- Règlements traversés : part {r['settlements_crossed_share']} ; funding moyen {r['funding_bp_mean']} pb.", ""]
-        lines += ["| mesure | n instants | événement (moy.) | contrôle (moy.) | D | LB90 | UB90 | p |", "|---|---|---|---|---|---|---|---|"]
-        for m, st in r["statistics_bp"].items():
-            d = st["diff_vs_control"]
-            lines.append(f"| `{m}` | {st['n_instants']} | {_fmt(d['event_mean'])} | {_fmt(d['control_mean'])} | {_fmt(d['point'])} | {_fmt(d['lb90'])} | {_fmt(d['ub90'])} | "
-                         f"{_fmt(d['p_one_sided'], 3, signed=False)} |")
-        lines += ["", f"Lecture économique : {json.dumps(r['economic'], default=_json_default, ensure_ascii=False)}", "",
-                  f"Descriptif (sans p-value ni verdict) : {json.dumps(r['robustness'], default=_json_default, ensure_ascii=False)}", ""]
-        if r.get("lp_sim"):
-            lines += [f"Simulation (Gate 2) : {json.dumps(r['lp_sim'], default=_json_default)}", ""]
-    desc = document.get("descriptive", {})
-    lines += ["## Rapports non décisifs", "", f"_{desc.get('note', '')}_", ""]
-    if "minute_zero" in desc:
-        mz = desc["minute_zero"]
-        lines.append(f"- Minute 0 : |r| moyen {mz['abs_return_bp_mean_minute_0']} pb contre {mz['abs_return_bp_mean_other_minutes']} pb les autres minutes (ratio {mz['ratio']}, n = {mz['n_minute_0']}).")
-    if "hourly_seasonality" in desc:
-        lines.append(f"- Saisonnalité horaire (|r| 1 min, pb) : {json.dumps({h: v['abs_return_bp_mean'] for h, v in desc['hourly_seasonality']['by_hour_utc'].items()})}.")
-    if "weekday_seasonality" in desc:
-        lines.append(f"- Jour de semaine (|r| 1 min, pb) : {json.dumps({d: v['abs_return_bp_mean'] for d, v in desc['weekday_seasonality']['by_weekday'].items()})}.")
-    lines.append(f"- Spread : {json.dumps(desc.get('spread_seasonality'), default=_json_default)[:600]}.")
-    lines.append(f"- Intervalles de funding : {json.dumps(desc.get('funding_intervals'), default=_json_default)[:1200]}.")
-    lines += ["", "## Couverture et qualité", "", f"Fetch : {json.dumps(document.get('fetch_quality'), default=_json_default)[:1500]}.", "",
-              f"Instantané des métadonnées : {json.dumps(document.get('instruments_snapshot'), default=_json_default, ensure_ascii=False)}.", "",
-              "| instrument | minutes | prix | autre prix | prime | funding rows | sans taux réalisé | non confirmées rejetées | lignes ≥ END rejetées | début D_cov funding |",
-              "|---|---|---|---|---|---|---|---|---|---|"]
-    for inst, cov in document["coverage"].items():
-        premium = cov.get("premium_mark_index_minutes", cov.get("premium_okx_minutes"))
-        streams = cov.get("streams", {})
-        fund = (streams.get("funding_hist") or {}).get("start")
-        lines.append(f"| `{inst}` | {cov.get('minutes')} | {cov.get('price_minutes')} | {cov.get('alt_price_minutes')} | {premium} | {cov.get('funding_rows')} | "
-                     f"{cov.get('funding_rows_without_realized', cov.get('settlements_unknown_rate'))} | {json.dumps(cov.get('unconfirmed_dropped', {}))} | "
-                     f"{cov.get('rows_at_or_after_end_dropped', 0)} | {fund} |")
-    lines += ["", f"Garde : {json.dumps(document['guard'])}.", ""]
+        lines += [f"## `{name}`", ""]
+        if "sealed" in r:
+            lines += [f"Type **scellé** ({r['verdict_label']}) : D, LB90, UB90, p, moyennes, critères et descriptifs du type sont dans `{r['sealed']['file']}`, "
+                      f"sha256 `{r['sealed']['sha256']}`, ouvert après {r['sealed']['open_after']}.", ""]
+        lines += [f"- Rôle `{r['role']}`, coûts {json.dumps(r['costs_bp'])}, jours/an {r['days_per_year']:g}, règle de fenêtre `{r['window_rule']}`.",
+                  f"- Taux de fill : {json.dumps(r.get('fill_rate'))}.",
+                  f"- Validation C6 : {json.dumps(r.get('validation'), ensure_ascii=False)}.",
+                  f"- Exclusions : {json.dumps({k: v for k, v in r['exclusions'].items() if k != 'by_instrument'}, ensure_ascii=False)}.", ""]
+        if "sealed" not in r:
+            lines += [f"- Statistique : {json.dumps(r['statistic'])}.", f"- Critères : {json.dumps(r['criteria'], ensure_ascii=False)}.",
+                      f"- Lecture économique : {json.dumps(r['economic'], ensure_ascii=False)}.", "", "### Descriptifs du type (aucune p-value, aucun verdict)", ""]
+            for key, value in r["descriptive"].items():
+                lines.append(f"- `{key}` : {json.dumps(value, ensure_ascii=False)[:1500]}")
+            lines.append("")
+    lines += ["## Descriptifs communs (aucune p-value, aucun verdict)", ""]
+    for key, value in document.get("common_descriptive", {}).items():
+        lines.append(f"- `{key}` : {json.dumps(value, ensure_ascii=False)[:1500]}")
+    lines += ["", "## Dispositif", "", f"- Garde : {json.dumps(document.get('guard'))}.", f"- Qualité du fetch : {json.dumps(document.get('fetch_quality'), ensure_ascii=False)[:2000]}.",
+              f"- Défauts globaux : {document['summary']['global_device_defects'] or 'aucun'}.", f"- Instantané : {json.dumps(document.get('instruments_snapshot'), ensure_ascii=False)}.",
+              f"- Funding scellé : {json.dumps(document.get('funding_seal'), ensure_ascii=False)}.", ""]
     return "\n".join(lines)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def spec_summary(spec: Spec, sha: str, path: str) -> dict:
+    protocol = REPO_ROOT / spec.protocol
+    return {"path": path, "sha256": sha, "spec_id": spec.spec_id, "schema": SPEC_SCHEMA, "version": spec.version, "status": spec.status, "source": spec.source,
+            "dataset_id": spec.dataset_id, "window": [spec.start.isoformat(), spec.end_exclusive.isoformat()], "requires": list(spec.requires),
+            "descriptive_rule": spec.descriptive["rule"], "protocol": spec.protocol, "protocol_sha256": tape.sha256_of(protocol) if protocol.is_file() else None,
+            "audit": spec.audit, "freeze_fill": {k: v for k, v in spec.freeze_fill.items() if k != "null"}, "notes": spec.notes}
 
 
 # ----------------------------------------------------------------------------- command line
 
 
 def add_parser(sub) -> None:
-    parser = sub.add_parser("g5-eval", help="G5 event study driven by a frozen JSON spec (history layouts or capture tape); JSON + Markdown reports", allow_abbrev=False)
+    parser = sub.add_parser("g5-eval", help="G5 Gate 1 / Gate 2 evaluation driven by the frozen g5-spec/2 JSON spec; JSON + Markdown + sealed files", allow_abbrev=False)
     parser.add_argument("--tape", required=True)
-    parser.add_argument("--spec", required=True, help="frozen specification (types, signs, windows, conditions, controls, costs, thresholds); strict g5_eval/2 format")
-    parser.add_argument("--instruments-file", default="", help="contract metadata (default <tape>/instruments-futures.json)")
-    parser.add_argument("--inst", default="", help="comma-separated instrument ids (default: every instrument of the tape)")
-    parser.add_argument("--expect-spec-sha256", default="", help="refuse to run when the spec file's sha256 differs")
-    parser.add_argument("--expect-code-digest", default="", help="refuse to run when cli.code_digest() (sha256 of the research_lp modules) differs")
-    parser.add_argument("--allow-partial", action="store_true", help="read pending segments of unfinalized days")
-    parser.add_argument("--out-json", default="")
+    parser.add_argument("--spec", required=True, help="the frozen machine spec (schema g5-spec/2)")
+    parser.add_argument("--expect-spec-sha256", required=True, help="the sha256 of the frozen spec (LP-G5 §13): a different file gives INCONCLUSIVE without reading anything")
+    parser.add_argument("--instruments-file", default="", help="the freeze snapshot (default freeze_fill.instruments_snapshot_path); its sha256 must equal the spec's")
+    parser.add_argument("--expect-funding-seal-sha256", default="", help="the sha256 of the sealed funding receipt recorded at the freeze (registry)")
+    parser.add_argument("--out-json", required=True)
     parser.add_argument("--out-md", default="")
+    parser.add_argument("--sealed-dir", default="", help="where sealed/<type>.json go (default: <dir of --out-json>/sealed)")
     parser.set_defaults(func=command_eval)
 
 
-def _instrument_rows(args: argparse.Namespace) -> tuple[dict, str | None, dict | None]:
-    path = Path(args.instruments_file) if args.instruments_file else Path(args.tape) / "instruments-futures.json"
-    if not path.exists():
-        return {}, None, None
-    document = json.loads(path.read_text())
-    items = document.get("instruments", document.get("data", [])) if isinstance(document, dict) else document
-    snapshot = document.get("snapshot") if isinstance(document, dict) else None
-    return {str(row["instId"]): row for row in items if isinstance(row, dict) and row.get("instId")}, str(path), snapshot
+def _snapshot_rows(path: Path) -> dict:
+    return {str(r["instId"]): r for r in xc.load_instruments_file(path) if isinstance(r, dict) and r.get("instId")}
+
+
+def check_universe(spec: Spec, rows: dict) -> list[str]:
+    """(B) xviii, vii — the spec's universe against the freeze snapshot: listTime, tickSz, ctVal, uly of every analysed instrument;
+    the metadata rule (FUTURES, xperp, <BASE>-USD, listTime + days before the end) on the D1 list (analysed ∪ excluded)."""
+    problems = []
+    days_us = int(round(spec.eligibility_days * DAY_US))
+    d1 = {i.inst_id for i in spec.universe} | {e["inst_id"] for e in spec.excluded}
+    for meta in spec.universe:
+        row = rows.get(meta.inst_id)
+        if row is None:
+            problems.append(f"{meta.inst_id}: absent from the snapshot")
+            continue
+        if xc._i(row.get("listTime"), 0) * 1000 != meta.list_time_us:
+            problems.append(f"{meta.inst_id}: listTime differs")
+        if xc._f(row.get("tickSz")) != meta.tick_sz or xc._f(row.get("ctVal")) != meta.ct_val:
+            problems.append(f"{meta.inst_id}: tickSz / ctVal differ")
+        if g5_fetch.index_id_of(row) != meta.index_id:
+            problems.append(f"{meta.inst_id}: uly differs")
+    for inst, row in rows.items():
+        if inst not in d1:
+            continue
+        rule = (str(row.get("instType", "FUTURES")) == "FUTURES" and str(row.get("ruleType", "xperp")) == "xperp" and bool(xc.XPERP_RE.match(inst))
+                and xc._i(row.get("listTime"), 0) * 1000 + days_us < spec.end_us)
+        analysed = any(i.inst_id == inst for i in spec.universe)
+        if rule != analysed:
+            problems.append(f"{inst}: the metadata rule {'admits' if rule else 'refuses'} it but the spec {'analyses' if analysed else 'excludes'} it")
+    return problems
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def _finish(document: dict, args: argparse.Namespace, sealed_payloads: dict) -> None:
+    out_json = Path(args.out_json)
+    sealed_dir = Path(args.sealed_dir) if args.sealed_dir else out_json.parent / "sealed"
+    for name, text in sealed_payloads.items():
+        path = sealed_dir / f"{name}.json"
+        _write(path, text)
+        if g5_fetch.sha256_text(path.read_text()) != document["types"][name]["sealed"]["sha256"]:
+            raise RuntimeError(f"sealed file {path}: sha256 differs from the one printed")
+        document["types"][name]["sealed"]["path"] = str(path)
+    public = _clean(document)
+    _write(out_json, json.dumps(public, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
+    if args.out_md:
+        _write(Path(args.out_md), render_markdown(public))
 
 
 def command_eval(args: argparse.Namespace) -> int:
@@ -2148,58 +3165,91 @@ def command_eval(args: argparse.Namespace) -> int:
         spec, spec_sha = load_spec(Path(args.spec))
     except SpecError as error:
         raise SystemExit(f"spec error: {error}") from None
-    if args.expect_spec_sha256 and args.expect_spec_sha256.lower() != spec_sha:
-        raise SystemExit(f"spec sha256 mismatch: file {spec_sha}, expected {args.expect_spec_sha256}")
-    code_digest = cli.code_digest()
-    if args.expect_code_digest and args.expect_code_digest.lower() != code_digest:
-        raise SystemExit(f"code digest mismatch: {code_digest}, expected {args.expect_code_digest} (the frozen code is not the one running; nothing is read)")
     guard = guard_window(spec)
-    manifest = tape.read_manifest(Path(args.tape))
-    if manifest is not None and manifest.get("mode") == "counting":
-        raise SystemExit(f"{args.tape}: a counting tape holds no value")
-    if spec.source == "history" and (manifest is None or manifest.get("kind") != g5_fetch.MANIFEST_KIND):
-        raise SystemExit(f"{args.tape}: not a {g5_fetch.MANIFEST_KIND} tape (source history reads the g5_fetch layouts only)")
-    if spec.source == "capture" and manifest is not None and manifest.get("kind") == g5_fetch.MANIFEST_KIND:
-        raise SystemExit(f"{args.tape}: a 1-minute history is not a capture tape")
-    rows, rows_path, snapshot = _instrument_rows(args)
-    price_layout = ("candles_1m" if spec.price_source == "last" else "mark_1m") if spec.source == "history" else ("trades" if spec.price_source == "last" else "mark")
-    instruments = [s for s in args.inst.split(",") if s] or tape.instruments_in(Path(args.tape), price_layout)
-    if not instruments:
-        raise SystemExit(f"no instrument under {args.tape}/{price_layout}")
-    series_by_inst: dict[str, Series] = {}
-    for inst in instruments:
-        row = rows.get(inst) or None
-        if spec.source == "history":
-            index_id = str((row or {}).get("indexId") or "") or g5_fetch.index_id_of({"instId": inst, "uly": (row or {}).get("uly")})
-            series = load_history_series(Path(args.tape), inst, index_id, spec, manifest=manifest, row=row, allow_pending=args.allow_partial)
-        else:
-            series = load_capture_series(Path(args.tape), inst, spec, row=row, allow_pending=args.allow_partial)
-        if series.coverage.get("price_minutes", 0) == 0:
-            series.coverage["skipped"] = "no reference price"
-        series_by_inst[inst] = series
-    usable = {inst: s for inst, s in series_by_inst.items() if s.coverage.get("price_minutes", 0) > 0}
-    fetch = fetch_quality(manifest, spec)
-    if usable:
-        study = run_study(usable, spec, fetch)
+    code_digest = cli.code_digest()
+    base = {"kind": "lp-g5-eval", "evaluator": EVALUATOR_VERSION, "generated_at": tape.iso_now(), "spec": spec_summary(spec, spec_sha, str(args.spec)), "tape": str(args.tape),
+            "guard": guard, "code": cli.code_identity(), "code_digest": code_digest}
+    # Global device conditions decided before any market value is opened (B xviii): nothing is read when one holds.
+    device = []
+    if args.expect_spec_sha256.lower() != spec_sha:
+        device.append(f"spec_sha256_mismatch: file {spec_sha}, expected {args.expect_spec_sha256}")
+    if not spec.frozen:
+        device.append(f"status_not_frozen: {spec.status} (market data are read under a FROZEN spec only)")
+    if spec.freeze_fill["null"]:
+        device.append(f"freeze_fill_null: {spec.freeze_fill['null']}")
+    if spec.freeze_fill.get("code_digest_sha256") != code_digest:
+        device.append(f"code_digest_mismatch: running {code_digest}, frozen {spec.freeze_fill.get('code_digest_sha256')}")
+    if device:
+        types = {t.name: {"type": t.name, "verdict": "INCONCLUSIVE", "verdict_label": spec.gate + "INCONCLUSIVE", "verdict_reasons": device, "n_instants": 0, "n_days": 0,
+                          "exclusions": {}, "fill_rate": None, "validation": None, "gate2_inscription": spec.gate2_inscription["INCONCLUSIVE"], "holm_local_confirmed": False,
+                          "pass_programme_immediate": False, "reading": spec.gate + "INCONCLUSIVE", "market_data_read": False} for t in spec.types}
+        document = {**base, "types": types, "summary": {"verdicts": {n: r["verdict_label"] for n, r in types.items()}, "global_device_defects": device, "market_data_read": False,
+                                                        "mode": "tape"}}
+        check_forbidden(document, spec)
+        _write(Path(args.out_json), json.dumps(_clean(document), indent=1, sort_keys=True, ensure_ascii=False) + "\n")
+        print(json.dumps({"spec_sha256": spec_sha, "verdicts": document["summary"]["verdicts"], "market_data_read": False, "device": device}, ensure_ascii=False))
+        return 2
+    snapshot_path = Path(args.instruments_file or spec.freeze_fill["instruments_snapshot_path"])
+    if not snapshot_path.exists() or tape.sha256_of(snapshot_path) != spec.freeze_fill["instruments_snapshot_sha256"]:
+        raise SystemExit(f"instruments snapshot {snapshot_path}: missing or its sha256 differs from freeze_fill.instruments_snapshot_sha256 (mismatch_with_snapshot: refuse_run)")
+    rows = _snapshot_rows(snapshot_path)
+    problems = check_universe(spec, rows)
+    if problems:
+        raise SystemExit("universe against the snapshot (refuse_run): " + "; ".join(problems[:20]))
+    tape_dir = Path(args.tape)
+    manifest = tape.read_manifest(tape_dir)
+    if manifest is None or manifest.get("mode") != "values":
+        raise SystemExit(f"{tape_dir}: no values tape here")
+    context: dict = {"mode": "tape", "device": []}
+    seal = None
+    if spec.source == "history":
+        if manifest.get("kind") != g5_fetch.MANIFEST_KIND:
+            raise SystemExit(f"{tape_dir}: not a {g5_fetch.MANIFEST_KIND} tape")
+        src = manifest.get("source") or {}
+        if src.get("dataset_id") not in (None, spec.dataset_id):
+            raise SystemExit(f"{tape_dir}: dataset {src.get('dataset_id')!r} is not the spec's {spec.dataset_id!r}")
+        if src.get("decision_ref") != spec.freeze_fill["decision_ref_p_g5_1"]:
+            raise SystemExit(f"{tape_dir}: the fetch's decision_ref is not freeze_fill.decision_ref_p_g5_1")
+        sealed_dir = tape_dir / g5_fetch.SEALED_DIR_NAME
+        receipt_path = tape_dir / g5_fetch.SEALED_RECEIPT_NAME
+        sealed_manifest = tape.read_manifest(sealed_dir) if sealed_dir.exists() else None
+        d_cov_global = None
+        if receipt_path.exists() and sealed_manifest is not None:
+            receipt, receipt_sha = g5_fetch.read_receipt(receipt_path)
+            if args.expect_funding_seal_sha256 and args.expect_funding_seal_sha256.lower() != receipt_sha:
+                raise SystemExit(f"funding receipt sha256 {receipt_sha} differs from --expect-funding-seal-sha256")
+            if tape.sha256_of(sealed_dir / tape.MANIFEST_NAME) != receipt.get("sealed_manifest_sha256") or g5_fetch.directory_digest(sealed_dir)[0] != receipt.get("sealed_files_digest"):
+                raise SystemExit(f"{sealed_dir}: the sealed funding store differs from its receipt (sealed manifest or files changed)")
+            d_cov_global = receipt.get("coverage_start_us")
+            seal = {"receipt_sha256": receipt_sha, "sealed_manifest_sha256": receipt.get("sealed_manifest_sha256"), "coverage_start_utc": receipt.get("coverage_start_utc")}
+        elif args.expect_funding_seal_sha256:
+            raise SystemExit("--expect-funding-seal-sha256 given but the tape holds no sealed funding receipt")
+        context["d_cov_global_us"] = d_cov_global
+        states = dict(manifest.get("g5_streams") or {})
+        states.update((sealed_manifest or {}).get("g5_streams") or {})
+        keys = [f"{i.inst_id}:{s}" for i in spec.universe for s in ("candles_1m", "mark_1m", "funding_hist")] + sorted({f"{i.index_id}:index_1m" for i in spec.universe})
+        bad = [k for k in keys if not (states.get(k) or {}).get("complete") or (states.get(k) or {}).get("end_reason") not in g5_fetch.COMPLETE_REASONS or (states.get(k) or {}).get("errors")]
+        missing = [k for k in keys if (states.get(k) or {}).get("end_reason") is None]
+        share = len(bad) / len(keys) if keys else 0.0
+        context["fetch_quality"] = {"jobs": len(keys), "jobs_in_error": len(bad), "error_share": share, "end_reason_missing": len(missing)}
+        threshold = spec.verdict["fetch_error_share_max"]
+        if share > threshold:
+            context["device"].append(f"fetch_job_error_share_gt: {len(bad)} of {len(keys)} jobs in error > {threshold:g} (§4.5)")
+        if missing and "stream_end_reason_missing" in spec.verdict["conditions"]:
+            context["device"].append(f"stream_end_reason_missing: {len(missing)} jobs without end_reason")
+        series = {i.inst_id: load_history_series(tape_dir, i, spec, manifest, sealed_manifest) for i in spec.universe}
     else:
-        study = {"types": {}, "holm": holm({}, spec.alpha), "fetch_quality": fetch,
-                 "summary": {"types": 0, "primary_types": 0, "pass_local": [], "holm_local_confirmed": [], "programme_immediate": None, "fail": [], "not_informative": [],
-                             "inconclusive": [], "readings": {}, "global_device_defects": []}}
-    document = {"kind": "lp-g5-eval", "evaluator": EVALUATOR_VERSION, "generated_at": tape.iso_now(), "source": spec.source, "tape": str(args.tape), "guard": guard,
-                "spec": {"path": str(args.spec), "sha256": spec_sha, "spec_id": spec.spec_id, "window": [spec.start, spec.end_exclusive], "alpha": spec.alpha, "threshold_bp": spec.threshold_bp,
-                         "min_instants": spec.min_instants, "min_days": spec.min_days, "primary_measure": spec.primary_measure, "price_source": spec.price_source,
-                         "requires": list(spec.requires), "capabilities_used": list(spec.used), "document": spec.raw},
-                "instruments": list(series_by_inst), "instruments_file": rows_path, "instruments_snapshot": snapshot,
-                "coverage": {inst: s.coverage for inst, s in series_by_inst.items()}, **study, "descriptive": descriptive_reports(usable, spec.start_us),
-                "code": cli.code_identity(), "code_digest": code_digest, "elapsed_seconds": round(time.time() - started, 1)}
-    if args.out_json:
-        path = Path(args.out_json)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(document, indent=1, sort_keys=True, default=_json_default) + "\n")
-    if args.out_md:
-        path = Path(args.out_md)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(render_markdown(json.loads(json.dumps(document, default=_json_default))))
-    print(json.dumps({"spec_id": spec.spec_id, "spec_sha256": spec_sha, "code_digest": code_digest, "instruments": len(usable), "summary": document["summary"],
-                      "elapsed_seconds": document["elapsed_seconds"]}, default=_json_default))
+        if manifest.get("kind") == g5_fetch.MANIFEST_KIND:
+            raise SystemExit(f"{tape_dir}: a 1-minute history is not a capture tape")
+        if tape.parse_iso_utc(str(manifest.get("not_before") or "1970-01-01T00:00:00Z")) < QUARANTINE_END_US:
+            raise SystemExit(f"{tape_dir}: a capture tape without the quarantine floor")
+        series = {i.inst_id: load_capture_series(tape_dir, i, spec, rows.get(i.inst_id)) for i in spec.universe}
+        context["d_cov_global_us"] = spec.pad_start_us
+    study = run_study(series, spec, context)
+    sealed_payloads = study.pop("_sealed_payloads")
+    document = {**base, **study, "instruments": [i.inst_id for i in spec.universe], "instruments_snapshot": {"path": str(snapshot_path), "sha256": tape.sha256_of(snapshot_path)},
+                "funding_seal": seal, "coverage": {i: s.coverage for i, s in series.items()}, "elapsed_seconds": round(time.time() - started, 1)}
+    _finish(document, args, sealed_payloads)
+    print(json.dumps({"spec_sha256": spec_sha, "code_digest": code_digest, "verdicts": study["summary"]["verdicts"], "sealed_sha256": study["summary"]["sealed_sha256"],
+                      "gate2_inscription": study["summary"]["gate2_inscription"], "elapsed_seconds": document["elapsed_seconds"]}, ensure_ascii=False))
     return 0

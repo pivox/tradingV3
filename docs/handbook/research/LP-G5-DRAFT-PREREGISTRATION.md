@@ -821,6 +821,7 @@ ou traitement différent, motivé ; **signalé** = hors du périmètre d'écritu
 ## 13. Procédure de gel
 
 Deux portes, gelées **ensemble**, avant toute lecture et avant la lecture de G2 (P-G5-9) ; méthode de `PREREGISTRATION-H2-GATE1.md` §15.
+Spec Gate 2 (ligne du 2026-10-21, volet `docs-b`) : `python-orchestrator/scripts/research_lp/specs/g5_gate2_spec.json` (brouillon, Annexe B) ; son sha256 de version `FROZEN`, sans aucune valeur `owner_decision_pending` restante, fait partie du gel au même titre que celui du spec Gate 1 (points 3 et 5).
 
 1. P-G5-1 … P-G5-11 satisfaits et consignés (`a1-protocol/NOTES.md`, registre du programme) ; verdict `fwd-okx-r1` rendu ; fetch du
    funding scellé fait et haché (P-G5-3), D_cov inscrit au registre.
@@ -874,15 +875,76 @@ le spec est corrigé avant le gel, jamais après) :
 | `fetch_plan` | funding scellé avant le gel ; ≈ 58 285 requêtes au total (D_cov supposé au 2026-08-04) |
 | `freeze_fill` | snapshot, calendriers vérifiés, digest du code, `decision_ref` : nuls dans le brouillon, obligatoires au gel |
 
-## Annexe B — Spec Gate 2 (à écrire au gel, même dossier)
+## Annexe B — Spec Gate 2 (fichier du dépôt, brouillon)
 
-`python-orchestrator/scripts/research_lp/specs/g5_gate2_spec.json` : identique au spec Gate 1 avec `spec_id: "LP-G5-GATE2-2026"`,
-`source: "capture"`, `window.start` = T0 (≥ 2026-11-02), `window.end_exclusive` = fin décidée (§10.3), prix = derniers prints à la
-minute, classifieur sur mark de capture et indice selon P-G5-10 (ii), `costs.adverse_selection` mesurée par `lp_sim` (`half_spread_from_book`),
-`execution_role` honoré par `measure_lp_sim` (entrée preneur T05), `funding_fill_grace_min: 1` (fill dans [h ; h+1) traversant),
-validation C6 sur R du canal `funding-rate`, univers G2 §3, calendriers et sessions 2026-11 → 2027-04 (P-G5-5), `events` = types inscrits
-selon §8 (règle écrite ici, appliquée au gel du Gate 2 sans autre changement : le spec Gate 2 contient les deux types, l'évaluateur ne lit
-que ceux que le résultat du Gate 1 inscrit).
+**Chemin** : `python-orchestrator/scripts/research_lp/specs/g5_gate2_spec.json` (schéma `g5-spec/2`, `spec_id: "LP-G5-GATE2-2026"`,
+`status: "DRAFT_NOT_FROZEN"`, version `0.1.0-draft`), écrit le 2026-10-21 (volet `docs-b` de `20261020T2321Z-g5-periods`). sha256 du
+brouillon, **informatif** : `f35d820c9adf61da5235c8dbecb3e7b1972417d2945dbf9c3cd270a91fb4e083` (aussi dans `docs-b/NOTES.md`). Le sha256
+qui compte est celui de la version `FROZEN`, gelée **dans la même ligne de gel** que le spec Gate 1 (§13, point 5 ; piège 7). Comme le
+spec Gate 1, ce brouillon est **refusé** par le parseur strict actuel `g5_eval/2` (clés inconnues, constaté le 2026-10-21) : échec fermé
+jusqu'au code (B), dont (B) xxi. En cas d'écart entre ce fichier et le corps du protocole, le corps fait foi et le spec est corrigé avant
+le gel, jamais après.
+
+**Identique au Gate 1** (vérifié clé par clé par script le 2026-10-21, `docs-b/NOTES.md`) : les deux types décisifs T01 et T05 et leur
+rôle d'exécution ; classifieur `premium_wavg` évalué à t_arm (480 min, ≥ 90 % de bornes présentes, ±0,0009, grandeur unique
+`premium_mark_index`) ; signes ; empreintes [−5 ; +15] et [0 ; +60] ; `arm_min` −5 / +5 ; `rest_until_min` 1 ; fenêtres de rendement ;
+bougies clés ; filtre d'intervalle 8 h ± 1 min ; générateur de T05 en heure de New York ; contrôles (minute de l'heure 0 / 30, toutes les
+heures admissibles, marge 60 min, grilles 00/08/16 et 00/04/…/20) ; sessions ; publications macro ; éligibilité `listTime + 30 j` ;
+unité ; α 0,10, seuil +10 pb, bootstrap par blocs d'un jour (10 000, graine 20261102) ; plancher 100 instants et 30 jours ; critères
+C1–C7 ; validation C6 (seuils, dénominateurs) ; C7 ; m_max = 7 ; porte économique (S_éco 97, 4 × 100 USD, 1×, 365 / 252).
+
+**Ce qui change** (§10, §5.5) :
+
+| Clé | Valeur du brouillon Gate 2 |
+|---|---|
+| `source`, `dataset_id` | `capture` ; `okx-xperp-prospective-G5`, fenêtre de scoring de `okx-xperp-capture-2026-11-02` (registre) |
+| `window` | début 2026-11-02 ; T0 = premier 00:00 UTC ≥ max(plancher, gel de ce spec, fin de P3), inscrit au gel ; un instant appartient à la fenêtre si toute son empreinte y est ; lecture **avant** T0 permise pour les 480 min du classifieur seulement, jamais sous le plancher, jamais scorée ; fin T01 2027-03-31 inclus ; fin T05 selon P-G5-10 (i) ; prolongation pour trous ≤ 14 jours, au-delà du 2027-03-31 seulement sous les décisions de (i) b |
+| `price` | dernier prix = dernier print de la minute ; une minute clé sans print est l'équivalent de `vol = 0` (exclusion, comptée) |
+| `statistics.measure` | `sim_net_bp` (aller-retour simulé) ; `net_bp` (construction du Gate 1 sur derniers prints et coûts de conception) descriptif |
+| `execution_sim` | `lp_sim`, règle `touch` (`through` / `queue` descriptives), latence 250 ms, carnet périmé > 10 s ⇒ intention non posée, post-only annulé s'il croise, 100 USD, `books5` (`bbo-tbt` s'il est capturé), `funding_fill_grace_min: 1` |
+| T01 | post-only au touch du côté s décidé à h−5, vivant jusqu'à h+1 ; un fill dans [h ; h+1) traverse la photo et paie ; sortie passive au touch opposé de h+15 à h+60, reliquat taker |
+| T05 | preneur au touch opposé à h+5 (+ latence) plus 2 pb de glissement ; sortie passive de h+60 à h+75, reliquat taker ; 14:30 UTC jusqu'au 2027-03-12, 13:30 dès le 2027-03-15 |
+| `costs` | frais 2 / 5 pb ; glissement 2 pb par jambe preneuse ; sélection adverse et demi-spread **mesurés** ; stress : frais et glissement × 1,5 **plus** 0,5 × la valeur de conception de chaque terme mesuré (1,75 pb par jambe maker remplie, 1,5 pb par entrée preneuse) |
+| `costs.funding` | taux réglé du canal `funding-rate` (sémantique `settFundingRate` / `settState` UNKNOWN, à vérifier avant le gel) ; repli REST après T0 (`GATES` §5.1) ; taux inconnu ⇒ observation exclue, comptée |
+| C6 | même matrice, R lu dans le canal `funding-rate` ; échec ⇒ `G5_GATE2_INCONCLUSIVE` |
+| `universe` | règle de G2 §3 au gel (métadonnées, comptages P3 `selection`, ≤ 40), `listTime + 30 j` ; liste `analysed` remplie au gel ; P-S3 en attente |
+| `calendars` | fériés NYSE 2026-11-26, 12-25, 2027-01-01, 01-18, 02-15, 03-26 ; CPI 2026-11-10, 12-10 ; FOMC 2026-12-09, 2027-01-27, 03-17 (2027 « tentative ») ; Employment Situation et CPI 2027 **à relever** (`incomplete_at_draft`, refus du statut `FROZEN` tant que non vide) |
+| `controls_common.audit_expected_utc` | heures UTC des contrôles par régime d'heure d'été (hiver jusqu'au 2027-03-13 : T01 03–06, 10–13, 18, 19 h ; T05 05:30, 09:30, 17:30 — comme §7.1) |
+| `quality` | instrument-jour inexploitable = couverture `books5` < 90 % ou période `stale` > 10 min (G2 §4.4) ; > 20 % ⇒ `INCONCLUSIVE` |
+| `verdict` | `G5_GATE2_*` ; `INCONCLUSIVE` global en plus si une valeur `owner_decision_pending` subsiste ou si le sha256 du résultat du Gate 1 diffère du registre |
+| `gate2_inscription` | lit le JSON du résultat du Gate 1 (sha256 au registre) ; `PASS`, `NOT_INFORMATIVE`, `INCONCLUSIVE` évalués, `FAIL` non évalué (p = 1) ; aucune discrétion, aucune lecture intermédiaire |
+| `sealing` | les fichiers scellés du Gate 1 ne sont ouverts qu'après le verdict du Gate 2 du même type ; l'évaluateur du Gate 2 ne lit jamais `sealed/` |
+
+**Décisions du propriétaire au gel (P-G5-10), champs `owner_decision_pending`** :
+- **(i) fin de la fenêtre T05** (`events[T05_us_open].window_end`) — (a) **2027-03-31** : 102 jours NYSE depuis le 2026-11-02, ≈ 92
+  instants hors CPI / Employment Situation ⇒ `G5_GATE2_NOT_INFORMATIVE` par construction, accepté par écrit ; (b) **2027-04-12** : 110
+  jours NYSE, mais ≈ **98–99** instants hors macro (11 ou 12 dates BLS ; calendrier 2027 UNKNOWN) — le « ≈ 100 » de §10.3 est
+  optimiste, et chaque jour NYSE de T0 après le 2026-11-02 retire un instant de plus (T0 = 2026-11-05 : 107 jours) ; (c) **proposée par
+  ce brouillon, absente du corps** : fin = le jour NYSE où le compte des jours NYSE hors CPI / Employment Situation depuis T0 atteint 100,
+  calculée au gel sur les listes complètes (≈ 2027-04-13 à 04-15 pour T0 = 2026-11-02) — « une fin fixée au gel par le calendrier n'est
+  pas une extension sur résultat » (§10.3). (b) et (c) exigent **deux** décisions écrites que P-G5-10 ne nomme pas : une exception à
+  `GATES` §1.3 (scoring après le 2027-03-31) et une extension de D1 (capture au-delà du 2027-03-31 = nouvelle décision).
+- **(ii) source d'indice à la minute** (`classifier_index_source`) — (a) canal public `index-tickers` ajouté à la capture avant T0
+  (nouvelle décision D1, code de capture et layout à écrire) ; (b) `history-index-candles` récupéré une fois après la fin de la fenêtre
+  (nouvelle décision de lecture, D1 ne couvrant que la capture et l'historique du Gate 1 ; ≈ 2 160 pages par indice pour 150 jours) ;
+  sans l'une ou l'autre, T01 est `G5_GATE2_INCONCLUSIVE` par construction (écrit d'avance). Le mark vient du canal `mark-price` (dernier
+  `markPx` de la minute).
+- **Hors P-G5-10, même statut** : `universe.p_s3_track_s` — P-S3 du track S (`LP-S-CSFUND-K1C-AMENDMENT-DRAFT.md` §4.3) vise le Gate 1 ;
+  son effet sur les captures de BTC et ETH lues au Gate 2 n'est pas tranché.
+
+**Choix de rédaction du brouillon, que le corps ne fixe pas (à confirmer au gel)** : (1) stress des termes mesurés par un ajout de
+0,5 × leur valeur de conception (jamais plus faible que le stress du Gate 1 ; le code du 2026-10-21 ne stresse que frais et glissement) ;
+(2) Holm local K = 2 au Gate 2, un type non inscrit comptant p = 1 (miroir du Gate 1) ; (3) aucun scellement des verdicts propres du
+Gate 2 (aucune porte n'en dépend) ; (4) jour inexploitable repris de G2 §4.4 ; (5) règle de liquidité de G2 §3.3 **non** appliquée
+(§10.1 ne nomme que métadonnées, comptages P3 et `listTime + 30 j`) ; (6) la queue de sortie simulée (h+15 → h+60, h+60 → h+75) n'entre
+pas dans les empreintes, gardées égales à celles du Gate 1 (les heures de contrôle de §7.1 en dépendent).
+
+**Code à écrire avant le gel (en plus de (B) xxi)** : clés `requires` propres au Gate 2 (`capture_source_quarantine_floor_check`,
+`price_last_print_per_minute`, `key_minute_without_print_exclusion`, `classifier_mark_and_index_from_capture_or_index_history`,
+`gate2_sim_*`, `gate2_funding_fill_grace_crossing`, `gate2_classifier_validation_funding_channel`, `gate2_stress_add_on_for_measured_terms`,
+`gate2_window_end_per_type`, `gate2_inscription_from_gate1_result`, `gate2_quality_unusable_instrument_day`,
+`owner_decisions_resolved_required_for_freeze`) ; au 2026-10-21, `g5_eval` lit `premium_okx` (champ `premium` du canal) sur la capture
+et refuse `premium_mark_index` hors historique, alors que §10.1 exige `premium_mark_index` aux deux portes : (B) xxi doit le changer.
 
 ## Annexe C — Calendriers et sessions (dates lues par la red team le 2026-10-21 sur bls.gov, federalreserve.gov, nyse.com ; à re-vérifier au gel)
 

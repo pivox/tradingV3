@@ -5,20 +5,25 @@
     python -m scripts.research_lp.cli simulate --tape DIR --dates 2026-11-03..2026-11-09 [--inst A,B] --rule queue --out orders.npz --summary summary.json
     python -m scripts.research_lp.cli events   --tape DIR --dates … --kind liquidation,excursion,clock --out events.npz --summary events.json
     python -m scripts.research_lp.cli verify   --tape DIR
-    python -m scripts.research_lp.cli g5-fetch --out DIR --instruments-file F --inst-ids A,B --dry-run --plan-out plan.json
-    python -m scripts.research_lp.cli g5-fetch --out DIR --instruments-file F --inst-ids A,B --plan plan.json --max-requests N --decision-ref TEXT
-    python -m scripts.research_lp.cli g5-eval  --tape DIR --spec g5-gate1.json --out-json R.json --out-md R.md [--expect-spec-sha256 H] [--expect-code-digest H]
+    python -m scripts.research_lp.cli g5-fetch --out DIR --instruments-file F --inst-ids-file IDS --spec SPEC --phase pre_freeze --dry-run --plan-out plan.json
+    python -m scripts.research_lp.cli g5-fetch --out DIR --instruments-file F --inst-ids-file IDS --spec SPEC --phase pre_freeze --plan plan.json \
+        --max-requests N --decision-ref TEXT                                  (sealed funding history, before the freeze)
+    python -m scripts.research_lp.cli g5-fetch … --phase post_freeze --funding-receipt DIR/funding-sealed-receipt.json …   (candles, mark, index)
+    python -m scripts.research_lp.cli g5-eval  --tape DIR --spec SPEC --expect-spec-sha256 H --out-json R.json --out-md R.md [--expect-funding-seal-sha256 H]
 
 `capture`, `count` and `g5-fetch` are the only commands that open a network connection (the public
 WebSocket, and the public instruments list unless `--inst-ids` / `--instruments-file` is given;
 `g5-fetch` the public REST history endpoints, never in `--dry-run`, and never without `--decision-ref`,
-an explicit instrument list, `--max-requests` and the dry-run `--plan` of the same configuration; the
-global host also needs `--host-reason`). `g5-fetch` persists no row whose market timestamp is at or
-after `g5_fetch.END_EXCLUSIVE` (2026-10-14T00:00:00Z, a constant); `g5-eval` refuses any window touching
-the quarantine [2026-10-14, 2026-11-02), any unknown key of its strict JSON spec and any capability the
-spec requires but the code does not implement (see `g5_eval`). `code_digest()` is the sha256 of
-`code_identity()` (one sha256 per module of this package): the value frozen with a protocol and checked
-by `g5-eval --expect-code-digest`.
+the G5 spec and its phase (`--spec`, `--phase`; `--funding-receipt` after the freeze), an instrument list
+equal to the spec's universe (hashed), `--max-requests` and the dry-run `--plan` of the same configuration;
+the global host also needs `--host-reason`; the funding history only in sealed mode, LP-G5 P-G5-3).
+`g5-fetch` persists no row whose market timestamp is at or after `g5_fetch.END_EXCLUSIVE`
+(2026-10-14T00:00:00Z, a constant); `g5-eval` reads the schema `g5-spec/2` only and refuses any window
+touching the quarantine [2026-10-14, 2026-11-02), any unknown key or value of the spec and any capability
+it requires but the code does not implement; it reads no market value unless the spec is FROZEN with a
+complete `freeze_fill`, its sha256 equals `--expect-spec-sha256` and `code_digest()` equals the frozen
+`freeze_fill.code_digest_sha256` (see `g5_eval`). `code_digest()` is the sha256 of `code_identity()` (one
+sha256 per module of this package).
 
 Quarantine guard (rule 13 of the theory report; `LP-PROGRAMME-GATES.md`): `--not-before` is
 accepted only at or after `xperp_capture.QUARANTINE_FLOOR` (2026-11-02T00:00:00Z) in every

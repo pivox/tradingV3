@@ -1,37 +1,42 @@
-"""Offline tests of the G5 event study (`scripts/research_lp/g5_eval.py`, strict spec format `g5_eval/2`) on synthetic
-1-minute histories and a synthetic capture tape: the strict spec reader (unknown keys, `requires`, renamed keys, the
-look-ahead lock), the loaders (reference price without fallback, unconfirmed candles, realized rates only, coverage), the
-generators (DST, exclusion dates, 8 h interval filter), the controls (same days, minute of the hour, union exclusion), the
-measures (roles, costs, stress, funding unknown, zero volume, mixed source, dead zone, premium average), the instant unit,
-a planted effect recovered with C1–C6, the INCONCLUSIVE paths, the H0 calibration over 1 000 seeds, the economic reading,
-Holm, the capture simulation (maker / taker entry, funding grace) and the command line.
+"""Offline tests of the G5 evaluator (`scripts/research_lp/g5_eval.py`, schema `g5-spec/2`, LP-G5 §2.3 (B) xxii) on synthetic
+1-minute histories, a synthetic capture tape and the repository's own machine spec `specs/g5_gate1_spec.json`: the strict reader
+on the real spec (unknown keys, unknown values, capabilities, look-ahead, audits), eligibility at listTime + 30 days, the local-time
+generator of T05 and the 8 h filter of T01, the controls at the type's minute of the hour with footprint exclusions (the protocol's
+own hour lists), the one classifier P̂(t_arm) at events and controls, the through fill proxy, zero-volume and missing candles, the
+costs by role, the funding, the instant unit, C6 (3 × 3 matrix, thresholds, INCONCLUSIVE), the verdict precedence and C1–C7, Holm
+and the programme field, the sealing of INCONCLUSIVE / NOT_INFORMATIVE, the economic reading, the descriptive reports, the Gate 2
+simulation and the command line end to end. The calibration under H0 over 1 000 seeds and the B2 non-regression are in
+`test_research_lp_g5_calibration.py`.
 
-No test opens a connection (socket-level autouse guard) and no market data exists anywhere here."""
+Rewritten on 2026-10-21 for the code (B): the earlier tests read the intermediate format `g5_eval/2`, which the protocol replaces
+by `g5-spec/2` (B xviii); each of their concerns is covered here on the new format. No test opens a connection (socket-level
+autouse guard) and no market data exists anywhere here."""
 
 from __future__ import annotations
 
 import copy
-import dataclasses
 import json
 import math
 import socket
 import urllib.request
+from datetime import date
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from scripts.research_lp import cli, g5_eval, g5_fetch, lp_sim, tape
+from scripts.research_lp import events as ev
 
 US = tape.SECOND_US
 MINUTE_US = 60 * US
 HOUR_US = 60 * MINUTE_US
 DAY_US = tape.DAY_S * US
-INST = "BTC-USD_UM_XPERP-310404"
-INST2 = "ETH-USD_UM_XPERP-310404"
-INDEX = "BTC-USD"
-INDEX2 = "ETH-USD"
-RATE_CYCLE = (3e-4, 1e-4, -2e-4)  # longs pay (outside the dead zone), exactly I = 0.01 % (dead zone), shorts pay
+REAL_SPEC = Path(__file__).resolve().parents[1] / "scripts" / "research_lp" / "specs" / "g5_gate1_spec.json"
+REAL_SPEC_SHA256_DRAFT = "d4189493d896fe508b36f32da6433c03305cd4867fdc5fe94ff67d17f85af80a"  # LP-G5 Annexe A (informative)
+BASE = json.loads(REAL_SPEC.read_text())
+BTC, ETH, SOL = "BTC-USD_UM_XPERP-310404", "ETH-USD_UM_XPERP-310404", "SOL-USD_UM_XPERP-310404"
+LISTED = {BTC: "2026-03-30T04:30:00Z", ETH: "2026-04-01T04:00:00Z", SOL: "2026-04-01T04:25:00Z"}
 
 
 @pytest.fixture(autouse=True)
@@ -46,749 +51,1084 @@ def _no_network(monkeypatch):
     monkeypatch.setattr(g5_fetch.UrllibClient, "get", refuse)
 
 
-BASE_REQUIRES = ["price_source_last", "n_unit_instant", "execution_role_costs", "verdict_c2_c6", "days_per_year", "quality_rules"]
-T01 = {"type": "T01_funding_8h", "primary": True, "execution_role": "maker_maker", "days_per_year": 365,
-       "description": "photo de funding 8 h, taux réglé hors zone morte, fournisseur du côté payeur armé à h−5",
-       "generator": {"kind": "funding", "fallback_hours": [], "interval_hours": 8, "interval_tolerance_min": 1},
-       "sign": {"kind": "field_sign", "field": "funding_rate", "at_min": 0, "dead_zone": [0.0, 0.0001], "eps": 1e-9},
-       "control_sign": {"kind": "premium_wavg", "base": "premium_mark_index", "at_min": -5, "minutes": 480, "min_coverage": 0.9, "upper": 0.0006, "lower": -0.0005,
-                        "concordance_min": 0.80, "concordance_on": "class"},
-       "window": {"from_min": -5, "to_min": 15}, "arm_min": -5, "rest_until_min": 1, "restrict_to_coverage": ["funding_hist", "mark_1m", "index_1m"],
-       "declared_lookahead": {"field": "sign", "reason": "R_h is computed at h-1 (funding page EEE l.258-270); its class is known at h-5 up to the dead-zone frontier (LP-G5 §5.1)"}}
-T05 = {"type": "T05_us_open", "primary": True, "execution_role": "taker_maker", "days_per_year": 252, "description": "ouverture cash US, continuation",
-       "generator": {"kind": "us_open", "exclude_dates": ["2026-06-19"], "skip_dates": ["2026-06-10"]}, "sign": {"kind": "return_sign", "from_min": 0, "to_min": 5},
-       "window": {"from_min": 5, "to_min": 60}, "arm_min": 5, "rest_until_min": 6, "control_minute_of_hour": 30}
-MACRO = {"type": "T11_macro_filter", "evaluate": False, "generator": {"kind": "explicit", "instants": ["2026-06-10T12:30:00Z", "2026-06-17T18:00:00Z"]}, "description": "filtre"}
-SPEC = {
-    "spec_id": "g5-synthetic-test", "source": "history", "unit": "instant", "price_source": "last",
-    "requires": BASE_REQUIRES + ["funding_rate_sign_dead_zone", "interval_8h_filter", "control_sign_premium_wavg", "premium_named_fields", "controls_same_days_minute_zero",
-                                 "declared_lookahead", "us_open_exclude_dates", "controls_minute_of_hour", "coverage_restriction"],
-    "window": {"start": "2026-06-01", "end_exclusive": "2026-06-25"},
-    "alpha": 0.10, "threshold_bp": 10.0, "min_instants": 30, "min_days": 10, "primary_measure": "net_bp",
-    "bootstrap": {"resamples": 200, "seed": 7, "block_days": 1},
-    "execution": {"maker_bp": 2.0, "taker_bp": 5.0, "half_spread_bp": 0.0, "adverse_selection_bp_per_leg": 2.0, "slippage_bp": 2.0, "cost_stress_multiplier": 1.5,
-                  "adverse_selection_sensitivity_bp_per_leg": 3.5},
-    "controls": {"hours": [4, 12, 20], "random_per_day": 3, "exclusion_min": 60, "seed": 20261102, "minute_zero_only": True, "same_days_as_events": True},
-    "quality": {"max_missing_window_share": 0.20, "max_proxy_missing_share": 0.50, "max_fetch_error_share": 0.10, "max_funding_unknown_share": 0.20, "exclude_zero_volume": False},
-    "economic": {"s_eco_usd_per_year": 97.0, "max_fills_per_instant": 4, "order_notional_usd": 100.0},
-    "events": [T01, T05, MACRO],
-}
+# ----------------------------------------------------------------------------- synthetic specs and series
 
 
-def doc(**changes) -> dict:
-    document = copy.deepcopy(SPEC)
-    document.update(copy.deepcopy(changes))
+def iso(us: int) -> str:
+    return tape.iso_utc(int(us))[:19] + "Z"
+
+
+def uni(inst: str, listed: str | None = None, tick: float = 0.01) -> dict:
+    listed_us = tape.parse_iso_utc(listed or LISTED[inst])
+    return {"inst_id": inst, "index_id": inst.split("_")[0], "list_time_utc": iso(listed_us), "eligible_from_utc": iso(listed_us + 30 * DAY_US), "ct_val": 0.0001, "tick_sz": tick}
+
+
+def derived(universe: list[dict] | None = None, window: dict | None = None, mutate=None) -> dict:
+    """The real spec with another universe / window / mutation: the audit numbers that depend on them are dropped (T05 calendar,
+    break-evens) or recomputed (fetch-plan estimates). The real spec keeps its own numbers (checked by the first tests)."""
+    document = copy.deepcopy(BASE)
+    if universe is not None:
+        document["universe"]["analysed"] = universe
+    if window is not None:
+        document["window"] = window
+    for item in document["events"]:
+        item.pop("audit_expected", None)
+    document["economic"]["audit_break_even_net_bp"] = {}
+    rows = [{"instId": u["inst_id"], "uly": u["index_id"], "listTime": str(tape.parse_iso_utc(u["list_time_utc"]) // 1000)} for u in document["universe"]["analysed"]]
+    estimate = g5_fetch.spec_estimate(rows, 30, tape.day_of_date("2026-08-04") * DAY_US, {"candles_1m": 300, "mark_1m": 100, "index_1m": 100, "funding_hist": 400})
+    document["fetch_plan"]["pre_freeze"]["requests_estimate"] = estimate["funding_hist"]
+    for stream in ("candles_1m", "mark_1m", "index_1m"):
+        document["fetch_plan"]["post_freeze"][stream]["requests_estimate"] = estimate[stream]
+    document["fetch_plan"]["requests_total_estimate"] = sum(estimate.values())
+    if mutate is not None:
+        mutate(document)
     return document
 
 
-def spec_of(**changes) -> g5_eval.Spec:
-    return g5_eval.parse_spec(doc(**changes))
+def spec_of(**kw) -> g5_eval.Spec:
+    return g5_eval.parse_spec(derived(**kw))
 
 
-def settlement_plan(spec: g5_eval.Spec) -> tuple[np.ndarray, np.ndarray]:
-    """8 h settlements (00 / 08 / 16 UTC) from the padded start to a day after the end, rates cycling through RATE_CYCLE."""
-    hs, rs = [], []
-    for d in range(int(spec.pad_start_us // DAY_US), int(spec.end_us // DAY_US) + 2):
-        for j, hour in enumerate((0, 8, 16)):
-            hs.append(d * DAY_US + hour * HOUR_US)
-            rs.append(RATE_CYCLE[(d + j) % 3])
-    return np.array(hs, dtype=np.int64), np.array(rs)
+SHORT = {"start": "2026-08-01", "end_exclusive": "2026-10-14"}
 
 
-def synthetic(spec: g5_eval.Spec, seed: int = 3, drift_bp: float = 0.0, sigma: float = 2e-4, premium_level: float = 8e-4, flip_proxy: bool = False,
-              unknown_rate_at=(), funding_start_us: int | None = None, inst: str = INST) -> dict:
-    """Arrays of a synthetic instrument on the spec's grid: a Gaussian walk of the last price (no premium inside it), a mark
-    = last × (1 + premium) where the premium of the 8 h period ending at h has the class of R_h (± premium_level, 0 in the dead
-    zone; inverted when `flip_proxy`), and, when `drift_bp`, a drift of s_h × drift_bp over (h − 5, h + 15] at every settlement
-    outside the dead zone."""
-    grid = np.arange(spec.pad_start_us, spec.end_us + MINUTE_US, MINUTE_US, dtype=np.int64)
+def lowered_floor(document: dict, instants: int = 20, days: int = 10) -> None:
+    document["power_floor"]["min_instants"] = instants
+    document["power_floor"]["min_days"] = days
+
+
+def settlements_8h(spec: g5_eval.Spec) -> np.ndarray:
+    first = (spec.pad_start_us // (8 * HOUR_US) + 1) * 8 * HOUR_US
+    return np.arange(first, g5_fetch.END_EXCLUSIVE_US, 8 * HOUR_US, dtype=np.int64)
+
+
+def market(spec: g5_eval.Spec, meta: g5_eval.Instrument, seed: int = 1, sigma_bp: float = 2.0, classes=None, rate_of=None, t01_drift_bp: float = 0.0, t05_drift_bp: float = 0.0,
+           d_cov_us: int | None = None, band_bp: float = 25.0, settlements=None, t01_drift_hours=None, t01_drift_days=None) -> g5_eval.Series:
+    """A synthetic instrument on the spec's grid: a Gaussian walk of the last price; candles with low / high at ± `band_bp` (the fill
+    proxy then fills); settlements every 8 h (or `settlements`) with a class c ∈ {−1, 0, +1} each (`classes`, default random 40/20/40):
+    the premium is c × 0.0012 over the 480 minute boundaries ending at s − 5 (so P̂(s − 5) has class c) and the realized rate
+    `rate_of(c)` (default ±5 bp outside the zone, ±1 bp inside); planted effects: a drift c × `t01_drift_bp` over (s − 5, s + 15] at the
+    settlements (optionally only at `t01_drift_hours` / before `t01_drift_days`), and a continuation s × `t05_drift_bp` over
+    (h + 5, h + 60] at the T05 instants."""
+    grid = g5_eval.spec_grid(spec)
     n = grid.size
     rng = np.random.default_rng(seed)
-    ret = rng.normal(0.0, sigma, n)
+    ret = rng.normal(0.0, sigma_bp / 1e4, n)
     ret[0] = 0.0
-    hs, rs = settlement_plan(spec)
-    cls = np.where(rs > 1e-4 + 1e-9, 1, np.where(rs < -1e-9, -1, 0))
+    st = settlements_8h(spec) if settlements is None else np.asarray(settlements, dtype=np.int64)
+    if classes is None:
+        classes = rng.choice(np.array([-1, 0, 1]), size=st.size, p=[0.4, 0.2, 0.4])
+    classes = np.asarray(classes, dtype=np.int64)
+    rate_of = rate_of or (lambda c, i: 5e-4 * c if c else (1e-4 if i % 2 else -1e-4))
+    rates = np.array([rate_of(int(c), i) for i, c in enumerate(classes.tolist())], dtype=np.float64)
     premium = np.zeros(n)
-    for h, c in zip(hs.tolist(), cls.tolist()):
-        k = (h - int(grid[0])) // MINUTE_US
-        lo, hi = max(0, k - 479), min(n - 1, k)
-        if hi >= lo:
-            premium[lo: hi + 1] = c * premium_level * (-1 if flip_proxy else 1)
-        if c and drift_bp and 1 <= k - 4 and k + 15 < n:
-            ret[k - 4: k + 16] += c * drift_bp / 1e4 / 20.0
-    price = 100.0 * np.exp(np.cumsum(ret))
-    return {"grid": grid, "price": price, "mark": price * (1.0 + premium), "premium": premium, "hs": hs, "rs": rs, "inst": inst,
-            "unknown": np.array(sorted(unknown_rate_at), dtype=np.int64), "funding_start_us": funding_start_us}
+    k_s = (st - int(grid[0])) // MINUTE_US
+    for k, c, s in zip(k_s.tolist(), classes.tolist(), st.tolist()):
+        hi = k - 5
+        lo = max(0, hi - 479)
+        if hi >= 0:
+            premium[lo: min(hi, n - 1) + 1] = c * 0.0012
+        hour_ok = t01_drift_hours is None or ((s % DAY_US) // HOUR_US) in t01_drift_hours
+        day_ok = t01_drift_days is None or (s // DAY_US) < t01_drift_days
+        if c and t01_drift_bp and hour_ok and day_ok and 5 <= k - 4 and k + 15 < n:
+            ret[k - 4: k + 16] += c * t01_drift_bp / 1e4 / 20.0
+    close = 100.0 * np.exp(np.cumsum(ret))
+    if t05_drift_bp:
+        t05 = next(t for t in spec.types if t.generator["kind"] == "local_time")
+        for h, _, _ in g5_eval.local_time_instants(t05, spec):
+            k = (h - int(grid[0])) // MINUTE_US
+            if k + 60 < n:
+                s = np.sign(close[k + 5] - close[k])
+                if s:
+                    ret[k + 6: k + 61] += s * t05_drift_bp / 1e4 / 55.0
+        close = 100.0 * np.exp(np.cumsum(ret))
+    band = band_bp / 1e4
+    if d_cov_us is None:
+        inside = st[st >= spec.start_us]
+        d_cov_us = int(inside[1]) if inside.size > 1 else None
+    return g5_eval.make_series(meta, grid, close, close * (1 - band), close * (1 + band), np.ones(n), close * (1 + premium), close.copy(), st, rates, d_cov_us)
 
 
-def memory_series(spec: g5_eval.Spec, arrays: dict, volume: np.ndarray | None = None) -> g5_eval.Series:
-    grid, hs, rs = arrays["grid"], arrays["hs"], arrays["rs"]
-    known = ~np.isin(hs, arrays["unknown"])
-    start = arrays["funding_start_us"]
-    funding = lp_sim.FundingSchedule(hs[known], rs[known], source="synthetic realized")
-    if start is not None:
-        funding = lp_sim.FundingSchedule(hs[known & (hs >= start)], rs[known & (hs >= start)], source="synthetic realized")
-    settlements = hs if start is None else hs[hs >= start]
-    coverage = {name: int(grid[0]) for name in tape.HISTORY_LAYOUTS}
-    if start is not None:
-        coverage["funding_hist"] = int(start)
-    return g5_eval.Series(arrays["inst"], grid, arrays["price"], np.ones(grid.size, dtype=np.int8), arrays["mark"], np.full(grid.size, 10.0) if volume is None else volume,
-                          {"premium_mark_index": arrays["premium"]}, np.full(grid.size, 1.0), funding, settlements, arrays["unknown"], g5_eval._assumed_unknown(spec, coverage["funding_hist"]),
-                          coverage, None, True, spec.start_us)
+def flat(spec: g5_eval.Spec, meta: g5_eval.Instrument, price: float = 100.0, settlements=(), rates=(), d_cov_us: int | None = None) -> g5_eval.Series:
+    grid = g5_eval.spec_grid(spec)
+    close = np.full(grid.size, price)
+    return g5_eval.make_series(meta, grid, close, close.copy(), close.copy(), np.ones(grid.size), close.copy(), close.copy(), settlements, rates, d_cov_us)
 
 
-def write_tape(root: Path, spec: g5_eval.Spec, arrays_list: list[dict], unconfirmed_at=(), drop_last_at=(), manifest_streams: dict | None = None) -> None:
-    """The synthetic arrays in the `g5_fetch` layouts (candles opening at g_{k-1}, closing at g_k), finalized, with an instruments file."""
-    store = tape.TapeStore(root, "values", source={"rest": "synthetic"}, kind=g5_fetch.MANIFEST_KIND)
-    rows = []
-    for arrays in arrays_list:
-        inst, index = arrays["inst"], f"{arrays['inst'].split('-')[0]}-USD"
-        grid, price, mark = arrays["grid"], arrays["price"], arrays["mark"]
-        for k in range(1, grid.size):
-            ts = int(grid[k - 1])
-            confirm = 0 if ts in unconfirmed_at else 1
-            if ts not in drop_last_at:
-                store.append("candles_1m", inst, ts, (ts, ts, price[k - 1], max(price[k - 1], price[k]), min(price[k - 1], price[k]), price[k], 10.0, 0.001, 100.0, confirm))
-            store.append("mark_1m", inst, ts, (ts, ts, mark[k - 1], mark[k], mark[k], mark[k], 1))
-            store.append("index_1m", index, ts, (ts, ts, price[k - 1], price[k], price[k], price[k], 1))
-        for h, r in zip(arrays["hs"].tolist(), arrays["rs"].tolist()):
-            if h < g5_fetch.END_EXCLUSIVE_US:
-                store.append("funding_hist", inst, h, (h, h, r * 1.1, np.nan if h in arrays["unknown"] else r, 1, 1))
-        rows.append({"instId": inst, "uly": index, "indexId": index, "tickSz": "0.1", "ctVal": "0.0001", "lotSz": "1", "minSz": "1", "listTime": str(int(spec.pad_start_us // 1000) - 86_400_000 * 60)})
-    store.checkpoint()
-    store.finalize_days_before(int(spec.end_us // DAY_US) + 3, force=True)
-    if manifest_streams:
-        store.manifest["g5_streams"] = manifest_streams
-        store.save_manifest()
-    (root / "instruments-futures.json").write_text(json.dumps({"kind": g5_fetch.MANIFEST_KIND, "snapshot": {"snapshot_date": "2026-06-30", "in_quarantine": False}, "instruments": rows}))
+def at(spec: g5_eval.Spec, text: str) -> int:
+    return tape.parse_iso_utc(text)
 
 
-# ----------------------------------------------------------------------------- the strict spec
+def k_of(series: g5_eval.Series, text: str) -> int:
+    return int(series.index_of(np.array([tape.parse_iso_utc(text)]))[0])
 
 
-def test_spec_reader_is_strict_and_refuses_what_it_does_not_implement():
-    spec = g5_eval.parse_spec(SPEC)
-    assert [e.type for e in spec.events] == ["T01_funding_8h", "T05_us_open", "T11_macro_filter"] and not spec.events[2].evaluate
-    assert spec.events[0].observed_min == {"sign": -1, "control_sign": -5} and spec.events[1].observed_min == {"sign": 5}
-    assert set(spec.used) <= set(spec.requires) and spec.dates[0] == "2026-06-01" and len(spec.dates) == 24 and spec.pad_start_us == spec.start_us - DAY_US
-
-    def broken(mutate, match: str | None = None):
-        document = copy.deepcopy(SPEC)
-        mutate(document)
-        with pytest.raises(g5_eval.SpecError, match=match):
-            g5_eval.parse_spec(document)
-
-    # Unknown keys at every level are refused, never ignored (CTO B1): `requires`, `price_source: last`, `exclude_dates` used to pass silently.
-    broken(lambda d: d.update({"verdict_rule": "lenient"}), "unknown key")
-    broken(lambda d: d["execution"].update({"fee_stress_multiplier": 1.5}), "cost_stress_multiplier")
-    broken(lambda d: d["controls"].update({"minute": 7}), "unknown key")
-    broken(lambda d: d["events"][0]["generator"].update({"lookback": 3}), "unknown key")
-    broken(lambda d: d["events"][1]["generator"].update({"weekends": True}), "unknown key")
-    broken(lambda d: d["events"][0]["sign"].update({"smoothing": 2}), "unknown key")
-    broken(lambda d: d["events"][0].update({"stop_bp": 50}), "unknown key")
-    broken(lambda d: d["events"][2].update({"sign": {"kind": "constant", "value": 1}}), "unknown key")  # a filter has no sign: it would be ignored
-    broken(lambda d: d["events"][1]["sign"].update({"kind": "field_sign", "field": "premium", "at_min": 5}), "premium_mark_index")
-    broken(lambda d: d["events"][1].update({"condition": {"field": "mid_return", "op": ">", "value": 0, "from_min": 0, "to_min": 5}}), "price_return")
-    # `requires`: an unknown capability, and a capability used without being declared (the version lock of (B) xii).
-    broken(lambda d: d["requires"].append("funding_snipe"), "not implemented")
-    broken(lambda d: d["requires"].remove("interval_8h_filter"), "without declaring")
-    broken(lambda d: d["requires"].remove("n_unit_instant"), "without declaring")
-    broken(lambda d: d["requires"].append("price_source_last"), "distinct")
-    for key in ("price_source", "unit", "requires", "quality", "economic"):
-        broken(lambda d, key=key: d.pop(key), "missing")
-    broken(lambda d: d.update({"price_source": "mid"}), "not in")
-    broken(lambda d: d.update({"unit": "instrument_instant"}), "not in")
-    for key in ("execution_role", "days_per_year", "arm_min", "rest_until_min"):
-        broken(lambda d, key=key: d["events"][0].pop(key), "missing")
-    broken(lambda d: d["events"][1].update({"execution_role": "taker_taker"}), "not in")
-    broken(lambda d: d["events"][1]["generator"].pop("exclude_dates"), "missing")  # (B) vii: the NYSE / CPI / NFP list is mandatory, even empty
-    broken(lambda d: d["events"][1]["generator"].update({"exclude_dates": ["2026-13-01"]}), "YYYY-MM-DD")
-    # M2: one premium per source; a capture-only field on the history is refused.
-    broken(lambda d: d["events"][0]["control_sign"].update({"base": "premium_okx"}), "capture only")
-    # The controls of a funding-signed type need a control sign; a control sign elsewhere would break "the same rule at the controls".
-    broken(lambda d: d["events"][0].pop("control_sign"), "control_sign is required")
-    broken(lambda d: d["events"][1].update({"control_sign": copy.deepcopy(T01["control_sign"])}), "control_sign replaces")
-
-    def funding_sign_on_a_clock_type(d):
-        d["events"][1].update({"generator": {"kind": "fixed_time", "times": ["13:30"]}, "sign": copy.deepcopy(T01["sign"]), "control_sign": copy.deepcopy(T01["control_sign"]),
-                               "declared_lookahead": copy.deepcopy(T01["declared_lookahead"])})
-
-    broken(funding_sign_on_a_clock_type, "settlement instants")
-    # The pre-registered Annexe A carries both a funding condition and a funding sign: each is a look-ahead and must be declared.
-    broken(lambda d: d["events"][0].update({"condition": {"field": "funding_rate", "op": "outside_dead_zone", "low": 0.0, "high": 0.0001, "eps": 1e-9, "require_realized": True}}),
-           "condition is observed")
-    both = {**T01, "condition": {"field": "funding_rate", "op": "outside_dead_zone", "low": 0.0, "high": 0.0001, "eps": 1e-9, "require_realized": True},
-            "declared_lookahead": [T01["declared_lookahead"], {"field": "condition", "reason": "same rate as the sign"}]}
-    assert g5_eval.parse_spec(doc(events=[both, T05])).events[0].condition["op"] == "outside_dead_zone"
-    broken(lambda d: d["events"][0].update({**both, "condition": {**both["condition"], "require_realized": False}}), "only true")
-    # M1: a history type is bounded to the D_cov of what it reads.
-    broken(lambda d: d["events"][0].pop("restrict_to_coverage"), "restrict_to_coverage")
-    broken(lambda d: d["events"][0].update({"restrict_to_coverage": ["funding_hist"]}), "index_1m")
-    # Windows and arming.
-    broken(lambda d: d["events"][0].update({"arm_min": -1, "window": {"from_min": -1, "to_min": 15}, "declared_lookahead": [{"field": "sign", "reason": "x"}, {"field": "control_sign", "reason": "y"}]}),
-           "toxic")
-    broken(lambda d: d["events"][1].update({"arm_min": 6}), "armed before")
-    broken(lambda d: d["events"][1].update({"rest_until_min": 61}), "rest_until_min")
-    broken(lambda d: d["events"][1].update({"window": {"from_min": 5, "to_min": 5}}), "from_min must be")
-    broken(lambda d: d["events"][1].update({"exit_until_min": 75}), "Gate 2")  # a capture-only key on the history would be ignored
-    broken(lambda d: d["events"].append(copy.deepcopy(d["events"][1])), "duplicate")
-    broken(lambda d: [e.update({"primary": False}) for e in d["events"] if e.get("evaluate", True)], "primary")
-    broken(lambda d: d["events"][2].update({"primary": True}), "cannot be primary")
-    broken(lambda d: d.update({"primary_measure": "sim_net_bp"}), "execution.sim")
-    broken(lambda d: d.update({"alpha": 1.5}))
-    broken(lambda d: d.update({"min_instants": True}), "integer")  # a boolean is not an integer
-    broken(lambda d: d["quality"].update({"exclude_zero_volume": "yes"}), "true or false")
-    broken(lambda d: d.update({"events": []}), "empty")
-    # Optional blocks declare their capability: eligibility (quant B3), programme family, assumed hours outside the coverage.
-    broken(lambda d: d.update({"eligibility": {"days_after_list": 30}}), "without declaring")
-    assert spec_of(eligibility={"days_after_list": 30}, requires=SPEC["requires"] + ["eligibility_days_after_list"]).eligibility_days == 30.0
-    assert spec_of(programme={"m_max": 7}, requires=SPEC["requires"] + ["programme_family"]).programme_m_max == 7
-    # Quarantine: no window may touch [2026-10-14, 2026-11-02); a history window ends at END_EXCLUSIVE at the latest.
-    for window in ({"start": "2026-10-01", "end_exclusive": "2026-10-15"}, {"start": "2026-10-20", "end_exclusive": "2026-10-25"}, {"start": "2026-10-31", "end_exclusive": "2026-11-05"}):
-        with pytest.raises(SystemExit):
-            g5_eval.guard_window(spec_of(window=window))
-    assert g5_eval.guard_window(spec_of(window={"start": "2026-03-30", "end_exclusive": "2026-10-14"}))["end_exclusive"] == "2026-10-14T00:00:00Z"
+# ----------------------------------------------------------------------------- the real spec and the strict reader (B xviii)
 
 
-def test_a_field_observed_after_the_decision_is_refused_unless_declared_by_name():
-    """CTO B2: the test spec of the first version (condition premium(h−1), order armed at h−15) is refused now."""
-    old_style = {"type": "pre", "primary": True, "execution_role": "maker_maker", "days_per_year": 365, "generator": {"kind": "fixed_time", "times": ["08:00"]},
-                 "condition": {"field": "premium_mark_index", "at_min": -1, "op": ">", "value": 0.0}, "sign": {"kind": "constant", "value": -1},
-                 "window": {"from_min": -15, "to_min": 0}, "arm_min": -15, "rest_until_min": -14, "restrict_to_coverage": ["mark_1m", "index_1m"]}
-    requires = SPEC["requires"]
-    with pytest.raises(g5_eval.SpecError, match="look-ahead"):
-        g5_eval.parse_spec(doc(events=[old_style]))
-    declared = {**old_style, "declared_lookahead": {"field": "condition", "reason": "test"}}
-    spec = g5_eval.parse_spec(doc(events=[declared], requires=requires))
-    assert spec.events[0].declared_lookahead == ({"field": "condition", "reason": "test"},)
-    with pytest.raises(g5_eval.SpecError, match="nothing to declare"):  # a declaration with no look-ahead behind it
-        g5_eval.parse_spec(doc(events=[{**old_style, "condition": {**old_style["condition"], "at_min": -15}, "declared_lookahead": {"field": "condition", "reason": "x"}}]))
-    # A return sign read until h+5 for an order armed at h: refused; armed at h+5 (T05): accepted.
-    late_sign = {**T05, "arm_min": 0, "window": {"from_min": 0, "to_min": 60}}
-    with pytest.raises(g5_eval.SpecError, match="sign is observed at h\\+5"):
-        g5_eval.parse_spec(doc(events=[late_sign]))
-    # T01 without its declaration: the realized rate (observed at h−1) and an order armed at h−5.
-    with pytest.raises(g5_eval.SpecError, match="look-ahead"):
-        g5_eval.parse_spec(doc(events=[{k: v for k, v in T01.items() if k != "declared_lookahead"}, T05]))
-    # The control proxy read at h−1 (the prereg §7.2 form) needs its own declaration.
-    proxy_late = {**T01, "control_sign": {**T01["control_sign"], "at_min": -1}}
-    with pytest.raises(g5_eval.SpecError, match="control_sign is observed"):
-        g5_eval.parse_spec(doc(events=[proxy_late, T05]))
-    both = {**proxy_late, "declared_lookahead": [T01["declared_lookahead"], {"field": "control_sign", "reason": "P̂(c−1), prereg §7.2"}]}
-    assert len(g5_eval.parse_spec(doc(events=[both, T05])).events[0].declared_lookahead) == 2
-    # The quant-review alternative (one classifier P̂(h−5) for events and controls, no look-ahead) is expressible without any declaration.
-    unified = {"type": "T01_proxy", "primary": True, "execution_role": "maker_maker", "days_per_year": 365, "generator": T01["generator"],
-               "sign": {k: v for k, v in T01["control_sign"].items() if k not in ("concordance_min", "concordance_on")}, "window": T01["window"], "arm_min": -5, "rest_until_min": 1,
-               "restrict_to_coverage": ["mark_1m", "index_1m"]}
-    assert g5_eval.parse_spec(doc(events=[unified])).events[0].declared_lookahead == ()
+def test_the_real_spec_is_accepted_and_every_field_is_read():
+    spec, sha = g5_eval.load_spec(REAL_SPEC)
+    assert sha == REAL_SPEC_SHA256_DRAFT and spec.status == "DRAFT_NOT_FROZEN" and spec.source == "history" and spec.gate == "G5_GATE1_"
+    assert spec.requires == tuple(BASE["requires"]) and set(spec.requires) == set(g5_eval.HISTORY_REQUIRES) and len(spec.requires) == 27
+    assert spec.freeze_fill["null"] == ["instruments_snapshot_path", "instruments_snapshot_sha256", "calendars_verified_utc", "code_digest_sha256", "decision_ref_p_g5_1"]
+    assert len(spec.universe) == 25 and [e["inst_id"] for e in spec.excluded] == ["PONS-USD_UM_XPERP-310919", "STRK-USD_UM_XPERP-310919", "CT-USD_UM_XPERP-311003", "QUANT-USD_UM_XPERP-311003"]
+    assert spec.instrument(BTC).eligible_from_us == tape.parse_iso_utc("2026-04-29T04:30:00Z") and spec.eligibility_days == 30.0
+    assert (spec.start.isoformat(), spec.end_exclusive.isoformat(), spec.end_us) == ("2026-04-28", "2026-10-14", g5_fetch.END_EXCLUSIVE_US)
+    t01, t05 = spec.types
+    assert (t01.name, t01.label, t01.role, t01.footprint, t01.arm_min, t01.rest_until_min, t01.return_window, t01.key_candles) == (
+        "T01_funding_8h", "T01", "maker_maker", (-5, 15), -5, 1, (-5, 15), (-5, 15))
+    assert t01.classifier == {"kind": "premium_wavg", "lookback_min": 480, "min_coverage": 0.9, "high": 0.0009, "low": -0.0009, "threshold_origin": BASE["events"][0]["classifier"]["threshold_origin"]}
+    assert t01.fill_proxy == {"kind": "through_candles", "open_from_min": -5, "open_to_min": 0} and t01.validation == {
+        "rate_high": 0.0004, "rate_low": -0.0004, "sensitivity_min": 0.8, "false_positive_rate_max": 0.2, "min_denominator": 30}
+    assert t01.generator["previous_gap_us"] == t01.generator["next_gap_us"] == 8 * HOUR_US and t01.generator["tolerance_us"] == MINUTE_US
+    assert t01.controls == {"minute_of_hour": 0, "grid_hours": (0, 8, 16), "within": "funding_coverage"} and t01.c7 == {"event_hour_utc": 16, "require_point_gt_bp": 0.0}
+    assert t01.criteria == ("C1", "C2", "C3", "C4", "C5", "C6", "C7") and t01.proxy_missing_share_max == 0.5 and t01.days_per_year == 365
+    assert (t05.name, t05.role, t05.footprint, t05.arm_min, t05.return_window, t05.key_candles, t05.sign) == (
+        "T05_us_open", "taker_maker", (0, 60), 5, (5, 60), (0, 5, 60), {"kind": "return_sign", "from_min": 0, "to_min": 5})
+    assert t05.generator["minute_of_day"] == 9 * 60 + 30 and t05.generator["tz"] == "America/New_York" and t05.generator["exclude_refs"] == ("cpi", "employment_situation")
+    assert t05.controls == {"minute_of_hour": 30, "grid_hours": (0, 4, 8, 12, 16, 20), "within": "spec_window"} and t05.criteria == ("C1", "C2", "C3", "C4", "C5") and t05.days_per_year == 252
+    assert g5_eval.cost_terms("maker_maker", spec.costs)["total_bp"] == 13.0 and g5_eval.cost_terms("maker_maker", spec.costs)["stress_total_bp"] == 19.5
+    assert g5_eval.cost_terms("taker_maker", spec.costs)["total_bp"] == 15.5 and g5_eval.cost_terms("taker_maker", spec.costs)["stress_total_bp"] == pytest.approx(23.25)
+    assert spec.statistics == {"alpha": 0.1, "threshold_bp": 10.0, "block_days": 1, "resamples": 10000, "seed": 20261102, "lb_quantile": 0.1, "ub_quantile": 0.9, "sensitivity_block_days": 7}
+    assert spec.power == {"min_instants": 100, "min_days": 30} and spec.unit["min_instruments"] == 1 and spec.price["max_missing_share"] == 0.2
+    assert spec.controls_common["margin_min"] == 60 and spec.controls_common["components"] == {
+        "settlements": (-5, 15), "default_grid": (-5, 15), "type_instants": ("T05_us_open", 0, 60, "T05"), "sessions": True, "macro": True}
+    assert [s["name"] for s in spec.sessions] == ["us_cash_open", "us_cash_close", "london_xetra_open", "hong_kong_open", "tokyo_open", "cme_cf_brr_window", "okx_dated_settlement_average"]
+    assert [(m["name"], m["time_min"], m["duration_min"], m["dates_ref"]) for m in spec.macro] == [("cpi", 510, 60, "cpi"), ("employment_situation", 510, 60, "employment_situation"),
+                                                                                                    ("fomc_statement", 840, 90, "fomc_statement")]
+    assert spec.verdict["fetch_error_share_max"] == 0.1 and spec.verdict["c5_trim_share"] == 0.05 and spec.multiplicity["m_max"] == 7 and spec.multiplicity["immediate_if_p_le"] == 0.0142857
+    assert spec.family == ("T01_funding_8h", "T05_us_open") and spec.gate2_inscription == {"PASS": "inscribed", "FAIL": "not_inscribed",
+                                                                                          "NOT_INFORMATIVE": "inscribed_automatically_without_futility",
+                                                                                          "INCONCLUSIVE": "inscribed_automatically_without_futility"}
+    assert spec.economic["s_eco"] == 97.0 and spec.economic["max_live"] == 4 and spec.descriptive["reports"] == tuple(g5_eval.DESCRIPTIVE_REPORTS)
+    # Calcul d'audit from the spec's own lists (LP-G5 §4.3, §4.4, §5.2, §7.6, Annexe C): the parse refuses any other number.
+    assert spec.audit["T05_us_open"] == {"nyse_days_with_eligible_instrument": 116, "raw_instants": 105, "raw_instants_with_ge_3_instruments": 103,
+                                         "first_instant_utc": "2026-04-29T13:30:00Z", "halves_by_lower_median_day": [53, 52]}
+    assert spec.audit["T01_funding_8h"]["raw_instants_upper_bound"] == 211 and round(spec.audit["T01_funding_8h"]["not_informative_expected_if_f_inst_below"], 3) == 0.474
+    assert {k: round(v, 2) for k, v in spec.audit["break_even"].items()} == BASE["economic"]["audit_break_even_net_bp"]
+    assert spec.fetch_plan["estimates"] == {"funding_hist": 50, "candles_1m": 13023, "mark_1m": 22606, "index_1m": 22606} and spec.fetch_plan["total"] == 58285
+    assert spec.fetch_plan["estimate_coverage_start_us"] == tape.parse_iso_utc("2026-08-04T00:00:00Z") and spec.fetch_plan["estimate_fetched_on"] == "2026-11-02"
 
 
-# ----------------------------------------------------------------------------- loaders
+def _refused(mutate, match: str):
+    document = copy.deepcopy(BASE)
+    mutate(document)
+    with pytest.raises(g5_eval.SpecError, match=match):
+        g5_eval.parse_spec(document)
 
 
-def test_history_loader_reference_price_without_fallback_unconfirmed_realized_and_coverage(tmp_path: Path):
-    spec = spec_of(window={"start": "2026-06-01", "end_exclusive": "2026-06-03"})
-    arrays = synthetic(spec, unknown_rate_at=(tape.parse_iso_utc("2026-06-01T08:00:00Z"),))
-    t_unconf = int(arrays["grid"][100])
-    t_missing = int(arrays["grid"][200])
-    write_tape(tmp_path, spec, [arrays], unconfirmed_at=(t_unconf,), drop_last_at=(t_missing,))
-    series = g5_eval.load_history_series(tmp_path, INST, INDEX, spec)
-    k = 500
-    assert series.size == 3 * 1440 + 1 and series.price[k] == pytest.approx(arrays["price"][k]) and series.price_code[k] == g5_eval.PRICE_CODE["last"]
-    assert series.alt_price[k] == pytest.approx(arrays["mark"][k]) and series.premium["premium_mark_index"][k] == pytest.approx(arrays["premium"][k], abs=1e-12)
-    # (i) no fallback: a missing last-price candle leaves the reference price missing although the mark exists; an unconfirmed candle is dropped and counted.
-    assert np.isnan(series.price[201]) and series.price_code[201] == 0 and np.isfinite(series.alt_price[201])
-    assert np.isnan(series.price[101]) and series.coverage["unconfirmed_dropped"]["candles_1m"] == 1
-    # (ii) realized rates only: the settlement without realizedRate is known as an instant, its rate is unknown.
-    h_unknown = tape.parse_iso_utc("2026-06-01T08:00:00Z")
-    assert h_unknown in series.settlements_all.tolist() and h_unknown in series.funding_unknown_ts.tolist() and h_unknown not in series.funding.ts_us.tolist()
-    assert series.coverage["funding_rows_without_realized"] == 1 and series.funding.rate[0] in RATE_CYCLE
-    # Coverage from the rows when the manifest has no fetch state; from the manifest's end_reason when it has one (M1).
-    assert series.coverage_start_us["funding_hist"] == int(arrays["hs"][0])
-    manifest = {"g5_streams": {f"{INST}:funding_hist": {"complete": True, "end_reason": "server_empty_before_start", "coverage_start_us": spec.start_us + DAY_US, "start_us": 0},
-                               f"{INST}:candles_1m": {"complete": True, "end_reason": "reached_start", "start_us": 123, "coverage_start_us": 123}}}
-    series = g5_eval.load_history_series(tmp_path, INST, INDEX, spec, manifest=manifest)
-    assert series.coverage_start_us["funding_hist"] == spec.start_us + DAY_US and series.coverage_start_us["candles_1m"] == 123
-    # The quarantine bound holds in the loader too.
-    rows = np.zeros(3, dtype=tape.PX_CANDLES_1M_DTYPE)
-    rows["ts_us"] = [g5_fetch.END_EXCLUSIVE_US - MINUTE_US, g5_fetch.END_EXCLUSIVE_US, g5_fetch.END_EXCLUSIVE_US + MINUTE_US]
-    kept, dropped = g5_eval._drop_after_end(rows)
-    assert kept.size == 1 and dropped == 2
-    mark_spec = spec_of(window={"start": "2026-06-01", "end_exclusive": "2026-06-03"}, price_source="mark")
-    assert g5_eval.load_history_series(tmp_path, INST, INDEX, mark_spec).price[201] == pytest.approx(arrays["mark"][201])
+def test_the_strict_reader_refuses_unknown_keys_values_capabilities_and_inconsistencies():
+    t01 = lambda d: d["events"][0]  # noqa: E731
+    t05 = lambda d: d["events"][1]  # noqa: E731
+    cases = [
+        # unknown keys at every level, never ignored
+        (lambda d: d.update({"verdict_rule": "lenient"}), "unknown key"),
+        (lambda d: d["price"].update({"fallback": "mark"}), "unknown key"),
+        (lambda d: t01(d)["classifier"].update({"smoothing": 2}), "unknown key"),
+        (lambda d: d["controls_common"].update({"draws_per_day": 3}), "unknown key"),
+        (lambda d: d["fetch_plan"]["post_freeze"]["candles_1m"].update({"bar": "5m"}), "unknown key"),
+        (lambda d: d["sealing"].update({"printed_extra": []}), "unknown key"),
+        (lambda d: t05(d).update({"stop_bp": 50}), "unknown key"),
+        (lambda d: d.pop("sealing"), "missing"),
+        (lambda d: t01(d)["generator"].pop("interval_filter"), "missing"),
+        # schema, status, constants
+        (lambda d: d.update({"spec_schema": "g5-spec/1"}), "not implemented"),
+        (lambda d: d.update({"status": "FROZEN"}), "draft|null"),
+        (lambda d: d.update({"status": "FROZEN", "spec_version": "1.0.0"}), "null"),
+        (lambda d: d.update({"status": "APPROVED"}), "not implemented"),
+        (lambda d: d.update({"end_exclusive_utc": "2026-10-20T00:00:00Z"}), "implemented rule"),
+        (lambda d: d.update({"quarantine_floor_utc": "2026-11-01T00:00:00Z"}), "implemented rule"),
+        (lambda d: d.update({"window": {"start": "2026-10-01", "end_exclusive": "2026-10-20"}}), "quarantine"),
+        (lambda d: d.update({"spec_id": "LP-G5-GATE2-2026"}), "Gate 1"),
+        # requires: the version lock
+        (lambda d: d["requires"].append("funding_snipe"), "not implemented"),
+        (lambda d: d["requires"].remove("fill_proxy_through_candles"), "without declaring"),
+        (lambda d: d["requires"].append("gate2_capture_simulation"), "not applicable"),
+        (lambda d: d["requires"].append("price_source_last_only"), "distinct"),
+        # implemented values only
+        (lambda d: d["price"].update({"source": "mark"}), "implemented rule"),
+        (lambda d: d["price"].update({"forward_fill": "previous"}), "implemented rule"),
+        (lambda d: d["frozen_candle"].update({"rule": "keep"}), "implemented rule"),
+        (lambda d: d["unit"].update({"min_instruments_per_instant": 0}), "outside"),
+        (lambda d: d["unit"].update({"report": ["instruments_per_instant_distribution", "median_split"]}), "not implemented"),
+        (lambda d: d["statistics"]["bootstrap"].update({"kind": "iid"}), "not implemented"),
+        (lambda d: d["statistics"]["bootstrap"].update({"lb_quantile": 0.05}), "alpha"),
+        (lambda d: d["statistics"]["bootstrap"].update({"events_and_controls_jointly": False}), "only true"),
+        (lambda d: d["power_floor"].update({"extension_on_result": True}), "only false"),
+        (lambda d: d["controls_common"].update({"random_draws": 3}), "only 0"),
+        (lambda d: d["controls_common"]["exclusions"].append("full moons"), "not an implemented exclusion"),
+        (lambda d: d["sessions"][0].update({"tz": "Mars/Olympus"}), "unknown time zone"),
+        (lambda d: d["sessions"][0].update({"days": "weekends"}), "not implemented"),
+        (lambda d: d["calendars"].update({"tz": "UTC"}), "New York"),
+        (lambda d: d["macro_filter"]["releases"][0].update({"dates_ref": "calendars.ppi"}), "names no date list"),
+        # costs: the declared totals are checked (CTO B1-vi)
+        (lambda d: t01(d).update({"expected_cost_bp": 10.0}), "cost terms"),
+        (lambda d: t05(d).update({"expected_cost_bp_stress": 23.0}), "cost terms"),
+        (lambda d: d["costs"].update({"g2_table_substitution": "G2 table when available"}), "none"),
+        # types
+        (lambda d: t01(d).update({"decisive": False}), "only true"),
+        (lambda d: t01(d)["generator"].update({"fallback_hours": "0,8,16"}), "not implemented"),
+        (lambda d: t01(d)["generator"]["interval_filter"].update({"unknown_neighbour": "keep"}), "not implemented"),
+        (lambda d: t01(d)["generator"].update({"require_realized_rate": False}), "only true"),
+        (lambda d: t01(d).update({"arm_min": -1, "return_window_min": [-1, 15], "entry": {"kind": "passive_limit", "price": "c(h-1)"}}), "forbidden"),
+        (lambda d: t01(d)["entry"].update({"price": "c(h-1)"}), "implemented rule"),
+        (lambda d: t01(d)["fill_proxy"].update({"candles_open_to_min": 1}), "rests"),
+        (lambda d: t01(d)["fill_proxy"].update({"long_filled_if": "min(low) <= c(t_arm)"}), "implemented rule"),
+        (lambda d: t01(d)["classifier"].update({"lookback_min": 240}), "implemented rule"),
+        (lambda d: t01(d)["validation"].update({"classifier_class": "+1 if P_hat(t_arm) >= 0.0006, -1 if <= -0.0005, 0 otherwise"}), "thresholds"),
+        (lambda d: t01(d)["validation"].update({"population": "every T01 settlement"}), "population"),
+        (lambda d: t01(d)["validation"].update({"fail_or_not_computable": "G5_GATE1_FAIL"}), "implemented rule"),
+        (lambda d: t01(d).update({"criteria": ["C1", "C2", "C3", "C4", "C6", "C7"]}), "C1-C5"),
+        (lambda d: t05(d).update({"c7": {"event_hour_utc": 13, "controls": "same_utc_days", "require_point_gt_bp": 0.0}}), "without C7"),
+        (lambda d: t01(d).update({"inconclusive_if": ["funding_coverage_unknown", "C6_failed_or_not_computable", "moon_phase"]}), "not implemented"),
+        (lambda d: t01(d).update({"inconclusive_if": ["C6_failed_or_not_computable"]}), "funding_coverage_unknown"),
+        (lambda d: t05(d)["controls"].update({"within": "funding_coverage"}), "window_rule"),
+        (lambda d: t05(d)["controls"].update({"days": "every day"}), "implemented rule"),
+        (lambda d: t05(d)["generator"].update({"days": "fri"}), "not implemented"),
+        # calcul d'audit: a number the spec's own lists contradict
+        (lambda d: t05(d)["audit_expected"].update({"raw_instants": 123}), "calcul d'audit"),
+        (lambda d: t05(d)["audit_expected"].update({"halves_by_lower_median_day": [52, 53]}), "calcul d'audit"),
+        (lambda d: t01(d)["audit_expected"].update({"raw_instants_upper_bound_if_funding_fetched_2026_11_02": 213}), "assumed D_cov"),
+        (lambda d: t01(d)["audit_expected"].update({"magic": 1}), "unknown key"),
+        (lambda d: d["economic"]["audit_break_even_net_bp"].update({"T05_us_open_4_fills_per_event_day": 9.6}), "S_eco"),
+        (lambda d: d["fetch_plan"]["post_freeze"]["candles_1m"].update({"requests_estimate": 13000}), "sum|recomputation"),
+        (lambda d: d["fetch_plan"]["post_freeze"]["mark_1m"].update({"page": 50}), "documented maximum"),
+        (lambda d: d["fetch_plan"].update({"host": "https://www.okx.com"}), "implemented rule"),
+        (lambda d: d["fetch_plan"].update({"rate_scale_default": 0.5}), "default"),
+        (lambda d: d["fetch_plan"]["pre_freeze"].update({"streams": ["funding_hist", "candles_1m"]}), "before the freeze"),
+        (lambda d: d["fetch_plan"]["pre_freeze"].update({"printed": ["jobs_total", "rows"]}), "prints"),
+        # verdict, multiplicity, sealing, inscription, economics, descriptive
+        (lambda d: d["verdict"].update({"precedence": ["criteria_then_holm", "G5_GATE1_INCONCLUSIVE", "G5_GATE1_NOT_INFORMATIVE"]}), "precedence"),
+        (lambda d: d["verdict"]["criteria"].update({"C4": "D point > 0 in each calendar half"}), "implemented rule"),
+        (lambda d: d["verdict"]["inconclusive_global"].append("operator_mood"), "not implemented"),
+        (lambda d: d["multiplicity"]["local_holm"].update({"family": ["T01_funding_8h"]}), "decisive types"),
+        (lambda d: d["multiplicity"]["programme"].update({"immediate_if_p_le": 0.02}), "alpha / m_max"),
+        (lambda d: d["multiplicity"]["programme"].update({"field": "pass_programme"}), "implemented rule"),
+        (lambda d: d["multiplicity"].update({"forbidden_field_names": []}), "non-empty|forbid"),
+        (lambda d: d["sealing"].update({"printed": d["sealing"]["printed"] + ["D"]}), "not implemented"),
+        (lambda d: d["sealing"].update({"applies_to_verdicts": ["G5_GATE1_INCONCLUSIVE"]}), "only"),
+        (lambda d: d["gate2_inscription"].update({"G5_GATE1_FAIL": "inscribed"}), "not implemented"),
+        (lambda d: d["gate2_inscription"].update({"discretion": "owner"}), "not implemented"),
+        (lambda d: d["economic"].update({"max_live": 6}), "not feasible"),
+        (lambda d: d["economic"].update({"readings": ["PASS", "FAIL", "?"]}), "readings"),
+        (lambda d: d["descriptive"]["reports"].append("T05_lunar_cycle"), "not implemented"),
+        (lambda d: d["universe"]["analysed"][0].update({"eligible_from_utc": "2026-04-28T04:30:00Z"}), "list_time_utc"),
+        (lambda d: d["universe"]["analysed"][0].update({"index_id": "ETH-USD"}), "index"),
+        (lambda d: d["universe"]["analysed"].append({"inst_id": "PONS-USD_UM_XPERP-310919", "index_id": "PONS-USD", "list_time_utc": "2026-09-16T08:00:00Z",
+                                                     "eligible_from_utc": "2026-10-16T08:00:00Z", "ct_val": 10, "tick_sz": 0.0001}), "excluded_never_eligible"),
+        (lambda d: d["universe"].update({"mismatch_with_snapshot": "warn"}), "not implemented"),
+        (lambda d: d.update({"gate2": {}}), "capture"),
+    ]
+    for mutate, match in cases:
+        _refused(mutate, match)
 
 
-# ----------------------------------------------------------------------------- generators and controls
+def test_no_information_after_the_decision_is_refused_at_parse_time():
+    """(B) xvii, CTO B2: a classifier evaluated after t_arm, a sign window ending after arm_min, are refused (look-ahead)."""
+    _refused(lambda d: d["events"][0]["classifier"].update({"evaluated_at": "h-1"}), "information after the decision")
+    _refused(lambda d: d["events"][0]["classifier"].update({"evaluated_at": "settlement"}), "information after the decision")
+    _refused(lambda d: d["events"][1]["sign"].update({"to_min": 6}), "look-ahead")
+    _refused(lambda d: d["events"][1].update({"arm_min": 4, "return_window_min": [4, 60], "entry": {"kind": "taker", "price": "c(h+4)", "half_spread_bp": "costs.taker_entry_half_spread_bp"}}),
+             "look-ahead")
+    _refused(lambda d: d["events"][0]["classifier"].update({"applies_to": ["events"]}), "events and the controls")
+    # The only post-decision quantities are the fill, the exit and the return (and the realized rate as a cost): the classifier and the
+    # sign end at t_arm by construction.
+    spec, _ = g5_eval.load_spec(REAL_SPEC)
+    t01, t05 = spec.types
+    assert t01.lookback_min == -484 and max(t05.sign["from_min"], t05.sign["to_min"]) <= t05.arm_min
 
 
-def test_generators_dst_exclusion_dates_and_the_8h_interval_filter():
-    spec = spec_of(window={"start": "2026-03-02", "end_exclusive": "2026-03-14"})
-    series = memory_series(spec, synthetic(spec))
-    instants, source, diag = g5_eval.generate_instants(spec.events[1].generator, series, spec)  # exclude_dates are June dates: nothing excluded in March
-    labels = [tape.iso_utc(int(t))[5:16] for t in instants]
-    assert source == "us_open_dst_aware" and labels == ["03-02T14:30", "03-03T14:30", "03-04T14:30", "03-05T14:30", "03-06T14:30",
-                                                         "03-09T13:30", "03-10T13:30", "03-11T13:30", "03-12T13:30", "03-13T13:30"]
-    us = g5_eval._parse_generator({"kind": "us_open", "exclude_dates": ["2026-03-04"], "skip_dates": ["2026-03-11"]}, "g", set())
-    instants, _, diag = g5_eval.generate_instants(us, series, spec)
-    assert instants.size == 8 and diag["excluded_dates"] == 1 and diag["skipped_dates"] == 1 and [tape.iso_utc(t)[5:16] for t in diag["skipped_instants"]] == ["03-11T13:30"]
-    with pytest.raises(g5_eval.SpecError, match="both excluded"):
-        g5_eval._parse_generator({"kind": "us_open", "exclude_dates": ["2026-03-04"], "skip_dates": ["2026-03-04"]}, "g", set())
-    fixed = g5_eval._parse_generator({"kind": "fixed_time", "times": ["08:00"], "weekdays": [4], "exclude_dates": ["2026-03-13"]}, "g", set())
-    fridays, _, diag = g5_eval.generate_instants(fixed, series, spec)
-    assert [tape.iso_utc(int(t))[5:16] for t in fridays] == ["03-06T08:00"] and diag["excluded_dates"] == 1
-    # Interval filter: a 4 h settlement inserted at 2026-03-05 12:00 removes 08:00 and 16:00 (gaps 4 h) and itself.
-    extra = tape.parse_iso_utc("2026-03-05T12:00:00Z")
-    series.settlements_all = np.sort(np.append(series.settlements_all, extra))
-    funding, source, diag = g5_eval.generate_instants(spec.events[0].generator, series, spec)
-    stamps = {tape.iso_utc(int(t))[5:16] for t in funding}
-    assert source == "instrument_settlements" and diag["settlements"] == 12 * 3 + 1 and diag["interval_kept"] == 12 * 3 - 2 and diag["interval_other"] == 3
-    assert "03-05T08:00" not in stamps and "03-05T12:00" not in stamps and "03-05T16:00" not in stamps and "03-05T00:00" in stamps
-    # Without neighbours (first / last settlement of what was read) the interval is unknown: excluded and counted.
-    series.settlements_all = series.settlements_all[(series.settlements_all >= spec.start_us) & (series.settlements_all < spec.end_us)]
-    _, _, diag = g5_eval.generate_instants(spec.events[0].generator, series, spec)
-    assert diag["interval_unknown"] == 2
-    explicit, source, _ = g5_eval.generate_instants(g5_eval._parse_generator({"kind": "explicit", "instants": ["2026-03-05T12:30:00Z", "2026-03-05T12:30:30Z", "2026-04-01T12:30:00Z"]}, "g", set()),
-                                                    series, spec)
-    assert source == "explicit_list" and [tape.iso_utc(int(t))[5:16] for t in explicit] == ["03-05T12:30"]
+def test_a_frozen_spec_needs_its_freeze_fill_and_the_c5_trim_share_is_read_from_its_text():
+    def frozen(d):
+        d.update({"status": "FROZEN", "spec_version": "1.0.0"})
+        d["freeze_fill"].update({"instruments_snapshot_path": "snapshot.json", "instruments_snapshot_sha256": "a" * 64, "calendars_verified_utc": "2026-11-02T10:00:00Z",
+                                 "code_digest_sha256": "b" * 64, "decision_ref_p_g5_1": "owner, 2026-11-02: scale confirmed"})
+
+    document = copy.deepcopy(BASE)
+    frozen(document)
+    spec = g5_eval.parse_spec(document)
+    assert spec.frozen and spec.freeze_fill["null"] == []
+    _refused(lambda d: (frozen(d), d["freeze_fill"].update({"code_digest_sha256": "not-a-sha"})), "sha256")
+    _refused(lambda d: (frozen(d), d["freeze_fill"].update({"calendars_verified_utc": "yesterday"})), "ISO")
+    document = copy.deepcopy(BASE)
+    document["verdict"]["criteria"]["C5"] = document["verdict"]["criteria"]["C5"].replace("0.05", "0.10")
+    assert g5_eval.parse_spec(document).verdict["c5_trim_share"] == 0.10
 
 
-def test_controls_same_days_minute_of_the_hour_and_the_union_exclusion():
-    spec = spec_of()
-    series = memory_series(spec, synthetic(spec))
-    t01, t05 = spec.events[0], spec.events[1]
-    us_open, _, _ = g5_eval.generate_instants(t05.generator, series, spec)
-    macro, _, _ = g5_eval.generate_instants(spec.events[2].generator, series, spec)
-    union = np.unique(np.concatenate([series.settlements_all, us_open, macro]))
-    days = (us_open // DAY_US)[:5]
-    controls, diag = g5_eval.control_instants(series, spec, t05, 1, union, days)
-    minutes_of_hour = {int(t // MINUTE_US % 60) for t in controls}
-    assert minutes_of_hour == {30} and set((controls // DAY_US).tolist()) <= set(days.tolist())  # (B) iv + quant B2: same days, minute of the event
-    assert np.all(np.min(np.abs(controls[:, None] - union[None, :]), axis=1) > 60 * MINUTE_US)  # ≥ 60 min from every settlement, open and macro instant
-    assert diag["fixed"] == 5 * 2 and diag["random"] == 5 * 3  # 12:30 is within 60 min of 13:30 every day
-    again, _ = g5_eval.control_instants(series, spec, t05, 1, union, days)
-    other, _ = g5_eval.control_instants(series, spec, t05, 0, union, days)
-    assert again.tolist() == controls.tolist() and other.tolist() != controls.tolist()  # reproducible, type-specific draws
-    t01_days = (series.settlements_all[(series.settlements_all >= spec.start_us) & (series.settlements_all < spec.end_us)] // DAY_US)[:6]
-    controls, _ = g5_eval.control_instants(series, spec, t01, 0, union, t01_days)
-    assert {int(t // MINUTE_US % 60) for t in controls} == {0} and {int(t // HOUR_US % 24) for t in controls} & {0, 8, 16, 7, 9, 15, 17, 23, 1} == set()
-    # A settlement without a known rate still excludes its neighbourhood (union = every settlement, all intervals).
-    hole = g5_eval.control_instants(series, spec, t01, 0, np.append(union, spec.start_us + 4 * HOUR_US), t01_days[:1])[0]
-    assert spec.start_us + 4 * HOUR_US not in hole.tolist()
-    # Window exclusion: the whole control window [c + lo ; c + to] stays ≥ exclusion_min from the union.
-    wspec = spec_of(controls={**SPEC["controls"], "exclusion_on": "window"}, requires=SPEC["requires"] + ["controls_window_exclusion"])
-    wcontrols, _ = g5_eval.control_instants(series, wspec, wspec.events[1], 1, union, days)
-    assert wcontrols.size and all(np.min(np.abs(union - (c + 60 * MINUTE_US))) > 60 * MINUTE_US for c in wcontrols.tolist())
-    # The union of the study: settlements, assumed hours, every type's instants (the filter included).
-    raw = {e.type: g5_eval.generate_instants(e.generator, series, spec)[0] for e in spec.events}
-    skipped = g5_eval.generate_instants(t05.generator, series, spec)[2]["skipped_instants"]
-    full = g5_eval.exclusion_union(series, raw, skipped)
-    assert set(macro.tolist()) <= set(full.tolist()) and set(series.settlements_all.tolist()) <= set(full.tolist()) and set(us_open.tolist()) <= set(full.tolist())
-    assert skipped == [tape.parse_iso_utc("2026-06-10T13:30:00Z")] and skipped[0] in full.tolist()  # the open of a skipped CPI session still excludes its neighbourhood
+# ----------------------------------------------------------------------------- generators, eligibility, local time (B ii, vii, x, xii)
 
 
-# ----------------------------------------------------------------------------- measures
+def test_t05_instants_are_09_30_new_york_on_frozen_nyse_days_without_cpi_and_nfp():
+    spec, _ = g5_eval.load_spec(REAL_SPEC)
+    t05 = spec.type("T05_us_open")
+    rows = g5_eval.local_time_instants(t05, spec, apply_exclusions=False)
+    instants = {d.isoformat(): (iso(m), e) for m, d, e in rows}
+    assert instants["2026-04-29"] == ("2026-04-29T13:30:00Z", False) and instants["2026-06-10"] == ("2026-06-10T13:30:00Z", True)  # CPI: generated, excluded
+    assert "2026-06-19" not in instants and "2026-07-03" not in instants and "2026-05-02" not in instants  # Juneteenth, Independence Day observed, a Saturday
+    assert instants["2026-07-02"][1] is True and instants["2026-04-28"] == ("2026-04-28T13:30:00Z", False)  # Employment Situation on a Thursday
+    assert all(iso(m).endswith("13:30:00Z") for m, _, _ in rows)  # the whole Gate 1 window is EDT
+    kept = g5_eval.local_time_instants(t05, spec)
+    assert len(kept) == len(rows) - sum(1 for _, _, e in rows if e)
+    # DST from local time (zoneinfo), checked against events.us_dst_active: 14:30 UTC in EST.
+    ny = t05.generator["tz_info"]
+    assert iso(g5_eval.local_to_utc_us(date(2026, 11, 2), 570, ny)) == "2026-11-02T14:30:00Z" and iso(g5_eval.local_to_utc_us(date(2027, 3, 12), 570, ny)) == "2027-03-12T14:30:00Z"
+    assert iso(g5_eval.local_to_utc_us(date(2027, 3, 15), 570, ny)) == "2027-03-15T13:30:00Z"
+    london = next(s for s in spec.sessions if s["name"] == "london_xetra_open")["tz_info"]
+    assert iso(g5_eval.local_to_utc_us(date(2026, 8, 5), 480, london)) == "2026-08-05T07:00:00Z" and iso(g5_eval.local_to_utc_us(date(2026, 11, 2), 480, london)) == "2026-11-02T08:00:00Z"
 
 
-def test_measure_roles_costs_stress_signs_and_exclusions():
-    spec = spec_of(window={"start": "2026-06-01", "end_exclusive": "2026-06-03"})
-    arrays = synthetic(spec, sigma=0.0)
-    n = arrays["grid"].size
-    arrays["price"] = 100.0 * np.exp(np.arange(n) * 1e-4)  # +1 bp per minute, deterministic
-    series = memory_series(spec, arrays)
-    t01, t05 = spec.events[0], spec.events[1]
-    # (vi) costs at the role: maker/maker 2 + 2 fees, 2 × 2 adverse selection, 2 slippage = 10 bp; taker/maker 5 + 2, 1 × 2, 2 = 11 bp; stress × 1.5 on every term.
-    assert g5_eval.cost_terms(t01, spec)["total_bp"] == 10.0 and g5_eval.cost_terms(t05, spec)["total_bp"] == 11.0
-    assert g5_eval.cost_terms(t01, spec)["stress_total_bp"] == 15.0 and g5_eval.cost_terms(t05, spec)["stress_total_bp"] == pytest.approx(16.5) and g5_eval.cost_terms(t01, spec)["sensitivity_total_bp"] == 13.0
-    hs = arrays["hs"][(arrays["hs"] >= spec.start_us) & (arrays["hs"] < spec.end_us)]
-    m = g5_eval.measure(series, hs, t01, spec, "event")
-    rates = dict(zip(arrays["hs"].tolist(), arrays["rs"].tolist()))
-    expected_signs = [1 if rates[h] > 1e-4 else -1 for h in hs.tolist() if rates[h] != 1e-4]
-    assert m["counts"]["zero_sign"] == 2 and m["counts"]["kept"] == 4 and m["sign"].tolist() == expected_signs  # (ii) dead zone excluded
-    long_i = int(np.argmax(m["sign"] > 0))
-    assert m["r_bp"][long_i] == pytest.approx(20.0) and m["funding_bp"][long_i] == pytest.approx(-3.0) and m["net_bp"][long_i] == pytest.approx(20.0 - 10.0 - 3.0, abs=0.05)
-    assert m["net_bp_stress"][long_i] == pytest.approx(20.0 - 15.0 - 3.0, abs=0.05) and m["net_bp_as_sensitivity"][long_i] == pytest.approx(20.0 - 13.0 - 3.0, abs=0.05)
-    short_i = int(np.argmax(m["sign"] < 0))
-    assert m["r_bp"][short_i] == pytest.approx(-20.0) and m["funding_bp"][short_i] == pytest.approx(-2.0)  # shorts pay a negative rate
-    # Controls of T01 read the control sign (P̂ at c − 5) and skip the funding condition; the funding sign is never read there.
-    c = g5_eval.measure(series, np.array([spec.start_us + 4 * HOUR_US + DAY_US], dtype=np.int64), t01, spec, "control")
-    assert c["counts"]["condition_unknown"] == 0 and c["counts"]["sign_unknown"] == 0 and c["funding_bp"].tolist() in ([], [0.0])
-    # Taker entry: half-spread paid at entry, earned at the maker exit (history: 0 by spec; here 1 bp).
-    hspec = spec_of(window={"start": "2026-06-01", "end_exclusive": "2026-06-03"}, execution={**SPEC["execution"], "half_spread_bp": 1.0})
-    h = spec.start_us + 13 * HOUR_US + 30 * MINUTE_US
-    mt = g5_eval.measure(series, np.array([h], dtype=np.int64), hspec.events[1], hspec)
-    assert mt["sign"].tolist() == [1] and mt["rt_bp"][0] == pytest.approx(55.15, abs=0.05) and mt["net_bp"][0] == pytest.approx(55.15 - 11.0, abs=0.05)  # simple return of e^55bp
-    mm = g5_eval.measure(series, np.array([h], dtype=np.int64), dataclasses.replace(hspec.events[1], execution_role="maker_maker"), hspec)
-    assert mm["rt_bp"][0] == pytest.approx(55.15 + 2.0, abs=0.05)  # the maker entry earns the half-spread instead of paying it
-    # (ii) a settlement without realizedRate supplies no rate: the funding sign is unknown there (counted), never the predicted rate.
-    mu = g5_eval.measure(memory_series(spec, synthetic(spec, unknown_rate_at=(int(hs[0]),))), hs, t01, spec)
-    assert mu["counts"]["sign_unknown"] == 1 and int(hs[0]) not in mu["instants_us"].tolist()
-    # M1: a window that crosses a settlement of unknown rate is excluded and counted (`funding_unknown`): here T05's rule at 07:30 crosses 08:00.
-    early = spec.start_us + 7 * HOUR_US + 30 * MINUTE_US
-    mf = g5_eval.measure(memory_series(spec, synthetic(spec, unknown_rate_at=(spec.start_us + 8 * HOUR_US,))), np.array([early], dtype=np.int64), t05, spec)
-    assert mf["counts"]["funding_unknown"] == 1 and mf["counts"]["kept"] == 0
-    known = g5_eval.measure(series, np.array([early], dtype=np.int64), t05, spec)
-    assert known["counts"]["kept"] == 1 and known["settlements"][0] == 1 and known["funding_bp"][0] == pytest.approx(-1e4 * rates[spec.start_us + 8 * HOUR_US])
-    # Zero volume (quant M3): a candle without trade at the arming, the window ends or the sign ends excludes the observation.
-    zspec = spec_of(window={"start": "2026-06-01", "end_exclusive": "2026-06-03"}, quality={**SPEC["quality"], "exclude_zero_volume": True},
-                    requires=SPEC["requires"] + ["zero_volume_exclusion"])
-    volume = np.full(n, 10.0)
-    volume[series.index_of(np.array([h + 5 * MINUTE_US]))[0]] = 0.0
-    mz = g5_eval.measure(memory_series(zspec, arrays, volume=volume), np.array([h], dtype=np.int64), zspec.events[1], zspec)
-    assert mz["counts"]["zero_volume"] == 1 and mz["counts"]["kept"] == 0
-    # Mixed source: ends of one return from two different price sources are excluded and counted, never mixed (B1 (i)).
-    mixed = memory_series(spec, arrays)
-    mixed.price_code[series.index_of(np.array([h + 60 * MINUTE_US]))[0]] = g5_eval.PRICE_CODE["mark"]
-    mx = g5_eval.measure(mixed, np.array([h], dtype=np.int64), t05, spec)
-    assert mx["counts"]["mixed_source"] == 1 and mx["counts"]["kept"] == 0
-    # A missing price at an end is a missing observation, not a fallback.
-    holed = memory_series(spec, arrays)
-    holed.price[series.index_of(np.array([h + 60 * MINUTE_US]))[0]] = np.nan
-    assert g5_eval.measure(holed, np.array([h], dtype=np.int64), t05, spec)["counts"]["missing_price"] == 1
+def test_new_york_conversions_are_checked_against_events_us_dst_active(monkeypatch):
+    spec, _ = g5_eval.load_spec(REAL_SPEC)
+    monkeypatch.setattr(ev, "us_dst_active", lambda day: False)
+    with pytest.raises(g5_eval.SpecError, match="us_dst_active"):
+        g5_eval.local_to_utc_us(date(2026, 8, 5), 570, spec.type("T05_us_open").generator["tz_info"])
 
 
-def test_premium_average_weights_coverage_and_classes():
-    spec = spec_of(window={"start": "2026-06-01", "end_exclusive": "2026-06-03"})
-    series = memory_series(spec, synthetic(spec))
-    block = {"base": "premium_mark_index", "minutes": 4, "min_coverage": 0.75, "upper": 0.0006, "lower": -0.0005}
-    series.premium["premium_mark_index"][:] = np.nan
-    series.premium["premium_mark_index"][10:14] = [1.0, 2.0, 3.0, 4.0]
-    assert g5_eval.premium_wavg_at(series, np.array([13]), block)[0] == pytest.approx((1 * 1 + 2 * 2 + 3 * 3 + 4 * 4) / 10.0)  # weights 1…n, the latest heaviest
-    series.premium["premium_mark_index"][11] = np.nan  # 3 of 4 present: 0.75 ≥ min_coverage
-    assert g5_eval.premium_wavg_at(series, np.array([13]), block)[0] == pytest.approx((1 + 9 + 16) / 8.0)
-    series.premium["premium_mark_index"][12] = np.nan
-    assert np.isnan(g5_eval.premium_wavg_at(series, np.array([13]), block)[0]) and np.isnan(g5_eval.premium_wavg_at(series, np.array([2]), block)[0])
-    assert g5_eval._classify(np.array([7e-4, 6e-4, 0.0, -5e-4, -6e-4, np.nan]), 6e-4, -5e-4).tolist() == [1, 0, 0, 0, -1, 0]
+def test_t01_instants_keep_8h_settlements_with_both_neighbours_and_a_realized_rate():
+    spec = spec_of(universe=[uni(BTC)], window=SHORT)
+    meta = spec.instrument(BTC)
+    base = tape.parse_iso_utc("2026-09-01T00:00:00Z")
+    st = [base + h * HOUR_US for h in (0, 8, 16, 24, 28, 32, 40, 48, 56)] + [base + 56 * HOUR_US + 30 * US]  # a 4 h pair (24 → 28 → 32) and a misaligned one
+    rates = [1e-4] * len(st)
+    rates[7] = math.nan  # 48 h: realized rate missing
+    series = flat(spec, meta, settlements=st, rates=rates, d_cov_us=base)
+    kept, counts, other = g5_eval.settlement_instants(series, spec.type("T01_funding_8h"), spec)
+    hours = [(t - base) // HOUR_US for t in kept.tolist()]
+    assert hours == [8, 16, 40] and counts["unknown_neighbour"] == 1 and counts["realized_rate_missing"] == 1 and counts["misaligned"] == 1
+    assert counts["interval_other"] == 4 and sorted((t - base) // HOUR_US for t in other.tolist()) == [24, 28, 32, 56]  # the T02 stratum (descriptive)
+    # The settlement of 2026-10-13 16:00 has no next one before END_EXCLUSIVE: excluded (LP-G5 §4.2).
+    last = flat(spec, meta, settlements=settlements_8h(spec), rates=np.full(settlements_8h(spec).size, 1e-4), d_cov_us=base)
+    kept, counts, _ = g5_eval.settlement_instants(last, spec.type("T01_funding_8h"), spec)
+    assert iso(int(kept[-1])) == "2026-10-13T08:00:00Z"
 
 
-# ----------------------------------------------------------------------------- the study
+def test_eligibility_at_list_time_plus_30_days_applies_to_the_footprint_of_events_and_controls():
+    """(B) vii: an instrument-instant exists only if its footprint starts at listTime + 30 days or later."""
+    listed = "2026-08-20T13:32:00Z"  # eligible from 2026-09-19 13:32 (a Saturday): the first T05 event is 2026-09-21
+    spec = spec_of(universe=[uni(BTC, listed)], window=SHORT)
+    meta = spec.instrument(BTC)
+    assert iso(meta.eligible_from_us) == "2026-09-19T13:32:00Z"
+    t05, t01 = spec.type("T05_us_open"), spec.type("T01_funding_8h")
+    series = flat(spec, meta, settlements=settlements_8h(spec), rates=np.full(settlements_8h(spec).size, 1e-4), d_cov_us=spec.start_us)
+    common = g5_eval.common_instants(spec)
+    raw, counts = g5_eval.restrict(series, common["local_time"]["T05_us_open"], t05, spec)
+    assert iso(int(raw[0])) == "2026-09-21T13:30:00Z" and counts["excluded_ineligible"] == int((common["local_time"]["T05_us_open"] < raw[0]).sum())
+    # T01: the footprint starts at h − 5 — 2026-09-19 16:00 starts 15:55 >= 13:32 (kept), 08:00 starts 07:55 (excluded).
+    kept, _, _ = g5_eval.settlement_instants(series, t01, spec)
+    raw01, counts01 = g5_eval.restrict(series, kept, t01, spec)
+    assert iso(int(raw01[0])) == "2026-09-19T16:00:00Z" and counts01["excluded_ineligible"] > 0
+    controls, diag = g5_eval.control_instants(series, t01, spec, raw01, g5_eval.exclusion_intervals(series, t01, spec, common))
+    assert controls.size and int(controls.min()) - 5 * MINUTE_US >= meta.eligible_from_us
+    # A control of the first event day before the eligibility is not admitted: 2026-09-19 03:00..12:00 are before 13:32.
+    first_day = [iso(int(c)) for c in controls.tolist() if iso(int(c)).startswith("2026-09-19")]
+    assert first_day == ["2026-09-19T18:00:00Z", "2026-09-19T19:00:00Z", "2026-09-19T20:00:00Z", "2026-09-19T21:00:00Z", "2026-09-19T22:00:00Z"]
+    assert diag["restriction"]["excluded_ineligible"] >= 1
 
 
-def test_a_planted_effect_is_recovered_with_c1_to_c6_at_the_instant_unit():
-    spec = spec_of()
-    series = {INST: memory_series(spec, synthetic(spec, seed=3, drift_bp=30.0)), INST2: memory_series(spec, synthetic(spec, seed=4, drift_bp=30.0, inst=INST2))}
-    study = g5_eval.run_study(series, spec)
-    t01 = study["types"]["T01_funding_8h"]
-    assert t01["n_instants"] == 24 * 3 * 2 // 3 and t01["n_observations"] == 2 * t01["n_instants"]  # (B) v: n = unique instants, both instruments at each
-    assert t01["instruments_per_instant"] == {"min": 2, "median": 2.0, "max": 2, "share_below_5": 1.0}
-    assert t01["exclusions"]["event"]["zero_sign"] == 2 * 24 and t01["exclusions"]["event"]["condition_failed"] == 0  # the dead zone of the sign excludes R = I
-    net = t01["primary_statistic"]
-    assert net["point"] == pytest.approx(30.0 - 2.5, abs=4.0) and net["lb90"] > 15.0 and net["p_one_sided"] == 0.0
-    c = t01["criteria"]
-    assert all(c[k]["pass"] for k in ("C1", "C2", "C3", "C4", "C5", "C6")) and c["C2"]["event_net_mean"] == pytest.approx(30.0 - 10.0 - 2.5, abs=4.0) and c["C6"]["kappa"] == 1.0
-    assert t01["verdict"] == "PASS" and t01["verdict_label"] == "G5_GATE1_PASS" and t01["holm_local_confirmed"] is True and t01["fail_annotation"] is None
-    assert t01["kappa"]["observations"] == t01["n_observations"] and t01["proxy_table"]["sensitivity_outside"] == 1.0 and t01["proxy_table"]["false_positive_inside_dead_zone"] == 0.0
-    assert t01["declared_lookahead"][0]["field"] == "sign" and t01["observed_min"]["sign"] == -1
-    eco = t01["economic"]  # 2 fills per instant (≤ 4), 2 conditioned settlements per day, +17.5 bp: 4 × 100 × 0.00175 × 365 ≈ 255 USD/year ≥ 97 with LB90 > 0
-    assert eco["fills"] == 2 * t01["n_instants"] and eco["fills_per_day"] == pytest.approx(4.0) and eco["usd_per_year_point"] == pytest.approx(4 * 100 * eco["net_bp_mean"] / 1e4 * 365)
-    assert eco["pursued"] is True and t01["reading"] == "PASS, poursuivi"
-    t05 = study["types"]["T05_us_open"]
-    assert t05["n_instants"] == 16 and t05["verdict"] == "NOT_INFORMATIVE" and t05["reading"] == "NOT_INFORMATIVE" and t05["costs_bp"]["total_bp"] == 11.0  # 18 weekdays − holiday − CPI day
-    # The economic reading of T05 is per session day: the skipped CPI session is a candidate day (17 = 18 weekdays − the holiday), the holiday is not.
-    assert t05["economic"]["candidate_days"] == 17 and t05["by_instrument"][INST]["generator"] == {"source": "us_open_dst_aware", "excluded_dates": 1, "skipped_dates": 1}
-    assert study["types"]["T11_macro_filter"]["evaluate"] is False and "T11_macro_filter" not in study["holm"]["tests"]
-    assert study["holm"]["m"] == 2 and study["holm"]["tests"]["T05_us_open"]["p"] == 1.0 and study["summary"]["holm_local_confirmed"] == ["T01_funding_8h"]
-    assert study["summary"]["readings"] == {"T01_funding_8h": "PASS, poursuivi", "T05_us_open": "NOT_INFORMATIVE"}
-    # The same effect under a higher S_éco: still a scientific PASS, « non poursuivi ».
-    rich = g5_eval.run_study(series, spec_of(economic={**SPEC["economic"], "s_eco_usd_per_year": 1000.0}))
-    assert rich["types"]["T01_funding_8h"]["reading"] == "PASS, non poursuivi (sous S_éco)"
-    # CTO B3: costs cancel in D, so a large adverse selection keeps C1 but turns the absolute net negative: FAIL, never PASS.
-    costly = g5_eval.run_study(series, spec_of(execution={**SPEC["execution"], "adverse_selection_bp_per_leg": 15.0}))
-    r = costly["types"]["T01_funding_8h"]
-    assert r["criteria"]["C1"]["pass"] and not r["criteria"]["C2"]["pass"] and r["verdict"] == "FAIL" and "C2 fails" in r["verdict_reasons"] and r["reading"] == "FAIL"
-    assert r["primary_statistic"]["point"] == pytest.approx(net["point"], abs=1e-9) and r["holm_local_confirmed"] is False
+# ----------------------------------------------------------------------------- controls at the minute of the hour, footprint exclusions (B xi, xii)
 
 
-def test_the_unit_is_the_instant_not_the_instrument_instant():
-    """Piège 23: an instant with many instruments must not weigh more than an instant with one."""
-    parts = [{"instants_us": np.array([0, DAY_US], dtype=np.int64), "inst": "A", "x": np.array([10.0, 0.0])},
-             {"instants_us": np.array([0], dtype=np.int64), "inst": "B", "x": np.array([20.0])},
-             {"instants_us": np.array([0, 2 * DAY_US], dtype=np.int64), "inst": "C", "x": np.array([30.0, np.nan])}]
-    instants, values, counts = g5_eval.instant_means(parts, "x")
-    assert instants.tolist() == [0, DAY_US] and values.tolist() == [20.0, 0.0] and counts.tolist() == [3, 1]  # NaN observations do not count
-    spec = spec_of(min_instants=60)
-    series = {INST: memory_series(spec, synthetic(spec, drift_bp=30.0)), INST2: memory_series(spec, synthetic(spec, seed=9, drift_bp=30.0, inst=INST2))}
-    t01 = g5_eval.run_study(series, spec)["types"]["T01_funding_8h"]
-    assert t01["n_observations"] == 96 and t01["n_instants"] == 48 and t01["verdict"] == "NOT_INFORMATIVE" and "n=48 < min_instants=60" in t01["verdict_reasons"][0]
+def _control_hours(spec, series, tspec, day: str) -> list[str]:
+    common = g5_eval.common_instants(spec)
+    d = tape.day_of_date(day)
+    raw = np.array([d * DAY_US + (13 * 60 + 30) * MINUTE_US], dtype=np.int64) if tspec.generator["kind"] == "local_time" else np.array([d * DAY_US + 16 * HOUR_US], dtype=np.int64)
+    controls, _ = g5_eval.control_instants(series, tspec, spec, raw, g5_eval.exclusion_intervals(series, tspec, spec, common))
+    return [iso(int(c))[11:16] for c in controls.tolist()]
 
 
-def test_inconclusive_paths_kappa_proxy_funding_and_fetch():
-    spec = spec_of()
-    # C6: a proxy that classifies against the contractual rate (κ = 0) makes T01 INCONCLUSIVE, never PASS or FAIL; Holm counts it p = 1.
-    flipped = {INST: memory_series(spec, synthetic(spec, drift_bp=30.0, flip_proxy=True))}
-    study = g5_eval.run_study(flipped, spec)
-    t01 = study["types"]["T01_funding_8h"]
-    assert t01["kappa"]["kappa"] == 0.0 and t01["verdict"] == "INCONCLUSIVE" and any(r.startswith("C6") for r in t01["verdict_reasons"]) and study["holm"]["tests"]["T01_funding_8h"]["p"] == 1.0
-    # No proxy at all (mark or index missing): the instrument leaves T01, which becomes INCONCLUSIVE (§4.5); T05 does not need the proxy.
-    arrays = synthetic(spec, drift_bp=30.0)
-    no_proxy = memory_series(spec, arrays)
-    no_proxy.premium["premium_mark_index"][:] = np.nan
-    study = g5_eval.run_study({INST: no_proxy}, spec)
-    assert study["types"]["T01_funding_8h"]["verdict"] == "INCONCLUSIVE" and study["types"]["T01_funding_8h"]["exclusions"]["instruments"]["no_proxy"] == [INST]
-    assert study["types"]["T05_us_open"]["verdict"] == "NOT_INFORMATIVE"
-    # Fetch errors on more than max_fetch_error_share of the (instrument, stream) jobs: every type INCONCLUSIVE (§4.5).
-    manifest = {"g5_streams": {f"{INST}:{s}": {"complete": s != "mark_1m", "end_reason": "reached_start" if s != "mark_1m" else "malformed_page", "errors": []} for s in tape.HISTORY_LAYOUTS}}
-    fetch = g5_eval.fetch_quality(manifest, spec)
-    assert fetch["jobs"] == 4 and fetch["jobs_in_error"] == 1 and fetch["error_share"] == 0.25
-    study = g5_eval.run_study({INST: memory_series(spec, synthetic(spec, drift_bp=30.0))}, spec, fetch)
-    assert {r["verdict"] for r in study["types"].values() if r.get("evaluate")} == {"INCONCLUSIVE"} and study["summary"]["global_device_defects"]
-    # Many event windows crossing a settlement of unknown rate: excluded, counted, and past max_funding_unknown_share the type is INCONCLUSIVE (§4.5, M1).
-    pre = {"type": "pre_08", "primary": True, "execution_role": "maker_maker", "days_per_year": 365, "generator": {"kind": "fixed_time", "times": ["07:50"]},
-           "sign": {"kind": "constant", "value": 1}, "window": {"from_min": -5, "to_min": 15}, "arm_min": -5, "rest_until_min": 1}
-    pspec = spec_of(events=[pre])
-    days = range(int(pspec.start_us // DAY_US), int(pspec.end_us // DAY_US))
-    holes = [d * DAY_US + 8 * HOUR_US for d in days][::2]
-    r = g5_eval.run_study({INST: memory_series(pspec, synthetic(pspec, unknown_rate_at=holes))}, pspec)["types"]["pre_08"]
-    assert r["exclusions"]["event"]["funding_unknown"] == len(holes) and r["exclusions"]["funding_unknown_share"] == pytest.approx(0.5) and r["verdict"] == "INCONCLUSIVE"
-    assert any(reason.startswith("funding:") for reason in r["verdict_reasons"])
+def test_controls_are_every_admissible_hour_at_the_type_minute_with_the_protocol_hour_lists():
+    """LP-G5 §7.1 (calcul d'audit, summer time): T01 an ordinary NYSE day 03, 04, 05, 10, 11, 12, 18, 22 h; 12 h out on CPI / NFP days,
+    18 h out on FOMC days, 13 hours on a Saturday; T05 09:30, 17:30, 21:30 UTC (two on FOMC days). Footprints, not instants."""
+    spec = spec_of(universe=[uni(BTC)], window=SHORT)
+    meta = spec.instrument(BTC)
+    series = flat(spec, meta, settlements=settlements_8h(spec), rates=np.full(settlements_8h(spec).size, 1e-4), d_cov_us=spec.start_us)
+    t01, t05 = spec.type("T01_funding_8h"), spec.type("T05_us_open")
+    assert _control_hours(spec, series, t01, "2026-08-05") == ["03:00", "04:00", "05:00", "10:00", "11:00", "12:00", "18:00", "22:00"]
+    assert _control_hours(spec, series, t01, "2026-08-12") == ["03:00", "04:00", "05:00", "10:00", "11:00", "18:00", "22:00"]  # CPI
+    assert _control_hours(spec, series, t01, "2026-09-04") == ["03:00", "04:00", "05:00", "10:00", "11:00", "18:00", "22:00"]  # Employment Situation (a Friday)
+    assert _control_hours(spec, series, t01, "2026-09-16") == ["03:00", "04:00", "05:00", "10:00", "11:00", "12:00", "22:00"]  # FOMC
+    assert len(_control_hours(spec, series, t01, "2026-08-08")) == 13  # a Saturday
+    assert _control_hours(spec, series, t05, "2026-08-05") == ["09:30", "17:30", "21:30"]
+    assert _control_hours(spec, series, t05, "2026-09-16") == ["09:30", "21:30"]  # FOMC
+    # The settlements of the instrument, all intervals: an escalated 04:00 settlement removes 03, 04 and 05 h for this instrument only.
+    extra = np.sort(np.concatenate([settlements_8h(spec), [tape.parse_iso_utc("2026-08-05T04:00:00Z")]]))
+    escalated = flat(spec, meta, settlements=extra, rates=np.full(extra.size, 1e-4), d_cov_us=spec.start_us)
+    assert _control_hours(spec, escalated, t01, "2026-08-05") == ["10:00", "11:00", "12:00", "18:00", "22:00"]
+    # Footprint rule at the margin: admissible iff end <= start − margin or start >= end + margin.
+    a = np.array([0, 0, 0], dtype=np.int64)
+    b = np.array([100, 101, 50], dtype=np.int64)
+    assert g5_eval.violates(np.array([160]), np.array([170]), a, b, 60).tolist() == [False, True, False]
+    assert g5_eval.violates(np.array([-200]), np.array([-60]), a, b, 60).tolist() == [False, False, False]
+    assert g5_eval.violates(np.array([-200]), np.array([-59]), a, b, 60).tolist() == [True, True, True]
 
 
-def test_coverage_restriction_bounds_events_and_controls_and_assumed_hours_exclude_outside(tmp_path: Path):
-    requires = SPEC["requires"]
-    spec = spec_of(requires=requires, funding_outside_coverage={"assumed_hours": [0, 8, 16]})
-    start = spec.start_us + 10 * DAY_US
-    series = {INST: memory_series(spec, synthetic(spec, drift_bp=30.0, funding_start_us=start))}
-    study = g5_eval.run_study(series, spec)
-    r = study["types"]["T01_funding_8h"]
-    hs, rs = settlement_plan(spec)
-    expected = sum(1 for h, rate in zip(hs.tolist(), rs.tolist()) if start < h < spec.end_us and rate != 1e-4)  # the first settlement served has no previous gap: interval unknown
-    assert r["n_instants"] == expected and r["verdict"] == "NOT_INFORMATIVE" and r["by_instrument"][INST]["generator"]["interval_unknown"] == 1
-    s = series[INST]
-    kept, counts = g5_eval.restrict(np.array([start - DAY_US, start + DAY_US], dtype=np.int64), s, spec.events[0], spec)
-    assert kept.tolist() == [start + DAY_US] and counts["before_coverage_funding_hist"] == 1  # the same bound for the controls
-    # T05 keeps its whole window; the assumed settlement hours before the funding coverage enter the control exclusion union (quant M5).
-    assert s.assumed_unknown_ts.size and np.all(s.assumed_unknown_ts < start) and {int(t // HOUR_US % 24) for t in s.assumed_unknown_ts.tolist()} == {0, 8, 16}
-    union = g5_eval.exclusion_union(s, {e.type: g5_eval.generate_instants(e.generator, s, spec)[0] for e in spec.events})
-    t05_controls, _ = g5_eval.control_instants(s, spec, spec.events[1], 1, union, np.arange(int(spec.start_us // DAY_US), int(start // DAY_US)))
-    assert t05_controls.size and np.min(np.abs(t05_controls[:, None] - s.assumed_unknown_ts[None, :])) > 60 * MINUTE_US
-    assert study["types"]["T05_us_open"]["n_instants"] == 16
-    # A history window that ends at END_EXCLUSIVE: the settlement at exactly 2026-10-14 00:00 is never known (m4 edge, counted).
-    edge = spec_of(events=[T05, {**T01, "primary": False, "type": "late", "generator": {"kind": "fixed_time", "times": ["23:45"]}, "condition": None,
-                                 "sign": {"kind": "constant", "value": 1}, "control_sign": None, "declared_lookahead": [], "window": {"from_min": 0, "to_min": 15}, "arm_min": 0}],
-                   window={"start": "2026-10-11", "end_exclusive": "2026-10-14"}, requires=requires, funding_outside_coverage={"assumed_hours": [0, 8, 16]})
-    edge_series = memory_series(edge, synthetic(edge))
-    m = g5_eval.measure(edge_series, np.array([g5_fetch.END_EXCLUSIVE_US - 15 * MINUTE_US], dtype=np.int64), edge.events[1], edge)
-    assert m["counts"]["funding_unknown_end_edge"] == 1 and m["counts"]["kept"] == 0
+# ----------------------------------------------------------------------------- the one classifier at t_arm (B iv, xvii)
 
 
-def test_eligibility_after_listing_applies_to_events_and_controls():
-    requires = SPEC["requires"] + ["eligibility_days_after_list"]
-    spec = spec_of(eligibility={"days_after_list": 30}, requires=requires)
-    series = memory_series(spec, synthetic(spec, drift_bp=30.0))
-    series.eligible_from_us = spec.start_us + 12 * DAY_US
-    kept, counts = g5_eval.restrict(np.array([spec.start_us + DAY_US, spec.start_us + 13 * DAY_US], dtype=np.int64), series, spec.events[0], spec)
-    assert kept.tolist() == [spec.start_us + 13 * DAY_US] and counts["before_eligibility"] == 1
-    r = g5_eval.run_study({INST: series}, spec)["types"]["T01_funding_8h"]
-    assert r["n_instants"] == 12 * 2 and r["exclusions"]["restriction"]["before_eligibility"] == 12 * 3
-    unknown = memory_series(spec, synthetic(spec))
-    unknown.eligibility_known = False
-    assert g5_eval.restrict(np.array([spec.start_us], dtype=np.int64), unknown, spec.events[0], spec)[1]["eligibility_unknown"] == 1
-
-
-def test_h0_calibration_no_pass_beyond_alpha_over_1000_seeds():
-    """(B) xi: under H0 (random walk, fictitious instants) the one-sided p is calibrated and no verdict is PASS beyond α.
-    Costs are set to zero and the threshold to 0 bp so that only the statistics decide (the strictest reading of C1–C5);
-    the pre-registered costs and +10 bp threshold then never pass at all."""
-    lean = {"type": "H0", "primary": True, "execution_role": "maker_maker", "days_per_year": 365, "generator": {"kind": "fixed_time", "times": ["02:00", "10:00", "18:00"]},
-            "sign": {"kind": "constant", "value": 1}, "window": {"from_min": 0, "to_min": 20}, "arm_min": 0, "rest_until_min": 1}
-    zero = {"maker_bp": 0.0, "taker_bp": 0.0, "half_spread_bp": 0.0, "adverse_selection_bp_per_leg": 0.0, "slippage_bp": 0.0, "cost_stress_multiplier": 1.0}
-    spec = spec_of(events=[lean], execution=zero, threshold_bp=0.0, min_instants=60, min_days=20, window={"start": "2026-05-01", "end_exclusive": "2026-06-05"},
-                   bootstrap={"resamples": 200, "seed": 5, "block_days": 1}, requires=BASE_REQUIRES + ["controls_same_days_minute_zero"])
-    strict = spec_of(events=[lean], min_instants=60, min_days=20, window={"start": "2026-05-01", "end_exclusive": "2026-06-05"},
-                     bootstrap={"resamples": 200, "seed": 5, "block_days": 1}, requires=BASE_REQUIRES + ["controls_same_days_minute_zero"])
-    rejected, passes, strict_passes = 0, 0, 0
-    seeds = 1000
-    for seed in range(seeds):
-        series = {INST: memory_series(spec, synthetic(spec, seed=1000 + seed, sigma=3e-4))}
-        r = g5_eval.run_study(series, spec)["types"]["H0"]
-        p = r["primary_statistic"]["p_one_sided"]
-        rejected += int(p is not None and p <= spec.alpha)
-        passes += int(r["verdict"] == "PASS")
-        # The pre-registered costs (10 bp) and threshold (+10 bp) on the same draw: D is unchanged by the costs, C1 needs D ≥ 10, C2 a positive net.
-        d = r["primary_statistic"]
-        strict_passes += int(d["point"] is not None and d["point"] >= strict.threshold_bp and d["lb90"] > 0 and r["criteria"]["C2"]["event_net_mean"] - 10.0 > 0)
-    tolerance = 3.0 * math.sqrt(spec.alpha * (1 - spec.alpha) / seeds)
-    assert rejected / seeds <= spec.alpha + tolerance  # calibrated (a percentile bootstrap may be slightly anti-conservative; within 3 σ)
-    assert passes / seeds <= spec.alpha and strict_passes == 0
-
-
-def test_day_block_bootstrap_and_holm():
-    days = np.repeat(np.arange(20), 5)
-    constant = g5_eval.day_block_bootstrap(np.full(100, 12.0), days, resamples=100, seed=1)
-    assert constant["point"] == 12.0 and constant["lb90"] == pytest.approx(12.0) and constant["ub90"] == pytest.approx(12.0) and constant["p_one_sided"] == 0.0 and constant["blocks"] == 20
+def test_one_classifier_p_hat_at_t_arm_for_events_and_controls_and_nothing_after_the_decision():
+    spec = spec_of(universe=[uni(BTC)], window=SHORT)
+    meta = spec.instrument(BTC)
+    t01 = spec.type("T01_funding_8h")
+    h = tape.parse_iso_utc("2026-09-02T16:00:00Z")
+    c = tape.parse_iso_utc("2026-09-03T04:00:00Z")  # an admissible control hour; its look-back does not overlap the event's
+    series = flat(spec, meta, settlements=settlements_8h(spec), rates=np.full(settlements_8h(spec).size, 5e-4), d_cov_us=spec.start_us)
+    series.low[:], series.high[:] = 99.0, 101.0  # the resting orders fill: this test is about the classifier
+    k_h, k_c = int(series.index_of([h])[0]), int(series.index_of([c])[0])
+    premium = np.zeros(series.size)
+    premium[k_h - 5 - 479: k_h - 5 + 1] = 0.0012  # the 480 boundaries ending at h − 5
+    premium[k_h - 4: k_h + 30] = -0.05  # after the decision: never read
+    premium[k_c - 5 - 479: k_c - 5 + 1] = -0.0010
+    series.mark[:] = series.index * (1.0 + premium)
+    series.cache.clear()
+    value = series.p_hat(np.array([k_h - 5, k_c - 5]), t01.classifier)
+    assert value[0] == pytest.approx(0.0012, rel=1e-9) and value[1] == pytest.approx(-0.0010, rel=1e-9)
+    e = g5_eval.measure(series, [h], t01, spec, "event")
+    k = g5_eval.measure(series, [c], t01, spec, "control")
+    assert e["sign"].tolist() == [1] and e["p_hat"][0] == pytest.approx(0.0012, rel=1e-9) and k["sign"].tolist() == [-1]
+    # Changing everything after t_arm changes neither P̂ nor the class (no look-ahead); the same function serves events and controls.
+    series.mark[k_h - 4:] = series.index[k_h - 4:] * 1.5
+    series.cache.clear()
+    assert g5_eval.measure(series, [h], t01, spec, "event")["p_hat"][0] == pytest.approx(0.0012, rel=1e-9)
+    # Inside the zone: excluded and counted, at events as at controls.
+    series.mark[k_c - 5 - 479: k_c - 5 + 1] = series.index[k_c - 5 - 479: k_c - 5 + 1] * (1 + 0.0008)
+    series.cache.clear()
+    assert g5_eval.measure(series, [c], t01, spec, "control")["counts"]["classifier_inside_zone"] == 1
+    # Weights 1..480 renormalised over the present boundaries; fewer than 90 % present: not computable.
     rng = np.random.default_rng(5)
-    values = rng.normal(10.0, 30.0, 100)
-    noisy = g5_eval.day_block_bootstrap(values, days, resamples=400, seed=2)
-    assert noisy["lb90"] < noisy["point"] < noisy["ub90"] and 0.0 <= noisy["p_one_sided"] <= 1.0 and noisy["n"] == 100 and noisy["event_median"] == pytest.approx(float(np.median(values)))
-    day_effect = np.repeat(rng.normal(0.0, 40.0, 20), 5)
-    clustered = day_effect + rng.normal(0.0, 1.0, 100)
-    by_day = g5_eval.day_block_bootstrap(clustered, days, resamples=400, seed=3)
-    iid = g5_eval.day_block_bootstrap(clustered, np.arange(100), resamples=400, seed=3)
-    assert (by_day["ub90"] - by_day["lb90"]) > 1.5 * (iid["ub90"] - iid["lb90"]) and by_day["blocks"] == 20 and iid["blocks"] == 100
-    same = g5_eval.day_block_bootstrap(values, days, values, days, resamples=100, seed=4)
-    assert same["point"] == 0.0 and same["lb90"] == pytest.approx(0.0) and same["ub90"] == pytest.approx(0.0) and same["n_control"] == 100
-    shifted = g5_eval.day_block_bootstrap(values + 25.0, days, values, days, resamples=100, seed=4)
-    assert shifted["point"] == pytest.approx(25.0) and shifted["lb90"] == pytest.approx(25.0) and shifted["p_one_sided"] == 0.0
-    two_blocks = g5_eval.day_block_bootstrap(np.array([1.0, 5.0]), np.array([0, 1]), resamples=50, seed=1, block_days=7)
-    assert two_blocks["blocks"] == 1 and two_blocks["lb90"] == two_blocks["point"] == 3.0 and two_blocks["p_one_sided"] is None
-    assert g5_eval.day_block_bootstrap(np.zeros(0), np.zeros(0, dtype=np.int64))["point"] is None
-    assert g5_eval.day_block_bootstrap(np.array([np.nan, 2.0]), np.array([0, 1]), resamples=10, seed=1)["n"] == 1
-    result = g5_eval.holm({"a": 0.01, "b": 0.04, "c": 0.5}, 0.10)
-    assert result["confirmed"] == ["a", "b"] and result["tests"]["a"]["threshold"] == pytest.approx(0.10 / 3) and result["tests"]["b"]["threshold"] == pytest.approx(0.05)
-    stopped = g5_eval.holm({"a": 0.09, "b": 0.06, "c": 0.001}, 0.10)
-    assert stopped["confirmed"] == ["c"] and stopped["tests"]["b"]["confirmed"] is False and stopped["tests"]["a"]["confirmed"] is False and stopped["tests"]["a"]["rank"] == 3
-    assert g5_eval.holm({"a": 0.04, "b": 0.045, "c": 0.001}, 0.10)["confirmed"] == ["c", "a", "b"]
-    missing = g5_eval.holm({"a": 0.001, "b": None, "c": float("nan")}, 0.10)
-    assert missing["m"] == 3 and missing["confirmed"] == ["a"] and missing["tests"]["b"]["p"] == 1.0 and missing["tests"]["c"]["p"] == 1.0
-    assert g5_eval.holm({}, 0.10) == {"alpha": 0.10, "m": 0, "tests": {}, "confirmed": []}
+    pi = rng.normal(0, 1e-3, 480)
+    gaps = rng.choice(480, size=40, replace=False)
+    window = series.index[k_c - 5 - 479: k_c - 5 + 1] * (1 + pi)
+    window[gaps] = np.nan
+    series.mark[k_c - 5 - 479: k_c - 5 + 1] = window
+    series.cache.clear()
+    w = np.arange(1, 481, dtype=np.float64)
+    ok = np.ones(480, dtype=bool)
+    ok[gaps] = False
+    expected = math.fsum((w[ok] * pi[ok]).tolist()) / math.fsum(w[ok].tolist())
+    assert series.p_hat(np.array([k_c - 5]), t01.classifier)[0] == pytest.approx(expected, rel=1e-9, abs=1e-15)
+    series.mark[k_c - 5 - 479: k_c - 5 - 479 + 50] = np.nan  # 90 missing of 480: 81 % present
+    series.cache.clear()
+    assert math.isnan(series.p_hat(np.array([k_c - 5]), t01.classifier)[0]) and g5_eval.measure(series, [c], t01, spec, "control")["counts"]["classifier_not_computable"] == 1
 
 
-def test_verdict_order_and_fail_annotation():
-    spec = spec_of()
-    ok = {name: {"pass": True} for name in ("C1", "C2", "C3", "C4", "C5", "C6")}
-    diff = {"point": 15.0, "lb90": 3.0, "ub90": 25.0}
-    assert g5_eval.verdict_for(spec, 100, 40, diff, ok, ["C6: κ"])[0] == "INCONCLUSIVE"  # a device defect comes first, whatever the power
-    assert g5_eval.verdict_for(spec, 29, 40, diff, ok, [])[0] == "NOT_INFORMATIVE" and g5_eval.verdict_for(spec, 100, 9, diff, ok, [])[0] == "NOT_INFORMATIVE"
-    assert g5_eval.verdict_for(spec, 100, 40, {"point": None, "lb90": None, "ub90": None}, ok, [])[0] == "NOT_INFORMATIVE"
-    assert g5_eval.verdict_for(spec, 100, 40, diff, ok, [])[0] == "PASS"
-    for failing in ("C2", "C3", "C4", "C5"):
-        verdict, reasons, annotation = g5_eval.verdict_for(spec, 100, 40, diff, {**ok, failing: {"pass": False}}, [])
-        assert verdict == "FAIL" and reasons == [f"{failing} fails"] and annotation == "non détecté"
-    verdict, _, annotation = g5_eval.verdict_for(spec, 100, 40, {"point": 2.0, "lb90": -4.0, "ub90": 8.0}, {**ok, "C1": {"pass": False}}, [])
-    assert verdict == "FAIL" and annotation == "effet exclu"  # UB90 < +10 bp
+# ----------------------------------------------------------------------------- fill proxy, key candles, missing data (B vi, viii, i)
 
 
-# ----------------------------------------------------------------------------- capture (Gate 2)
+def test_the_through_fill_proxy_zero_volume_key_candles_and_missing_prices():
+    spec = spec_of(universe=[uni(BTC, tick=0.1)], window=SHORT)
+    meta = spec.instrument(BTC)
+    t01 = spec.type("T01_funding_8h")
+    h = tape.parse_iso_utc("2026-09-02T16:00:00Z")
+    series = flat(spec, meta, settlements=settlements_8h(spec), rates=np.full(settlements_8h(spec).size, 5e-4), d_cov_us=spec.start_us)
+    k = int(series.index_of([h])[0])
+    series.mark[k - 5 - 479: k - 5 + 1] = series.index[k - 5 - 479: k - 5 + 1] * 1.0012  # long: rests at the bid c(h − 5) = 100
+    series.cache.clear()
+
+    def run(low=None, high=None, vol=None, close=None):
+        s = g5_eval.make_series(meta, series.grid_us, series.close.copy() if close is None else close, series.low.copy() if low is None else low,
+                                series.high.copy() if high is None else high, series.vol.copy() if vol is None else vol, series.mark, series.index, series.settlements_us,
+                                series.settlement_rates, series.d_cov_start_us)
+        return g5_eval.measure(s, [h], t01, spec, "event")
+
+    low = series.low.copy()
+    assert run(low)["counts"]["unfilled"] == 1  # never below 100 − 1 tick
+    low[k - 4] = 99.9  # the candle opening at h − 5 (ending h − 4) touches exactly c − 1 tick: not strictly below
+    assert run(low)["counts"]["unfilled"] == 1
+    low[k + 1] = 99.89  # the candle opening at h (ending h + 1): inside the resting window
+    assert run(low)["counts"]["kept"] == 1
+    low2 = series.low.copy()
+    low2[k + 2] = 90.0  # opening at h + 1: after the order's end
+    low2[k - 5] = 90.0  # opening at h − 6: before the decision
+    assert run(low2)["counts"]["unfilled"] == 1
+    low3 = low.copy()
+    low3[k - 2] = np.nan
+    assert run(low3)["counts"]["fill_window_missing"] == 1
+    vol = series.vol.copy()
+    vol[k + 15] = 0.0  # the exit candle is frozen: excluded
+    assert run(low, vol=vol)["counts"]["excluded_vol_zero"] == 1
+    vol = series.vol.copy()
+    vol[k + 3] = 0.0  # not a key candle
+    assert run(low, vol=vol)["counts"]["kept"] == 1
+    close = series.close.copy()
+    close[k + 15] = np.nan
+    assert run(low, close=close)["counts"]["missing_key_price"] == 1
+    # A control is held to the same proxy: the same arrays give the same outcome at a control instant.
+    c = tape.parse_iso_utc("2026-09-02T11:00:00Z")
+    kc = int(series.index_of([c])[0])
+    series.mark[kc - 5 - 479: kc - 5 + 1] = series.index[kc - 5 - 479: kc - 5 + 1] * 1.0012
+    series.cache.clear()
+    s = g5_eval.make_series(meta, series.grid_us, series.close, series.low, series.high, series.vol, series.mark, series.index, series.settlements_us, series.settlement_rates,
+                            series.d_cov_start_us)
+    assert g5_eval.measure(s, [c], t01, spec, "control")["counts"]["unfilled"] == 1
+    s.low[kc + 1] = 99.8
+    assert g5_eval.measure(s, [c], t01, spec, "control")["counts"]["kept"] == 1
 
 
-def test_capture_simulation_maker_and_taker_entries_and_the_funding_grace(tmp_path: Path):
-    root = tmp_path / "capture"
+def test_an_instrument_missing_more_than_20_percent_of_its_event_footprints_leaves_the_type():
+    document = derived(universe=[uni(BTC), uni(ETH)], window=SHORT, mutate=lowered_floor)
+    spec = g5_eval.parse_spec(document)
+    good = market(spec, spec.instrument(BTC), seed=1)
+    bad = market(spec, spec.instrument(ETH), seed=2)
+    t05 = spec.type("T05_us_open")
+    for h, _, _ in g5_eval.local_time_instants(t05, spec):
+        k = int(bad.index_of([h])[0])
+        bad.close[k + 10: k + 30] = np.nan  # 20 of 61 footprint minutes
+    run = g5_eval.evaluate_type({BTC: good, ETH: bad}, t05, spec, g5_eval.common_instants(spec))
+    assert run["exclusions"]["instruments_excluded_missing_share"] == [ETH] and list(run["series"]) == [BTC] and ETH not in run["controls"]
+    # T01: an instrument left out for missing prices still belongs to the raw population of C6 (its P̂ is computable).
+    bad01 = market(spec, spec.instrument(ETH), seed=3)
+    for s_ in bad01.settlements_us.tolist():
+        k = int(bad01.index_of([s_])[0])
+        bad01.close[max(0, k - 5): k + 1] = np.nan
+    doc = g5_eval.run_study({BTC: good, ETH: bad01}, spec, {"d_cov_global_us": good.d_cov_start_us})
+    t01 = doc["types"]["T01_funding_8h"]
+    assert t01["exclusions"]["instruments_excluded_missing_share"] == [ETH] and t01["validation"]["population"] == t01["exclusions"]["raw_instrument_instants"]
+    # Every instrument out: no statistic, NOT_INFORMATIVE (sealed), never an error.
+    doc = g5_eval.run_study({ETH: bad01}, spec, {"d_cov_global_us": good.d_cov_start_us})
+    assert doc["types"]["T01_funding_8h"]["verdict"] in ("NOT_INFORMATIVE", "INCONCLUSIVE") and doc["types"]["T01_funding_8h"]["n_instants"] == 0
+
+
+# ----------------------------------------------------------------------------- costs, funding, unit (B xiii, xiv, ix)
+
+
+def test_costs_by_role_funding_signs_and_funding_outside_coverage():
+    spec = spec_of(universe=[uni(BTC)], window=SHORT)
+    meta = spec.instrument(BTC)
+    t01, t05 = spec.type("T01_funding_8h"), spec.type("T05_us_open")
+    h = tape.parse_iso_utc("2026-09-02T16:00:00Z")
+    st = settlements_8h(spec)
+    rates = np.full(st.size, 5e-4)
+    series = flat(spec, meta, settlements=st, rates=rates, d_cov_us=tape.parse_iso_utc("2026-09-01T00:00:00Z"))
+    k = int(series.index_of([h])[0])
+    series.mark[k - 484: k - 4] = series.index[k - 484: k - 4] * 1.0012
+    series.low[k - 4] = 99.0
+    series.close[k + 15:] = 100.0 * math.exp(30 / 1e4)  # +30 bp at the exit
+    series.cache.clear()
+    e = g5_eval.measure(series, [h], t01, spec, "event")
+    # The long pays R_h = 5 bp (the settlement h is in (h − 5, h + 15]); maker / maker costs 13 bp.
+    assert e["sign"].tolist() == [1] and e["r_bp"][0] == pytest.approx(30.0) and e["funding_bp"][0] == pytest.approx(-5.0) and e["net_bp"][0] == pytest.approx(30 - 5 - 13)
+    assert e["net_stress_bp"][0] == pytest.approx(30 - 5 - 19.5) and e["rate_at_h"][0] == pytest.approx(5e-4)
+    # T05: taker / maker 15.5 bp; a settlement crossed inside (h + 5, h + 60] is paid; outside D_cov the funding is assumed zero and counted.
+    h5 = tape.parse_iso_utc("2026-09-02T13:30:00Z")
+    k5 = int(series.index_of([h5])[0])
+    t05_series = flat(spec, meta, settlements=np.sort(np.concatenate([st, [h5 + 30 * MINUTE_US]])), rates=np.concatenate([rates, [5e-4]]), d_cov_us=spec.start_us)
+    t05_series.close[k5 + 5:] = 100.0 * math.exp(10 / 1e4)  # up in the first five minutes: long
+    t05_series.close[k5 + 60:] = 100.0 * math.exp(40 / 1e4)
+    m = g5_eval.measure(t05_series, [h5], t05, spec, "event")
+    assert m["sign"].tolist() == [1] and m["r_bp"][0] == pytest.approx(30.0) and m["funding_bp"][0] == pytest.approx(-5.0) and m["net_bp"][0] == pytest.approx(30 - 5 - 15.5)
+    t05_series.d_cov_start_us = tape.parse_iso_utc("2026-09-10T00:00:00Z")
+    m = g5_eval.measure(t05_series, [h5], t05, spec, "event")
+    assert m["funding_bp"][0] == 0.0 and m["counts"]["funding_unknown"] == 1 and m["funding_outside_coverage"] == 1
+    # A crossed settlement whose rate is unknown inside D_cov: excluded and counted.
+    t05_series.d_cov_start_us = spec.start_us
+    t05_series.settlement_rates[np.searchsorted(t05_series.settlements_us, h5 + 30 * MINUTE_US)] = np.nan
+    assert g5_eval.measure(t05_series, [h5], t05, spec, "event")["counts"]["funding_rate_missing"] == 1
+    # Control funding is computed: a control crossing a settlement is counted as an anomaly (none by construction of the controls).
+    c = g5_eval.measure(series, [tape.parse_iso_utc("2026-09-02T11:00:00Z")], t05, spec, "control")
+    assert c["funding_nonzero"] == 0
+
+
+def test_the_unit_is_the_instant_with_equal_weights_and_n_unique_instants():
+    parts = [{"inst": "A", "instants_us": np.array([10, 20], dtype=np.int64), "net_bp": np.array([1.0, 4.0])},
+             {"inst": "B", "instants_us": np.array([10], dtype=np.int64), "net_bp": np.array([3.0])}]
+    ts, values, counts = g5_eval.instant_means(parts, "net_bp")
+    assert ts.tolist() == [10, 20] and values.tolist() == [2.0, 4.0] and counts.tolist() == [2, 1]
+    ts, values, counts = g5_eval.instant_means(parts, "net_bp", min_instruments=2)
+    assert ts.tolist() == [10] and values.tolist() == [2.0]
+
+
+# ----------------------------------------------------------------------------- the study: C6, verdicts, Holm, sealing, economics (B v, xv, xvi, xx)
+
+D_COV = tape.parse_iso_utc("2026-08-04T08:00:00Z")
+
+
+def study(seed: int = 1, t01: float = 0.0, t05: float = 0.0, window: dict | None = None, mutate=None, instruments=(BTC, ETH, SOL), context: dict | None = None, **kw):
+    def change(document):
+        document["statistics"]["bootstrap"]["resamples"] = 2000  # test cost; the frozen spec keeps 10 000
+        if mutate is not None:
+            mutate(document)
+
+    spec = g5_eval.parse_spec(derived(universe=[uni(i) for i in instruments], window=window, mutate=change))
+    series = {i: market(spec, spec.instrument(i), seed=seed + 7 * j, t01_drift_bp=t01, t05_drift_bp=t05, d_cov_us=D_COV, **kw) for j, i in enumerate(instruments)}
+    ctx = {"d_cov_global_us": D_COV}
+    ctx.update(context or {})
+    return spec, series, g5_eval.run_study(series, spec, ctx)
+
+
+@pytest.fixture(scope="module")
+def planted():
+    """+40 bp planted at every T01 settlement (drift of the class over (h − 5, h + 15]) and +40 bp of T05 continuation."""
+    return study(seed=3, t01=40.0, t05=40.0)
+
+
+@pytest.fixture(scope="module")
+def null():
+    return study(seed=11)
+
+
+def test_a_planted_effect_passes_c1_to_c7_and_holm_with_the_programme_field(planted):
+    spec, series, doc = planted
+    t01, t05 = doc["types"]["T01_funding_8h"], doc["types"]["T05_us_open"]
+    for r in (t01, t05):
+        assert r["verdict_label"] == "G5_GATE1_" + "PASS" and r["holm_local_confirmed"] and r["gate2_inscription"] == "inscribed" and "sealed" not in r
+        assert all(c["pass"] for c in r["criteria"].values()) and r["pass_programme_immediate"] and r["statistic"]["p_one_sided"] <= 0.0142857
+    assert list(t01["criteria"]) == ["C1", "C2", "C3", "C4", "C5", "C6", "C7"] and list(t05["criteria"]) == ["C1", "C2", "C3", "C4", "C5"]
+    # D ≈ drift − funding paid (5 bp) at T01, ≈ the continuation at T05; the costs cancel in D, not in C2 / C3.
+    assert 25 < t01["statistic"]["D"] < 45 and 30 < t05["statistic"]["D"] < 50
+    assert t01["criteria"]["C2"]["event_net_mean"] == pytest.approx(t01["statistic"]["event_mean"]) and t01["criteria"]["C3"]["event_net_stress_mean"] == pytest.approx(
+        t01["statistic"]["event_mean"] - 6.5, abs=1e-6)
+    assert t01["criteria"]["C4"]["halves"]["first_half"]["days"] >= t01["criteria"]["C4"]["halves"]["second_half"]["days"]
+    assert t01["criteria"]["C7"]["event_hour_utc"] == 16 and t01["criteria"]["C7"]["n"] > 0
+    assert t01["validation"]["pass"] and t01["validation"]["sensitivity"] == 1.0 and t01["validation"]["false_positive_rate"] == 0.0
+    assert t01["validation"]["denominator_rate_inside_zone"] >= 30 and sum(t01["validation"]["matrix_classifier_class|rate_class"].values()) == t01["validation"]["population"]
+    assert doc["summary"]["holm_local_confirmed"] == ["T01_funding_8h", "T05_us_open"] and doc["holm"]["m"] == 2
+    assert t01["n_instants"] == t01["exclusions"]["raw_instants"] * t01["exclusions"]["f_inst"] and t01["exclusions"]["raw_instants"] == 211  # the audit count, on the data
+    assert t05["n_instants"] == 105 and t05["n_days"] == 105 and t05["exclusions"]["raw_instants"] == 105
+    text = json.dumps(g5_eval._clean(doc))
+    assert '"pass_programme"' not in text and "pass_programme_immediate" in text
+    with pytest.raises(RuntimeError, match="forbidden field"):
+        g5_eval.check_forbidden({"x": [{"pass_programme": True}]}, spec)
+
+
+def test_without_an_effect_the_types_fail_with_the_annotation_of_the_spec(null):
+    spec, _, doc = null
+    for name, r in doc["types"].items():
+        assert r["verdict"] == "FAIL" and r["gate2_inscription"] == "not_inscribed" and not r["holm_local_confirmed"] and r["reading"] == "FAIL"
+        assert "C1 fails" in r["verdict_reasons"]
+        expected = spec.verdict["annotation_lt"] if r["statistic"]["ub90"] < 10 else spec.verdict["annotation_ge"]
+        assert r["fail_annotation"] == expected and r["closure_scope"] == BASE["verdict"]["closure_scope"]  # FAIL closes the tested form only
+    assert doc["types"]["T01_funding_8h"]["fail_annotation"] == "effet >= +10 pb exclu sous la forme testee"  # D ≈ −5 bp (funding paid)
+
+
+def test_c7_c4_and_c2_are_criteria_of_their_own():
+    _, _, doc = study(seed=5, t01=40.0, t01_drift_hours=(0, 8))  # the effect at the composite photos only (LP-G5 §1.4)
+    t01 = doc["types"]["T01_funding_8h"]
+    assert t01["verdict"] == "FAIL" and "C7 fails" in t01["verdict_reasons"] and t01["criteria"]["C1"]["pass"] and t01["criteria"]["C7"]["point"] < 5
+    cut = tape.day_of_date("2026-09-08")
+    _, _, doc = study(seed=6, t01=60.0, t01_drift_days=cut)  # the effect in the first half of the event days only
+    t01 = doc["types"]["T01_funding_8h"]
+    assert t01["verdict"] == "FAIL" and "C4 fails" in t01["verdict_reasons"] and t01["criteria"]["C4"]["halves"]["second_half"]["point"] < 0
+    _, _, doc = study(seed=7, t01=16.0)  # D ≈ 16 − 5 bp of funding ≥ 10, but the absolute net ≈ 16 − 5 − 13 < 0: C2 (and C3) fail
+    t01 = doc["types"]["T01_funding_8h"]
+    assert t01["criteria"]["C1"]["pass"] and not t01["criteria"]["C2"]["pass"] and not t01["criteria"]["C3"]["pass"] and t01["verdict"] == "FAIL"
+    assert t01["verdict_reasons"][:2] == ["C2 fails", "C3 fails"]
+
+
+def test_inconclusive_c6_and_d_cov_unknown_are_sealed_and_inscribed_automatically():
+    # Rates of the opposite class: P̂ never says who pays — sensitivity 0 ⇒ INCONCLUSIVE (C6), whatever D is.
+    spec, _, doc = study(seed=4, t01=40.0, rate_of=lambda c, i: -5e-4 * c if c else 1e-4)
+    t01 = doc["types"]["T01_funding_8h"]
+    assert t01["verdict_label"] == "G5_GATE1_INCONCLUSIVE" and t01["verdict_reasons"][0].startswith("C6_failed_or_not_computable")
+    assert t01["gate2_inscription"] == "inscribed_automatically_without_futility" and t01["validation"]["sensitivity"] == 0.0 and t01["validation"]["pass"] is False
+    assert "statistic" not in t01 and "criteria" not in t01 and "economic" not in t01 and "descriptive" not in t01 and t01["holm"]["p_used"] == 1.0
+    # Denominators below 30 (no rate inside the zone): not computable ⇒ INCONCLUSIVE.
+    _, _, doc = study(seed=4, t01=40.0, classes=np.where(np.arange(settlements_8h(spec).size) % 2, 1, -1))
+    assert doc["types"]["T01_funding_8h"]["verdict"] == "INCONCLUSIVE" and doc["types"]["T01_funding_8h"]["validation"]["computable"] is False
+    # D_cov unknown ⇒ T01 INCONCLUSIVE; T05 unaffected.
+    _, _, doc = study(seed=4, t01=40.0, t05=40.0, context={"d_cov_global_us": None})
+    assert doc["types"]["T01_funding_8h"]["verdict_reasons"][0].startswith("funding_coverage_unknown") and doc["types"]["T05_us_open"]["verdict"] == "PASS"
+    # A global device defect (fetch errors > 10 %, end_reason missing) ⇒ every type INCONCLUSIVE.
+    _, _, doc = study(seed=4, t01=40.0, t05=40.0, context={"device": ["fetch_job_error_share_gt: 12 of 100 jobs in error > 0.1 (§4.5)"]})
+    assert all(r["verdict"] == "INCONCLUSIVE" and "sealed" in r for r in doc["types"].values()) and doc["summary"]["global_device_defects"]
+
+
+def test_the_proxy_missing_rule_and_the_power_floor():
+    def no_mark(series_by_inst):
+        for s in series_by_inst.values():
+            s.mark[: s.index_of([tape.parse_iso_utc("2026-09-25T00:00:00Z")])[0]] = np.nan
+            s.cache.clear()
+
+    spec = g5_eval.parse_spec(derived(universe=[uni(BTC), uni(ETH)], mutate=lambda d: d["statistics"]["bootstrap"].update({"resamples": 500})))
+    series = {i: market(spec, spec.instrument(i), seed=9 + j, t01_drift_bp=40.0, d_cov_us=D_COV) for j, i in enumerate((BTC, ETH))}
+    no_mark(series)
+    doc = g5_eval.run_study(series, spec, {"d_cov_global_us": D_COV})
+    t01 = doc["types"]["T01_funding_8h"]
+    assert t01["verdict"] == "INCONCLUSIVE" and any(r.startswith("proxy_missing_instrument_day_share_gt_0_50") for r in t01["verdict_reasons"])
+    assert t01["exclusions"]["proxy_missing"]["share"] > 0.5
+    # Below the floor: NOT_INFORMATIVE, sealed, inscribed automatically; never an extension.
+    _, _, doc = study(seed=4, t05=40.0, window={"start": "2026-08-01", "end_exclusive": "2026-10-14"})
+    t05 = doc["types"]["T05_us_open"]
+    assert t05["verdict_label"] == "G5_GATE1_NOT_INFORMATIVE" and t05["verdict_reasons"][0].startswith("n_instants=") and "sealed" in t05
+    assert t05["gate2_inscription"] == "inscribed_automatically_without_futility"
+
+
+def test_holm_needs_both_or_the_smallest_at_alpha_over_two(monkeypatch):
+    """(B) xvi: PASS needs every criterion and the local Holm (K = 2, α 0.10; a sealed type counts p = 1)."""
+    real = g5_eval.criteria_for
+
+    def fake(spec, tspec, inst, validation):
+        criteria, diff = real(spec, tspec, inst, validation)
+        criteria = {k: {**v, "pass": True} for k, v in criteria.items()}
+        return criteria, {**diff, "p_one_sided": 0.07 if tspec.label == "T05" else 0.02}
+
+    monkeypatch.setattr(g5_eval, "criteria_for", fake)
+    _, _, doc = study(seed=8, t01=40.0, t05=40.0, window=SHORT, mutate=lowered_floor)
+    t01, t05 = doc["types"]["T01_funding_8h"], doc["types"]["T05_us_open"]
+    assert t01["verdict"] == "PASS" and t05["verdict"] == "PASS" and t01["holm"]["threshold"] == 0.05 and t05["holm"]["threshold"] == 0.10  # 0.02 <= 0.05, then 0.07 <= 0.10
+    assert not t01["pass_programme_immediate"] and not t05["pass_programme_immediate"]  # 0.02 > 0.10 / 7
+
+    def fake_one(spec, tspec, inst, validation):
+        criteria, diff = real(spec, tspec, inst, validation)
+        criteria = {k: {**v, "pass": True} for k, v in criteria.items()}
+        return criteria, {**diff, "p_one_sided": 0.07}
+
+    monkeypatch.setattr(g5_eval, "criteria_for", fake_one)
+    _, _, doc = study(seed=8, t01=40.0, t05=40.0, window=SHORT, mutate=lowered_floor, rate_of=lambda c, i: -5e-4 * c if c else 1e-4)
+    t05 = doc["types"]["T05_us_open"]
+    assert doc["types"]["T01_funding_8h"]["verdict"] == "INCONCLUSIVE" and t05["verdict"] == "FAIL" and t05["verdict_reasons"] == ["non confirmé par Holm"]
+
+
+def test_sealed_types_print_only_the_sealing_list_and_the_sha256_of_their_sealed_file():
+    spec, _, doc = study(seed=4, t01=40.0, t05=40.0, window={"start": "2026-08-01", "end_exclusive": "2026-10-14"}, rate_of=lambda c, i: -5e-4 * c if c else 1e-4)
+    payloads = doc["_sealed_payloads"]
+    assert set(payloads) == {"T01_funding_8h", "T05_us_open"}
+    for name, r in doc["types"].items():
+        assert set(r) == {"type", "label", "decisive", "role", "costs_bp", "days_per_year", "window_rule", "gate2_inscription", "verdict", "verdict_label", "verdict_reasons",
+                          "n_instants", "n_days", "exclusions", "fill_rate", "validation", "holm", "holm_local_confirmed", "pass_programme_immediate", "fail_annotation", "closure_scope",
+                          "reading", "sealed"}
+        assert r["sealed"]["sha256"] == g5_fetch.sha256_text(payloads[name]) and r["sealed"]["file"] == f"sealed/{name}.json"
+        sealed = json.loads(payloads[name])
+        assert set(spec.sealing["sealed"]) <= set(sealed) and sealed["D"] is not None and sealed["statistic"]["D"] == sealed["D"]
+        public = json.dumps(g5_eval._clean({k: v for k, v in doc.items() if k != "_sealed_payloads"}))
+        assert repr(round(sealed["D"], 6))[:8] not in public and "lb90" not in json.dumps(r) and "p_one_sided" not in json.dumps(r)
+    assert doc["summary"]["sealed_sha256"] == {n: r["sealed"]["sha256"] for n, r in doc["types"].items()}
+    assert all("p" not in t for t in doc["holm"]["tests"].values())
+
+
+def test_the_economic_reading_admits_at_most_max_live_fills_per_instant_and_reads_pursued(planted):
+    spec, series, doc = planted
+    for name, r in doc["types"].items():
+        e = r["economic"]
+        tspec = spec.type(name)
+        assert e["fills"] <= 3 * r["n_instants"] and e["max_live"] == 4 and e["days_per_year"] == tspec.days_per_year
+        assert e["usd_per_year_point"] == pytest.approx(e["fills_per_day"] * 100.0 * e["net_bp_mean"] / 1e4 * tspec.days_per_year)
+        pursued = e["usd_per_year_point"] >= 97.0 and (e["usd_per_year_ub90"] >= 2 * 97.0 or e["usd_per_year_lb90"] > 0)
+        assert e["pursued"] == pursued and r["reading"] == ("PASS, poursuivi" if pursued else spec.economic["readings"][1])
+        assert e["pos_mode"]["overlapping_positions_same_instrument"] == 0 and e["pos_mode"]["net_mode"] == e["pos_mode"]["long_short_mode"]
+        minutes = tspec.return_window[1] - tspec.return_window[0]
+        assert e["margin_opportunity_cost"]["rule"] == "negligible_reported" and e["margin_opportunity_cost"]["minutes_per_position"] == minutes
+        assert e["margin_opportunity_cost"]["usd_per_position_at_5pct"] == pytest.approx(100.0 * minutes / (365 * 1440) * 0.05)
+    assert doc["types"]["T01_funding_8h"]["economic"]["calendar_days"] == 71  # calendar days of D_cov (2026-08-04 → 10-13)
+    assert doc["types"]["T05_us_open"]["economic"]["calendar_days"] == 116  # NYSE days with an eligible instrument, macro days included
+    sub = [{"inst": i, "instants_us": np.array([0, 0, 0, 0, 0]) * 0 + DAY_US * 20000, "net_bp": np.array([1.0])} for i in ("E", "D", "C", "B", "A")]
+    for p in sub:
+        p["instants_us"] = np.array([DAY_US * 20000])
+    e = g5_eval.economic_reading(sub, spec.type("T05_us_open"), spec, 10, "FAIL")
+    assert e["fills"] == 4 and e["fills_uncapped"] == 5 and e["reading"] == "FAIL"
+
+
+def test_every_descriptive_report_of_the_spec_is_produced_without_any_p_value(planted):
+    spec, _, doc = planted
+    names = set(spec.descriptive["reports"])
+    produced = set(doc["common_descriptive"])
+    for r in doc["types"].values():
+        produced |= set(r["descriptive"])
+    assert names <= produced
+    assert set(doc["common_descriptive"]) == set(g5_eval.COMMON_REPORTS)
+    t01, t05 = doc["types"]["T01_funding_8h"]["descriptive"], doc["types"]["T05_us_open"]["descriptive"]
+    assert all(k.startswith("T01_") or k in g5_eval.PER_TYPE_REPORTS or k in ("instruments_per_instant",) + g5_eval.UNIT_REPORTS for k in t01)
+    assert t05["T05_ten_am_et_release_days"]["status"] == "UNAVAILABLE" and set(t05["T05_horizons_15_30"]) == {"exit_h+20", "exit_h+35"}
+    assert t01["T01_dead_zone_thresholds_0_0006_minus_0_0005"]["thresholds"] == [0.0006, -0.0005] and t01["T01_without_fill_proxy"]["n"] >= doc["types"]["T01_funding_8h"]["n_instants"]
+    v = t01["T01_v_shape_minus15_0_plus15"]["events"]  # the drift is planted over (h − 5, h + 15]: a quarter before h, three quarters after
+    assert t01["T01_classified_by_realized_rate"]["point"] > 20 and 5 < v["signed_return_bp_h_minus_15_to_h"] < 15 and v["signed_return_bp_h_to_h_plus_15"] > 20
+    assert set(t01["T01_by_photo_hour_00_08_16"]) == {"00:00", "08:00", "16:00"} and t01["block_days_7"]["lb90"] is not None and t01["portfolio_reading"]["net_mode"]["fills"] > 0
+    assert t05["T05_macro_days_separately"]["n"] == 11 and t05["regime_rv24_above_median"]["stress"]["n"] + t05["regime_rv24_above_median"]["calm"]["n"] > 0
+    assert "p_one_sided" not in json.dumps(g5_eval._clean(t01)) and "p_one_sided" not in json.dumps(g5_eval._clean(doc["common_descriptive"]))
+    assert doc["common_descriptive"]["minute_zero_T07"]["by_minute_of_hour"]["00"]["n"] > 0
+    for r in doc["types"].values():  # unit.report
+        assert r["descriptive"]["instruments_per_instant_distribution"]["events"]["distribution"] and r["descriptive"]["stratum_min_instruments_3"]["n"] > 0
+        assert r["exclusions"]["excluded_vol_zero_share_by_instrument"] == {i: 0.0 for i in (BTC, ETH, SOL)}  # frozen_candle.report
+
+
+def test_day_block_bootstrap_moves_events_and_controls_of_a_day_together_and_holm_steps_down():
+    ev_v, ev_d = np.array([1.0, 2.0, 3.0, 4.0]), np.array([0, 0, 1, 2])
+    ct_v, ct_d = np.array([0.0, 1.0, 1.0]), np.array([0, 1, 2])
+    a = g5_eval.day_block_bootstrap(ev_v, ev_d, ct_v, ct_d, resamples=500, seed=7)
+    b = g5_eval.day_block_bootstrap(ev_v, ev_d, ct_v, ct_d, resamples=500, seed=7)
+    assert a == b and a["point"] == pytest.approx(2.5 - 2 / 3) and a["blocks"] == 3 and 0 <= a["p_one_sided"] <= 1 and a["lb90"] <= a["point"] <= a["ub90"]
+    # Fixed blocks (C5): the same draws when an event day disappears.
+    c = g5_eval.day_block_bootstrap(ev_v[:3], ev_d[:3], ct_v, ct_d, resamples=500, seed=7, blocks=np.array([0, 1, 2]))
+    assert c["blocks"] == 3
+    assert g5_eval.day_block_bootstrap(np.array([1.0]), np.array([0]), np.array([0.0]), np.array([0]))["lb90"] is None  # one block: no statistic
+    h = g5_eval.holm({"a": 0.01, "b": 0.04, "c": None}, 0.10)
+    assert h["confirmed"] == ["a", "b"] and h["tests"]["c"]["p"] == 1.0 and h["tests"]["a"]["threshold"] == pytest.approx(0.10 / 3)
+    assert g5_eval.holm({"a": 0.04, "b": 0.07}, 0.10)["confirmed"] == ["a", "b"] and g5_eval.holm({"a": 0.06, "b": 0.07}, 0.10)["confirmed"] == []
+    assert g5_eval.holm({"a": 0.06, "b": 1.0}, 0.10)["confirmed"] == []
+
+
+# ----------------------------------------------------------------------------- Gate 2: the capture simulation (B xxi)
+
+
+def gate2_document(universe: list[dict], index_source: str = "history_index_candles") -> dict:
+    """The Gate 2 spec of LP-G5 Annexe B built from the Gate 1 spec (the Gate 2 file is written at the freeze): source capture,
+    the capture's price and premium, the simulated fill, the passive exit end per type, `gate2.sim`, the G5_GATE2_ labels."""
+    document = derived(universe=universe, window={"start": "2026-11-03", "end_exclusive": "2026-11-05"})
+    document = json.loads(json.dumps(document).replace("G5_GATE1_", "G5_GATE2_"))
+    document.update({"spec_id": "LP-G5-GATE2-2026", "source": "capture", "dataset_id": "okx-xperp-prospective-G5", "requires": document["requires"] + ["gate2_capture_simulation"]})
+    document["universe"]["excluded_never_eligible"] = []
+    document["price"].update({"series": "trades.last_print_of_minute", "boundary_convention": "c(t) = last print of the minute ending at t"})
+    document["frozen_candle"]["rule"] = "not_applicable_capture_has_no_candles"
+    document["costs"]["funding"]["source"] = "funding.settled_rate"
+    document["controls_common"]["exclusions"] = [e.replace("read in funding_hist", "read in funding") for e in document["controls_common"]["exclusions"]]
+    document.pop("fetch_plan")
+    document["gate2"] = {"sim": {"rule": "touch", "latency_ms": 250.0, "stale_s": 10.0, "funding_fill_grace_min": 1.0}, "index_source": index_source,
+                         "validation_rate_source": "funding_channel_settled_rate"}
+    t01, t05 = document["events"]
+    t01.pop("funding_coverage")
+    t01.update({"window_rule": "spec_window", "inconclusive_if": ["proxy_missing_instrument_day_share_gt_0_50", "C6_failed_or_not_computable", "index_source_none"],
+                "fill_proxy": {"kind": "lp_sim", "applies_to": ["events", "controls"], "unfilled": "exclude_from_primary_and_count", "report": "fill_rate_events_and_controls"},
+                "gate2": {"exit_until_min": 60}})
+    t01["generator"]["stream"] = "funding"
+    t01["controls"]["within"] = "spec_window"
+    t01["classifier"]["premium_proxy"] = g5_eval.PREMIUM_PROXY["capture"]
+    t05["gate2"] = {"exit_until_min": 75}
+    return document
+
+
+def write_capture(root: Path, inst: str, index_id: str) -> None:
+    """Three days (2026-11-02 → 11-05) of a quiet one-tick book (bid 100.0, ask 100.2), prints alternating at the bid and the ask every
+    10 s (buyers at 100.2 from 14:30:10 to 14:35 on 11-03: the T05 sign is +1), a mark of 100.1 with a premium of +0.0012 over the
+    eight hours before 2026-11-03 07:56 (P̂(07:55) is long), index candles at 100.1, settlements every 8 h at 5 bp (settled)."""
     store = tape.TapeStore(root, "values", source={"ws": "synthetic"}, not_before="2026-11-02T00:00:00Z")
-    day0 = tape.day_of_date("2026-11-03") * DAY_US
-    for s in range(0, 2 * tape.DAY_S, 10):  # a quiet one-tick book every 10 s for two days
+    day0 = tape.parse_iso_utc("2026-11-02T00:00:00Z")
+    pos_from, pos_to = tape.parse_iso_utc("2026-11-02T23:00:00Z"), tape.parse_iso_utc("2026-11-03T07:56:00Z")
+    t05 = tape.parse_iso_utc("2026-11-03T14:30:00Z")
+    for s in range(0, 3 * tape.DAY_S, 10):
         ts = day0 + s * US
-        store.append("books5", INST, ts, (ts, ts + 1000, s, [100.0, 99.9, 99.8, 99.7, 99.6], [5.0] * 5, [100.2, 100.3, 100.4, 100.5, 100.6], [5.0] * 5))
-        store.append("trades", INST, ts, (ts, ts + 1000, 100.0 if s % 20 == 0 else 100.2, 2.0, 0 if s % 20 == 0 else 1, s, 1))
+        store.append("books5", inst, ts, (ts, ts + 1000, s, [100.0, 99.9, 99.8, 99.7, 99.6], [5.0] * 5, [100.2, 100.3, 100.4, 100.5, 100.6], [5.0] * 5))
+        buyer = s % 20 != 0
+        if t05 - 60 * US <= ts <= t05:
+            buyer = False
+        elif t05 < ts <= t05 + 5 * MINUTE_US:
+            buyer = True
+        store.append("trades", inst, ts, (ts, ts + 1000, 100.2 if buyer else 100.0, 2.0, 1 if buyer else 0, s, 1))
         if s % 60 == 0:
-            store.append("mark", INST, ts, (ts, ts + 1000, 100.1))
+            premium = 0.0012 if pos_from <= ts < pos_to else 0.0
+            store.append("mark", inst, ts, (ts, ts + 1000, 100.1 * (1 + premium)))
+            store.append("index_1m", index_id, ts - MINUTE_US, (ts - MINUTE_US, ts, 100.1, 100.1, 100.1, 100.1, 1))
         if s % 3600 == 0:
             nxt = ((ts // (8 * HOUR_US)) + 1) * 8 * HOUR_US
             prev = nxt - 8 * HOUR_US
-            store.append("funding", INST, ts, (ts, ts + 1, nxt, 0.0001, nxt + 8 * HOUR_US, np.nan, 0.0004, 0.0001, 1, 1, 0.00375, -0.00375, 0.0001))
-            store.append("funding", INST, ts + 1, (ts + 1, ts + 2, prev, 0.0001, nxt, np.nan, 0.0004, 0.0001, 1, 1, 0.00375, -0.00375, 0.0001))
+            store.append("funding", inst, ts, (ts, ts + 1, nxt, 5e-4, nxt + 8 * HOUR_US, np.nan, 0.0, 5e-4, 1, 1, 0.00375, -0.00375, 0.0001))
+            store.append("funding", inst, ts + 1, (ts + 1, ts + 2, prev, 5e-4, nxt, np.nan, 0.0, 5e-4, 1, 1, 0.00375, -0.00375, 0.0001))
     store.checkpoint()
-    store.finalize_days_before(tape.day_of_date("2026-11-05"))
-    (root / "instruments-futures.json").write_text(json.dumps({"instruments": [{"instId": INST, "tickSz": "0.1", "ctVal": "0.0001", "lotSz": "1", "minSz": "1"}]}))
-    sim = {"rule": "touch", "latency_ms": 250.0, "funding_fill_grace_min": 1.0, "stale_s": 10.0}
-    maker = {"type": "maker_08", "primary": True, "execution_role": "maker_maker", "days_per_year": 365, "generator": {"kind": "fixed_time", "times": ["08:00"]},
-             "sign": {"kind": "constant", "value": 1}, "window": {"from_min": -5, "to_min": 15}, "arm_min": -5, "rest_until_min": 1, "exit_until_min": 60}
-    taker = {**maker, "type": "taker_0930", "primary": False, "execution_role": "taker_maker", "generator": {"kind": "fixed_time", "times": ["09:30"]},
-             "window": {"from_min": 5, "to_min": 15}, "arm_min": 5, "rest_until_min": 6, "exit_until_min": 30}
-    document = doc(source="capture", price_source="mark", window={"start": "2026-11-03", "end_exclusive": "2026-11-05"}, min_instants=1, min_days=1, primary_measure="sim_net_bp",
-                   execution={**SPEC["execution"], "sim": sim}, controls={**SPEC["controls"], "hours": [4], "random_per_day": 1}, events=[maker, taker],
-                   requires=BASE_REQUIRES + ["controls_same_days_minute_zero", "gate2_lp_sim_roles"])
+    store.finalize_days_before(tape.day_of_date("2026-11-06"), force=True)
+
+
+def test_gate2_simulates_the_maker_and_taker_entries_on_the_captured_book(tmp_path: Path):
+    document = gate2_document([uni(BTC, "2026-09-01T00:00:00Z", tick=0.1)])
     spec = g5_eval.parse_spec(document)
-    with pytest.raises(g5_eval.SpecError, match="exit_until_min"):
-        g5_eval.parse_spec({**document, "events": [{k: v for k, v in maker.items() if k != "exit_until_min"}]})
-    series = g5_eval.load_capture_series(root, INST, spec, row={"instId": INST, "tickSz": "0.1", "ctVal": "0.0001", "lotSz": "1", "minSz": "1"})
-    assert series.premium["premium_okx"][series.index_of(np.array([day0 + 10 * HOUR_US]))[0]] == pytest.approx(0.0004) and series.inst_spec is not None
-    assert series.funding.ts_us.size >= 4 and series.price[series.index_of(np.array([day0 + 10 * HOUR_US]))[0]] == pytest.approx(100.1)
-    study = g5_eval.run_study({INST: series}, spec)
-    m = study["types"]["maker_08"]
-    # Maker entry at the bid 100.0 (armed at h−5, filled by the next seller), passive exit at the ask 100.2 from h+15: 20 bp − 4 bp of fees,
-    # and the 08:00 settlement crossed (fill before h): the long pays 1 bp.
-    assert m["n_instants"] == 2 and m["lp_sim"]["status_event"]["filled"] == 2 and m["statistics_bp"]["sim_net_bp"]["event"]["event_mean"] == pytest.approx(20.0 - 4.0 - 1.0, abs=0.1)
-    t = study["types"]["taker_0930"]
-    # Taker entry at the ask 100.2 after the latency (+2 bp slippage), passive exit at the ask from h+15: 0 bp, fees 5 + 2, slippage 2.
-    assert t["lp_sim"]["status_event"]["filled"] == 2 and t["statistics_bp"]["sim_net_bp"]["event"]["event_mean"] == pytest.approx(0.0 - 7.0 - 2.0, abs=0.1)
-    # The funding grace: a fill within a minute after the settlement crosses it ("may take up to a minute"); later, it does not.
-    espec = dataclasses.replace(spec.events[0], arm_min=0, from_min=0, rest_until_min=1)
-    late = g5_eval.simulate_clock_scalp(series, np.array([day0 + 8 * HOUR_US], dtype=np.int64), np.array([1], dtype=np.int8), espec, spec)[0]
-    assert late["sim_funding_bp"][0] == pytest.approx(-1.0)
-    no_grace = g5_eval.parse_spec({**document, "execution": {**document["execution"], "sim": {**sim, "funding_fill_grace_min": 0.0}}})
-    later = g5_eval.simulate_clock_scalp(series, np.array([day0 + 8 * HOUR_US], dtype=np.int64), np.array([1], dtype=np.int8), espec, no_grace)[0]
-    assert later["sim_funding_bp"][0] == pytest.approx(0.0)
-    with pytest.raises(g5_eval.SpecError, match="history only"):
-        g5_eval.parse_spec({**document, "events": [{**maker, "restrict_to_coverage": ["funding_hist"]}]})
-    with pytest.raises(g5_eval.SpecError, match="history only|capture"):
-        g5_eval.parse_spec({**document, "events": [{**maker, "sign": {"kind": "field_sign", "field": "premium_mark_index", "at_min": -5}}]})
+    assert spec.source == "capture" and spec.gate == "G5_GATE2_" and spec.gate2["sim"]["funding_fill_grace_min"] == 1.0 and spec.fetch_plan is None
+    root = tmp_path / "capture"
+    write_capture(root, BTC, "BTC-USD")
+    meta = spec.instrument(BTC)
+    series = g5_eval.load_capture_series(root, meta, spec, {"instId": BTC, "lotSz": "1", "minSz": "1"})
+    t01, t05 = spec.types
+    h = tape.parse_iso_utc("2026-11-03T08:00:00Z")
+    assert series.p_hat(series.index_of([h - 5 * MINUTE_US]), t01.classifier)[0] == pytest.approx(0.0012, rel=1e-6)
+    # T01: post-only long at the bid 100.0 armed at h − 5, filled by the next seller before h (the settlement is crossed: the long pays 5 bp);
+    # passive exit at the ask 100.2 from h + 15: +20 bp, fees 2 + 2.
+    m = g5_eval.measure(series, [h], t01, spec, "event")
+    assert m["execution"] == "lp_sim" and m["sim_status"]["filled"] == 1 and m["net_bp"][0] == pytest.approx(20.0 - 4.0 - 5.0, abs=0.05) and m["funding_bp"][0] == pytest.approx(-5.0)
+    # T05: 09:30 New York = 14:30 UTC in November; the first five minutes go up; taker entry at the ask after the latency (+2 bp
+    # slippage), passive exit at the ask from h + 60: 0 bp, fees 5 + 2, slippage 2.
+    h5 = tape.parse_iso_utc("2026-11-03T14:30:00Z")
+    assert [m_ for m_, _, _ in g5_eval.local_time_instants(t05, spec)][0] == h5
+    m5 = g5_eval.measure(series, [h5], t05, spec, "event")
+    assert m5["sign"].tolist() == [1] and m5["net_bp"][0] == pytest.approx(0.0 - 7.0 - 2.0, abs=0.05)
+    # A fill in [h ; h + 1) crosses the settlement ("may take up to a minute"): the grace of gate2.sim.
+    import dataclasses
+
+    late = dataclasses.replace(t01, arm_min=0, rest_until_min=1, return_window=(0, 15))
+    sim, status = g5_eval.measure_lp_sim(series, np.array([h]), np.array([1], dtype=np.int8), late, spec)
+    assert status["filled"] == 1 and sim["sim_funding_bp"][0] == pytest.approx(-5.0)
+    no_grace = g5_eval.parse_spec({**document, "gate2": {**document["gate2"], "sim": {**document["gate2"]["sim"], "funding_fill_grace_min": 0.0}}})
+    sim, _ = g5_eval.measure_lp_sim(series, np.array([h]), np.array([1], dtype=np.int8), late, no_grace)
+    assert sim["sim_funding_bp"][0] == pytest.approx(0.0)
+    # The study: C6 on the settled rate of the funding channel (too few settlements in two days: INCONCLUSIVE, sealed).
+    doc = g5_eval.run_study({BTC: series}, spec, {"d_cov_global_us": spec.pad_start_us})
+    r = doc["types"]["T01_funding_8h"]
+    assert r["verdict_label"] == "G5_GATE2_INCONCLUSIVE" and r["validation"]["population"] >= 1 and r["validation"]["computable"] is False
+    assert doc["types"]["T05_us_open"]["verdict_label"] == "G5_GATE2_NOT_INFORMATIVE"
+    # Without an index source (P-G5-10 ii undecided) T01 is INCONCLUSIVE by construction.
+    blind = g5_eval.parse_spec(gate2_document([uni(BTC, "2026-09-01T00:00:00Z", tick=0.1)], index_source="none"))
+    s2 = g5_eval.load_capture_series(root, blind.instrument(BTC), blind, {"instId": BTC})
+    assert np.isnan(s2.index).all()
+    doc = g5_eval.run_study({BTC: s2}, blind, {"d_cov_global_us": blind.pad_start_us})
+    assert any(x.startswith("index_source_none") for x in doc["types"]["T01_funding_8h"]["verdict_reasons"])
+    # Keys of one gate are refused in the other.
+    with pytest.raises(g5_eval.SpecError, match="capture is not fetched"):
+        g5_eval.parse_spec({**document, "fetch_plan": BASE["fetch_plan"]})
+    with pytest.raises(g5_eval.SpecError, match="gate2"):
+        g5_eval.parse_spec({k: v for k, v in document.items() if k != "gate2"})
+    with pytest.raises(g5_eval.SpecError, match="quarantine floor|quarantine"):
+        g5_eval.parse_spec({**document, "window": {"start": "2026-10-20", "end_exclusive": "2026-11-05"}})
 
 
-# ----------------------------------------------------------------------------- command line
+# ----------------------------------------------------------------------------- the command line, end to end (B xviii, xx)
 
 
-def test_cli_g5_eval_writes_json_and_markdown_and_checks_the_spec_and_the_code(tmp_path: Path, capsys):
+def write_history(root: Path, spec: g5_eval.Spec, series_by_inst: dict, funding_from_us: int, decision_ref: str, drop_state: str | None = None) -> None:
+    """The synthetic series in the `g5_fetch` layouts (candles opening at g_{k−1}, closing at g_k), finalized day files, the manifest
+    states of the jobs, the funding history in the sealed store from `funding_from_us` (the server's horizon) and its receipt."""
+    store = tape.TapeStore(root, "values", source={"rest": "synthetic", "decision_ref": decision_ref, "dataset_id": spec.dataset_id}, kind=g5_fetch.MANIFEST_KIND)
+    sealed = tape.TapeStore(root / g5_fetch.SEALED_DIR_NAME, "values", source={"rest": "synthetic", "decision_ref": decision_ref}, kind=g5_fetch.MANIFEST_KIND)
+    fetched = tape.parse_iso_utc("2026-11-03T00:00:00Z")
+    states, sealed_states = {}, {}
+
+    def save(base: Path, layout: str, key: str, rows: np.ndarray) -> None:
+        days = rows["ts_us"] // DAY_US
+        for d in np.unique(days).tolist():
+            tape.save_rows(base / layout / key / f"{key}-{tape.date_of_day(int(d))}.npz", rows[days == d])
+
+    for inst, s in series_by_inst.items():
+        k = np.arange(1, s.size)
+        opens = s.grid_us[:-1]
+        candles = np.zeros(k.size, dtype=tape.CANDLES_1M_DTYPE)
+        for col, values in (("ts_us", opens), ("open", s.close[k - 1]), ("high", s.high[k]), ("low", s.low[k]), ("close", s.close[k]), ("vol", s.vol[k]), ("vol_ccy", s.vol[k]),
+                            ("vol_ccy_quote", s.vol[k] * 100)):
+            candles[col] = values
+        candles["fetched_us"], candles["confirm"] = fetched, 1
+        candles["confirm"][100] = 0  # one unconfirmed candle: dropped and counted
+        late = candles[-1:].copy()
+        late["ts_us"] = g5_fetch.END_EXCLUSIVE_US + 3 * MINUTE_US  # a row at or after END_EXCLUSIVE in the last day's file: dropped
+        save(root, "candles_1m", inst, candles)
+        tape.save_rows(root / "candles_1m" / inst / f"{inst}-2026-10-13.npz", np.concatenate([candles[candles["ts_us"] // DAY_US == tape.day_of_date("2026-10-13")], late]))
+        for layout, key, values in (("mark_1m", inst, s.mark), ("index_1m", s.meta.index_id, s.index)):
+            px = np.zeros(k.size, dtype=tape.PX_CANDLES_1M_DTYPE)
+            px["ts_us"], px["fetched_us"], px["open"], px["high"], px["low"], px["close"], px["confirm"] = opens, fetched, values[k - 1], values[k], values[k], values[k], 1
+            save(root, layout, key, px)
+        keep = s.settlements_us >= funding_from_us
+        fund = np.zeros(int(keep.sum()), dtype=tape.FUNDING_HIST_DTYPE)
+        fund["ts_us"], fund["fetched_us"], fund["funding_rate"], fund["realized_rate"], fund["method"], fund["formula_type"] = s.settlements_us[keep], fetched, s.settlement_rates[keep] * 1.1, s.settlement_rates[keep], 1, 1
+        save(root / g5_fetch.SEALED_DIR_NAME, "funding_hist", inst, fund)
+        for stream in ("candles_1m", "mark_1m"):
+            states[f"{inst}:{stream}"] = {"complete": True, "end_reason": "reached_start", "errors": []}
+        states[f"{s.meta.index_id}:index_1m"] = {"complete": True, "end_reason": "reached_start", "errors": []}
+        ts = np.sort(s.settlements_us[keep])
+        sealed_states[f"{inst}:funding_hist"] = {"complete": True, "end_reason": "server_empty_before_start", "errors": [], "rows": int(ts.size), "coverage_start_us": int(ts[0]),
+                                                 "d_cov_start_us": int(ts[1]), "truncated": True}
+    if drop_state:
+        states[drop_state]["end_reason"] = None
+    store.manifest["g5_streams"] = states
+    store.save_manifest()
+    sealed.manifest["g5_streams"] = sealed_states
+    sealed.save_manifest()
+    digest, _ = g5_fetch.directory_digest(root / g5_fetch.SEALED_DIR_NAME)
+    coverage = max(v["d_cov_start_us"] for v in sealed_states.values())
+    receipt = {"kind": g5_fetch.RECEIPT_KIND, "end_exclusive": g5_fetch.END_EXCLUSIVE, "jobs_total": len(sealed_states), "jobs_complete": len(sealed_states), "jobs_error": 0,
+               "coverage_start_us": coverage, "coverage_start_utc": tape.iso_utc(coverage), "sealed_manifest_sha256": tape.sha256_of(root / g5_fetch.SEALED_DIR_NAME / tape.MANIFEST_NAME),
+               "sealed_files_digest": digest}
+    (root / g5_fetch.SEALED_RECEIPT_NAME).write_text(json.dumps(receipt, indent=1, sort_keys=True))
+
+
+def snapshot_file(path: Path, spec_doc: dict, tick: str = "0.01") -> Path:
+    rows = [{"instId": u["inst_id"], "instType": "FUTURES", "ruleType": "xperp", "state": "live", "uly": u["index_id"], "ctVal": str(u["ct_val"]), "tickSz": tick,
+             "listTime": str(tape.parse_iso_utc(u["list_time_utc"]) // 1000)} for u in spec_doc["universe"]["analysed"]]
+    rows += [{"instId": e["inst_id"], "instType": "FUTURES", "ruleType": "xperp", "state": "live", "uly": e["inst_id"].split("_")[0], "ctVal": "1", "tickSz": "0.0001",
+              "listTime": str(tape.parse_iso_utc(e["list_time_utc"]) // 1000)} for e in spec_doc["universe"]["excluded_never_eligible"]]
+    path.write_text(json.dumps({"code": "0", "msg": "", "data": rows}))
+    return path
+
+
+def test_the_command_line_end_to_end_on_a_synthetic_tape(tmp_path: Path, capsys):
+    funding_from = tape.parse_iso_utc("2026-08-04T00:00:00Z")  # the server's three-month horizon: D_cov starts at 08:00
+    decision = "test only: owner's written confirmation of the scale (P-G5-1)"
+
+    def frozen(document):
+        document["statistics"]["bootstrap"]["resamples"] = 1000
+        lowered_floor(document, instants=40, days=20)
+        document.update({"status": "FROZEN", "spec_version": "1.0.0-test"})
+
+    document = derived(universe=[uni(BTC), uni(ETH)], window=SHORT, mutate=frozen)
+    snapshot = snapshot_file(tmp_path / "snapshot.json", document)
+    document["freeze_fill"].update({"instruments_snapshot_path": str(snapshot), "instruments_snapshot_sha256": tape.sha256_of(snapshot), "calendars_verified_utc": "2026-11-02T10:00:00Z",
+                                    "code_digest_sha256": cli.code_digest(), "decision_ref_p_g5_1": decision})
+    spec = g5_eval.parse_spec(document)
+    series = {i: market(spec, spec.instrument(i), seed=21 + j, t01_drift_bp=40.0, d_cov_us=D_COV) for j, i in enumerate((BTC, ETH))}
     root = tmp_path / "history"
-    spec_doc = doc(window={"start": "2026-06-01", "end_exclusive": "2026-06-13"}, min_instants=20, min_days=8)
-    spec = g5_eval.parse_spec(spec_doc)
-    write_tape(root, spec, [synthetic(spec, drift_bp=30.0)])
+    write_history(root, spec, series, funding_from, decision)
     spec_path = tmp_path / "spec.json"
-    spec_path.write_text(json.dumps(spec_doc, indent=1, ensure_ascii=False))
-    out_json, out_md = tmp_path / "g5.json", tmp_path / "g5.md"
-    digest = cli.code_digest()
-    assert cli.main(["g5-eval", "--tape", str(root), "--spec", str(spec_path), "--out-json", str(out_json), "--out-md", str(out_md), "--expect-code-digest", digest]) == 0
+    spec_path.write_text(json.dumps(document, indent=1, ensure_ascii=False))
+    sha = g5_fetch.sha256_bytes(spec_path.read_bytes())
+    out_json, out_md = tmp_path / "run" / "g5.json", tmp_path / "run" / "g5.md"
+    args = ["g5-eval", "--tape", str(root), "--spec", str(spec_path), "--expect-spec-sha256", sha, "--out-json", str(out_json), "--out-md", str(out_md)]
+    assert cli.main(args) == 0
     printed = json.loads(capsys.readouterr().out)
-    document = json.loads(out_json.read_text(), parse_constant=lambda c: pytest.fail(f"non-finite number {c} in the JSON report"))
-    assert printed["spec_sha256"] == document["spec"]["sha256"] == g5_fetch.sha256_text(spec_path.read_text()) and printed["code_digest"] == digest == document["code_digest"]
-    assert document["evaluator"] == g5_eval.EVALUATOR_VERSION and document["spec"]["requires"] == spec_doc["requires"] and set(document["spec"]["capabilities_used"]) <= set(spec_doc["requires"])
-    assert document["types"]["T01_funding_8h"]["verdict"] == "PASS" and document["summary"]["holm_local_confirmed"] == ["T01_funding_8h"] and document["holm"]["m"] == 2
-    assert document["coverage"][INST]["price_source"] == "last" and document["coverage"][INST]["index_id"] == INDEX and document["instruments_snapshot"]["snapshot_date"] == "2026-06-30"
-    assert document["fetch_quality"]["jobs"] == 0 and "g5_eval.py" in document["code"] and document["spec"]["document"] == spec_doc
-    assert document["types"]["T01_funding_8h"]["declared_lookahead"][0]["reason"].startswith("R_h is computed at h-1")
+    result = json.loads(out_json.read_text(), parse_constant=lambda c: pytest.fail(f"non-finite number {c} in the JSON report"))
+    assert printed["spec_sha256"] == sha == result["spec"]["sha256"] and result["code_digest"] == cli.code_digest() and result["evaluator"] == g5_eval.EVALUATOR_VERSION
+    t01, t05 = result["types"]["T01_funding_8h"], result["types"]["T05_us_open"]
+    assert t01["verdict_label"] == "G5_GATE1_PASS" and t05["verdict_label"] == "G5_GATE1_FAIL" and result["d_cov_global"] == iso(D_COV)
+    assert result["funding_seal"]["receipt_sha256"] == tape.sha256_of(root / g5_fetch.SEALED_RECEIPT_NAME) and result["fetch_quality"]["error_share"] == 0.0
+    cov = result["coverage"][BTC]
+    assert cov["unconfirmed_dropped"]["candles_1m"] == 1 and cov["rows_at_or_after_end_dropped"] == 1 and cov["d_cov_start"] == iso(D_COV)
+    assert '"pass_programme"' not in out_json.read_text() and printed["gate2_inscription"] == {"T01_funding_8h": "inscribed", "T05_us_open": "not_inscribed"}
+    notes = result["spec"]["notes"]  # every descriptive text of the spec is copied into the report
+    for key, value in (("note", BASE["note"]), ("universe.selection_bias_declared", BASE["universe"]["selection_bias_declared"]), ("sessions_note", BASE["sessions_note"]),
+                       ("controls_common.rule", BASE["controls_common"]["rule"]), ("macro_filter.ten_am_et_releases", BASE["macro_filter"]["ten_am_et_releases"]),
+                       ("verdict.closure_scope", BASE["verdict"]["closure_scope"]), ("fetch_plan.max_requests", BASE["fetch_plan"]["max_requests"]),
+                       ("freeze_fill.rule", BASE["freeze_fill"]["rule"]), ("calendars.read_by", BASE["calendars"]["read_by"])):
+        assert notes[key] == value
+    assert notes["sessions_to_verify_at_freeze"] == ["cme_cf_brr_window"] and notes["classifier.threshold_origin"]["T01_funding_8h"] == BASE["events"][0]["classifier"]["threshold_origin"]
+    protocol = REAL_SPEC.parents[4] / BASE["protocol"]
+    assert result["spec"]["protocol_sha256"] == tape.sha256_of(protocol) and result["summary"]["gate2_inscription_discretion"] == "none"
     text = out_md.read_text()
-    assert text.startswith("# G5 — étude d'événements `g5-synthetic-test` (history)") and "GATES` §9.7 interdit de promouvoir" in text.split("## Verdicts")[0]
-    assert "**G5_GATE1_PASS**" in text and "PASS, poursuivi" in text and "regard en avant déclaré" in text and "## Couverture et qualité" in text and "UNAVAILABLE" in text
-    with pytest.raises(SystemExit, match="code digest"):
-        cli.main(["g5-eval", "--tape", str(root), "--spec", str(spec_path), "--expect-code-digest", "0" * 64])
-    with pytest.raises(SystemExit, match="sha256 mismatch"):
-        cli.main(["g5-eval", "--tape", str(root), "--spec", str(spec_path), "--expect-spec-sha256", "deadbeef"])
-    assert cli.main(["g5-eval", "--tape", str(root), "--spec", str(spec_path), "--expect-spec-sha256", document["spec"]["sha256"].upper()]) == 0
-    bad = tmp_path / "bad.json"
-    for broken in ({**spec_doc, "window": {"start": "2026-10-01", "end_exclusive": "2026-10-20"}}, {**spec_doc, "events": []}, {**spec_doc, "requires": spec_doc["requires"] + ["magic"]},
-                   {**spec_doc, "surprise": 1}):
-        bad.write_text(json.dumps(broken))
-        with pytest.raises(SystemExit):
-            cli.main(["g5-eval", "--tape", str(root), "--spec", str(bad)])
-    counting = tmp_path / "counting"
-    tape.TapeStore(counting, "counting")
-    with pytest.raises(SystemExit):
-        cli.main(["g5-eval", "--tape", str(counting), "--spec", str(spec_path)])
-    capture_like = tmp_path / "capture"
-    tape.TapeStore(capture_like, "values")
-    with pytest.raises(SystemExit, match="not a lp-xperp-1m-history"):
-        cli.main(["g5-eval", "--tape", str(capture_like), "--spec", str(spec_path)])
-    with pytest.raises(SystemExit):
-        cli.main(["g5-eval", "--tape", str(tmp_path / "empty"), "--spec", str(spec_path)])
+    assert text.startswith("# G5 — `LP-G5-GATE1-2026` (history)") and BASE["descriptive"]["rule"] in text.split("## Verdicts")[0] and "GATES` §9.7" in text
+    # A sealed type: drop T01's sensitivity (rates of the opposite class) → INCONCLUSIVE, its statistics in sealed/<type>.json only.
+    series_c6 = {i: market(spec, spec.instrument(i), seed=21 + j, t01_drift_bp=40.0, d_cov_us=D_COV, rate_of=lambda c, n: -5e-4 * c if c else 1e-4) for j, i in enumerate((BTC, ETH))}
+    root2 = tmp_path / "history-c6"
+    write_history(root2, spec, series_c6, funding_from, decision)
+    out2 = tmp_path / "run2" / "g5.json"
+    assert cli.main(["g5-eval", "--tape", str(root2), "--spec", str(spec_path), "--expect-spec-sha256", sha, "--out-json", str(out2), "--out-md", str(tmp_path / "run2" / "g5.md")]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    r2 = json.loads(out2.read_text())["types"]["T01_funding_8h"]
+    sealed_path = tmp_path / "run2" / "sealed" / "T01_funding_8h.json"
+    assert r2["verdict"] == "INCONCLUSIVE" and sealed_path.exists() and tape.sha256_of(sealed_path) == r2["sealed"]["sha256"] == printed["sealed_sha256"]["T01_funding_8h"]
+    assert "statistic" not in r2 and json.loads(sealed_path.read_text())["D"] is not None and "scellé" in (tmp_path / "run2" / "g5.md").read_text()
+    # Global device defects decided before any market value is read: exit 2, every type INCONCLUSIVE, nothing read.
+    for bad_args, reason in ((["--expect-spec-sha256", "0" * 64], "spec_sha256_mismatch"),):
+        a = list(args)
+        a[a.index("--expect-spec-sha256") + 1] = bad_args[1]
+        assert cli.main(a) == 2
+        refused = json.loads(capsys.readouterr().out)
+        assert refused["market_data_read"] is False and refused["device"][0].startswith(reason) and set(refused["verdicts"].values()) == {"G5_GATE1_INCONCLUSIVE"}
+    for change, reason in ((lambda d: d.update({"status": "DRAFT_NOT_FROZEN", "spec_version": "0.9-draft"}), "status_not_frozen"),
+                           (lambda d: d["freeze_fill"].update({"code_digest_sha256": "c" * 64}), "code_digest_mismatch")):
+        other = copy.deepcopy(document)
+        change(other)
+        p = tmp_path / f"{reason}.json"
+        p.write_text(json.dumps(other))
+        assert cli.main(["g5-eval", "--tape", str(root), "--spec", str(p), "--expect-spec-sha256", g5_fetch.sha256_bytes(p.read_bytes()), "--out-json", str(tmp_path / f"{reason}-out.json")]) == 2
+        refused = json.loads(capsys.readouterr().out)
+        assert refused["market_data_read"] is False and any(x.startswith(reason) for x in refused["device"])
+    # The snapshot, the universe and the sealed store are checked before reading (refuse_run).
+    tampered = copy.deepcopy(document)
+    bad_snapshot = snapshot_file(tmp_path / "snapshot-tick.json", document, tick="0.1")
+    tampered["freeze_fill"].update({"instruments_snapshot_path": str(bad_snapshot), "instruments_snapshot_sha256": tape.sha256_of(bad_snapshot)})
+    p = tmp_path / "tick.json"
+    p.write_text(json.dumps(tampered))
+    with pytest.raises(SystemExit, match="tickSz"):
+        cli.main(["g5-eval", "--tape", str(root), "--spec", str(p), "--expect-spec-sha256", g5_fetch.sha256_bytes(p.read_bytes()), "--out-json", str(tmp_path / "x.json")])
+    with pytest.raises(SystemExit, match="snapshot"):
+        cli.main(args[:-4] + ["--instruments-file", str(bad_snapshot), "--out-json", str(tmp_path / "x.json")])
+    victim = next((root / g5_fetch.SEALED_DIR_NAME / "funding_hist" / BTC).iterdir())
+    victim.write_bytes(victim.read_bytes() + b"\0")
+    with pytest.raises(SystemExit, match="differs from its receipt"):
+        cli.main(args)
+    # A job without end_reason: global INCONCLUSIVE (stream_end_reason_missing), both types sealed.
+    root3 = tmp_path / "history-missing"
+    write_history(root3, spec, series, funding_from, decision, drop_state=f"{ETH}:mark_1m")
+    out3 = tmp_path / "run3" / "g5.json"
+    assert cli.main(["g5-eval", "--tape", str(root3), "--spec", str(spec_path), "--expect-spec-sha256", sha, "--out-json", str(out3)]) == 0
+    r3 = json.loads(out3.read_text())
+    assert all(r["verdict"] == "INCONCLUSIVE" and "sealed" in r for r in r3["types"].values()) and any("stream_end_reason_missing" in x for x in r3["summary"]["global_device_defects"])
     with pytest.raises(SystemExit):  # the command line exposes no threshold, sign, window or seed
-        cli.build_parser().parse_args(["g5-eval", "--tape", str(root), "--spec", str(spec_path), "--threshold-bp", "5"])
+        cli.build_parser().parse_args(args + ["--threshold-bp", "5"])
     capsys.readouterr()
 
 
-def test_annex_a_shaped_spec_parses_once_its_lists_are_filled():
-    """The draft Annexe A of LP-G5 in the g5_eval/2 format (what a1 freezes); the `<Annexe C …>` placeholders replaced by test lists."""
-    annex = {
-        "spec_id": "LP-G5-GATE1-2026", "source": "history", "unit": "instant", "price_source": "last",
-        "requires": ["price_source_last", "funding_rate_sign_dead_zone", "interval_8h_filter", "control_sign_premium_wavg", "controls_same_days_minute_zero", "n_unit_instant",
-                     "execution_role_costs", "us_open_exclude_dates", "verdict_c2_c6", "days_per_year", "quality_rules", "premium_named_fields", "declared_lookahead",
-                     "controls_minute_of_hour", "coverage_restriction", "eligibility_days_after_list", "programme_family"],
-        "window": {"start": "2026-04-01", "end_exclusive": "2026-10-14"},
-        "alpha": 0.10, "threshold_bp": 10.0, "min_instants": 100, "min_days": 30, "primary_measure": "net_bp",
-        "bootstrap": {"resamples": 1000, "seed": 20261102, "block_days": 1},
-        "execution": {"half_spread_bp": 0.0, "maker_bp": 2.0, "taker_bp": 5.0, "adverse_selection_bp_per_leg": 2.0, "adverse_selection_sensitivity_bp_per_leg": 3.5, "slippage_bp": 2.0,
-                      "cost_stress_multiplier": 1.5},
-        "controls": {"hours": [4, 12, 20], "random_per_day": 3, "minute_zero_only": True, "same_days_as_events": True, "exclusion_min": 60, "seed": 20261102},
-        "quality": {"max_missing_window_share": 0.20, "max_proxy_missing_share": 0.50, "max_fetch_error_share": 0.10, "max_funding_unknown_share": 0.10, "exclude_zero_volume": False},
-        "economic": {"s_eco_usd_per_year": 97.0, "max_fills_per_instant": 4, "order_notional_usd": 100.0},
-        "eligibility": {"days_after_list": 30}, "funding_outside_coverage": {"assumed_hours": [0, 8, 16]}, "programme": {"m_max": 7},
-        "events": [
-            {**T01, "type": "T01_funding_8h",
-             "control_sign": {**T01["control_sign"], "at_min": -1},
-             "declared_lookahead": [T01["declared_lookahead"], {"field": "control_sign", "reason": "P̂(c−1) mirrors R_h computed at h−1 (LP-G5 §7.2)"}]},
-            {**T05, "generator": {"kind": "us_open", "exclude_dates": ["2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07"],
-                                  "skip_dates": ["2026-04-10", "2026-05-12", "2026-06-10", "2026-07-14", "2026-08-12", "2026-09-11", "2026-05-08", "2026-06-05", "2026-07-02",
-                                                 "2026-08-07", "2026-09-04", "2026-10-02"]}},
-            {"type": "T11_macro_filter", "evaluate": False, "generator": {"kind": "explicit", "instants": ["2026-04-10T12:30:00Z", "2026-04-29T18:00:00Z"]}},
-        ],
-    }
-    spec = g5_eval.parse_spec(annex)
-    assert spec.events[0].restrict_to_coverage == ("funding_hist", "mark_1m", "index_1m") and spec.programme_m_max == 7 and spec.eligibility_days == 30.0
-    g5_eval.guard_window(spec)
+def test_no_test_can_open_a_socket():
+    with pytest.raises(AssertionError):
+        socket.create_connection(("127.0.0.1", 9))
+    with pytest.raises(AssertionError):
+        urllib.request.urlopen("https://eea.okx.com/api/v5/public/time")

@@ -14,6 +14,13 @@ revue » (refus écrits « Réponse à la revue »). Deux corrections demandées
 `claude/research-scalping-theory-gap`, hors du périmètre d'écriture de cette passe) : elles sont **signalées** ici (§6.2, §12),
 pas appliquées.
 
+**Amendement 2026-10-21 (P-G5-7).** Prérequis P-G5-7 de `LP-G5-DRAFT-PREREGISTRATION.md` (relecture quant de G5 m3, m4 :
+`tradingV3-private/research/20261020T2321Z-g5-periods/review/quant.md`), appliqué par le volet `docs-b` du programme
+`20261020T2321Z-g5-periods` : §1.1 (jours par an du calendrier du type), §2.1–2.3 (famille m_max = 3 + 2K = 7), §3.1 (blocs
+d'un jour UTC pour G5), §3.3 et §8 (instants réellement disponibles pour G5) ; §6.2 reçoit en plus l'état du registre
+(P-G5-6). Chaque passage amendé porte une ligne « Amendement 2026-10-21 (P-G5-7) » qui cite le texte remplacé. Statut
+inchangé (`DRAFT_NOT_FROZEN`) ; aucune donnée lue.
+
 **Convention** : « programme » = chiffre recopié d'un rapport du dépôt ; « calcul d'audit » = arithmétique sans donnée ;
 **UNKNOWN** = ni sourcé ni mesuré. **Aucun chiffre de marché** ne figure ici.
 
@@ -37,7 +44,7 @@ renommer le standing objective.
 
 1.1 **Formule, écrite avant le gel de chaque protocole** :
 
-    plafond_USD_an = fills_admis_par_jour × notionnel_moyen_USD × net_pb / 10 000 × 365
+    plafond_USD_an = fills_admis_par_jour × notionnel_moyen_USD × net_pb / 10 000 × jours_par_an_du_type
 
 avec `fills_admis_par_jour` et `notionnel_moyen_USD` pris dans la **lecture portefeuille** (§4 : 500 USDT, 1×, ≤ 4 engagements
 vivants, 100 USD par ordre ; rapportée sous les deux hypothèses de `posMode` tant qu'il n'est pas lu) et `net_pb` = **toujours un
@@ -47,6 +54,12 @@ seul frais maker, qui est une demi-transaction (relecture quant B1 ; Part A, `re
 mark-out net −3,05 … −3,49 pb contre aller-retour taker −8,1 … −8,7 pb) ; rapporté avec ses bornes LB90 / UB90. Ordres de grandeur du rapport théorie (calcul d'audit, §5
 ligne 5) : 600 fills en 8 semaines × ~100 USD × +10 pb ≈ 350–400 USD/an ; 2 créneaux de 50 USD × 5 fills/jour ≈ 90 USD/an. Ce
 sont les ordres de grandeur **si tout passe** ; ce ne sont pas des prévisions.
+
+**Amendement 2026-10-21 (P-G5-7)** : « × 365 » (texte du 2026-10-20) devient « × jours/an du calendrier du type » : **365** pour
+un type à calendrier continu (jours calendaires : G2, G4, G1, G5-T01), **252** pour un type au calendrier NYSE (jours de bourse :
+G5-T05, jours de publication macro exclus de l'événement comptés au dénominateur) ; `fills_admis_par_jour` est compté sur les
+jours du **même** calendrier (G5 §7.6 ; relecture quant de G5 m3). Annualiser à 365 des fills qui n'existent que les jours de
+bourse gonflait le plafond d'un facteur 365 / 252 ≈ 1,45 (calcul d'audit).
 
 1.2 **Seuil d'arrêt (à fixer par le propriétaire ; proposition a3, amendée par la relecture quant M7)** : une famille est
 **« poursuivie »** (Phase 4 d'architecture proposable, proposition démo possible) si et seulement si le **point** de
@@ -88,16 +101,32 @@ règle **figée**, quant m10). **FWER visé : 10 %** (unilatéral) sur la famill
 protocole (robustesse, contrôle, économie) abaissent l'α effectif de chaque PASS en dessous de son α nominal (déclaré, non
 chiffré).
 
+**Amendement 2026-10-21 (P-G5-7)** : G5 entre dans la famille avec **un test confirmatoire par type décisif et par porte**
+(K = 2 types, T01 et T05 ; G5 §1.2) : G5-Gate1-T01, G5-Gate1-T05, G5-Gate2-T01, G5-Gate2-T05, au lieu de « G5-Gate1-C1 » et
+« G5-Gate2-C1 » (texte du 2026-10-20). Les deux specs G5 étant gelés ensemble, les quatre tests sont gelés à la même date ; un
+type non inscrit au Gate 2 (`G5_GATE1_FAIL`) y compte p = 1, par la règle ci-dessus (jamais de retrait).
+
 2.2 **Niveau** : α_famille = 0,10 **unilatéral** (c'est le « LB90 > 0 » de chaque protocole, exprimé en p-value bootstrap
 unilatérale p_i = P*(statistique ≤ 0)). **Holm** : p_(1) ≤ … ≤ p_(m) ; le test (i) est confirmé si p_(j) ≤ α / (m − j + 1) pour tout
 j ≤ i. Avec m = 5 : le plus significatif doit avoir p ≤ 0,02 (LB98 > 0), puis 0,025, 0,033, 0,05, 0,10.
+**Amendement 2026-10-21 (P-G5-7)** : à la taille planifiée m = 7 (§2.3), l'échelle de Holm est 0,10/7 ≈ 0,0143 ; 0,10/6 ≈ 0,0167 ;
+0,02 ; 0,025 ; 0,0333 ; 0,05 ; 0,10 (calcul d'audit). L'exemple à m = 5 ci-dessus est conservé comme texte du 2026-10-20.
 
 2.3 **Lecture intermédiaire** (les verdicts tombent à des dates différentes) : un protocole qui satisfait son critère local
 (LB90 > 0 **et** ses seuils économiques) reçoit `PASS_LOCAL`. Il devient `PASS_PROGRAMME` **immédiatement** si p_i ≤ α / m_max,
-où m_max = taille **planifiée** de la famille écrite ici (**m_max = 5** : G2-C2, G4-Gate2, G5-Gate1, G5-Gate2, G1 ; 6 si G6 est
-autorisé ; +1 par screen devenu post-screen, §2.1) — c'est
+où m_max = taille **planifiée** de la famille écrite ici (**m_max = 3 + 2K = 7**, K = 2 types décisifs de G5 : **G2-C2,
+G4-Gate2, G1, G5-Gate1-T01, G5-Gate1-T05, G5-Gate2-T01, G5-Gate2-T05** ; 8 si G6 est autorisé ; +1 par screen devenu
+post-screen, §2.1), soit **p_i ≤ 0,10 / 7 ≈ 0,0143** — c'est
 Bonferroni, toujours ⊆ Holm ; sinon il attend la **clôture de la famille** (dernier verdict ou date de §1.3) pour l'application de
 Holm. Aucune Phase 4 d'architecture ne démarre sur un `PASS_LOCAL`.
+
+**Amendement 2026-10-21 (P-G5-7)** : texte du 2026-10-20 « **m_max = 5** : G2-C2, G4-Gate2, G5-Gate1, G5-Gate2, G1 ; 6 si G6 est
+autorisé » remplacé (relecture quant de G5 m3 ; G5 §1.2, §7.5) : chaque type décisif de G5 est un test à chacune de ses deux
+portes, d'où m = 3 + 2K. `PASS_PROGRAMME` immédiat ⟺ p_i ≤ 0,10 / 7 ≈ 0,0143 (champ `pass_programme_immediate` des
+évaluateurs ; `multiplicity.programme` des specs G5). Il est distinct de la confirmation Holm **locale** d'un protocole (G5 :
+`holm_local_confirmed`, K = 2, α = 0,10, requise avec les critères du type pour `G5_GATE1_PASS`), et n'a **aucun effet** sur
+l'inscription d'un type au Gate 2 de G5 (G5 §7.5). Un changement de K (type décisif ajouté ou retiré, gelé avant toute lecture)
+réécrit m_max = 3 + 2K par un nouvel amendement daté, avant le gel de G5.
 
 2.4 **Dans chaque protocole** : **un** signe et **une** fenêtre pré-déclarés par event study ; les horizons, règles de fill,
 tranches, variantes et stratifications supplémentaires sont **descriptifs** et ne reçoivent ni p-value ni verdict ; une analyse
@@ -108,10 +137,18 @@ tranches, variantes et stratifications supplémentaires sont **descriptifs** et 
 
 ## 3. Puissance (règle 9)
 
-3.1 **Unité d'observation** : l'**instant** (événement, cluster par heure UTC inter-instruments : G4, G5), le **slot** (G6 si
+3.1 **Unité d'observation** : l'**instant** (G4 : événement, cluster par heure UTC inter-instruments ; **G5 : horodatage
+d'événement ou de contrôle, valeur = moyenne des instruments retenus, n = instants uniques**), le **slot** (G6 si
 autorisé), le **fill** regroupé par **blocs de 10 min** (G2, G1). Jamais le trade isolé, jamais la paire-semaine. L'incertitude
 est calculée par **bootstrap par blocs** (`lp_sim.block_bootstrap_lower_bound` : blocs de 600 s, 1 000 rééchantillons, graine
-20261102 ; blocs de 3 600 s pour les instants), poolé sur l'univers avec le bloc comme unité.
+20261102 ; blocs de 3 600 s pour les instants de G4 ; **G5 : blocs d'un jour UTC**, `g5_eval.day_block_bootstrap`,
+10 000 rééchantillons, graine 20261102, événements et contrôles d'un même jour rééchantillonnés ensemble, sensibilité
+descriptive à blocs de 7 jours), poolé sur l'univers avec le bloc comme unité.
+
+**Amendement 2026-10-21 (P-G5-7)** : texte du 2026-10-20 « cluster par heure UTC inter-instruments : G4, G5 » et « blocs de
+3 600 s pour les instants » ; G5 passe à l'instant-horodatage et aux **blocs d'un jour UTC** (G5 §7.3 ; spec
+`statistics.bootstrap.block_days = 1` ; relecture quant de G5 m1, m4 ; piège 5 de la red team : les chocs de jour sont
+partagés par les événements et les contrôles d'un même jour, que des blocs d'une heure sépareraient). G4 est inchangé.
 
 3.2 **Taille minimale, formule** (calcul d'audit) : n ≈ ((z_{1−α} + z_{1−β}) · σ / δ)² × DE, α = 0,10 unilatéral (z = 1,28),
 puissance 0,80 (z = 0,84), δ = effet cherché, σ = écart-type de l'unité, DE = effet de plan du regroupement (1 + ρ(k − 1)).
@@ -125,10 +162,22 @@ jamais recalculées sur la donnée lue. **Chaque protocole déclare son effet mi
 1 000 (relaxation « par paire-tranche » déclarée, G2 §7.2) ; G4 ≥ **100 instants** par porte (effet cherché grand et rare : +10 pb
 est un seuil économique ; la détection à 100 instants vaut pour ≈ **0,24 σ** de l'unité — ≈ +24 pb si σ ≈ 100 pb, 40–75 pb si σ
 est, comme probable après cascade, de 150–300 pb ; `NOT_INFORMATIVE` est l'issue probable sous 0,25 σ, G4 §7.2) ; G5 Gate 1
-historique ≥ **100 instants par type d'événement** (le jeu `okx-xperp-1m-history` en offre ≈ 600 par photo de funding sur
-≈ 200 jours — calcul d'audit, pas une lecture) et G5 Gate 2 prospectif ≥ **100 instants par type** ; G1 ≥ **600 fills** en
+historique ≥ **100 instants et ≥ 30 jours distincts par type décisif** ; instants disponibles (calcul d'audit sur les
+calendriers et les `listTime`, pas une lecture) : **T01 ≤ 211 × f_inst** (règlements à 8 h dans la couverture D_cov de
+`funding-rate-history`, fetch du funding le 2026-11-02 ; ≈ 157 le 11-20, ≈ 124 le 12-01 ; f_inst = part des instants bruts avec
+≥ 1 instrument retenu ; `NOT_INFORMATIVE` attendu si f_inst < 0,47), **T05 = 105** (jours NYSE hors CPI / Employment Situation
+avec ≥ 1 instrument éligible, 2026-04-29 → 2026-10-13) ; G5 Gate 2 prospectif ≥ **100 instants et ≥ 30 jours par type**
+(T01 ≈ 449 × f_inst sur les 150 jours du 2026-11-02 au 2027-03-31 ; T05 ≈ 92 au 2027-03-31, d'où la décision P-G5-10 (i) du
+propriétaire) ; G1 ≥ **600 fills** en
 simulation sans contrainte (critère stress − calme). Sous le plancher : `NOT_INFORMATIVE`, **jamais d'extension sur résultat**,
 prolongation **pour trous de données** seulement, bornée et écrite au gel.
+
+**Amendement 2026-10-21 (P-G5-7)** : texte du 2026-10-20 « G5 Gate 1 historique ≥ 100 instants par type d'événement (le jeu
+`okx-xperp-1m-history` en offre ≈ 600 par photo de funding sur ≈ 200 jours) » remplacé. Les ≈ 600 ignoraient la profondeur
+« up to three months » de `funding-rate-history`, qui borne T01 à D_cov, et l'éligibilité `listTime + 30 j`, qui borne T05 à 105
+(G5 §4.4, §5.2, §7.4 ; relecture quant de G5 B3, m4 ; piège 9 de la red team). Effet détectable : T05 δ_min ≈ 0,236 σ et
+δ₈₀ ≈ +15,6 à +28,3 pb pour σ de conception 60–120 pb (+10 pb n'est pas détectable avec une puissance de 0,80, écrit d'avance) ;
+`NOT_INFORMATIVE` de T01 probable, écrit d'avance (G5 §7.4).
 
 3.4 **Interdits de puissance** (rapport théorie §4.2 point 6) : pas de porte « 300 trades / 20 paires / 4 semaines » ; pas de
 « 70 % des paires » ; la réponse à une puissance insuffisante est d'**élargir l'univers** (plus d'instruments éligibles), pas
@@ -209,6 +258,12 @@ produit, instruments, fenêtre, statut, hash, protocole, date de lecture) ; apr�
 2026-10-13, hors quarantaine ; Market Data §9.4 ⇒ lecture soumise à P2, décision 15 de §11 ; réservé au Gate 1 historique de G5,
 §8 — quant B3), `okx-xperp-selection-T0-1` (`selection`, comptages P3), `okx-xperp-funding-trackS` (`prospective`).
 
+**État 2026-10-21 (P-G5-6, signalé avec l'amendement P-G5-7)** : le registre est **créé** (volet `docs-b` de
+`20261020T2321Z-g5-periods`) avec les lignes `okx-xperp-1m-history-2026-03-30..2026-10-13` (`unread`), `okx-xperp-funding-history`
+(`unread`, scellé, à remplir au fetch), `okx-xperp-prospective-G5` et `okx-xperp-capture-2026-11-02` (`prospective`),
+`hyperliquid-node-fills` (= `hl-fills-G4-gate1` ci-dessus) et `dydx-v4-indexer` (candidats G4 Gate 1, `unread`), et le journal
+des décisions D1–D4. Les autres lignes ci-dessus restent à créer par leurs protocoles avant leurs gels.
+
 **Lien avec H2, écrit noir sur blanc** (quant B3). L'« univers secondaire » d'H2 était formé des séries **USDT-SWAP** (OKX Global)
 des bases figurant dans la liste des 160 X-Perps crypto du 2026-10-15 (`PREREGISTRATION-H2-GATE1.md` l.82–88 : « the events of the
 primary run whose base is one of the 160 live crypto X-Perps ») ; la liste X-Perps n'y est qu'une métadonnée hachée.
@@ -261,7 +316,8 @@ drapeaux et un chemin produit qui n'existent pas, et n'ajouterait qu'un risque s
                                                                                  (+ books-rpi : part RPI au touch)
     G5  Gate 1 HISTORIQUE CONFIRMATOIRE sur okx-xperp-1m-history (unread) :    → gelé AVANT la lecture de G2 (G2 P-G2-10) ;
         signes et fenêtres gelés depuis la théorie (§3.3 G5), dans la            une exécution ; PASS/FAIL par type d'événement
-        famille Holm, une exécution, ≥ 100 instants/type (≈ 600 disponibles)
+        famille Holm, une exécution, ≥ 100 instants/type (T01 ≤ 211 × f_inst,
+        T05 105 — amendement 2026-10-21, P-G5-7)
     G2  capture ≥ 2 semaines, gel avant T0, une exécution                      → sélection adverse nette d'entrée (C1, entrée
                                                                                  de coût de G1/G4/G5) + aller-retour net (C2, test)
     G4  Gate 1 HL (après consentement ; peut courir pendant la capture G2)     → PASS ⇒ gel du Gate 2 OKX (90 j) ; FAIL ⇒ non
@@ -289,6 +345,14 @@ sans événement ; F dans le net par signe (intervalle lu par instrument, §5.1)
 08:00 ⇒ décision 07:55:00, repos jusqu'à 08:01:00 » ; vérifié le 2026-10-21, digests dans G2 P-G2-4 (A)). Calendrier indicatif : P3 2026-11-02→04 ; G5 Gate 1 gelé puis exécuté avant la lecture de G2 (≈ 2026-11-20) ; G2
 T0 ≈ 2026-11-05, verdict ≈ 2026-11-22 ; G4 Gate 1 en novembre si consenti ; G4 Gate 2 et G5 Gate 2 décembre → février ; clôture
 du programme ≤ 2027-03-31.
+
+**Amendement 2026-10-21 (P-G5-7)** : dans le paragraphe ci-dessus, « ≈ 10 fois la puissance du prospectif (≈ 200 jours × 3 photos
+≈ 600 instants par type pour 00/08/16 UTC) » est caduc. Instants disponibles au Gate 1 (calcul d'audit, G5 §4.4, §5.2) : T01
+≤ 211 × f_inst (D_cov, fetch du funding le 2026-11-02), T05 105 ; au Gate 2, T01 ≈ 449 × f_inst et T05 ≈ 92 au 2027-03-31. Le
+Gate 1 reste **confirmatoire** (signes et fenêtres gelés depuis la théorie, jeu `unread`), mais sa puissance est au plancher, et
+`NOT_INFORMATIVE` y est une issue probable de T01, écrite d'avance. Le brouillon G5 existe (`LP-G5-DRAFT-PREREGISTRATION.md`,
+`DRAFT_NOT_FROZEN`) ; il passe **en tête de la piste L** (mandat du propriétaire du 2026-10-20, `LP-OWNER-DECISIONS-2026-10-21.md`)
+sans changer les dépendances de cette séquence (verdict `fwd-okx-r1`, gel avant la lecture de G2).
 
 ---
 
