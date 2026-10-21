@@ -1,11 +1,18 @@
 # Sorties dynamiques à entrées identiques : rejeu d'exploration 1 (2026-10-21)
 
-**Verdict pré-déclaré : `NO_IMPROVEMENT_DEMONSTRATED`, statut `EXPLORATION_ONLY`.** Ni le stop suiveur
-(B) ni la sortie adaptative (C) n'améliorent la sortie fixe (A). Sur ces données, les deux font même
-légèrement moins bien. Les trois méthodes perdent environ un tiers de R par trade, parce que les
-entrées S1 perdent déjà avant coûts et que les coûts pèsent environ 0,3 R. Aucune gestion de sortie
-ne transforme ces entrées en stratégie rentable. Ces données 2023-2024 sont déjà consommées : ce
-rejeu ne vaut ni validation indépendante ni stratégie confirmée.
+**Statut : candidat S1 avec sorties A/B/C CLOS (2026-10-21).** Verdict pré-déclaré :
+`NO_IMPROVEMENT_DEMONSTRATED`, statut `EXPLORATION_ONLY`, sans validation indépendante.
+
+Ni le stop suiveur (B) ni la sortie adaptative (C) n'améliorent la sortie fixe (A). Sur ces données,
+les deux font même légèrement moins bien. Les trois méthodes perdent environ un tiers de R par trade.
+Avant coûts, chacune des trois est déjà légèrement négative. Les coûts supposés pèsent ensuite environ
+0,3 R. La conclusion établie est limitée : **les trois méthodes testées ne rendent pas S1 rentable dans
+ce modèle de simulation.** Elle ne dit rien des sorties qui n'ont pas été testées. Ces données
+2023-2024 sont déjà consommées : ce rejeu ne vaut ni validation indépendante ni stratégie confirmée.
+
+**Clôture.** Rien ne justifie une confirmation supplémentaire de ce candidat sur des données neuves.
+Le simulateur de sorties, le portefeuille réaliste et le verdict fermé restent disponibles pour de
+futures hypothèses distinctes. Aucun seuil ni paramètre n'a été modifié après lecture.
 
 ## 1. Données réellement utilisées
 
@@ -98,17 +105,19 @@ multiplié par 1,5, n'est jamais remplie avant le stop.
 | Commissions | 0,169 | 0,169 | 0,169 |
 | Écart et glissement | 0,111 | 0,169 | 0,121 |
 
-- **Les entrées perdent avant coûts.** Le brut de A vaut −0,060 R, intervalle à 90 % [−0,068 ;
-  −0,051], soit environ −2,8 pb par trade. Le stop médian est à 25 pb de l'entrée, alors que les coûts
+- **Avant coûts, le couple S1 + A est négatif.** Son brut vaut −0,060 R, intervalle à 90 % [−0,068 ;
+  −0,051], soit environ −2,8 pb par trade. Le brut dépend du couple entrée-sortie, pas de l'entrée
+  seule : il vaut −0,053 R avec B et −0,060 R avec C. Le stop médian est à 25 pb de l'entrée, alors que les coûts
   supposés font 12 à 14 pb. Les coûts représentent donc à eux seuls environ 0,3 R.
 - **B ne gagne rien en brut.** Il fait +0,007 R par rapport à A, intervalle [−0,005 ; +0,019]. Il
   perd ensuite 0,058 R en coûts : toutes ses sorties paient l'écart et le glissement d'une sortie au
   marché, alors qu'un TP de A sort en limite sans ces frais.
 - **C est neutre en brut**, −0,0005 R, et un peu plus cher en coûts.
 
-C'est l'issue attendue par Kaminski et Lo (2014), *When do stop-loss rules stop losses?* Sans
-dépendance sérielle exploitable après l'entrée, un stop ou une règle de sortie ne crée pas d'espérance
-positive : il déplace la distribution des résultats et ajoute des coûts. La page OKX « How to use
+Ce résultat est compatible avec Kaminski et Lo (2014), *When do stop-loss rules stop losses?* Dans
+leur modèle de marche aléatoire, une règle de stop n'apporte pas d'espérance positive. Ils montrent au
+contraire qu'elle peut en apporter quand les rendements ont une dépendance sérielle, comme le momentum.
+Nos deux règles n'ont rien capté de tel ici. Cela ne prouve pas qu'aucune règle ne le pourrait. La page OKX « How to use
 trailing stop » décrit un stop suiveur déclenché sur le dernier prix, sans garantie de prix
 d'exécution. C'est cohérent avec notre hypothèse : sortie au marché, au pire du niveau et de
 l'ouverture.
@@ -227,17 +236,29 @@ avec δ = 0,05 R.
   ouvert les borne, hors gaps.
 - La décomposition entre brut et coûts et ses intervalles ont été calculées après lecture. Elles
   expliquent le verdict sans le décider.
-- Annuler puis replacer un stop en production laisserait une fenêtre sans protection. L'étude ne la
-  modélise pas.
+- **Problème ouvert avant toute utilisation réelle.** En production, le service de mise à jour des
+  TP/SL annule l'ordre existant avant d'en poser un nouveau. La position reste sans protection entre
+  les deux. L'étude ne modélise pas cette fenêtre. Sa correction est hors du périmètre de cette
+  recherche et doit faire l'objet d'un changement séparé, avant toute utilisation réelle de sorties
+  dynamiques.
 
 ## 8. Recommandation
 
-**Fermer cette piste pour le setup S1.** Les entrées S1 ont un brut négatif. Avec un stop à environ
-25 pb, les coûts supposés absorbent environ 0,3 R par trade. Les deux règles de sortie testées ne
-récupèrent rien en brut. B ajoute des coûts de sortie au marché. Rien ne justifie de dépenser des
-données de confirmation neuves sur ce couple entrée-sorties. Le module reste utilisable tel quel pour
-une autre entrée qui aurait un brut positif démontré : c'est la condition préalable à toute étude
-utile des sorties.
+**Fermer le candidat S1 avec les sorties A, B et C.** Les trois couples testés ont un brut
+légèrement négatif. Avec un stop à environ 25 pb, les coûts supposés absorbent environ 0,3 R par trade.
+Les deux règles dynamiques ne récupèrent rien en brut par rapport à A, et B ajoute des coûts de sortie
+au marché. Rien ne justifie de dépenser des données de confirmation neuves sur ce candidat.
+
+Ce que ce rejeu n'établit pas :
+
+- il ne montre pas qu'aucune sortie ne pourrait rendre une entrée rentable ; seules trois règles, avec
+  un jeu de paramètres chacune, ont été testées ;
+- un brut positif avec la sortie fixe n'est pas une condition mathématique pour étudier une autre
+  sortie, puisque le brut dépend du couple entrée-sortie ;
+- en pratique, une nouvelle hypothèse de sortie devrait toutefois donner une raison a priori de capter
+  une dépendance du prix après l'entrée, et être pré-enregistrée comme un nouvel essai.
+
+Le simulateur reste utilisable pour de telles hypothèses distinctes.
 
 ## 9. Proposition de confirmation, préparée et non exécutée
 
@@ -272,5 +293,37 @@ entrée remplace S1. Rien n'a été téléchargé ni capturé.
 - **Avant la première lecture** : relever les coûts d'OKX Europe et geler une spécification v1.2.0
   avec un minimum de max(3 000 ; besoin ré-estimé) trades.
 
-Une confirmation n'aurait de sens qu'après un gel versionné, et pour une entrée dont le brut est
-positif.
+Une confirmation n'aurait de sens qu'après un gel versionné et pour une hypothèse distincte de celle
+qui vient d'être close.
+
+## 10. Portée des corrections partagées
+
+Cette campagne a corrigé `research_v2/budgets.py`, partagé avec les screens research_v2. La portée
+ci-dessous vient du code et des rapports existants. Aucune ancienne campagne n'a été relancée.
+
+**Ce qui change.**
+
+- **Drawdown relatif.** `max_drawdown_share` vaut désormais la plus forte baisse rapportée au sommet
+  atteint avant elle. L'ancien calcul divisait la plus forte baisse absolue par le sommet final. Il ne
+  pouvait donc que sous-estimer : 1 000, puis 700, puis 2 000 donnait 15 % au lieu de 30 %.
+- **Ordre des règlements.** Les positions se règlent dans l'ordre de leurs sorties, et non plus dans
+  l'ordre des décisions. Seul le chemin du capital entre deux décisions change, donc seuls les deux
+  champs de drawdown peuvent bouger.
+- **Champs ajoutés.** `drawdown_basis` et `max_open_risk_share` sont nouveaux.
+
+**Ce qui ne change pas.** La somme des règlements avant chaque décision est la même quel que soit leur
+ordre. Le dimensionnement, les trades pris ou écartés, le ROI et le capital final sont donc identiques.
+Le critère G7 des screens, un drawdown ≤ 6 000 USDT, utilise `stats.realized_drawdown` à taille de
+référence, pas `budgets.py` : il est inchangé. Aucun module hors de research_v2 n'importe
+`budgets.py`.
+
+**Rapports concernés.**
+
+| Rapport | Usage de `budgets.py` | Effet |
+|---|---|---|
+| `research-v2-selection-2026-10-12.md`, section Budgets | colonne « max DD » des quatre configurations validées, 10 à 33 % | ces valeurs sont des bornes basses, surtout sur l'entraînement où le capital a fortement monté ; le verdict `no_eligible_candidate` n'en dépendait pas |
+| `research-scalping-2026-10-12.md`, section Budgets | part de trades réalisables | inchangée ; aucun drawdown relatif n'y est cité |
+| documents `screen-*.json` privés produits avant le 2026-10-21 | champ `budgets.*.max_drawdown_share` | ancienne définition ; à ne pas comparer directement aux nouveaux |
+
+Les autres campagnes, tick, LP, H1, H2 et G5, utilisent leurs propres moteurs et ne sont pas
+touchées.

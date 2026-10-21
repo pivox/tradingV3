@@ -442,3 +442,6 @@ sha256 e7d2328cb62d8ffe7d0fdb42dd0c9745d4a5cb408e83c52ef040c28893f32207 (voir le
   Binance 2023-2024 autorisées : `NO_IMPROVEMENT_DEMONSTRATED` (statut `EXPLORATION_ONLY`). Rapport :
   `docs/handbook/reports/research-dynamic-exits-exploration-2026-10-21.md`. La spécification n'a pas
   été modifiée après lecture.
+- Clôture, 2026-10-21 : candidat S1 avec les sorties A, B et C **clos**. Aucune confirmation supplémentaire
+  n'est justifiée. Le simulateur reste disponible pour des hypothèses distinctes, à pré-enregistrer comme
+  de nouveaux essais.
