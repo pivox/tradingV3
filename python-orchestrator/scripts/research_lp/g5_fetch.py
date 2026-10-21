@@ -65,11 +65,14 @@ final empty page (its last page reaches the start) and the funding estimate coun
 the spec assumes (`fetch_plan.estimate_assumption`): the totals reproduce the spec's `requests_estimate`.
 
 **Sealed mode (`LP-G5` P-G5-3, (B) xix).** The funding history is fetched **only** in sealed mode, before the
-freeze: the store is `<out>/sealed-funding/`, whose manifest holds the per-instrument states (rows, oldest /
-newest, pages, errors, files and their sha256) and is the sealed file; the console and `<out>/fetch.log` carry
+freeze: the store is `<out>/sealed-funding/` while the run lasts, whose manifest holds the per-instrument states
+(rows, oldest / newest, pages, errors, files and their sha256); at the end of the run it is archived into the one
+file `<out>/funding-sealed.tar` and the tree is removed (`SEALED_ARCHIVE_RULE`, CTO m3: a directory listing would
+show the files and sizes per instrument and day, hence the escalations); the console and `<out>/fetch.log` carry
 the global totals only (`SEALED_PRINTED`: jobs, complete jobs, jobs in error, D_cov) — no instrument id, no row,
 page or request count; the public receipt `<out>/funding-sealed-receipt.json` holds those totals, the sha256 of
-the sealed manifest and a digest of every sealed file (`sealed_files_digest`). D_cov of a job = its first
+the archive, of the sealed manifest and a digest of every sealed file (`sealed_files_digest`); the evaluator reads
+the archive in memory (`SealedArchive`). D_cov of a job = its first
 settlement whose predecessor is also served (the second oldest `fundingTime` stored), once the job ended
 `reached_start` or `server_empty_before_start`; the global `coverage_start_utc` = the latest of these over the
 jobs the server truncated (the documented three-month horizon), else the earliest. Outside sealed mode a
@@ -102,10 +105,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import math
+import os
 import re
+import shutil
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.parse
@@ -115,6 +122,8 @@ from dataclasses import dataclass, field
 from datetime import date as _date
 from pathlib import Path
 from typing import Callable, NamedTuple
+
+import numpy as np
 
 from . import tape
 from . import xperp_capture as xc
@@ -140,6 +149,11 @@ DAY_US = tape.DAY_S * tape.SECOND_US
 # Sealed mode (LP-G5 P-G5-3): the pre-freeze funding fetch.
 SEALED_DIR_NAME = "sealed-funding"
 SEALED_RECEIPT_NAME = "funding-sealed-receipt.json"
+SEALED_ARCHIVE_NAME = "funding-sealed.tar"
+SEALED_ARCHIVE_RULE = ("at the end of a sealed run the store is archived into one file (funding-sealed.tar: deterministic tar, members in the order of "
+                       "directory_digest, mtime 0, owner 0, mode 0600) whose sha256 is in the receipt, then the sealed-funding/ tree is removed: no "
+                       "per-instrument file, name or size stays listable; the evaluator reads the archive in memory; a resumed sealed run unpacks it "
+                       "first (CTO m3)")
 RECEIPT_KIND = "lp-g5-funding-sealed-receipt"
 SEALED_STREAMS = ("funding_hist",)
 SEALED_PRINTED = ("jobs_total", "jobs_complete", "jobs_error", "coverage_start_utc")
@@ -149,7 +163,7 @@ SEALED_COVERAGE_RULE = ("D_cov of a job = its first fundingTime whose predecesso
 SEALED_JOURNAL = {"fetch_start": ("jobs", "host", "end_exclusive", "decision_ref", "plan_sha256", "max_requests", "mode"),
                   "retry": ("stream", "attempt", "reason", "delay_s", "retry_after_s"),
                   "snapshot_in_quarantine": ("snapshot_date", "note"),
-                  "sealed_end": SEALED_PRINTED + ("receipt_sha256", "sealed_manifest_sha256", "budget_exhausted")}
+                  "sealed_end": SEALED_PRINTED + ("receipt_sha256", "sealed_manifest_sha256", "sealed_archive_sha256", "budget_exhausted")}
 # The start rules of the spec's fetch_plan.post_freeze (text → rule) and the streams of each phase.
 START_RULES = {"eligible_from_utc - 1 day": "eligibility_minus_1d", "max(coverage_start - 1 day, eligible_from_utc - 1 day)": "max_coverage_eligibility_minus_1d"}
 PHASES = {"pre_freeze": SEALED_STREAMS, "post_freeze": ("candles_1m", "mark_1m", "index_1m")}
@@ -201,6 +215,104 @@ def directory_digest(root: Path) -> tuple[str, int]:
     root = Path(root)
     lines = [f"{path.relative_to(root).as_posix()} {tape.sha256_of(path)}\n" for path in sorted(root.rglob("*")) if path.is_file()]
     return sha256_text("".join(lines)), len(lines)
+
+
+# ----------------------------------------------------------------------------- the sealed archive (CTO m3)
+
+
+class SealedArchive:
+    """The sealed funding store read from its archive `funding-sealed.tar`, in memory: nothing is extracted to disk, no member is
+    listed anywhere (`SEALED_ARCHIVE_RULE`). `files_digest` and `manifest_sha256` are those of `directory_digest` and of the store's
+    manifest before archiving (the receipt holds both, plus the archive's own sha256)."""
+
+    def __init__(self, path: Path, data: bytes) -> None:
+        self.path = Path(path)
+        self.sha256 = sha256_bytes(data)
+        members: dict[str, bytes] = {}
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as tar:
+            for info in tar.getmembers():
+                parts = Path(info.name).parts
+                if not info.isfile() or info.name.startswith("/") or ".." in parts or not parts or info.name in members:
+                    raise ValueError(f"{self.path}: unexpected archive member {info.name!r}")
+                handle = tar.extractfile(info)
+                members[info.name] = handle.read() if handle is not None else b""
+        self.members = members  # archive order = directory_digest order
+
+    @classmethod
+    def open(cls, path: Path) -> "SealedArchive":
+        return cls(path, Path(path).read_bytes())
+
+    @property
+    def files_digest(self) -> str:
+        return sha256_text("".join(f"{name} {sha256_bytes(data)}\n" for name, data in self.members.items()))
+
+    @property
+    def manifest_sha256(self) -> str | None:
+        data = self.members.get(tape.MANIFEST_NAME)
+        return sha256_bytes(data) if data is not None else None
+
+    @property
+    def manifest(self) -> dict | None:
+        data = self.members.get(tape.MANIFEST_NAME)
+        return json.loads(data.decode("utf-8")) if data is not None else None
+
+    def load_days(self, layout: str, inst: str, dates: list[str]) -> np.ndarray:
+        """The finalized day files of one instrument (as `tape.load_days(..., allow_pending=False)`), de-duplicated and sorted."""
+        parts = []
+        for date in dates:
+            data = self.members.get(f"{layout}/{tape.check_inst_name(inst)}/{inst}-{date}.npz")
+            if data is None:
+                continue
+            with np.load(io.BytesIO(data)) as z:
+                parts.append(tape.arrays_to_rows(layout, {name: z[name] for name in z.files}))
+        if not parts:
+            return tape.empty_rows(layout)
+        return tape.dedupe_and_sort(layout, np.concatenate(parts))[0]
+
+
+def archive_sealed_store(out_dir: Path) -> dict:
+    """`SEALED_ARCHIVE_RULE`: `<out>/sealed-funding/` → `<out>/funding-sealed.tar` (written atomically, re-read and compared with the
+    store before the tree is removed; on any difference the store is kept and the run fails)."""
+    out_dir = Path(out_dir)
+    root = out_dir / SEALED_DIR_NAME
+    files = [path for path in sorted(root.rglob("*")) if path.is_file()] if root.is_dir() else []
+    if not (root / tape.MANIFEST_NAME).is_file():
+        raise RuntimeError(f"{root}: no sealed store to archive")
+    digest, count = directory_digest(root)
+    manifest_sha = tape.sha256_of(root / tape.MANIFEST_NAME)
+    target = out_dir / SEALED_ARCHIVE_NAME
+    tmp = target.with_name(target.name + ".tmp")
+    with tmp.open("wb") as handle:
+        with tarfile.open(fileobj=handle, mode="w", format=tarfile.PAX_FORMAT) as tar:
+            for path in files:
+                data = path.read_bytes()
+                info = tarfile.TarInfo(path.relative_to(root).as_posix())
+                info.size, info.mtime, info.mode, info.uid, info.gid, info.uname, info.gname = len(data), 0, 0o600, 0, 0, "", ""
+                tar.addfile(info, io.BytesIO(data))
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(tmp, 0o600)
+    tmp.replace(target)
+    view = SealedArchive.open(target)
+    if view.files_digest != digest or view.manifest_sha256 != manifest_sha or len(view.members) != count:
+        raise RuntimeError(f"{target}: the archive differs from the sealed store (the store is kept)")
+    shutil.rmtree(root)
+    return {"sealed_archive": SEALED_ARCHIVE_NAME, "sealed_archive_sha256": view.sha256, "sealed_manifest_sha256": manifest_sha, "sealed_files_digest": digest}
+
+
+def restore_sealed_store(out_dir: Path) -> bool:
+    """A resumed sealed run: the archive of an earlier session is unpacked into `sealed-funding/` (re-archived at the end of the run).
+    Nothing happens when the tree exists (an interrupted session) or when there is no archive."""
+    out_dir = Path(out_dir)
+    root, path = out_dir / SEALED_DIR_NAME, out_dir / SEALED_ARCHIVE_NAME
+    if root.exists() or not path.exists():
+        return False
+    view = SealedArchive.open(path)
+    for name, data in view.members.items():
+        target = root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    return True
 
 
 # ----------------------------------------------------------------------------- guard
@@ -683,6 +795,8 @@ class Fetcher:
         self.lock = tape.DirectoryLock(self.out_dir).acquire()
         self.receipt: dict | None = None
         try:
+            if cfg.sealed:
+                restore_sealed_store(self.out_dir)  # a resumed sealed run continues the archived store (CTO m3)
             journal = xc.HealthJournal(self.out_dir / JOURNAL_NAME, echo=cfg.echo)
             self.journal = SealedJournal(journal) if cfg.sealed else journal
             source = {"rest": xc.resolve_rest(cfg.host), "streams": list(cfg.streams), "end_exclusive": END_EXCLUSIVE, "start_floor": cfg.start, "rate_scale": cfg.rate_scale,
@@ -915,9 +1029,11 @@ class Fetcher:
             self._save()
             self.journal.log("INFO", "fetch_end", jobs_run=done, requests=self.requests, retries=self.retries, rejected_at_or_after_end=self.guard.rejected,
                              budget_exhausted=self.budget_exhausted, waits={name: lim.waits for name, lim in self.limiters.items() if lim.waits})
-            if self.cfg.sealed:
-                self.receipt = self._write_receipt(jobs)
-            self.lock.release()
+            try:
+                if self.cfg.sealed:
+                    self.receipt = self._write_receipt(jobs)
+            finally:
+                self.lock.release()
         return self.summary()
 
     # -- sealed mode
@@ -935,11 +1051,11 @@ class Fetcher:
 
     def _write_receipt(self, jobs: list[Job]) -> dict:
         totals = self.sealed_totals(jobs)
-        manifest_path = self.store_dir / tape.MANIFEST_NAME
-        digest, _ = directory_digest(self.store_dir)
+        sealed = archive_sealed_store(self.out_dir)  # one hashed file, the tree removed (CTO m3)
         receipt = {"kind": RECEIPT_KIND, "generated_at": tape.iso_now(), "end_exclusive": END_EXCLUSIVE, "printed": list(SEALED_PRINTED), **totals,
-                   "coverage_rule": SEALED_COVERAGE_RULE, "sealed_dir": SEALED_DIR_NAME, "sealed_manifest": f"{SEALED_DIR_NAME}/{tape.MANIFEST_NAME}",
-                   "sealed_manifest_sha256": tape.sha256_of(manifest_path), "sealed_files_digest": digest, "decision_ref": self.cfg.decision_ref,
+                   "coverage_rule": SEALED_COVERAGE_RULE, "sealed_archive": sealed["sealed_archive"], "sealed_archive_sha256": sealed["sealed_archive_sha256"],
+                   "archive_rule": SEALED_ARCHIVE_RULE, "sealed_manifest": f"{SEALED_ARCHIVE_NAME}:{tape.MANIFEST_NAME}",
+                   "sealed_manifest_sha256": sealed["sealed_manifest_sha256"], "sealed_files_digest": sealed["sealed_files_digest"], "decision_ref": self.cfg.decision_ref,
                    "plan_sha256": self.cfg.plan_sha256, "inst_ids_sha256": self.cfg.inst_ids_sha256 or None, "max_requests": int(self.cfg.max_requests),
                    "spec": self.cfg.spec_info, "register_status": "unread",
                    "note": "sealed (LP-G5 P-G5-3): the per-instrument manifest is opened by no agent before the evaluator runs; this receipt carries global totals only"}
@@ -947,7 +1063,8 @@ class Fetcher:
         tape.atomic_write_text(path, json.dumps(receipt, indent=1, sort_keys=True) + "\n")
         receipt["receipt_sha256"] = tape.sha256_of(path)
         self.journal.log("INFO", "sealed_end", **{k: totals[k] for k in SEALED_PRINTED}, receipt_sha256=receipt["receipt_sha256"],
-                         sealed_manifest_sha256=receipt["sealed_manifest_sha256"], budget_exhausted=self.budget_exhausted)
+                         sealed_manifest_sha256=receipt["sealed_manifest_sha256"], sealed_archive_sha256=receipt["sealed_archive_sha256"],
+                         budget_exhausted=self.budget_exhausted)
         return receipt
 
     @property
@@ -959,7 +1076,8 @@ class Fetcher:
         if self.cfg.sealed:
             receipt = self.receipt or {"kind": RECEIPT_KIND, **self.sealed_totals(self.jobs())}
             return {**{k: receipt.get(k) for k in SEALED_PRINTED}, "mode": "sealed", "receipt": str(self.out_dir / SEALED_RECEIPT_NAME), "receipt_sha256": receipt.get("receipt_sha256"),
-                    "sealed_manifest_sha256": receipt.get("sealed_manifest_sha256"), "sealed_files_digest": receipt.get("sealed_files_digest")}
+                    "sealed_manifest_sha256": receipt.get("sealed_manifest_sha256"), "sealed_files_digest": receipt.get("sealed_files_digest"),
+                    "sealed_archive_sha256": receipt.get("sealed_archive_sha256")}
         states = list(self.states.values())
         reasons: dict[str, int] = {}
         for s in states:

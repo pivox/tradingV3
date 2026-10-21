@@ -21,6 +21,16 @@ d'un jour UTC pour G5), §3.3 et §8 (instants réellement disponibles pour G5) 
 (P-G5-6). Chaque passage amendé porte une ligne « Amendement 2026-10-21 (P-G5-7) » qui cite le texte remplacé. Statut
 inchangé (`DRAFT_NOT_FROZEN`) ; aucune donnée lue.
 
+**Amendement 2026-10-21 (relecture `review-b/quant.md` ; décisions D4–D9).** Relecture quant adversariale des amendements P-G5-7,
+du registre, du spec Gate 2 et de l'Annexe B de G5 (`tradingV3-private/research/20261020T2321Z-g5-periods/review-b/quant.md`,
+verdict `NEEDS_CHANGES`, 2 bloquants, 5 majeurs, 12 mineurs), appliquée par une passe de correction unique sur ce document, le
+plan, le registre, le spec Gate 2 et l'Annexe B de G5. Sections touchées : §1.2 (S_éco fixé par D4, règle unique, coût fixe),
+§1.3, §2.1 (Gate 1 de G4 quelle que soit sa source, règle de combinaison), §2.3 (`PASS_PROGRAMME` historique sans effet sur la
+Phase 4 ; T05 du Gate 2 dans m ; m_max est une règle), §3.2–3.3 (variance des contrôles ; comptes sous P-S3 et pour un T0
+atteignable ; D7), §6.2–6.3 (registre ; D1), §8 (fenêtres ; bornes hautes), §11 (états datés des décisions), §12 (traitement,
+refus écrits « Réponse à la revue »). Décisions prises en compte : `LP-OWNER-DECISIONS-2026-10-21.md` D1–D9. Statut inchangé
+(`DRAFT_NOT_FROZEN`) ; aucune donnée lue.
+
 **Convention** : « programme » = chiffre recopié d'un rapport du dépôt ; « calcul d'audit » = arithmétique sans donnée ;
 **UNKNOWN** = ni sourcé ni mesuré. **Aucun chiffre de marché** ne figure ici.
 
@@ -74,11 +84,31 @@ relecture CTO §4.3 : ≈ 170 Mo/jour/instrument de `books5` non compressé ; 40
 `stale`/`connect_failed`, rotation de `health.log`) et le `verify` quotidien ; le collecteur et le simulateur déjà écrits (a2)
 sont des coûts échoués et n'entrent pas. Le propriétaire peut fixer un S_éco plus haut ; jamais plus bas après un résultat.
 
+**Amendement 2026-10-21 (D4 ; relecture review-b quant m5, m6, M1).** « à fixer par le propriétaire ; proposition a3 » (texte du
+2026-10-20) : S_éco est **fixé par D4** (« 4 ok », 2026-10-21 : 5 × SOFR × capital). **Règle unique**, recopiée dans chaque spec
+avant son gel :
+
+    S_éco = max( 97,25 ; 5 × SOFR publié du jour du gel × 500 ; coût fixe annuel déclaré )      [USD par an]
+
+97,25 = 5 × 3,89 % × 500 : valeur littérale de D4. Son « ≈ 97 » et le 97,0 des deux specs G5 du 2026-10-21 sont des arrondis
+**inférieurs** à D4, contraires à « jamais plus bas » : les specs portent au moins 97,25 à leur gel. Convention de D4 : le taux
+publié multiplie le capital, sans conversion de base de jours ; la lecture actual/360 ramenée à 365 jours (× 365/360 : 98,60
+USD/an au même SOFR, celle du track S) est une **option du propriétaire pour relever** S_éco, à prendre avant tout gel. **Coût
+fixe déclaré** : non chiffré (heures du propriétaire UNKNOWN) ; **déclaré nul** dans la formule, pour G5 Gate 1 (P-G5-8 :
+« ≈ nul ») comme pour G5 Gate 2 (part d'une capture continue déjà décidée par D1, qui sert aussi G2 et G4) ; le propriétaire
+peut le chiffrer et relever S_éco avant un gel, jamais après une lecture. « Phase 4 d'architecture proposable » ci-dessus ne
+vaut que pour un `PASS_PROGRAMME` obtenu par un test **prospectif** (§2.3, amendement du même jour).
+
 1.3 **Règle d'arrêt du programme** : si, après les verdicts de G2, G4 et G5, aucune famille n'a simultanément un `PASS_PROGRAMME`
 (§2) et la condition « poursuivi » de §1.2, le programme de mesures est **clos** par un rapport ; G1 n'est alors lancé que si le
 consentement a été donné **avant** ces verdicts et si la table de coût G2 laisse une marge économique (sinon il est annulé sans
 lecture). Durée maximale du programme : **fin du scoring de la dernière fenêtre déclarée ≤ 2027-03-31** (sauf décision écrite
 contraire du propriétaire avant cette date).
+
+**Amendement 2026-10-21 (relecture review-b quant M1).** Le `PASS_PROGRAMME` de cette règle est celui d'un test **prospectif**
+de la famille (G2-C2, G4-Gate2, G5-Gate2-T01, G5-Gate2-T05, G1) : un `PASS_PROGRAMME` d'un test historique (G5-Gate1-*) ne
+suffit pas à poursuivre le programme (§2.3, §7.1). D7 applique la durée maximale à G5 : sa fenêtre prospective s'arrête au
+2027-03-31.
 
 1.4 **Lecture obligatoire dans chaque verdict** : « PASS, poursuivi » / « PASS, non poursuivi (sous S_éco) » / « FAIL » ; un PASS
 scientifique sous la porte économique est publié comme tel.
@@ -106,6 +136,14 @@ chiffré).
 « G5-Gate2-C1 » (texte du 2026-10-20). Les deux specs G5 étant gelés ensemble, les quatre tests sont gelés à la même date ; un
 type non inscrit au Gate 2 (`G5_GATE1_FAIL`) y compte p = 1, par la règle ci-dessus (jamais de retrait).
 
+**Amendement 2026-10-21 (relecture review-b quant m11 ; D3, D9).** « Le Gate 1 d'Hyperliquid (G4) est une porte de
+développement » (texte du 2026-10-20) se lit : **le Gate 1 de G4, quelle que soit sa source de développement** — dYdX v4 (D9 :
+source principale), Hyperliquid (D3 : repli) ou un double Gate 1 —, est une porte de développement hors famille. Sa **règle de
+combinaison** est gelée dans le pré-enregistrement de G4 **avant** toute lecture : si deux sources sont lues, **les deux doivent
+passer** (règle par défaut) ; le repli sur Hyperliquid n'est déclenché que par une condition de données écrite avant la lecture
+de dYdX (échantillon de schéma, rétention de l'indexeur, absence de `LIQUIDATED`), **jamais** par un résultat de dYdX ; « l'une
+suffit » est interdit : il doublerait à peu près le taux de faux passage vers le Gate 2 de G4.
+
 2.2 **Niveau** : α_famille = 0,10 **unilatéral** (c'est le « LB90 > 0 » de chaque protocole, exprimé en p-value bootstrap
 unilatérale p_i = P*(statistique ≤ 0)). **Holm** : p_(1) ≤ … ≤ p_(m) ; le test (i) est confirmé si p_(j) ≤ α / (m − j + 1) pour tout
 j ≤ i. Avec m = 5 : le plus significatif doit avoir p ≤ 0,02 (LB98 > 0), puis 0,025, 0,033, 0,05, 0,10.
@@ -127,6 +165,28 @@ portes, d'où m = 3 + 2K. `PASS_PROGRAMME` immédiat ⟺ p_i ≤ 0,10 / 7 ≈ 0,
 `holm_local_confirmed`, K = 2, α = 0,10, requise avec les critères du type pour `G5_GATE1_PASS`), et n'a **aucun effet** sur
 l'inscription d'un type au Gate 2 de G5 (G5 §7.5). Un changement de K (type décisif ajouté ou retiré, gelé avant toute lecture)
 réécrit m_max = 3 + 2K par un nouvel amendement daté, avant le gel de G5.
+
+**Amendement 2026-10-21 (relecture review-b quant M1, m1, m2, m6 ; D7).**
+- **Ce qu'ouvre un `PASS_PROGRAMME`.** Un `PASS_PROGRAMME` d'un test **historique** (G5-Gate1-T01, G5-Gate1-T05) n'ouvre
+  **aucune** Phase 4 et ne compte pas pour la continuation de §1.3 ; seuls les tests **prospectifs** (G2-C2, G4-Gate2,
+  G5-Gate2-*, G1) le font (§7.1 : la seule confirmation admise est une fenêtre `prospective`). Le test historique reste dans la
+  famille (il entre dans m et dans Holm) ; son seul effet est celui que son protocole lui donne (G5 : l'inscription au Gate 2).
+  Pour G5, une proposition de Phase 4 exige `G5_GATE2_PASS(type)` **et** le `PASS_PROGRAMME` de `G5-Gate2-<type>` (immédiat, ou
+  Holm à la clôture) **et** la lecture « PASS, poursuivi » (spec Gate 2, `verdict.pass_effect`) ; sinon elle attend la clôture
+  de la famille. §1.2 (« Phase 4 proposable »), §1.3 et la ligne Phase 4 du plan se lisent ainsi.
+- **G5-Gate2-T05 sous D7.** D7 arrête la fenêtre au 2027-03-31 : T05 au Gate 2 est `NOT_INFORMATIVE` par construction (§3.3).
+  Il **reste dans m** avec p = 1 (règle figée de §2.1) ; m_max = 7 inchangé ; aucun retrait sans amendement daté avant le gel de
+  G5, et jamais après une lecture.
+- **Conséquence écrite d'avance.** Si le refus de P-G5-10 (ii) (« Nn », D7) est confirmé, T01 au Gate 2 est `INCONCLUSIVE` par
+  construction : **aucun `G5_GATE2_PASS` n'est alors possible**, et G5 ne peut ouvrir aucune Phase 4 dans ce programme. Son
+  apport se limite au Gate 1 (inscriptions, filtres de §9 du protocole) ; ses deux tests du Gate 2 comptent p = 1.
+- **Protocole successeur.** Un protocole successeur sur une forme testée à une porte prospective sans scellement (G5 Gate 2)
+  entre dans m par un amendement de m_max daté **avant** son propre gel ; aucune prolongation de fenêtre n'est jamais motivée
+  par les valeurs imprimées (D, LB90, UB90) d'un `NOT_INFORMATIVE` ou d'un `INCONCLUSIVE`.
+- **m_max ne demande pas de décision.** m_max = 3 + 2K découle de la règle de §2.1 (un test par protocole gelé ; pour G5, un par
+  type décisif et par porte) : c'est une **règle**, pas un choix, et un m_max plus grand ne fait que durcir `PASS_PROGRAMME`. La
+  confirmation « m_max confirmé » de la décision 9 (§11) n'est donc **pas requise** ; tout changement (K, G6, screen devenu
+  post-screen) passe par un amendement daté, avant le gel concerné.
 
 2.4 **Dans chaque protocole** : **un** signe et **une** fenêtre pré-déclarés par event study ; les horizons, règles de fill,
 tranches, variantes et stratifications supplémentaires sont **descriptifs** et ne reçoivent ni p-value ni verdict ; une analyse
@@ -158,6 +218,13 @@ jamais recalculées sur la donnée lue. **Chaque protocole déclare son effet mi
 §4.3) : à n observations, δ_min ≈ 2,12 × σ × √DE / √n (≈ 0,24 σ à n = 100, DE 1,3 ; ≈ 0,09 σ à n = 600) — et dit si
 `NOT_INFORMATIVE` est l'issue probable au plancher.
 
+**Amendement 2026-10-21 (relecture review-b quant m4).** La formule ci-dessus ignore la variance de la moyenne des contrôles.
+Pour D = moyenne des événements − moyenne des contrôles, se(D) ≈ σ × √DE × √(1/n_e + 1/n_c) = (σ √DE / √n_e) × √(1 + n_e/n_c),
+d'où δ_min ≈ 2,12 × σ × √DE × √(1/n_e + 1/n_c). Avec n_c ≈ 3 n_e (G5), le facteur √(1 + n_e/n_c) vaut ≈ 1,15–1,16 (calcul
+d'audit). La covariance des chocs de jour communs aux événements et aux contrôles d'un même jour (rééchantillonnés ensemble,
+blocs d'un jour) joue en sens inverse ; son ampleur est UNKNOWN. Ces chiffres restent des **planchers de conception**, jamais
+recalculés sur la donnée ; pour G4 (contrôle continu et contrôle apparié), l'approximation sans ce facteur est **déclarée**.
+
 3.3 **Planchers par protocole** : G2 ≥ **1 000 fills** dans la cellule primaire (variante minute, spread ≥ 6 pb) et ≥ 5 paires à
 1 000 (relaxation « par paire-tranche » déclarée, G2 §7.2) ; G4 ≥ **100 instants** par porte (effet cherché grand et rare : +10 pb
 est un seuil économique ; la détection à 100 instants vaut pour ≈ **0,24 σ** de l'unité — ≈ +24 pb si σ ≈ 100 pb, 40–75 pb si σ
@@ -178,6 +245,26 @@ prolongation **pour trous de données** seulement, bornée et écrite au gel.
 (G5 §4.4, §5.2, §7.4 ; relecture quant de G5 B3, m4 ; piège 9 de la red team). Effet détectable : T05 δ_min ≈ 0,236 σ et
 δ₈₀ ≈ +15,6 à +28,3 pb pour σ de conception 60–120 pb (+10 pb n'est pas détectable avec une puissance de 0,80, écrit d'avance) ;
 `NOT_INFORMATIVE` de T01 probable, écrit d'avance (G5 §7.4).
+
+**Amendement 2026-10-21 (relecture review-b quant B2, M2, m4 ; D7, D8).**
+- **T05 au Gate 1 : 105 instants**, BTC et ETH compris. D8 (piste S classée sans suite) rend P-S3 sans objet : BTC et ETH
+  restent dans l'univers de G5 Gate 1. Pour mémoire, l'option α de P-S3 (BTC et ETH retirés) aurait donné **103** instants (ceux
+  du 2026-04-29 et du 2026-04-30 reposent sur BTC seul ; marge de 3 sur le plancher) : calcul d'audit, sans objet depuis D8.
+- **Puissance de T05 avec la variance des contrôles** (§3.2 amendé ; 105 instants d'événement contre ≈ 311 de contrôle) :
+  δ_min ≈ **0,27 σ** et δ₈₀ ≈ **+16,5 à +32,7 pb** pour un σ de conception de 60 à 120 pb, au lieu de 0,236 σ et +15,6 à
+  +28,3 pb (approximation sans les contrôles). T01 (211 contre ≈ 665) : facteur ≈ 1,15.
+- **Gate 2 : « T05 ≈ 92 » et « T01 ≈ 449 × f_inst » sont des bornes hautes**, celles de T0 = 2026-11-02, instant
+  **inatteignable** : T0 ≥ gel ≥ fin de P3, et P3 commence le 2026-11-02. Pour un T0 atteignable, du 2026-11-03 au 2026-11-20
+  (calcul d'audit sur les fériés de l'Annexe C de G5 ; dates BLS 2027 UNKNOWN, ≈ 2 par mois) : T05 au 2027-03-31 = 101 → 88 jours
+  NYSE, soit **≈ 91 → 79 instants** ; T01 = **446 → 395** instants bruts × f_inst (seuil de f_inst : 0,224 → 0,253).
+- **D7** (point 3 du 2026-10-21). P-G5-10 (i) est refusée : la fenêtre de T05 s'arrête au 2027-03-31, et **T05 au Gate 2 est
+  `NOT_INFORMATIVE` par construction**, accepté par écrit. Pour mémoire, l'option refusée « fin au 2027-04-12 » ne donnait
+  ≈ 97–98 instants qu'à T0 = 2026-11-03 et ≈ 85 à T0 = 2026-11-20, jamais 100 ; seule une fin fixée par le calendrier, refusée
+  avec elle, atteignait 100, en capturant au-delà du 2027-03-31. Le corps de G5 (§2.1 « ≥ 100 instants », §10.3 « ≈ 100 ») se
+  trompait dans le sens de l'option refusée : D7 n'en est pas affectée. P-G5-10 (ii) : « Nn » est lu comme un refus et une
+  confirmation explicite est demandée ; sans source d'indice, T01 au Gate 2 est `INCONCLUSIVE` par construction (conséquence en
+  §2.3).
+- « d'où la décision P-G5-10 (i) du propriétaire » (ci-dessus) se lit : décision prise, D7.
 
 3.4 **Interdits de puissance** (rapport théorie §4.2 point 6) : pas de porte « 300 trades / 20 paires / 4 semaines » ; pas de
 « 70 % des paires » ; la réponse à une puissance insuffisante est d'**élargir l'univers** (plus d'instruments éligibles), pas
@@ -264,6 +351,14 @@ produit, instruments, fenêtre, statut, hash, protocole, date de lecture) ; apr�
 `hyperliquid-node-fills` (= `hl-fills-G4-gate1` ci-dessus) et `dydx-v4-indexer` (candidats G4 Gate 1, `unread`), et le journal
 des décisions D1–D4. Les autres lignes ci-dessus restent à créer par leurs protocoles avant leurs gels.
 
+**État 2026-10-21, seconde mise à jour (relecture review-b quant m10 ; D5–D9).** Le journal du registre reçoit D5–D9 mot pour
+mot ; les lignes changent par le journal d'abord : P-G5-1 (D5, facteur 0,4), P-G5-4 (D6), P-G5-10 (D7), P-S3 sans objet (D8 :
+BTC et ETH restent ; l'ordre « P-S3 tranché avant le fetch scellé du funding » est écrit et tenu, la liste `--inst-ids` = les 25
+analysés), source du Gate 1 de G4 (D9 : dYdX v4, Hyperliquid en repli). Lignes annoncées : `okx-xperp-funding-rate-schema-G5`
+(`selection`, échantillon de schéma du canal `funding-rate` sans aucune valeur de taux, avant le gel du Gate 2) et
+`okx-xperp-index-history-G5-gate2` (`unread`, créée seulement si P-G5-10 (ii) (b) est décidée, ce que D7 refuse) ;
+`okx-xperp-funding-trackS` n'est plus à créer (D8).
+
 **Lien avec H2, écrit noir sur blanc** (quant B3). L'« univers secondaire » d'H2 était formé des séries **USDT-SWAP** (OKX Global)
 des bases figurant dans la liste des 160 X-Perps crypto du 2026-10-15 (`PREREGISTRATION-H2-GATE1.md` l.82–88 : « the events of the
 primary run whose base is one of the 160 live crypto X-Perps ») ; la liste X-Perps n'y est qu'une métadonnée hachée.
@@ -281,6 +376,11 @@ décision 8 ; décision 14 de §11) — **par défaut, tant qu'elle n'est pas pr
 `tradingV3-private`** et le dépôt ne reçoit que protocoles et verdicts qualitatifs (quant m8) ; la décision du propriétaire sur
 l'échelle de capture (P-G2-1) précède toute capture longue. Archive Hyperliquid : licence **non publiée** (UNKNOWN), décision du
 propriétaire (P-G4-2).
+
+**Amendement 2026-10-21 (D1 ; relecture review-b quant m6).** La décision 14 est prise par D1 : le dépôt `pivox/tradingV3` ne
+reçoit que des **agrégats statistiques sans prix** ; séries, tables chiffrées et fichiers de capture restent dans
+`tradingV3-private` ; le travail d'agents sur ces données n'entraîne aucun modèle commercialisé ni partagé. Le défaut « verdicts
+qualitatifs seulement » ci-dessus (texte du 2026-10-20) est remplacé ; G5 §4.8 suit déjà D1.
 
 ---
 
@@ -353,6 +453,15 @@ Gate 1 reste **confirmatoire** (signes et fenêtres gelés depuis la théorie, j
 `NOT_INFORMATIVE` y est une issue probable de T01, écrite d'avance. Le brouillon G5 existe (`LP-G5-DRAFT-PREREGISTRATION.md`,
 `DRAFT_NOT_FROZEN`) ; il passe **en tête de la piste L** (mandat du propriétaire du 2026-10-20, `LP-OWNER-DECISIONS-2026-10-21.md`)
 sans changer les dépendances de cette séquence (verdict `fwd-okx-r1`, gel avant la lecture de G2).
+
+**Amendement 2026-10-21 (relecture review-b quant M1, M2, m8 ; D7).** (1) « mêmes signes et fenêtres que le Gate 1 » (ligne G5
+Gate 2 du schéma) : « fenêtres » désigne les **fenêtres de signe et de rendement** (et les empreintes). La mesure primaire du
+Gate 2, `sim_net_bp`, va jusqu'à la sortie simulée (passive de h+15 à h+60 puis preneur pour T01, de h+60 à h+75 pour T05) :
+c'est une règle d'exécution **gelée** au protocole G5 §5.5, pas un choix après lecture ; la construction du Gate 1 sur les
+derniers prints (`net_bp_gate1_construction_on_last_prints`, descriptive) est imprimée à côté du primaire. (2) « T05 ≈ 92 au
+2027-03-31 » et « T01 ≈ 449 × f_inst » sont des bornes hautes (T0 = 2026-11-02 inatteignable) ; plage réaliste en §3.3 amendé ;
+sous D7, T05 au Gate 2 est `NOT_INFORMATIVE` par construction. (3) Une Phase 4 ne s'ouvre que sur un `PASS_PROGRAMME`
+prospectif (§2.3 amendé).
 
 ---
 
@@ -484,6 +593,24 @@ aucun levier > 1×.
 | 14 | Visibilité du dépôt et agrégats : le dépôt `pivox/tradingV3` reçoit-il des agrégats chiffrés (mark-outs moyens, taux de fill) ou seulement protocoles et verdicts qualitatifs ? (« display », §9.4(a)) | structurel §6.2 décision 8 ; desk §2.3 Q3 ; §6.3 | forme des `LP-*-RESULT.md` ; défaut : agrégats privés |
 | 15 | Lecture du jeu `okx-xperp-1m-history-2026-03-30..2026-10-13` (`unread`, Market Data §9.4) pour le Gate 1 historique confirmatoire de G5 ; option `market-data-history` (fichiers T+2/T+3, docs globale seule, disponibilité EEE UNKNOWN) pour la calibration C0 et le développement — rien n'est appelé avant décision | §6.2, §8 ; desk §0.5, §1.4, §2.3 Q5 (quant B3, m12) | G5 Gate 1 ; option C0 |
 
+**État au 2026-10-21 (décisions D1–D9 de `LP-OWNER-DECISIONS-2026-10-21.md` ; relecture review-b quant m6).** Ajout daté ; la
+table ci-dessus n'est pas réécrite.
+
+| # | État | Pièce |
+|---|---|---|
+| 1 | **Accordée** : capture publique continue du 2026-11-02 au plus tard le 2027-03-31, ≤ 40 X-Perps crypto + 2 swaps globaux, hôte EEE et, pour les deux swaps, hôte global ; tout allongement, instrument, canal ou hôte ajouté = nouvelle décision | D1 |
+| 2 | Ouverte | — |
+| 3 | Ouverte (D2 est un relevé d'interface, pas un GET) | D2 |
+| 4, 5, 6 | Ouvertes | — |
+| 7 | Ouverte : D1 couvre la capture ; le lancement de P3 reste à décider | D1 |
+| 8 | **Consentie** pour Hyperliquid (plafond provisoire 10 USD) ; source principale du Gate 1 de G4 : **dYdX v4**, Hyperliquid en repli ; règle de combinaison en §2.1 amendé | D3, D9 |
+| 9 | S_éco **fixé** (règle unique de §1.2 amendé : ≥ 97,25 USD/an) ; coût fixe **déclaré nul** (§1.2) ; durée maximale ≤ 2027-03-31 inchangée (D7 l'applique à G5) ; m_max = 7 : **règle**, aucune décision requise (§2.3) ; α = 0,10 inchangé ; option ouverte au propriétaire : relever S_éco par la lecture 365/360 | D4, D7 |
+| 10, 11, 12 | Ouvertes | — |
+| 13 | S-O1 = oui au niveau de l'interface ; **piste S classée sans suite** (S-O5) ; P-S3 sans objet ; une réouverture serait une décision nouvelle | D2, D8 |
+| 14 | **Prise** : le dépôt ne reçoit que des agrégats statistiques sans prix (§6.3 amendé) | D1 |
+| 15 | Lecture couverte par D1 ; échelle confirmée, facteur de cadence 0,4 retenu par défaut ; dérogation sur l'univers accordée ; option `market-data-history` ouverte | D1, D5, D6 |
+| G5 P-G5-10 | (i) **refusée** : fin de T05 au 2027-03-31, `NOT_INFORMATIVE` par construction ; (ii) « Nn » lu comme un refus, **confirmation explicite demandée** | D7 |
+
 ---
 
 ## 12. Traitement de la revue (2026-10-20)
@@ -512,6 +639,27 @@ traitement différent, motivé.
 | CTO **§4.3** — budget disque, supervision, `verify` au coût fixe | **Appliqué** : §1.2 |
 | CTO **M2** — G5 armé à `arm_ts_us` | **Appliqué** : §8 (exigence écrite pour le futur brouillon G5) ; simulateur corrigé par la passe parallèle `a5-corrections-cto`, vérifié le 2026-10-21 (suite `tests/test_research_lp_*.py` : 40 passed ; G2 P-G2-4 (A)) |
 | CTO **M1, M3, M4, m1–m12** — code du collecteur et du simulateur | Hors de ce document ; **appliqués au code** par la passe parallèle `a5-corrections-cto`, état consigné dans `LP-G2` P-G2-4 (A) (fait) / (B) (reste : tranche 6 pb, `grid_offset_s`, stratification, rejeu = direct, RPI, `bbo-tbt`, `queue_unknown`, `size_visible`, repli REST funding, `band_rejected`, `posMode`) ; la seule règle de ce document qui en dépend est la quarantaine §9.2, désormais **empêchée** par `QUARANTINE_FLOOR` et plus seulement traçable |
+
+**Traitement de la relecture `review-b/quant.md` (2026-10-21).** Relecture : `tradingV3-private/research/20261020T2321Z-g5-periods/review-b/quant.md`
+(verdict `NEEDS_CHANGES`). Même convention que ci-dessus. Constats propres au spec Gate 2 et au protocole G5 (B1, M3, M4, M5, m3,
+m7, m9, m12, et les parts « spec » ou « corps » des autres) : table de l'Annexe B de `LP-G5-DRAFT-PREREGISTRATION.md`.
+
+| Constat | Traitement |
+|---|---|
+| **B1** — « gelés ensemble » n'est imposé que dans un sens | **Appliqué** au spec Gate 2 (`frozen_with.rule` : la clause invérifiable « refused after any Gate 1 reading » est retirée et remplacée par la règle de la relecture). **Signalé** : capacité `gate2_frozen_together` du spec Gate 1, son code (a2) et sa ligne (B) au corps de G5 (a1) — hors du périmètre d'écriture de cette passe |
+| **B2** — P-S3 vise le Gate 1 | **Sans objet depuis D8** (piste S close ; BTC et ETH restent) : §3.3 (T05 = 105 ; 103 sous α, pour mémoire) ; registre (ordre « P-S3 avant le fetch scellé » écrit, tenu) ; plan ; spec Gate 2 (textes). **Signalé** : champ P-S3 du spec Gate 1 rempli `moot_track_s_closed` avec la référence D8, jamais en attente, et valeur à accepter par le lecteur (a2) ; P-G5-3 du corps (a1) |
+| **M1** — ce qu'ouvre un `PASS_PROGRAMME` | **Appliqué** : §2.3 (phrase de la relecture), §1.2, §1.3, §8 ; spec Gate 2 `verdict.pass_effect` ; plan (lignes G5, Phase 4, règle d'arrêt). **Signalé** : G5 §8 (a1) |
+| **M2** — T0 impossible ; option (c) | **Appliqué** : §3.3 et §8 (bornes hautes, plage réaliste de T0, D7) ; spec et Annexe B. **Signalé** : G5 §2.1 et §10.3 (a1). **Réponse à la revue** : la décision P-G5-10 (i) est prise (D7, refus) ; l'erreur du corps allait dans le sens de l'option refusée, et la plage réaliste ne rend aucune option refusée plus attractive (seule (c) atteignait 100, en capturant au-delà du 2027-03-31, ce que D7 refuse) : aucune question nouvelle n'est posée. `covers` n'est ni étendu, ni l'option (c) bornée : sans objet sous D7, et le lecteur refuse déjà une option (c) qui sortirait de `covers` |
+| **M3, M4, M5** | Spec Gate 2 et Annexe B de G5 ; registre : ligne `selection` annoncée pour l'échantillon de schéma `funding-rate` (M3) |
+| **m1** | **Appliqué** : §2.3 (protocole successeur, aucune prolongation motivée par les valeurs) ; spec `sealing`. **Signalé** : G5 §10.4 (a1) |
+| **m2** | **Appliqué** : §2.3 (G5-Gate2-T05 reste dans m, p = 1) ; spec `multiplicity.programme.otherwise` |
+| **m4** | **Appliqué** : §3.2 (facteur √(1 + n_e/n_c)), §3.3 (T05 : 0,27 σ ; +16,5 à +32,7 pb). **Signalé** : G5 §7.4 (a1) |
+| **m5** | **Appliqué** : §1.2 (règle unique ≥ 97,25 ; coût fixe déclaré nul). **Réponse à la revue** : la valeur n'est pas recopiée dans les specs par cette passe. Le lecteur strict exige le même S_éco aux deux portes (`g5_gate2.check_gate1_identity`, bloc `economic`) et le spec Gate 1 est hors de son périmètre : changer le seul Gate 2 le ferait refuser. 97,25 est écrit dans les deux specs ensemble (a2 ou passe de gel), avant le gel ; un spec à moins de 97,25 contredit §1.2 |
+| **m6** | **Appliqué** : §1.2 (D4), §6.3 (D1), §11 (états datés) ; m_max = 7 déclaré **règle** sans décision (§2.3), l'une des deux voies proposées par la relecture |
+| **m8** | **Appliqué** : §8 ; spec `statistics.measure_definition`. **Signalé** : impression côte à côte dans la sortie (a2) |
+| **m10** | **Appliqué** au registre : §4 (lignes annoncées, ordre P-S3 → fetch), journal d'abord |
+| **m11** | **Appliqué** : §2.1 (toute source du Gate 1 de G4 ; « les deux doivent passer » par défaut ; repli sur condition de données seulement) ; D9 a fait de dYdX la source principale |
+| **m3, m7, m9, m12** | Annexe B de G5 |
 
 ---
 

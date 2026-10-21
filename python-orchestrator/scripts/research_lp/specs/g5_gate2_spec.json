@@ -1,16 +1,16 @@
 {
   "spec_id": "LP-G5-GATE2-2026",
   "spec_schema": "g5-spec/2",
-  "spec_version": "0.1.0-draft",
+  "spec_version": "0.1.2-draft",
   "status": "DRAFT_NOT_FROZEN",
   "protocol": "docs/handbook/research/LP-G5-DRAFT-PREREGISTRATION.md",
   "protocol_sections": "section 10 (Gate 2), section 5.5 (simulated scalp), section 8 (inscription), Annex B (this file)",
-  "note": "Spec machine du G5 Gate 2 (prospectif, confirmation). Gele EN MEME TEMPS que le spec Gate 1 (piege 7) : memes types, classifieur, seuils, signes, fenetres, controles, unite et criteres ; seules changent la source (capture), l'execution (simulee sur carnet reel, lp_sim) et les calendriers (2026-11 -> 2027-04). Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee ; toute valeur null ou owner_decision_pending interdit le statut FROZEN. Le sha256 de la version FROZEN fait partie du gel (protocole section 13).",
+  "note": "Spec machine du G5 Gate 2 (prospectif, confirmation). Gele EN MEME TEMPS que le spec Gate 1 (piege 7) : memes types, classifieur, seuils, signes, fenetres, controles, unite et criteres ; seules changent la source (capture), l'execution (simulee sur carnet reel, lp_sim) et les calendriers (2026-11 -> 2027-04). Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee ; toute valeur null ou owner_decision_pending interdit le statut FROZEN. Le sha256 de la version FROZEN fait partie du gel (protocole section 13). Revision 0.1.2-draft (2026-10-21, passe de correction apres tradingV3-private/research/20261020T2321Z-g5-periods/review-b/quant.md) : textes libres seulement, chaque texte lie au lecteur strict est inchange. Les reponses du proprietaire D7 (P-G5-10 (i) : option a ; (ii) : refus lu dans Nn, confirmation explicite demandee) et D8 (piste S close, P-S3 sans objet, BTC et ETH restent) sont ecrites dans les textes et au journal du registre ; elles sont recopiees dans les blocs de decision au gel (status et choice restent owner_decision_pending jusque-la : echec ferme). Une valeur qui contient le marqueur freeze_pending suivi d un deux-points marque un choix de redaction que le corps du protocole ne fixe pas encore (a1, sections 10 et 11) ; elle interdit FROZEN (regle a coder, a2). Avant le gel, le canal funding-rate n est verifie que sur la documentation et sur un echantillon de schema (noms de champs, valeurs de settState, fundingTime contre ts ; aucun taux affiche ni persiste hors de la tape ; GATES 9.5) ; le texte FROZEN de costs.funding.source est g5_gate2.FUNDING_SOURCE.",
 
   "frozen_with": {
     "spec": "python-orchestrator/scripts/research_lp/specs/g5_gate1_spec.json",
     "spec_id": "LP-G5-GATE1-2026",
-    "rule": "both specs are frozen in the same freeze line (protocol section 13 point 5) ; a Gate 2 spec frozen after any Gate 1 reading is refused"
+    "rule": "both specs are frozen in the same freeze line (protocol section 13 point 5) ; Gate 1 side (capability gate2_frozen_together of g5_gate1_spec.json and its (B) line, to write, a2): before any market read the Gate 1 evaluator reads this file and refuses to run unless it is FROZEN, holds no owner_decision_pending, no freeze_pending marker and no null, and its freeze_fill.gate1_spec_sha256 equals the sha256 of the Gate 1 spec read ; the sha256 of this file is printed in the Gate 1 output and written in the register the day of the Gate 1 run ; Gate 2 side (g5_gate2): a FROZEN Gate 2 is refused unless its Gate 1 is FROZEN with that sha256 (review-b quant B1, CTO M2) ; the former clause on a Gate 2 frozen after a Gate 1 reading is withdrawn (no spec carries a freeze timestamp: not checkable)"
   },
 
   "source": "capture",
@@ -25,7 +25,7 @@
     "lookback_before_t0": "allowed for the classifier only (the 480 min of mark and index before t_arm), never before quarantine_floor_utc, never scored",
     "instant_in_window_if": "the whole footprint of the instant lies in [T0 ; end_exclusive of its type)",
     "end_exclusive": "2027-04-01",
-    "end_rule": "GATES 1.3 (end of scoring <= 2027-03-31) and D1 (capture until 2027-03-31 at the latest) ; per type: events[].window_end ; T05 per owner decision P-G5-10 (i)",
+    "end_rule": "GATES 1.3 (end of scoring <= 2027-03-31) and D1 (capture until 2027-03-31 at the latest) ; per type: events[].window_end ; T05 per owner decision P-G5-10 (i): answer D7 (2026-10-21) = option a, end 2027-03-31, copied at freeze ; data-gap extension as implemented (g5_eval, g5_gate2.extended_end ; review-b quant m3): a lost day is a UTC day on which every eligible instrument is unusable (quality.unusable_instrument_day), the extension adds calendar days (a weekend day added brings no NYSE day to T05), at most max_days, and goes beyond 2027-03-31 only under the decisions of the chosen option, dated before the freeze ; under D7 no extension is possible (both type windows end on 2027-03-31): unusable days are counted, never replaced",
     "data_gap_extension": {
       "rule": "one day added per unusable day (quality.unusable_instrument_day), never on a result",
       "max_days": 14,
@@ -50,6 +50,7 @@
     "classifier_mark_and_index_from_capture_or_index_history",
     "classifier_validation_confusion_3x3",
     "generator_local_time_exclude_dates",
+    "calendars_cover_the_window",
     "controls_minute_of_hour_all_admissible",
     "exclusion_by_footprint_with_margin",
     "sessions_local_time_dst",
@@ -75,11 +76,11 @@
   "owner_decisions": {
     "rule": "every value owner_decision_pending is replaced by the owner's dated choice (text copied in freeze_fill and in the register journal) before status FROZEN ; the evaluator refuses a FROZEN spec that still contains owner_decision_pending anywhere",
     "pending": [
-      {"id": "P-G5-10 (i)", "subject": "end of the T05 Gate 2 window", "path": "events[T05_us_open].window_end", "status": "owner_decision_pending"},
-      {"id": "P-G5-10 (ii)", "subject": "source of the per-minute index for the classifier P_hat", "path": "classifier_index_source", "status": "owner_decision_pending"}
+      {"id": "P-G5-10 (i)", "subject": "end of the T05 Gate 2 window (owner answer D7, 2026-10-21: option a, end 2027-03-31, NOT_INFORMATIVE by construction ; copied at freeze)", "path": "events[T05_us_open].window_end", "status": "owner_decision_pending"},
+      {"id": "P-G5-10 (ii)", "subject": "source of the per-minute index for the classifier P_hat (owner answer D7, 2026-10-21: Nn read as a refusal of point 3 as a whole ; explicit confirmation requested ; if confirmed: no source, T01 INCONCLUSIVE by construction)", "path": "classifier_index_source", "status": "owner_decision_pending"}
     ],
     "related_not_p_g5_10": [
-      {"id": "P-S3 (track S, LP-S-CSFUND-K1C-AMENDMENT-DRAFT.md section 4.3)", "subject": "BTC and ETH in the G5 universe", "path": "universe.p_s3_track_s", "status": "owner_decision_pending"}
+      {"id": "P-S3 (track S, LP-S-CSFUND-K1C-AMENDMENT-DRAFT.md section 4.3)", "subject": "BTC and ETH in the G5 universe (owner answer D8, 2026-10-21: track S closed without follow-up, P-S3 moot, BTC and ETH stay at both gates ; the strict reader accepts alpha or beta only: a value moot_track_s_closed is to add, a2, then copied at freeze)", "path": "universe.p_s3_track_s", "status": "owner_decision_pending"}
     ]
   },
 
@@ -96,20 +97,20 @@
     "decision_ref_p_g5_10_ii": null,
     "decision_ref_p_s3": null,
     "t05_end_inclusive_utc": null,
-    "rule": "toutes ces valeurs sont non nulles dans la version FROZEN ; l'evaluateur refuse un spec FROZEN qui en contient une nulle"
+    "rule": "toutes ces valeurs sont non nulles dans la version FROZEN ; l'evaluateur refuse un spec FROZEN qui en contient une nulle ; decision_ref_p_g5_10_i = texte de D7 (point 3 du 2026-10-21) et t05_end_inclusive_utc = 2027-03-31 ; decision_ref_p_s3 = texte de D8 (piste S close, P-S3 sans objet) ; decision_ref_p_g5_10_ii = confirmation explicite demandee par D7"
   },
 
   "universe": {
     "rule": "G2 section 3: metadata snapshot public/instruments (instType FUTURES, host EEE) taken at freeze (>= 2026-11-01, hashed) ; filters G2 3.2 (ruleType xperp, state live, id <BASE>-USD_UM_XPERP-<YYMMDD>, crypto underlying, listTime <= T0 - 30 d, expTime >= T0 + 365 d, ctType) ; ceiling N <= 40 by P3 message counts (selection, G2 3.4) if the collector cannot hold every instrument ; no volume, no market value",
     "always_included": "BTC-USD_UM_XPERP-<...> and ETH-USD_UM_XPERP-<...> (G2 3.5), subject to universe.p_s3_track_s",
     "global_swaps": "BTC-USDT-SWAP and ETH-USDT-SWAP are recorded by the capture for G2 C0 ; outside the G5 universe",
-    "liquidity_rule_g2_3_3": "not applied: protocol 10.1 names metadata, P3 counts and listTime + 30 d only ; to confirm at freeze",
+    "liquidity_rule_g2_3_3": "not applied: protocol 10.1 names metadata, P3 counts and listTime + 30 d only ; freeze_pending: protocol 10.1 to state it (a1, review-b quant M5)",
     "analysed": null,
     "analysed_rule": "list of {inst_id, index_id, list_time_utc, ct_val, tick_sz, lot_sz, min_sz} copied from the freeze snapshot ; index_id = uly",
     "p_s3_track_s": {
       "status": "owner_decision_pending",
-      "decision": "P-S3: (alpha, recommended by the track S) BTC-USD_UM_XPERP-310404 and ETH-USD_UM_XPERP-310404 removed from the G5 Gate 1 universe and outputs ; (beta) CS-FUND 0.4 amended (G5 reading declared as exposure E9)",
-      "gate2_scope": "P-S3 names the Gate 1 only ; whether option alpha also removes BTC and ETH from the Gate 2 (their capture between 2026-11-02 and the track S T0, read at the single Gate 2 evaluation) is not decided ; to be written with P-S3",
+      "decision": "P-S3: (alpha, recommended by the track S) BTC-USD_UM_XPERP-310404 and ETH-USD_UM_XPERP-310404 removed from the G5 Gate 1 universe and outputs ; (beta) CS-FUND 0.4 amended (G5 reading declared as exposure E9) ; owner answer D8 (2026-10-21, Clore s): track S closed without follow-up (S-O5), the P-S3 conflict disappears, BTC and ETH stay in the G5 Gate 1 universe and in this Gate 2 universe ; neither alpha nor beta is chosen (no CS-FUND to amend) ; a reopening of the track S is a new decision and never removes BTC or ETH from G5 after the freeze",
+      "gate2_scope": "moot under D8 (BTC and ETH stay at both gates) ; was: P-S3 names the Gate 1 only ; whether option alpha also removes BTC and ETH from the Gate 2 (their capture between 2026-11-02 and the track S T0, read at the single Gate 2 evaluation) is not decided ; to be written with P-S3",
       "choice": "owner_decision_pending"
     },
     "mismatch_with_snapshot": "refuse_run"
@@ -150,7 +151,7 @@
 
   "statistics": {
     "measure": "sim_net_bp",
-    "measure_definition": "simulated round trip on the captured book (execution_sim): entry, passive exit then taker remainder, fees at the role, slippage on taker legs, funding of the settlements crossed ; adverse selection and spread paid are inside the simulated prices",
+    "measure_definition": "simulated round trip on the captured book (execution_sim): entry, passive exit then taker remainder, fees at the role, slippage on taker legs, funding of the settlements crossed ; adverse selection and spread paid are inside the simulated prices ; the Gate 1 construction (descriptive net_bp_gate1_construction_on_last_prints) is printed next to the primary (review-b quant m8: same sign and return windows as the Gate 1 ; the simulated exit to h+60 or h+75 is a frozen execution rule, protocol 5.5 ; printing to code, a2)",
     "descriptive_measures": ["net_bp (Gate 1 construction on last prints with the Gate 1 design costs)", "r_bp"],
     "difference": "D = mean over event instants - mean over control instants",
     "alpha_one_sided": 0.10,
@@ -170,12 +171,12 @@
     "slippage_bp_per_taker_leg": 2.0,
     "stress_multiplier_all_cost_terms": 1.5,
     "stress_rule": "fees and slippage x 1.5 ; the measured terms are inside the simulated prices and cannot be multiplied there, so the stressed net also subtracts 0.5 x the Gate 1 design value of each measured term: 1.75 bp per filled maker leg (adverse selection 3.5 bp) and 1.5 bp per taker entry (half spread 3 bp)",
-    "stress_rule_status": "proposed by this draft (protocol 10.2 is silent on stressing measured terms ; the code of 2026-10-21 stresses fees and slippage only) ; to confirm at freeze ; never weaker than the Gate 1 stress on the assumed terms",
+    "stress_rule_status": "freeze_pending: proposed by this draft, to be written in protocol 10.2 by a1 (review-b quant M5 ; protocol 10.2 is silent on stressing measured terms) ; implemented by g5_eval measure_lp_sim and the g5_gate2 add-on ; never weaker than the Gate 1 stress on the assumed terms ; declared gap (review-b quant m9, calcul d'audit): T01 stress adds 5.5 bp at Gate 2 (fees 4 to 6 bp, no taker leg, 2 x 1.75 bp) against 6.5 bp at Gate 1 (13 to 19.5 bp), because the 2 bp design slippage of a maker/maker round trip disappears when both legs are maker ; T05 adds 7.75 bp at both gates",
     "design_values_gate1": {"adverse_selection_bp_per_maker_leg": 3.5, "taker_entry_half_spread_bp": 3.0, "slippage_bp_per_round_trip": 2.0, "use": "descriptive net_bp and stress add-on only"},
     "g2_table_substitution": "none: the Gate 2 measures its own adverse selection (protocol 10.2)",
     "funding": {
       "source": "capture funding-rate channel: settled rate of each settlement (settFundingRate with settState settled, attributed to fundingTime) ; field semantics UNKNOWN, to verify on the documentation and the first capture before freeze",
-      "fallback": "GATES 5.1: REST public/funding-rate-history read after T0 only ; coverage by D1 to confirm at freeze",
+      "fallback": "GATES 5.1: REST public/funding-rate-history read after T0 only ; freeze_pending: not implemented (g5_fetch persists nothing at or after END_EXCLUSIVE) and not covered by D1 (a new reading decision) ; the FROZEN text starts with none (an unknown settled rate excludes the observation, unknown_rate)",
       "formula": "funding_bp = -side * sum(settled rates of the instrument's settlements T with first_fill - execution_sim.funding_fill_grace_min < T <= exit) * 1e4",
       "unknown_rate": "observation excluded and counted",
       "count_field": "funding_unknown",
@@ -185,7 +186,7 @@
   },
 
   "execution_sim": {
-    "engine": "lp_sim primitives (g5_eval simulate_clock_scalp, (B) x and xxi)",
+    "engine": "lp_sim primitives (g5_eval.measure_lp_sim, (B) xxi ; g5_eval/3 at 2026-10-21)",
     "entry_fill_rule": "touch",
     "descriptive_fill_rules": ["through", "queue"],
     "latency_ms": 250,
@@ -206,7 +207,7 @@
     "decision": "P-G5-10 (ii)",
     "status": "owner_decision_pending",
     "choice": "owner_decision_pending",
-    "why": "the D1 capture carries no index channel (xperp_capture.CHANNELS = trades, books5, liquidation-orders, mark-price, funding-rate at 2026-10-21) ; P_hat needs idx(g) at every minute boundary of the 480-min lookback",
+    "why": "the D1 capture carries no index channel (xperp_capture.CHANNELS = trades, books5, liquidation-orders, mark-price, funding-rate at 2026-10-21) ; P_hat needs idx(g) at every minute boundary of the 480-min lookback ; owner answer D7 (2026-10-21): refusal read from Nn, explicit confirmation requested ; option b has no fetcher for the Gate 2 period (g5_fetch stops at END_EXCLUSIVE ; refused at FROZEN by the reader, CTO review-b M3: code to write) ; option a needs a new D1 decision and code ; if the refusal is confirmed the strict reader needs a choice none (a2) and T01 is G5_GATE2_INCONCLUSIVE by construction",
     "options": {
       "a_capture_index_tickers": {
         "source": "public WS channel index-tickers (docs-v5 l.43897), instId = index_id (uly), captured from before T0",
@@ -260,7 +261,8 @@
 
   "calendars": {
     "tz": "America/New_York",
-    "covers": "2026-11-02 .. 2027-04-30 (every option of P-G5-10 (i) and the gap extension)",
+    "covers": "2026-11-02 .. 2027-04-30 (window end 2027-03-31 under D7 ; the refused options b and c of P-G5-10 (i) ; the data-gap extension)",
+    "covers_rule": "the evaluator refuses a spec whose scoring window (every events[].window_end and the data gap extension included) is not inside covers, and a FROZEN spec whose lists are not complete over covers: a NYSE holiday or a CPI / Employment Situation / FOMC date missing from a list would be scored as an ordinary day ; the window coverage is implemented (g5_gate2, calendars_cover_the_window) ; the content test is to code before the freeze (review-b quant M4, a2 ; the same test on the Gate 1 spec over its own window): a FROZEN spec has at least one CPI date and one Employment Situation date per calendar month of [T0 ; last scored day + data-gap extension], except dated and sourced exceptions written here (postponement, government shutdown), at least one FOMC statement date per 8-week span, NYSE holidays equal to a rule-based generator (New Year, Martin Luther King Jr. Day, Washington's Birthday, Good Friday from Easter, Memorial Day, Juneteenth, Independence Day, Labor Day, Thanksgiving = 4th Thursday of November, Christmas, observed-day rules ; every exception written) and the NYSE half days listed (a 13:00 ET close moves the us_cash_close exclusion)",
     "nyse_holidays": ["2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26"],
     "cpi": ["2026-11-10", "2026-12-10"],
     "employment_situation": [],
@@ -269,7 +271,7 @@
       "cpi": "2027-01 .. 2027-04 to record (bls.gov schedule 2027)",
       "employment_situation": "2026-11 .. 2027-04 to record (bls.gov schedules 2026 and 2027) ; never a first-Friday rule (piege 6)",
       "fomc_statement": "2027 dates tentative on federalreserve.gov (red team 2026-10-21) ; to re-verify ; any meeting before 2027-04-30 to record",
-      "nyse_holidays": "2027-04 list to re-verify (none expected before 2027-04-30) ; NYSE half days to record",
+      "nyse_holidays": "2027-04 list to re-verify (none expected before 2027-04-30) ; NYSE half days to record (none sourced in this draft) ; holidays checked against a rule-based generator (covers_rule)",
       "ten_am_et_releases": "descriptive stratum list (JOLTS, ISM) to record"
     },
     "incomplete_rule": "every list complete and calendars_verified_utc set before FROZEN ; the evaluator refuses a FROZEN spec whose incomplete_at_draft is not empty",
@@ -313,7 +315,7 @@
         "fallback_hours": "none"
       },
       "footprint_min": [-5, 15],
-      "footprint_note": "the simulated exit tail (h+15 to h+60) is not part of the footprint used by the control exclusion: same footprints as Gate 1 (protocol 7.1 gives the Gate 2 control hours on these footprints) ; declared",
+      "footprint_note": "the simulated exit tail (h+15 to h+60) is not part of the footprint used by the control exclusion: same footprints as Gate 1 (protocol 7.1 gives the Gate 2 control hours on these footprints) ; declared ; freeze_pending: to be written in protocol 10.2 by a1 (review-b quant M5, Annex B choice 6)",
       "arm_min": -5,
       "rest_until_min": 1,
       "classifier": {
@@ -372,7 +374,7 @@
       "audit_expected": {
         "calendar_days_if_t0_2026_11_02": 150,
         "raw_instants_upper_bound_if_t0_2026_11_02": 449,
-        "raw_instants_note": "3 settlements per day ; the 00:00 of T0 is lost (its footprint starts before T0) ; T0 = 2026-11-04: 443 ; T0 = 2026-11-05: 440",
+        "raw_instants_note": "3 settlements per day ; the 00:00 of T0 is lost (its footprint starts before T0) ; T0 = 2026-11-04: 443 ; T0 = 2026-11-05: 440 ; 449 is an upper bound: T0 >= freeze >= end of P3, so T0 = 2026-11-02 is not reachable ; reachable T0 (calcul d'audit, g5_gate2.audit_capture_settlements ; review-b quant M2): 2026-11-03: 446, 11-10: 425, 11-20: 395 raw instants, f_inst floor 0.224 / 0.235 / 0.253",
         "not_informative_expected_if_f_inst_below": 0.223
       }
     },
@@ -395,23 +397,23 @@
             "end_inclusive": "2027-03-31",
             "end_exclusive": "2027-04-01",
             "nyse_days_if_t0_2026_11_02": 102,
-            "raw_instants_expected": "about 92 (102 NYSE days minus about 10 CPI and Employment Situation dates ; BLS dates 2026-11 .. 2027-03 partly to record)",
-            "consequence": "G5_GATE2_NOT_INFORMATIVE by construction (floor 100) ; the owner accepts it in writing",
+            "raw_instants_expected": "about 92 at T0 = 2026-11-02 (102 NYSE days minus about 10 CPI and Employment Situation dates ; an upper bound: that T0 is not reachable) ; reachable T0 (calcul d'audit, review-b quant M2): 2026-11-03: 101 NYSE days, about 91 ; 11-05: 99, about 89 ; 11-10: 96, about 87 ; 11-20: 88, about 79 (2027 BLS dates UNKNOWN, about 2 a month)",
+            "consequence": "G5_GATE2_NOT_INFORMATIVE by construction (floor 100) ; the owner accepts it in writing: D7 (2026-10-21) ; G5-Gate2-T05 stays in the programme family with p = 1 (GATES 2.1, 2.3 ; review-b quant m2)",
             "requires": []
           },
           "b_end_2027_04_12": {
             "end_inclusive": "2027-04-12",
             "end_exclusive": "2027-04-13",
             "nyse_days_if_t0_2026_11_02": 110,
-            "raw_instants_expected": "about 98 to 99 (110 NYSE days minus 11 or 12 CPI and Employment Situation dates ; BLS 2027 schedule UNKNOWN) ; protocol 10.3 writes about 100",
-            "consequence": "likely below the floor by 1 or 2 instants: NOT_INFORMATIVE remains probable ; each NYSE day of T0 after 2026-11-02 removes one more instant (T0 = 2026-11-05: 107 NYSE days)",
+            "raw_instants_expected": "about 98 to 99 at T0 = 2026-11-02 (110 NYSE days minus 11 or 12 CPI and Employment Situation dates ; an upper bound: that T0 is not reachable) ; reachable T0 (calcul d'audit, review-b quant M2): 2026-11-03: 109 NYSE days, about 97 to 98 ; 11-05: 107, about 95 to 96 ; 11-10: 104, about 93 ; 11-20: 96, about 85 ; never 100 for a reachable T0 (protocol 2.1 and 10.3 write >= 100 and about 100: to correct, a1)",
+            "consequence": "refused by D7 (2026-10-21: no capture and no scoring after 2027-03-31) ; below the floor for every reachable T0 in any case ; each NYSE day of T0 after 2026-11-02 removes one more instant (T0 = 2026-11-05: 107 NYSE days)",
             "requires": ["GATES 1.3: written exception by the owner before 2027-03-31 (end of scoring after 2027-03-31)", "D1: capture extended beyond 2027-03-31 (new decision)"]
           },
           "c_end_by_calendar_rule": {
             "rule": "end = the NYSE trading day on which the count of NYSE days from T0 outside the CPI and Employment Situation lists reaches 100, computed at freeze on the frozen and complete lists, written in freeze_fill.t05_end_inclusive_utc",
-            "expected_end": "about 2027-04-13 to 2027-04-15 for T0 = 2026-11-02 ; later if T0 is later",
-            "status": "proposed by this draft, not in the protocol text (protocol 10.3: an end fixed at freeze by the calendar is not an extension on a result)",
-            "consequence": "floor met on the calendar by construction (an instant is lost only if all its instruments are excluded)",
+            "expected_end": "about 2027-04-13 to 2027-04-15 for T0 = 2026-11-02 ; about 2027-04-15 (T0 2026-11-03) to 2027-04-30 (T0 2026-11-20), plus up to 14 days of data-gap extension: beyond calendars.covers for a late T0 (the reader refuses it, fail-closed)",
+            "status": "refused by D7 (2026-10-21) ; proposed by the draft 0.1.1 and never written in the protocol body ; kept only because the strict reader requires the three options (g5_gate2.T05_END_OPTIONS)",
+            "consequence": "would have met the floor on the calendar by construction (an instant is lost only if all its instruments are excluded) ; not chosen",
             "requires": ["GATES 1.3: written exception by the owner before 2027-03-31", "D1: capture extended beyond 2027-03-31 (new decision)"]
           }
         }
@@ -425,7 +427,7 @@
       },
       "utc_time_note": "14:30 UTC from T0 to 2027-03-12, 13:30 UTC from 2027-03-15 (defined in New York time ; piege 1)",
       "footprint_min": [0, 60],
-      "footprint_note": "the simulated exit tail (h+60 to h+75) is not part of the footprint used by the control exclusion: same footprints as Gate 1 ; declared",
+      "footprint_note": "the simulated exit tail (h+60 to h+75) is not part of the footprint used by the control exclusion: same footprints as Gate 1 ; declared ; freeze_pending: to be written in protocol 10.2 by a1 (review-b quant M5, Annex B choice 6)",
       "sign": {"kind": "return_sign", "from_min": 0, "to_min": 5, "price": "last", "zero": "exclude_and_count"},
       "arm_min": 5,
       "entry": {"kind": "taker", "price": "opposite touch at h+5 plus latency", "slippage_bp": "costs.slippage_bp_per_taker_leg", "half_spread": "measured"},
@@ -460,18 +462,18 @@
     "fail": "G5_GATE2_FAIL(type) otherwise, once no inconclusive condition holds and the floor is met",
     "fail_annotation": {"ub90_ge_threshold": "non poursuivi ; absence d'effet non demontree", "ub90_lt_threshold": "effet >= +10 pb exclu sous la forme testee"},
     "closure_scope": "the tested form for this architecture only (protocol 8: G5_GATE2_FAIL closes the form ; a filter at most) ; never the mechanism",
-    "pass_effect": "G5_GATE2_PASS with the reading 'PASS, poursuivi' authorises a written Phase 4 proposal (demo only) ; never an order (protocol 8, 10.4)"
+    "pass_effect": "a written Phase 4 proposal (demo only) iff G5_GATE2_PASS(type) and PASS_PROGRAMME of G5-Gate2-<type> (immediate, p <= 0.10 / 7, or Holm at the closure of the family, GATES 2.3) and the reading 'PASS, poursuivi' ; otherwise the proposal waits for the closure of the family ; a PASS_PROGRAMME of a historical test (G5-Gate1-*) opens no Phase 4 and does not count for GATES 1.3 ; never an order (protocol 8, 10.4 ; review-b quant M1) ; under D7, if the refusal of P-G5-10 (ii) is confirmed, no G5_GATE2_PASS is possible (T05 NOT_INFORMATIVE, T01 INCONCLUSIVE by construction ; written in advance)"
   },
 
   "multiplicity": {
-    "local_holm": {"alpha": 0.10, "family": ["T01_funding_8h", "T05_us_open"], "p_for_not_inscribed_inconclusive_or_not_informative": 1.0, "field": "holm_local_confirmed", "status": "mirrors the Gate 1 (protocol 10.2 names the same criteria and is silent on a local Holm at Gate 2) ; to confirm at freeze"},
-    "programme": {"m_max": 7, "tests": ["G5-Gate2-T01", "G5-Gate2-T05"], "immediate_if_p_le": 0.0142857, "otherwise": "Holm at family closure (GATES 2.3)", "field": "pass_programme_immediate", "gate2_effect": "none on the verdict of the type"},
+    "local_holm": {"alpha": 0.10, "family": ["T01_funding_8h", "T05_us_open"], "p_for_not_inscribed_inconclusive_or_not_informative": 1.0, "field": "holm_local_confirmed", "status": "freeze_pending: mirrors the Gate 1, to be written in protocol 10.2 by a1 (protocol 10.2 names the same criteria and is silent on a local Holm at Gate 2 ; review-b quant M5)"},
+    "programme": {"m_max": 7, "tests": ["G5-Gate2-T01", "G5-Gate2-T05"], "immediate_if_p_le": 0.0142857, "otherwise": "Holm at family closure (GATES 2.3) ; G5-Gate2-T05 stays in the family (p = 1 when NOT_INFORMATIVE, as under D7), never removed after a reading, m_max = 7 (review-b quant m2) ; only a prospective PASS_PROGRAMME opens a Phase 4 proposal (verdict.pass_effect)", "field": "pass_programme_immediate", "gate2_effect": "none on the verdict of the type"},
     "forbidden_field_names": ["pass_programme"]
   },
 
   "sealing": {
     "gate1_sealed_files": {"files": "sealed/<type>.json of the Gate 1 run", "open_after": "the G5 Gate 2 verdict of the same type is written and hashed", "evaluator_rule": "the Gate 2 evaluator never reads a path under the Gate 1 sealed/ directory"},
-    "gate2_own_verdicts": {"rule": "no sealing at Gate 2: no later gate depends on these statistics ; every verdict prints D, LB90, UB90, p", "status": "protocol silent ; to confirm at freeze"},
+    "gate2_own_verdicts": {"rule": "no sealing at Gate 2: no later gate depends on these statistics ; every verdict prints D, LB90, UB90, p ; a successor protocol on a form tested at this Gate 2 enters the programme family m by an amendment of m_max dated before its own freeze, and no extension or prolongation of any window is ever motivated by these values (review-b quant m1)", "status": "freeze_pending: protocol silent, to be written in protocol 10.4 by a1 (review-b quant M5, m1)"},
     "visibility": "D1 and protocol 4.8: aggregates without price in the repository ; series, tables and files in tradingV3-private"
   },
 
@@ -507,14 +509,14 @@
     "unusable_instrument_day": "books5 coverage (minutes with >= 1 snapshot) < 90 % or a stale period > 10 min crossing the instrument-day (G2 4.4, same capture) ; removed before any computation and counted",
     "unusable_share_inconclusive": 0.20,
     "classifier_missing_instrument_day_share_inconclusive": 0.50,
-    "status": "borrowed from G2 4.4 (protocol 10.3 names unusable days without defining them) ; to confirm at freeze"
+    "status": "freeze_pending: borrowed from G2 4.4 (protocol 10.3 names unusable days without defining them), to be written in protocol 10.3 by a1 (review-b quant M5)"
   },
 
   "capture": {
     "command": "python -m scripts.research_lp.cli capture (values mode), host eea (wss://wseea.okx.com/ws/v5/public)",
     "channels_required": ["trades", "books5", "mark-price", "funding-rate"],
     "channels_conditional": {
-      "index-tickers": "classifier_index_source option a ; new D1 decision ; not in xperp_capture.CHANNELS at 2026-10-21",
+      "index-tickers": "classifier_index_source option a ; new D1 decision ; not in xperp_capture.CHANNELS at 2026-10-21 ; refused with point 3 by D7 (confirmation requested)",
       "bbo-tbt": "G2 (B) vi ; in the channel list of decision 1 ; not in xperp_capture.CHANNELS at 2026-10-21"
     },
     "channels_in_code_2026_10_21": ["trades", "books5", "liquidation-orders", "mark-price", "funding-rate"],

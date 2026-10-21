@@ -64,3 +64,56 @@ Seuil sous lequel une famille n'est pas poursuivie même si elle passe statistiq
 Aucun ordre, aucun drapeau, aucune clé avec droit de trading. `fwd-okx-r1` et ses fenêtres W0–W2 restent intacts. Aucune
 donnée datée 2026-10-14 → 2026-10-31 n'est lue. La capture prospective ne démarre pas avant le 2026-11-02 00:00 UTC, plancher
 inscrit dans le code (`QUARANTINE_FLOOR`).
+
+---
+
+# Décisions du 2026-10-21, second lot (G5, piste S, G4)
+
+Réponses du propriétaire, reçues le 2026-10-21 vers 06:40 UTC, aux cinq points posés pour le gel de G5. Texte reçu, recopié
+tel quel :
+
+> 1 je confirme
+> 2 oui
+> 3 Nn
+> Clore s
+> 5 ok
+
+## D5 — Échelle de la lecture G5 Gate 1 : confirmée (P-G5-1)
+
+Lecture unique de 25 X-Perps : funding (≈ 50 requêtes, scellé, avant le gel), puis bougies 1 minute dernier prix, mark et
+indice (≈ 58 300 requêtes en tout), une IP, stockage `tradingV3-private`. Le propriétaire n'a pas choisi la cadence :
+**facteur 0,4 retenu par défaut** (≈ 5,6 h, proposition du protocole, la plus prudente vis-à-vis d'OKX). Le texte de D5 devient
+le `--decision-ref` du fetcher.
+
+## D6 — Liste des 25 instruments : dérogation accordée (P-G5-4)
+
+Le propriétaire accepte que l'univers figé reprenne la liste D1, issue d'un relevé de volume du 2026-10-14 (quarantaine,
+sélection sur la liquidité de fin de fenêtre), avec les biais déclarés au protocole §3.1. Le snapshot d'instruments relevé après
+le 2026-10-31 reste exigé ; aucun instrument n'est ajouté par un volume.
+
+## D7 — Gate 2 de G5 : « non » (P-G5-10)
+
+- **(i) Fin de fenêtre de T05 au Gate 2** : refusée. La fenêtre s'arrête au 2027-03-31 ; avec ≈ 92 instants < 100, T05 au
+  Gate 2 est `NOT_INFORMATIVE` **par construction**, comme le protocole l'écrit d'avance.
+- **(ii) Source d'indice à la minute pour le Gate 2** : la réponse « Nn » est lue comme un refus portant sur le point 3 entier ;
+  une confirmation explicite est demandée, car sans source d'indice T01 au Gate 2 est `INCONCLUSIVE` par construction (§10).
+
+## D8 — Piste S : close (S-O5)
+
+Le propriétaire classe la piste S **sans suite** : à 500 USDT, le portage couvert auto-collatéralisé ne franchit pas la porte
+économique, même dans le meilleur cas ([LP-S-CSFUND-K1C-AMENDMENT-DRAFT.md](LP-S-CSFUND-K1C-AMENDMENT-DRAFT.md) §11). Le
+conflit P-S3 disparaît : **BTC et ETH restent dans l'univers de G5 Gate 1**. Aucun enregistreur de funding n'est lancé pour la
+piste S. La réouverture exigerait une décision nouvelle (porte en dollars absolus et capital plus élevé).
+
+## D9 — Source du Gate 1 de G4 : dYdX v4 (décision 2 du rapport DEX)
+
+- dYdX v4 devient la source principale du Gate 1 de G4 ; Hyperliquid (D3) reste le repli.
+- Accords associés (rapport DEX §7, décision 3) : données de l'indexeur public sans licence écrite, pour une recherche
+  personnelle non redistribuée ; échantillon de schéma autorisé ; amendement de `LP-G4-DRAFT-PREREGISTRATION.md` §5.2 (proxy
+  de mid déclaré, biais déclaré) avant tout gel.
+- **Échantillon de schéma pris le 2026-10-21 à 06:39 UTC** (`indexer.dydx.trade/v4/trades/perpetualMarket/BTC-USD`, trois pages
+  de 100 trades, toutes datées avant le 2026-10-14) : champs `createdAt`, `createdAtHeight`, `id`, `price`, `side`, `size`,
+  `type` ; historique servi au moins jusqu'au 2023-12-31. Aucun prix, aucune taille, aucun décompte n'a été affiché ni stocké.
+  La valeur `LIQUIDATED` n'apparaît pas dans ces 300 trades, ce qui est attendu pour un événement rare : sa présence est vérifiée
+  au fetch du protocole gelé. Fichier : `tradingV3-private/research/20261021T-dex-alternatives/dydx-schema-sample/`
+  (sha256 dans `SHA256SUMS`).

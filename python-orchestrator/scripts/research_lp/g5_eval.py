@@ -1,8 +1,12 @@
 """Event study of the G5 clock / calendar types on the 1-minute X-Perp history (Gate 1) or on the capture tape (Gate 2),
-driven entirely by the frozen machine spec `specs/g5_gate1_spec.json` (schema `g5-spec/2`) — nothing here is searched.
+driven entirely by the frozen machine specs `specs/g5_gate1_spec.json` and `specs/g5_gate2_spec.json` (schema `g5-spec/2`) —
+nothing here is searched.
 
     python -m scripts.research_lp.cli g5-eval --tape DIR --spec specs/g5_gate1_spec.json --expect-spec-sha256 HEX \\
         --out-json R.json --out-md R.md [--instruments-file SNAPSHOT] [--expect-funding-seal-sha256 HEX]
+    python -m scripts.research_lp.cli g5-eval --tape CAPTURE --spec specs/g5_gate2_spec.json --expect-spec-sha256 HEX \\
+        --gate1-result G1.json --expect-gate1-result-sha256 HEX --p3-counts-file P3 [--gate1-spec G1_SPEC] \\
+        [--index-tape DIR --expect-index-tape-sha256 HEX] --out-json R.json --out-md R.md
 
 Authority: `docs/handbook/research/LP-G5-DRAFT-PREREGISTRATION.md` (§2.3 (B) i–xxii, §4–§8, §10, Annexes A–C). The text
 of the protocol prevails over the spec; the spec is the only file the evaluator reads; this module implements it.
@@ -21,7 +25,8 @@ estimates (13 023 / 22 606 / 22 606 / 50) are recomputed from the spec's own lis
 **Market data only under a frozen spec (B xviii).** `command_eval` opens no market value unless the spec is `FROZEN`,
 its `freeze_fill` complete, its sha256 equal to `--expect-spec-sha256`, the code digest equal to
 `freeze_fill.code_digest_sha256`, the instruments snapshot hash equal to `freeze_fill.instruments_snapshot_sha256` and
-the spec's universe equal to the snapshot (listTime, tickSz, ctVal, uly). A spec / code / status / freeze_fill defect
+the spec's universe equal to the snapshot (listTime, tickSz, ctVal, uly), the sealed funding receipt equal to
+`freeze_fill.funding_seal_receipt_sha256` and its archive equal to the receipt (refuse_run otherwise, CTO M4, m3). A spec / code / status / freeze_fill defect
 gives `G5_GATE1_INCONCLUSIVE` for every type without reading anything (exit 2). `run_study` evaluates in-memory series
 (synthetic tests): there the frozen status is recorded, not required.
 
@@ -29,9 +34,12 @@ Implemented (§2.3 (B)):
 - (i) the reference price is `candles_1m.close` (`c(t)` = close of the candle opening at t − 60 s); mark and index only
   feed the classifier; no forward fill; unconfirmed candles dropped and counted;
 - (ii) T01 instants = `fundingTime` of `funding_hist` kept when the gaps to the previous and to the next settlement are
-  8 h ± 1 min (unknown neighbour excluded and counted), realized rate required (never the predicted rate);
-- (iii) D_cov per instrument = its first settlement whose predecessor is served (sealed manifest + rows), global D_cov
-  from the sealed receipt; T01 events and controls inside D_cov; unknown D_cov ⇒ T01 INCONCLUSIVE;
+  8 h ± 1 min (unknown neighbour excluded and counted), realized rate required (never the predicted rate); the instants
+  removed by the next-neighbour criterion alone are counted (`removed_by_next_neighbour_only`: h+ is known after the decision,
+  CTO M1, a protocol decision at the freeze); at the Gate 2, h+ is the decision-time `nextFundingTime` (`NEXT_AT_DECISION_RULE`);
+- (iii) D_cov per instrument = its first settlement whose predecessor is served (sealed archive + rows), global D_cov
+  from the sealed receipt — required, equal to `freeze_fill.funding_seal_receipt_sha256` (CTO M4); T01 events and controls
+  inside D_cov; unknown D_cov ⇒ T01 INCONCLUSIVE;
 - (iv) one classifier P̂(t_arm) = Σ k·π / Σ k over the 480 minute boundaries ending at t_arm = h − 5 (π = (m − idx) / idx,
   weights 1…480, renormalised over the present ones, ≥ 90 % present), ±0.0009, the same function at events and controls;
 - (v) C6: the 3 × 3 matrix (class of P̂ × class of R_h at ±0.0004), sensitivity, false-positive rate, denominators;
@@ -56,10 +64,19 @@ Implemented (§2.3 (B)):
   reports go to `sealed/<type>.json` (sha256 printed), nothing else; economic reading at 365 / 252 days a year;
   day-block bootstrap (10 000 resamples, seed 20261102; 7-day blocks descriptive); the descriptive reports of §9 under
   the warning of `descriptive.rule`;
-- (xxi) Gate 2 (`source: capture`, capability `gate2_capture_simulation`): the entry and exit simulated on the captured
-  book (`measure_lp_sim`: post-only at the touch armed at h − 5 for T01, a fill in [h ; h+1) crossing the settlement;
-  taker at the opposite touch + slippage for T05), P̂ on the captured mark and the `index_1m` candles of the tape,
-  C6 on the settled rate of the `funding-rate` channel.
+- (xxi) Gate 2 (`source: capture`, `specs/g5_gate2_spec.json`, read strictly by `g5_gate2.parse_capture_spec`: owner decisions
+  pending ⇒ FROZEN refused, identity with the Gate 1 spec, calcul d'audit of its calendars and control hours): rows before the
+  quarantine floor dropped; c(t) = last print of the minute, minute bars from the prints, a key minute without print excludes
+  (`minute_bars`, `load_capture_series`); the entry and exit simulated on the captured book (`measure_lp_sim`: post-only at the
+  own touch decided at h − 5 for T01, resting until h + 1, a fill within the grace after a settlement crossing it; taker at the
+  opposite touch + slippage for T05; passive exit then taker remainder; stress = fees and slippage × 1.5 plus 0.5 × the design
+  value of each measured term; band rule counted; a book ending before the planned exit or a stale exit quote ⇒ `no_exit_quote`);
+  P̂ on the captured mark and the index of the P-G5-10 (ii) choice (option b: an index tape checked against its register sha256;
+  refused at FROZEN while no fetcher can read it, CTO M3); C6 and the funding cost on the settled rate of the `funding-rate`
+  channel attributed to the **previous** settlement (`attribute_settled_rates`, docs-v5, CTO B1); per-type windows [T0 ; end)
+  with the data-gap extension, unusable instrument-days
+  removed (share > 20 % ⇒ INCONCLUSIVE); the types inscribed by the Gate 1 result (FAIL: not evaluated, p = 1); no sealing;
+  the deferred strata of §9.8 as descriptive reports.
 
 Statistics: D = mean(event instants) − mean(control instants); bootstrap over blocks of UTC days (events and controls
 of a day resampled together; LB90 / UB90 = quantiles 0.10 / 0.90; one-sided p = P*(D* ≤ 0), `GATES` §2.2). Block sums
@@ -72,9 +89,11 @@ Guards: the spec window may not touch the quarantine [2026-10-14, 2026-11-02); e
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import math
 import re
+import tarfile
 import time
 from dataclasses import dataclass, field
 from datetime import date as _date
@@ -114,7 +133,7 @@ CAPABILITIES: dict[str, str] = {
     "candle_confirm_and_vol_zero_exclusion": "(B) viii: confirm = 0 dropped and counted; vol = 0 on a key candle excludes the instrument-instant",
     "unit_instant_equal_weight": "(B) ix: unit = instant, equal weight within an instant, n = unique event instants",
     "generator_funding_settlements_interval_filter": "(B) ii: T01 instants = fundingTime with 8 h ± 1 min to both neighbours, realized rate required",
-    "funding_coverage_window": "(B) iii: D_cov from the sealed manifest; T01 events and controls inside D_cov; unknown D_cov => INCONCLUSIVE",
+    "funding_coverage_window": "(B) iii: D_cov from the sealed receipt (required, freeze_fill.funding_seal_receipt_sha256); T01 events and controls inside D_cov; unknown D_cov => INCONCLUSIVE",
     "classifier_premium_wavg_at_arm": "(B) iv: one classifier P_hat(t_arm), weights 1..480, coverage >= 90 %, +-0.0009, events and controls",
     "classifier_validation_confusion_3x3": "(B) v: C6 matrix P_hat class x R_h class, sensitivity, false positives, denominators",
     "fill_proxy_through_candles": "(B) vi: through fill proxy on the candles opening from t_arm to h, events and controls",
@@ -132,28 +151,44 @@ CAPABILITIES: dict[str, str] = {
     "economic_reading_days_per_year": "(B) xx: plafond_USD_an with the type's days per year, S_eco, pursued / not pursued",
     "bootstrap_day_blocks": "(B) xx: day-block bootstrap, events and controls jointly, seed and resamples of the spec",
     "descriptive_reports_g5_v2": "(B) xx: the descriptive reports of section 9, warning at the head of the Markdown",
-    "gate2_capture_simulation": "(B) xxi: capture source, simulated entry and exit on the captured book, P_hat on capture mark and index, C6 on the channel rate",
+    # (B) xxi — the Gate 2 (`source: capture`, `specs/g5_gate2_spec.json`), implemented in `g5_gate2` and in the capture paths below.
+    "owner_decisions_resolved_required_for_freeze": "(B) xxi: owner_decision_pending anywhere (or a null) refuses FROZEN; at DRAFT it makes every type INCONCLUSIVE",
+    "capture_source_quarantine_floor_check": "(B) xxi: capture rows before xperp_capture.QUARANTINE_FLOOR dropped and counted; the tape's not_before checked",
+    "price_last_print_per_minute": "(B) xxi: c(t) = last print with ts in (t - 60 s ; t]; minute bars (low, high, prints) built from the prints",
+    "key_minute_without_print_exclusion": "(B) xxi: a key minute without any print excludes the instrument-instant (the capture analogue of vol = 0)",
+    "classifier_mark_and_index_from_capture_or_index_history": "(B) xxi: P_hat on the captured mark and the index of the owner's P-G5-10 (ii) choice",
+    "gate2_sim_maker_post_only_touch": "(B) xxi: T01 post-only at the own touch decided at h + arm_min, resting until h + rest_until_min (lp_sim fill rule)",
+    "gate2_sim_taker_entry_opposite_touch_slippage": "(B) xxi: T05 taker entry at the opposite touch after the latency, plus the slippage per taker leg",
+    "gate2_sim_passive_exit_taker_remainder": "(B) xxi: passive exit at the opposite touch from the exit offset until exit_until_min, remainder taker",
+    "gate2_funding_fill_grace_crossing": "(B) xxi: a fill within funding_fill_grace_min after a settlement crosses it and pays",
+    "gate2_classifier_validation_funding_channel": "(B) xxi: C6 on the settled rate of the funding-rate channel, attributed to the previous settlement (docs-v5)",
+    "gate2_stress_add_on_for_measured_terms": "(B) xxi: C3 stress = fees and slippage x m plus (m - 1) x the design value of each measured term",
+    "gate2_window_end_per_type": "(B) xxi: per-type window end (T05 per P-G5-10 (i)), footprint inside [T0 ; end), data-gap extension",
+    "gate2_inscription_from_gate1_result": "(B) xxi: the Gate 1 result decides which types are evaluated (FAIL: not evaluated, p = 1)",
+    "gate2_quality_unusable_instrument_day": "(B) xxi: books5 coverage < 90 % or a stale period > 10 min: instrument-day removed; share > 20 % => INCONCLUSIVE",
+    "calendars_cover_the_window": "(B) xxi, P-G5-5: the scoring window (every type end, the data-gap extension) inside calendars.covers; FROZEN needs complete lists",
 }
-HISTORY_REQUIRES = tuple(k for k in CAPABILITIES if k != "gate2_capture_simulation")
-CAPTURE_REQUIRES = tuple(CAPABILITIES)
+GATE1_ONLY = ("candle_confirm_and_vol_zero_exclusion", "funding_coverage_window", "fill_proxy_through_candles", "funding_unknown_outside_coverage_counted",
+              "sealed_statistics_for_inconclusive_and_not_informative")
+GATE2_ONLY = ("owner_decisions_resolved_required_for_freeze", "capture_source_quarantine_floor_check", "price_last_print_per_minute", "key_minute_without_print_exclusion",
+              "classifier_mark_and_index_from_capture_or_index_history", "gate2_sim_maker_post_only_touch", "gate2_sim_taker_entry_opposite_touch_slippage",
+              "gate2_sim_passive_exit_taker_remainder", "gate2_funding_fill_grace_crossing", "gate2_classifier_validation_funding_channel", "gate2_stress_add_on_for_measured_terms",
+              "gate2_window_end_per_type", "gate2_inscription_from_gate1_result", "gate2_quality_unusable_instrument_day", "calendars_cover_the_window")
+HISTORY_REQUIRES = tuple(k for k in CAPABILITIES if k not in GATE2_ONLY)
+CAPTURE_REQUIRES = tuple(k for k in CAPABILITIES if k not in GATE1_ONLY)
 
 # Texts that state an implemented rule: the spec must carry exactly these (a different text would be a different rule).
-PRICE_RULES = {
-    "history": {"source": "last", "series": "candles_1m.close", "boundary_convention": "c(t) = close of the candle opening at t - 60 s"},
-    "capture": {"source": "last", "series": "trades.last_print_of_minute", "boundary_convention": "c(t) = last print of the minute ending at t"},
-}
+PRICE_RULES = {"history": {"source": "last", "series": "candles_1m.close", "boundary_convention": "c(t) = close of the candle opening at t - 60 s"}}
 PRICE_FIXED = {"mixing_sources": "refused", "mark_and_index_use": "classifier_premium_proxy_only", "confirm_zero_rows": "drop_and_count",
                "missing_key_price": "exclude_instrument_instant_and_count", "forward_fill": "none", "above_max_missing_share": "exclude_instrument_from_type_and_count"}
 FROZEN_CANDLE = {"history": {"rule": "exclude_instrument_instant_if_vol_eq_0_on_any_key_candle", "key_candles": "events[].key_candles_end_min",
-                             "count_field": "excluded_vol_zero", "report": "share_by_instrument"},
-                 "capture": {"rule": "not_applicable_capture_has_no_candles", "key_candles": "events[].key_candles_end_min", "count_field": "excluded_vol_zero",
-                             "report": "share_by_instrument"}}
+                             "count_field": "excluded_vol_zero", "report": "share_by_instrument"}}
 UNIT_FIXED = {"kind": "instant", "instant": "minute-aligned UTC timestamp", "instrument_weight": "equal_within_instant", "instant_weight": "equal",
               "n_definition": "number of unique event instants with >= min_instruments_per_instant retained instruments"}
 UNIT_REPORTS = ("instruments_per_instant_distribution", "stratum_min_instruments_3")
 STAT_DIFFERENCE = "D = mean over event instants - mean over control instants"
 P_VALUE_RULE = "share of resamples with D* <= 0"
-FUNDING_RULES = {"history": {"source": "funding_hist.realized_rate"}, "capture": {"source": "funding.settled_rate"}}
+FUNDING_RULES = {"history": {"source": "funding_hist.realized_rate"}}
 FUNDING_FIXED = {"formula": "funding_bp = -side * sum(realized rates of the instrument's settlements T with entry < T <= exit) * 1e4",
                  "outside_coverage": "assumed_zero_not_observed_and_counted", "count_field": "funding_unknown", "cap_stress": "descriptive_only"}
 CONTROLS_FIXED = {"candidates": "every hour of the type's control days at controls.minute_of_hour", "selection": "all_admissible",
@@ -161,7 +196,7 @@ CONTROLS_FIXED = {"candidates": "every hour of the type's control days at contro
                   "funding_at_controls": "computed; expected 0; any non-zero count reported as anomaly"}
 SESSION_DAYS = ("nyse_trading_days", "mon_fri", "all", "fri")
 PREMIUM_PROXY = {"history": "pi(g) = (m(g) - idx(g)) / idx(g) at minute boundary g, m and idx = closes of mark_1m and index_1m candles ending at g",
-                 "capture": "pi(g) = (m(g) - idx(g)) / idx(g) at minute boundary g, m = last captured mark of the minute ending at g, idx = close of the index_1m candle ending at g"}
+                 "capture": "pi(g) = (m(g) - idx(g)) / idx(g) at minute boundary g ; m = classifier_index_source.mark_minute ; idx = classifier_index_source (P-G5-10 ii)"}
 FILL_PROXY_FIXED = {"limit_price": "c(t_arm)", "long_filled_if": "min(low) < c(t_arm) - tick_sz", "short_filled_if": "max(high) > c(t_arm) + tick_sz",
                     "unfilled": "exclude_from_primary_and_count", "report": "fill_rate_events_and_controls"}
 VALIDATION_FIXED = {"report": "3x3 matrix (classifier class x rate class), always printed", "sensitivity": "share of rate class != 0 with classifier class == rate class",
@@ -177,8 +212,9 @@ CRITERIA_TEXT = {
 C5_RE = re.compile(r"^LB90\(D\) > 0 after removing the ceil\((?P<share>0\.\d+) n\) event instants with the highest per-instant net ; controls unchanged ; same bootstrap seed and resamples$")
 INCONCLUSIVE_GLOBAL = ("spec_sha256_mismatch", "code_digest_mismatch", "status_not_frozen", "freeze_fill_null", "stream_end_reason_missing")
 FETCH_ERROR_RE = re.compile(r"^fetch_job_error_share_gt_(?P<a>\d)_(?P<b>\d+)$")
-INCONCLUSIVE_TYPE_FIXED = ("funding_coverage_unknown", "C6_failed_or_not_computable", "index_source_none")
-PROXY_MISSING_RE = re.compile(r"^proxy_missing_instrument_day_share_gt_(?P<a>\d)_(?P<b>\d+)$")
+INCONCLUSIVE_TYPE_FIXED = ("funding_coverage_unknown", "C6_failed_or_not_computable", "classifier_index_source_unresolved_or_unavailable")
+# The share of instrument-days without P̂ (LP-G5 §4.5): `proxy_…` in the Gate 1 spec, `classifier_…` in the Gate 2 spec (same rule).
+PROXY_MISSING_RE = re.compile(r"^(?P<kind>proxy|classifier)_missing_instrument_day_share_gt_(?P<a>\d)_(?P<b>\d+)$")
 SEALING_PRINTED = ("verdict", "reasons", "n_instants", "n_days", "exclusion_counts", "fill_rate", "validation_matrix")
 SEALING_SEALED = ("D", "lb90", "ub90", "p_one_sided", "event_mean", "control_mean", "criteria_values", "halves", "c5", "c7", "by_month", "by_instrument", "by_hour",
                   "economic", "type_descriptives")
@@ -207,7 +243,8 @@ DEAD_ZONE_RE = re.compile(r"^(?P<label>T\d+)_dead_zone_thresholds_(?P<hi_a>\d)_(
 HORIZONS_RE = re.compile(r"^(?P<label>T\d+)_horizons_(?P<h>\d+(?:_\d+)*)$")
 FETCH_END_TEXT = "g5_fetch.END_EXCLUSIVE (module constant, never a parameter)"
 ESTIMATE_RE = re.compile(r"^coverage_start = (?P<date>\d{4}-\d{2}-\d{2})\b")
-SETTLEMENT_EXCLUSION_RE = re.compile(r"^settlements of the instrument read in (?P<stream>funding_hist|funding) \(all intervals\), footprint \[s(?P<a>[+-]\d+) ; s(?P<b>[+-]\d+)\]$")
+SETTLEMENT_EXCLUSION_RE = re.compile(r"^settlements of the instrument read in (?P<stream>funding_hist|the capture funding layout) \(all intervals\), footprint \[s(?P<a>[+-]\d+) ; s(?P<b>[+-]\d+)\]$")
+SETTLEMENT_STREAM = {"history": "funding_hist", "capture": "the capture funding layout"}
 GRID_EXCLUSION_RE = re.compile(r"^default settlement grid of the type \(controls\.default_settlement_grid_utc_hours\), every day, footprint \[s(?P<a>[+-]\d+) ; s(?P<b>[+-]\d+)\]$")
 TYPE_EXCLUSION_RE = re.compile(r"^(?P<label>\S+) event instants \(generator of (?P<type>[A-Za-z0-9_]+)\), footprint \[h(?P<a>[+-]\d+)? ; h(?P<b>[+-]\d+)?\], for every instrument$")
 SESSIONS_EXCLUSION = "sessions (frozen list, local time, DST-aware)"
@@ -447,6 +484,8 @@ class Instrument:
     eligible_from_us: int
     ct_val: float
     tick_sz: float
+    lot_sz: float = 1.0  # Gate 2 (`universe.analysed_rule`): the simulated size; the Gate 1 universe carries no lot
+    min_sz: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -667,12 +706,18 @@ def _parse_requires(document: dict, source: str) -> tuple:
     return items
 
 
+FREEZE_FILL_KEYS = ("instruments_snapshot_path", "instruments_snapshot_sha256", "calendars_verified_utc", "code_digest_sha256", "decision_ref_p_g5_1")
+# CTO M4 (P-G5-3, §4.7, §13 point 5): the sha256 of the sealed funding receipt, written in the register and in the freeze line, is also a
+# freeze_fill value. Optional key while the spec is a draft written before it existed (absent = null); a FROZEN spec carries it.
+FREEZE_FILL_SEAL_KEY = "funding_seal_receipt_sha256"
+
+
 def _parse_freeze_fill(block, status: str) -> dict:
-    keys = ("instruments_snapshot_path", "instruments_snapshot_sha256", "calendars_verified_utc", "code_digest_sha256", "decision_ref_p_g5_1")
-    _check_keys(block, "freeze_fill", keys + ("rule",))
-    out = {"rule": _text(block, "rule", "freeze_fill")}
+    keys = FREEZE_FILL_KEYS + (FREEZE_FILL_SEAL_KEY,)
+    _check_keys(block, "freeze_fill", FREEZE_FILL_KEYS + ("rule",), (FREEZE_FILL_SEAL_KEY,))
+    out = {"rule": _text(block, "rule", "freeze_fill"), "absent": [k for k in keys if k not in block]}
     for key in keys:
-        value = block[key]
+        value = block.get(key)
         if value is None:
             out[key] = None
             continue
@@ -686,7 +731,8 @@ def _parse_freeze_fill(block, status: str) -> dict:
     nulls = [k for k in keys if out[k] is None]
     out["null"] = nulls
     if status == "FROZEN" and nulls:
-        raise SpecError(f"freeze_fill: a FROZEN spec has no null value ({nulls}); {out['rule']}")
+        raise SpecError(f"freeze_fill: a FROZEN spec has no null value ({nulls}); {out['rule']} (freeze_fill.{FREEZE_FILL_SEAL_KEY}: the sha256 of the sealed "
+                        "funding receipt, P-G5-3, §4.7, §13 point 5, CTO M4)")
     return out
 
 
@@ -758,9 +804,18 @@ def _parse_unit(block) -> dict:
     return {"min_instruments": _int(block, "min_instruments_per_instant", "unit", 1), "reports": reports}
 
 
-def _parse_statistics(block) -> dict:
-    _check_keys(block, "statistics", ("measure", "difference", "alpha_one_sided", "threshold_bp", "bootstrap", "descriptive_sensitivity"))
-    _choice(block, "measure", "statistics", ("net_bp",))
+STAT_MEASURE = {"history": "net_bp", "capture": "sim_net_bp"}
+STAT_DESCRIPTIVE_MEASURES = ("net_bp (Gate 1 construction on last prints with the Gate 1 design costs)", "r_bp")
+
+
+def _parse_statistics(block, source: str = "history") -> dict:
+    extra = ("measure_definition", "descriptive_measures") if source == "capture" else ()
+    _check_keys(block, "statistics", ("measure", "difference", "alpha_one_sided", "threshold_bp", "bootstrap", "descriptive_sensitivity") + extra)
+    _choice(block, "measure", "statistics", (STAT_MEASURE[source],))
+    if source == "capture":
+        _text(block, "measure_definition", "statistics")
+        if tuple(_str_list(block, "descriptive_measures", "statistics")) != STAT_DESCRIPTIVE_MEASURES:
+            raise SpecError(f"statistics.descriptive_measures: {list(STAT_DESCRIPTIVE_MEASURES)} are the implemented descriptive measures of the Gate 2")
     _exact(block, "difference", "statistics", STAT_DIFFERENCE)
     alpha = _num(block, "alpha_one_sided", "statistics", 0.0, 1.0, lo_open=True)
     boot = _check_keys(block["bootstrap"], "statistics.bootstrap", ("kind", "block_days", "resamples", "seed", "events_and_controls_jointly", "lb_quantile", "ub_quantile", "p_value"))
@@ -817,7 +872,8 @@ def cost_terms(role: str, costs: dict) -> dict:
 
 
 def _parse_controls_common(block, source: str) -> dict:
-    _check_keys(block, "controls_common", ("rule", "candidates", "selection", "random_draws", "admissible_if", "margin_min", "exclusions", "funding_at_controls"))
+    _check_keys(block, "controls_common", ("rule", "candidates", "selection", "random_draws", "admissible_if", "margin_min", "exclusions", "funding_at_controls"),
+                ("audit_expected_utc",) if source == "capture" else ())
     _text(block, "rule", "controls_common")
     for key, value in CONTROLS_FIXED.items():
         _exact(block, key, "controls_common", value)
@@ -827,7 +883,7 @@ def _parse_controls_common(block, source: str) -> dict:
     for i, text in enumerate(_str_list(block, "exclusions", "controls_common")):
         where = f"controls_common.exclusions[{i}]"
         if (m := SETTLEMENT_EXCLUSION_RE.match(text)) is not None:
-            stream = "funding_hist" if source == "history" else "funding"
+            stream = SETTLEMENT_STREAM[source]
             if m.group("stream") != stream:
                 raise SpecError(f"{where}: the settlements of a {source} spec are read in {stream}")
             name, value = "settlements", (int(m.group("a")), int(m.group("b")))
@@ -850,7 +906,9 @@ def _parse_controls_common(block, source: str) -> dict:
     return {"margin_us": _int(block, "margin_min", "controls_common", 0) * MINUTE_US, "margin_min": block["margin_min"], "components": components}
 
 
-def _parse_sessions(items) -> tuple:
+def _parse_sessions(items, status: str = "DRAFT_NOT_FROZEN") -> tuple:
+    """The frozen session list (local time). A FROZEN spec carries no `verify_at_freeze: true` (LP-G5 §4.6, P-G5-5: verified at the
+    freeze, attested by freeze_fill.calendars_verified_utc)."""
     if not isinstance(items, list) or not items:
         raise SpecError("sessions must be a non-empty list")
     out, names = [], set()
@@ -866,12 +924,14 @@ def _parse_sessions(items) -> tuple:
             raise SpecError(f"{where}: end before start (a session spans one local day)")
         out.append({"name": name, "tz": item["tz"], "tz_info": _tz(item["tz"], f"{where}.tz"), "start_min": start, "end_min": end,
                     "days": _choice(item, "days", where, SESSION_DAYS), "verify_at_freeze": _bool(item, "verify_at_freeze", where) if "verify_at_freeze" in item else False})
+        if status == "FROZEN" and out[-1]["verify_at_freeze"]:
+            raise SpecError(f"{where}: verify_at_freeze is true in a FROZEN spec (verify the session at the freeze, P-G5-5, then write false)")
     return tuple(out)
 
 
-def _parse_calendars(block) -> dict:
+def _parse_calendars(block, extra: tuple = ()) -> dict:
     lists = ("nyse_holidays", "cpi", "employment_situation", "fomc_statement")
-    _check_keys(block, "calendars", ("tz",) + lists + ("sources", "read_by"))
+    _check_keys(block, "calendars", ("tz",) + lists + ("sources", "read_by") + tuple(extra))
     if _text(block, "tz", "calendars") != NEW_YORK:
         raise SpecError(f"calendars.tz: the frozen dates are New York dates ({NEW_YORK}); {block['tz']!r} is not implemented")
     out = {name: frozenset(_dates(block[name], f"calendars.{name}")) for name in lists}
@@ -889,8 +949,8 @@ def _calendar_ref(text: str, where: str, calendars: dict) -> str:
     return name
 
 
-def _parse_macro(block, calendars: dict) -> tuple:
-    _check_keys(block, "macro_filter", ("type", "evaluate", "tz", "releases", "use", "ten_am_et_releases"))
+def _parse_macro(block, calendars: dict, source: str = "history") -> tuple:
+    _check_keys(block, "macro_filter", ("type", "evaluate", "tz", "releases", "use", "ten_am_et_releases"), ("utc_note",) if source == "capture" else ())
     _text(block, "type", "macro_filter")
     _bool(block, "evaluate", "macro_filter", only=False)
     tz = _tz(block["tz"], "macro_filter.tz")
@@ -913,7 +973,7 @@ def _parse_macro(block, calendars: dict) -> tuple:
 
 _TYPE_REQUIRED = ("type", "decisive", "primary", "execution_role", "expected_cost_bp", "expected_cost_bp_stress", "days_per_year", "window_rule", "generator",
                   "footprint_min", "arm_min", "entry", "exit", "return_window_min", "key_candles_end_min", "controls", "criteria")
-_TYPE_OPTIONAL = ("funding_coverage", "rest_until_min", "classifier", "fill_proxy", "sign", "validation", "c7", "inconclusive_if", "audit_expected", "gate2")
+_TYPE_OPTIONAL = ("funding_coverage", "rest_until_min", "classifier", "fill_proxy", "sign", "validation", "c7", "inconclusive_if", "audit_expected")
 AUDIT_KEYS = {"local_time": ("nyse_days_with_eligible_instrument", "raw_instants", "raw_instants_with_ge_3_instruments", "first_instant_utc", "halves_by_lower_median_day"),
               "funding_settlements": ("not_informative_expected_if_f_inst_below",)}
 RAW_UPPER_RE = re.compile(r"^raw_instants_upper_bound_if_funding_fetched_(?P<y>\d{4})_(?P<m>\d{2})_(?P<d>\d{2})$")
@@ -939,9 +999,14 @@ def _parse_generator(block, where: str, source: str, calendars: dict) -> dict:
             "days": _choice(block, "days", where, ("nyse_trading_days", "mon_fri", "all")), "exclude_refs": tuple(refs), "exclude_days": exclude}
 
 
+PREMIUM_FIELD_NAME = "premium_mark_index"
+
+
 def _parse_classifier(block, where: str, source: str, arm_min: int) -> dict:
     keys = ("kind", "evaluated_at", "applies_to", "premium_proxy", "lookback_min", "weights", "min_coverage_share", "long_if_ge", "short_if_le", "else", "threshold_origin")
-    _check_keys(block, where, keys)
+    _check_keys(block, where, keys + (("field_name",) if source == "capture" else ()))
+    if source == "capture":
+        _exact(block, "field_name", where, PREMIUM_FIELD_NAME)  # one quantity at both gates, never the channel's premium (CTO M2)
     _choice(block, "kind", where, ("premium_wavg",))
     # (B) xvii: the classifier is read at the decision, never later.
     if block["evaluated_at"] != "t_arm":
@@ -976,14 +1041,6 @@ def _parse_sign(block, where: str, arm_min: int, footprint: tuple) -> dict:
 
 
 def _parse_fill_proxy(block, where: str, source: str, arm_min: int, rest_until_min: int) -> dict:
-    if source == "capture":
-        _check_keys(block, where, ("kind", "applies_to", "unfilled", "report"))
-        _choice(block, "kind", where, ("lp_sim",))
-        if list(_str_list(block, "applies_to", where)) != ["events", "controls"]:
-            raise SpecError(f"{where}.applies_to: events and controls alike")
-        _exact(block, "unfilled", where, FILL_PROXY_FIXED["unfilled"])
-        _exact(block, "report", where, FILL_PROXY_FIXED["report"])
-        return {"kind": "lp_sim"}
     _check_keys(block, where, ("kind", "applies_to", "candles_open_from_min", "candles_open_to_min") + tuple(FILL_PROXY_FIXED))
     _choice(block, "kind", where, ("through_candles",))
     if list(_str_list(block, "applies_to", where)) != ["events", "controls"]:
@@ -1018,6 +1075,9 @@ def _parse_validation(block, where: str, label: str, classifier: dict, gate: str
 
 
 def _parse_type(item, position: int, source: str, gate: str, calendars: dict) -> TypeSpec:
+    """One event type of a history (Gate 1) spec; the capture types are read by `g5_gate2`."""
+    if source != "history":
+        raise SpecError("_parse_type reads the history types only (g5_gate2 reads the capture types)")
     where = f"events[{position}]"
     _check_keys(item, where, _TYPE_REQUIRED, _TYPE_OPTIONAL)
     name = _text(item, "type", where)
@@ -1113,7 +1173,7 @@ def _parse_type(item, position: int, source: str, gate: str, calendars: dict) ->
     if "inconclusive_if" in item:
         items = _str_list(item, "inconclusive_if", where)
         for cond in items:
-            if (pm := PROXY_MISSING_RE.match(cond)) is not None:
+            if (pm := PROXY_MISSING_RE.match(cond)) is not None and pm.group("kind") == "proxy":
                 if classifier is None:
                     raise SpecError(f"{where}.inconclusive_if: {cond} needs a classifier")
                 proxy_share = _share_of(pm)
@@ -1128,8 +1188,8 @@ def _parse_type(item, position: int, source: str, gate: str, calendars: dict) ->
         raise SpecError(f"{where}.inconclusive_if: funding_coverage_unknown without window_rule funding_coverage")
     if "C6_failed_or_not_computable" in inconclusive and validation is None:
         raise SpecError(f"{where}.inconclusive_if: C6_failed_or_not_computable without C6")
-    if "index_source_none" in inconclusive and (source != "capture" or classifier is None):
-        raise SpecError(f"{where}.inconclusive_if: index_source_none is a capture classifier condition")
+    if "classifier_index_source_unresolved_or_unavailable" in inconclusive:
+        raise SpecError(f"{where}.inconclusive_if: classifier_index_source_unresolved_or_unavailable is a capture (Gate 2) condition")
     audit = {}
     if "audit_expected" in item:
         block = item["audit_expected"]
@@ -1140,13 +1200,6 @@ def _parse_type(item, position: int, source: str, gate: str, calendars: dict) ->
                 raise SpecError(f"{where}.audit_expected: unknown key {key!r}")
             audit[key] = value
     gate2 = None
-    if source == "capture":
-        g = _check_keys(item.get("gate2"), f"{where}.gate2", ("exit_until_min",))
-        gate2 = {"exit_until_min": _int(g, "exit_until_min", f"{where}.gate2")}
-        if gate2["exit_until_min"] <= rw[1]:
-            raise SpecError(f"{where}.gate2.exit_until_min must be after the passive exit start h{rw[1]:+d}")
-    elif "gate2" in item:
-        raise SpecError(f"{where}.gate2: a capture (Gate 2) key in a history spec")
     return TypeSpec(name, label, position, role, _num(item, "expected_cost_bp", where, 0.0), _num(item, "expected_cost_bp_stress", where, 0.0),
                     _num(item, "days_per_year", where, 0.0, 366.0, lo_open=True), window_rule, generator, footprint, arm, rest, classifier, fill, sign,
                     {"kind": entry["kind"], "price": entry["price"]}, {"kind": exit_["kind"], "price": exit_["price"]}, rw, keys, validation, controls, c7, criteria,
@@ -1318,15 +1371,6 @@ def _parse_fetch_plan(block, universe: tuple, eligibility_days: float) -> dict:
             "estimate_fetched_on": fetched.group(1) if fetched else None, "rate_scale_proposed": proposed, "post_freeze": {s: {"page": pages[s], "start": starts[s]} for s in starts}}
 
 
-def _parse_gate2(block) -> dict:
-    _check_keys(block, "gate2", ("sim", "index_source", "validation_rate_source"))
-    sim = _check_keys(block["sim"], "gate2.sim", ("rule", "latency_ms", "stale_s", "funding_fill_grace_min"))
-    _choice(block, "validation_rate_source", "gate2", ("funding_channel_settled_rate",))
-    return {"sim": {"rule": _choice(sim, "rule", "gate2.sim", lp_sim.RULES), "latency_ms": _num(sim, "latency_ms", "gate2.sim", 0.0),
-                    "stale_s": _num(sim, "stale_s", "gate2.sim", 0.0, lo_open=True), "funding_fill_grace_min": _num(sim, "funding_fill_grace_min", "gate2.sim", 0.0, 60.0)},
-            "index_source": _choice(block, "index_source", "gate2", ("history_index_candles", "none"))}
-
-
 # ----------------------------------------------------------------------------- parse-time audits (calcul d'audit: the spec's own lists, no data)
 
 
@@ -1410,7 +1454,7 @@ def _check_audits(types: tuple, spec_like, fetch_plan: dict | None, economic: di
 _TOP_REQUIRED = ("spec_id", "spec_schema", "spec_version", "status", "protocol", "note", "source", "dataset_id", "end_exclusive_utc", "quarantine_floor_utc", "window",
                  "requires", "freeze_fill", "universe", "eligibility", "price", "frozen_candle", "unit", "statistics", "power_floor", "costs", "controls_common", "sessions",
                  "sessions_note", "calendars", "macro_filter", "events", "verdict", "multiplicity", "sealing", "gate2_inscription", "economic", "descriptive")
-_TOP_OPTIONAL = ("fetch_plan", "gate2")
+_TOP_OPTIONAL = ("fetch_plan",)
 
 
 @dataclass(frozen=True)
@@ -1432,23 +1476,32 @@ class _Partial:
         return tape.day_of_date(self.end_exclusive.isoformat()) * DAY_US
 
 
-def parse_spec(document) -> Spec:
+def parse_spec(document, gate1=None) -> Spec:
     """The strict reader of `g5-spec/2` (B xviii). Raises `SpecError` on any unknown key, unknown value, missing key, unimplemented
-    capability or internal inconsistency; returns the parsed `Spec` otherwise."""
+    capability or internal inconsistency; returns the parsed `Spec` otherwise. A `source: capture` spec (the Gate 2,
+    `specs/g5_gate2_spec.json`) is read by `g5_gate2.parse_capture_spec`; `gate1` (a Gate 1 spec file path, document or `Spec`) replaces
+    the file named by its `frozen_with.spec` for the identity check (`--gate1-spec`, synthetic tests); a FROZEN Gate 2 needs a FROZEN
+    Gate 1 (CTO M2)."""
     if not isinstance(document, dict):
         raise SpecError("spec must be an object")
     if document.get("spec_schema") != SPEC_SCHEMA:
         raise SpecError(f"spec_schema {document.get('spec_schema')!r} is not implemented ({EVALUATOR_VERSION} reads {SPEC_SCHEMA} only)")
+    if document.get("source") == "capture":
+        from . import g5_gate2  # lazy: g5_gate2 imports this module
+
+        return g5_gate2.parse_capture_spec(document, gate1)
+    if gate1 is not None:
+        raise SpecError("gate1: only a capture (Gate 2) spec is checked against a Gate 1 spec")
     _check_keys(document, "spec", _TOP_REQUIRED, _TOP_OPTIONAL)
     spec_id = _text(document, "spec_id", "spec")
     version = _text(document, "spec_version", "spec")
     status = _choice(document, "status", "spec", STATUSES)
     if status == "FROZEN" and "draft" in version.lower():
         raise SpecError(f"spec_version {version!r}: a FROZEN spec carries a final version")
-    source = _choice(document, "source", "spec", ("history", "capture"))
-    gate = "G5_GATE1_" if source == "history" else "G5_GATE2_"
-    if ("GATE1" if source == "history" else "GATE2") not in spec_id:
-        raise SpecError(f"spec_id {spec_id!r} does not name the {'Gate 1' if source == 'history' else 'Gate 2'} of a {source} spec")
+    source = _choice(document, "source", "spec", ("history", "capture"))  # capture: dispatched above
+    gate = "G5_GATE1_"
+    if "GATE1" not in spec_id:
+        raise SpecError(f"spec_id {spec_id!r} does not name the Gate 1 of a {source} spec")
     _text(document, "protocol", "spec")
     _text(document, "note", "spec")
     dataset_id = _text(document, "dataset_id", "spec")
@@ -1463,8 +1516,6 @@ def parse_spec(document) -> Spec:
         raise SpecError(f"window {start}..{end_exclusive} touches the quarantine [{g5_fetch.END_EXCLUSIVE}, {xc.QUARANTINE_FLOOR})")
     if source == "history" and end_us > g5_fetch.END_EXCLUSIVE_US:
         raise SpecError(f"a history window ends at or before END_EXCLUSIVE {g5_fetch.END_EXCLUSIVE}")
-    if source == "capture" and start_us < QUARANTINE_END_US:
-        raise SpecError(f"a capture window starts at or after the quarantine floor {xc.QUARANTINE_FLOOR}")
     requires = _parse_requires(document, source)
     freeze_fill = _parse_freeze_fill(document["freeze_fill"], status)
     el = _check_keys(document["eligibility"], "eligibility", ("days_after_list_time", "reference", "applies_to", "count_field"))
@@ -1481,7 +1532,7 @@ def parse_spec(document) -> Spec:
     power = _parse_power(document["power_floor"], gate)
     costs = _parse_costs(document["costs"], source)
     controls_common = _parse_controls_common(document["controls_common"], source)
-    sessions = _parse_sessions(document["sessions"])
+    sessions = _parse_sessions(document["sessions"], status)
     _text(document, "sessions_note", "spec")
     calendars = _parse_calendars(document["calendars"])
     macro = _parse_macro(document["macro_filter"], calendars)
@@ -1507,19 +1558,10 @@ def parse_spec(document) -> Spec:
     gate2_inscription = _parse_gate2_inscription(document["gate2_inscription"], gate)
     economic = _parse_economic(document["economic"])
     descriptive = _parse_descriptive(document["descriptive"], {t.label for t in types})
-    fetch_plan = None
-    if source == "history":
-        if "fetch_plan" not in document:
-            raise SpecError("spec: missing key(s) ['fetch_plan'] (a history spec carries its fetch plan)")
-        fetch_plan = _parse_fetch_plan(document["fetch_plan"], universe, eligibility_days)
-        if "gate2" in document:
-            raise SpecError("spec.gate2: a capture (Gate 2) block in a history spec")
-    else:
-        if "fetch_plan" in document:
-            raise SpecError("spec.fetch_plan: the capture is not fetched by g5_fetch")
-        if "gate2" not in document:
-            raise SpecError("spec: missing key(s) ['gate2'] (a capture spec states its simulation)")
-    gate2 = _parse_gate2(document["gate2"]) if source == "capture" else None
+    if "fetch_plan" not in document:
+        raise SpecError("spec: missing key(s) ['fetch_plan'] (a history spec carries its fetch plan)")
+    fetch_plan = _parse_fetch_plan(document["fetch_plan"], universe, eligibility_days)
+    gate2 = None
     partial = _Partial(start, end_exclusive, universe, calendars, sessions, macro)
     audit = _check_audits(types, partial, fetch_plan, economic, power)
     notes = {"note": document["note"], "universe.rule": document["universe"]["rule"], "universe.selection_bias_declared": document["universe"]["selection_bias_declared"],
@@ -1527,7 +1569,7 @@ def parse_spec(document) -> Spec:
              "calendars.read_by": calendars["read_by"], "macro_filter.type": document["macro_filter"]["type"], "macro_filter.use": document["macro_filter"]["use"],
              "macro_filter.ten_am_et_releases": document["macro_filter"]["ten_am_et_releases"], "costs.g2_table_substitution": costs["g2_table_substitution"],
              "verdict.closure_scope": verdict["closure_scope"], "multiplicity.programme.otherwise": multiplicity["otherwise"], "sealing.open_after": sealing["open_after"],
-             "freeze_fill.rule": freeze_fill["rule"], "gate2_inscription.discretion": document["gate2_inscription"]["discretion"],
+             "freeze_fill.rule": freeze_fill["rule"], "freeze_fill.absent_keys": freeze_fill["absent"], "gate2_inscription.discretion": document["gate2_inscription"]["discretion"],
              "sessions_to_verify_at_freeze": [s["name"] for s in sessions if s["verify_at_freeze"]],
              "classifier.threshold_origin": {t.name: t.classifier["threshold_origin"] for t in types if t.classifier is not None}}
     if fetch_plan is not None:
@@ -1538,14 +1580,15 @@ def parse_spec(document) -> Spec:
                 multiplicity, sealing, gate2_inscription, economic, descriptive, fetch_plan, gate2, audit, notes)
 
 
-def load_spec(path: Path) -> tuple[Spec, str]:
-    """The spec file and its sha256 (of the exact bytes read)."""
+def load_spec(path: Path, gate1=None) -> tuple[Spec, str]:
+    """The spec file and its sha256 (of the exact bytes read). `gate1` (Gate 2 only): the Gate 1 spec frozen with it — a path, a
+    document or a `Spec` — instead of the file named by its `frozen_with.spec` (`--gate1-spec`, synthetic tests)."""
     data = Path(path).read_bytes()
     try:
         document = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as error:
         raise SpecError(f"{path}: not JSON ({error})") from None
-    return parse_spec(document), g5_fetch.sha256_bytes(data)
+    return parse_spec(document, gate1), g5_fetch.sha256_bytes(data)
 
 
 def guard_window(spec: Spec) -> dict:
@@ -1706,9 +1749,10 @@ def d_cov_of(settlements_us: np.ndarray, state: dict | None) -> tuple[int | None
     return int(ts[1]), f"second settlement served ({state.get('end_reason')})"
 
 
-def load_history_series(tape_dir: Path, meta: Instrument, spec: Spec, manifest: dict | None, sealed_manifest: dict | None) -> Series:
-    """One instrument of a `g5_fetch` tape: last-price candles, mark and index candles from the tape, the funding history from its
-    sealed store (`sealed-funding/`). Rows at or after END_EXCLUSIVE dropped and counted; `confirm = 0` dropped and counted."""
+def load_history_series(tape_dir: Path, meta: Instrument, spec: Spec, manifest: dict | None, sealed: "g5_fetch.SealedArchive | None") -> Series:
+    """One instrument of a `g5_fetch` tape: last-price candles, mark and index candles from the tape, the funding history from the
+    sealed archive read in memory (`g5_fetch.SealedArchive`, CTO m3; None: no funding history). Rows at or after END_EXCLUSIVE dropped
+    and counted; `confirm = 0` dropped and counted."""
     grid = spec_grid(spec)
     dates = _dates_between(spec.pad_start_us, spec.end_us)
     cov: dict = {"rows_at_or_after_end_dropped": 0, "rows_outside_grid": 0, "unconfirmed_dropped": {}, "confirm_unknown": {}, "index_id": meta.index_id, "minutes": int(grid.size)}
@@ -1732,9 +1776,9 @@ def load_history_series(tape_dir: Path, meta: Instrument, spec: Spec, manifest: 
     last, mark_rows, index_rows = candles("candles_1m", meta.inst_id), candles("mark_1m", meta.inst_id), candles("index_1m", meta.index_id)
     close, low, high, vol = place(last, "close"), place(last, "low"), place(last, "high"), place(last, "vol")
     mark, index_px = place(mark_rows, "close"), place(index_rows, "close")
-    sealed_dir = Path(tape_dir) / g5_fetch.SEALED_DIR_NAME
     funding_dates = _dates_between(spec.pad_start_us - DAY_US, g5_fetch.END_EXCLUSIVE_US)
-    frows, _ = tape.load_days(sealed_dir, "funding_hist", meta.inst_id, funding_dates, allow_pending=False) if sealed_dir.exists() else (tape.empty_rows("funding_hist"), [])
+    frows = sealed.load_days("funding_hist", meta.inst_id, funding_dates) if sealed is not None else tape.empty_rows("funding_hist")
+    sealed_manifest = sealed.manifest if sealed is not None else None
     keep = frows["ts_us"] < g5_fetch.END_EXCLUSIVE_US
     cov["rows_at_or_after_end_dropped"] += int((~keep).sum())
     frows = frows[keep]
@@ -1754,13 +1798,123 @@ def load_history_series(tape_dir: Path, meta: Instrument, spec: Spec, manifest: 
     return make_series(meta, grid, close, low, high, vol, mark, index_px, ts, realized, d_cov, "history", cov)
 
 
-def load_capture_series(tape_dir: Path, meta: Instrument, spec: Spec, row: dict | None = None) -> Series:
-    """One instrument of the capture tape (Gate 2): the last print and the last mark of each minute, the index candles of
-    `index_1m/<index_id>` when `gate2.index_source` is `history_index_candles`, the settlements and settled rates of the funding
-    channel, the book and the prints for the simulation."""
+def minute_bars(grid: np.ndarray, ts_us: np.ndarray, price: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """(B) xxi — `(close, low, high, prints)` on the grid from the prints: at boundary g, the last, lowest and highest price and the
+    number of prints with ts in (g − 60 s ; g] (`price.series`, `frozen_candle.key_candles`); NaN / 0 for a minute without print."""
+    n = grid.size
+    close, low, high, count = np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan), np.zeros(n)
+    ts = np.asarray(ts_us, dtype=np.int64)
+    px = np.asarray(price, dtype=np.float64)
+    ok = np.isfinite(px)
+    ts, px = ts[ok], px[ok]
+    if ts.size == 0:
+        return close, low, high, count
+    order = np.argsort(ts, kind="stable")
+    ts, px = ts[order], px[order]
+    k = ((ts - 1 - int(grid[0])) // MINUTE_US + 1).astype(np.int64)  # boundary g_k with ts in (g_k − 60 s ; g_k]
+    inside = (k >= 0) & (k < n)
+    k, px = k[inside], px[inside]
+    if k.size == 0:
+        return close, low, high, count
+    uniq, first, cnt = np.unique(k, return_index=True, return_counts=True)
+    close[uniq] = px[first + cnt - 1]
+    low[uniq] = np.minimum.reduceat(px, first)
+    high[uniq] = np.maximum.reduceat(px, first)
+    count[uniq] = cnt
+    return close, low, high, count
+
+
+FUNDING_ATTRIBUTION_RULE = (
+    "a funding-rate message with settState settled carries in settFundingRate the rate of the previous settlement cycle, its fundingTime being the "
+    "upcoming settlement (docs-v5 funding-rate: 'If settState = settled, it is the funding rate that is being used for previous settlement cycle'): the "
+    "rate is attributed to the largest fundingTime carried by a message at or before it that is below its own fundingTime and at or before its ts "
+    "(none known: unattributed, counted; two different settled values for one settlement: unknown, counted); settState processing: rate ignored, counted; "
+    "settlements = the fundingTime values carried by the messages (nextFundingTime is a forecast, read only as the decision-time next settlement of T01)")
+NEXT_AT_DECISION_RULE = ("Gate 2 next neighbour h+ of T01 = nextFundingTime of the last funding-rate message at or before t_arm whose fundingTime is h "
+                         "(decision-time information, (B) xvii, CTO M1); no such message: unknown neighbour, excluded and counted")
+
+
+def attribute_settled_rates(rows: np.ndarray) -> dict:
+    """(B) xxi, CTO B1 — the settlements of one instrument's `funding` rows (capture of the `funding-rate` channel) and their settled
+    rates under `FUNDING_ATTRIBUTION_RULE`: a settled `settFundingRate` belongs to the settlement **before** the message's `fundingTime`
+    (the previous cycle), never to `fundingTime` itself. Returns `settlements_us` (the distinct `fundingTime` values, sorted), `rates`
+    (aligned, NaN when unknown), the counts, and the messages sorted by ts (`ts_us`, `funding_time_us`, `next_funding_time_us`) for the
+    decision-time next settlement (M1)."""
+    rows = np.asarray(rows)
+    n = int(rows.size)
+    order = np.argsort(rows["ts_us"], kind="stable") if n else np.zeros(0, dtype=np.int64)
+    ts = rows["ts_us"].astype(np.int64)[order]
+    ft = rows["funding_time_us"].astype(np.int64)[order]
+    nft = rows["next_funding_time_us"].astype(np.int64)[order]
+    state = rows["sett_state"].astype(np.int64)[order]
+    sett = rows["sett_funding_rate"].astype(np.float64)[order]
+    counts = {"messages": n, "settled": 0, "settled_attributed": 0, "settled_without_rate": 0, "settled_unattributed": 0, "settlements_conflicting": 0,
+              "processing_ignored": 0, "state_unknown": 0}
+    seen: list[int] = []  # the fundingTime values carried so far, sorted
+    known: set[int] = set()
+    rates: dict[int, float] = {}
+    conflicting: set[int] = set()
+    i = 0
+    while i < n:
+        j = i
+        while j < n and ts[j] == ts[i]:
+            j += 1
+        for k in range(i, j):  # a message at the same ts counts as "at or before"
+            f = int(ft[k])
+            if f > 0 and f not in known:
+                known.add(f)
+                bisect.insort(seen, f)
+        for k in range(i, j):
+            st = int(state[k])
+            if st == 0:
+                counts["processing_ignored"] += 1
+                continue
+            if st != 1:
+                counts["state_unknown"] += 1
+                continue
+            counts["settled"] += 1
+            value = float(sett[k])
+            if not math.isfinite(value) or int(ft[k]) <= 0:
+                counts["settled_without_rate"] += 1
+                continue
+            pos = bisect.bisect_right(seen, min(int(ft[k]) - 1, int(ts[k]))) - 1
+            if pos < 0:
+                counts["settled_unattributed"] += 1
+                continue
+            previous = seen[pos]
+            counts["settled_attributed"] += 1
+            if previous in conflicting:
+                continue
+            if previous in rates and rates[previous] != value:
+                conflicting.add(previous)
+                del rates[previous]
+                counts["settlements_conflicting"] += 1
+                continue
+            rates[previous] = value
+        i = j
+    settlements = np.array(seen, dtype=np.int64)
+    rate = np.array([rates.get(int(t), math.nan) for t in seen], dtype=np.float64)
+    return {"settlements_us": settlements, "rates": rate, "counts": counts, "messages": (ts, ft, nft), "rule": FUNDING_ATTRIBUTION_RULE}
+
+
+def load_capture_series(tape_dir: Path, meta: Instrument, spec: Spec, row: dict | None = None, index_dir: Path | None = None) -> Series:
+    """One instrument of the capture tape (Gate 2, B xxi): rows before the quarantine floor dropped and counted (and no day file dated
+    before the floor opened, CTO m2); minute bars of the last price from the prints; the last captured mark of each minute; the index
+    candles `index_1m/<index_id>` (of `index_dir`, default the tape) under P-G5-10 (ii) option b; the settlements and the settled rates
+    of the funding channel attributed to the previous settlement (`attribute_settled_rates`, docs-v5, CTO B1) and its messages (the
+    decision-time next settlement of T01, CTO M1); its `premium` field (descriptive only); the book, the prints and the unusable
+    instrument-days (`quality`)."""
+    from . import g5_gate2  # lazy: g5_gate2 imports this module
+
     grid = spec_grid(spec)
-    dates = _dates_between(spec.pad_start_us, spec.end_us)
-    cov: dict = {"minutes": int(grid.size), "index_id": meta.index_id}
+    dates = _dates_between(max(spec.pad_start_us, QUARANTINE_END_US), spec.end_us)  # never a day file dated before the quarantine floor (CTO m2)
+    cov: dict = {"minutes": int(grid.size), "index_id": meta.index_id, "rows_before_quarantine_floor_dropped": {}}
+
+    def load(base: Path, layout: str, key: str) -> np.ndarray:
+        rows, _ = tape.load_days(base, layout, key, dates, allow_pending=False)
+        keep = rows["ts_us"] >= QUARANTINE_END_US  # capture_source_quarantine_floor_check
+        cov["rows_before_quarantine_floor_dropped"][layout] = int((~keep).sum())
+        return rows[keep]
 
     def last_per_minute(ts_us: np.ndarray, values: np.ndarray) -> np.ndarray:
         out = np.full(grid.size, np.nan)
@@ -1775,45 +1929,74 @@ def load_capture_series(tape_dir: Path, meta: Instrument, spec: Spec, row: dict 
         out[ok] = values[idx[ok]]
         return out
 
-    trades, _ = tape.load_days(tape_dir, "trades", meta.inst_id, dates, allow_pending=False)
-    marks, _ = tape.load_days(tape_dir, "mark", meta.inst_id, dates, allow_pending=False)
-    close = last_per_minute(trades["ts_us"].astype(np.int64), trades["price"].astype(np.float64))
+    trades = load(Path(tape_dir), "trades", meta.inst_id)
+    marks = load(Path(tape_dir), "mark", meta.inst_id)
+    close, low, high, prints_count = minute_bars(grid, trades["ts_us"].astype(np.int64), trades["price"].astype(np.float64))
     mark = last_per_minute(marks["ts_us"].astype(np.int64), marks["mark_px"].astype(np.float64))
     index_px = np.full(grid.size, np.nan)
-    if spec.gate2 and spec.gate2["index_source"] == "history_index_candles":
-        rows, _ = tape.load_days(tape_dir, "index_1m", meta.index_id, dates, allow_pending=False)
+    choice = spec.gate2["index_choice"]
+    if choice == "b_history_index_candles_after_window":
+        rows = load(Path(index_dir or tape_dir), "index_1m", meta.index_id)
+        rows = rows[rows["confirm"] != 0]
         if rows.size:
             _place(grid, rows["ts_us"].astype(np.int64), rows["close"].astype(np.float64), index_px)
-    funding, _ = tape.load_days(tape_dir, "funding", meta.inst_id, dates, allow_pending=False)
-    moments, rates = set(), {}
+    funding = load(Path(tape_dir), "funding", meta.inst_id)
+    attribution = attribute_settled_rates(funding)
+    ts, rate = attribution["settlements_us"], attribution["rates"]
+    states, premium_ts, premium_v = {}, [], []
     for item in funding:
-        for column in ("funding_time_us", "next_funding_time_us"):
-            if int(item[column]) > 0:
-                moments.add(int(item[column]))
-        if int(item["sett_state"]) == 1 and math.isfinite(float(item["sett_funding_rate"])) and int(item["funding_time_us"]) > 0:
-            rates[int(item["funding_time_us"])] = float(item["sett_funding_rate"])
-    ts = np.array(sorted(moments), dtype=np.int64)
-    rate = np.array([rates.get(int(t), math.nan) for t in ts.tolist()], dtype=np.float64)
-    books, _ = tape.load_days(tape_dir, "books5", meta.inst_id, dates, allow_pending=False)
+        ft = int(item["funding_time_us"])
+        states.setdefault(ft, set()).add(int(item["sett_state"]))
+        if math.isfinite(float(item["premium"])):
+            premium_ts.append(int(item["ts_us"]))
+            premium_v.append(float(item["premium"]))
+    books = load(Path(tape_dir), "books5", meta.inst_id)
+    quality = spec.gate2["quality"]
+    first_day, last_day = int(spec.start_us // DAY_US), int(spec.end_us // DAY_US)
+    bad = g5_gate2.unusable_days(books["ts_us"].astype(np.int64), first_day, last_day, quality["coverage_min"], quality["stale_us"])
     row = dict(row or {})
-    inst_spec = lp_sim.InstrumentSpec(meta.inst_id, meta.tick_sz, meta.ct_val, float(row.get("lotSz") or 1.0), float(row.get("minSz") or row.get("lotSz") or 1.0))
-    cov.update({"close_minutes": int(np.isfinite(close).sum()), "mark_minutes": int(np.isfinite(mark).sum()), "index_minutes": int(np.isfinite(index_px).sum()),
-                "settlements": int(ts.size), "settled": int(np.isfinite(rate).sum()), "book_rows": int(books.size), "trade_rows": int(trades.size),
-                "index_source": spec.gate2["index_source"] if spec.gate2 else None})
-    series = make_series(meta, grid, close, close, close, np.full(grid.size, np.nan), mark, index_px, ts, rate, spec.pad_start_us, "capture", cov)
+    band = xc._f(row.get("maxPxLmtPct"))
+    cov.update({"close_minutes": int(np.isfinite(close).sum()), "minutes_without_print": int((prints_count == 0).sum()), "mark_minutes": int(np.isfinite(mark).sum()),
+                "index_minutes": int(np.isfinite(index_px).sum()), "index_choice": choice, "settlements": int(ts.size), "settled": int(np.isfinite(rate).sum()),
+                "funding_attribution": {"rule": attribution["rule"], **attribution["counts"]}, "next_at_decision_rule": NEXT_AT_DECISION_RULE,
+                "book_rows": int(books.size), "trade_rows": int(trades.size), "unusable_days": sorted(bad), "band_pct": band if math.isfinite(band) else None,
+                "sett_states": {str(k): sorted(v) for k, v in states.items() if k > 0}, "dates_read": [dates[0], dates[-1]] if dates else []})
+    series = make_series(meta, grid, close, low, high, prints_count, mark, index_px, ts, rate, spec.pad_start_us, "capture", cov)
     series.book = lp_sim.Book.from_rows(books) if books.size else None
     series.prints = lp_sim.Prints.from_rows(trades) if trades.size else None
-    series.inst_spec = inst_spec
+    series.inst_spec = lp_sim.InstrumentSpec(meta.inst_id, meta.tick_sz, meta.ct_val, meta.lot_sz, meta.min_sz)
+    order = np.argsort(np.array(premium_ts, dtype=np.int64), kind="stable")
+    series.cache["premium_okx"] = (np.array(premium_ts, dtype=np.int64)[order], np.array(premium_v, dtype=np.float64)[order])
+    series.cache["funding_messages"] = attribution["messages"]
     return series
 
 
 # ----------------------------------------------------------------------------- instants: generators and restrictions
 
 
+def next_settlement_at_decision(series: Series, instants: np.ndarray, arm_min: int) -> np.ndarray:
+    """(B) xvii, CTO M1 (Gate 2) — per settlement h, the `nextFundingTime` announced by the last funding-rate message at or before
+    t_arm = h + arm_min whose `fundingTime` is h (`NEXT_AT_DECISION_RULE`); −1 when no such message exists."""
+    instants = np.asarray(instants, dtype=np.int64)
+    out = np.full(instants.size, -1, dtype=np.int64)
+    messages = series.cache.get("funding_messages")
+    if messages is None or instants.size == 0 or messages[0].size == 0:
+        return out
+    m_ts, m_ft, m_nft = messages
+    idx = np.searchsorted(m_ts, instants + int(arm_min) * MINUTE_US, side="right") - 1
+    safe = np.maximum(idx, 0)
+    hit = (idx >= 0) & (m_ft[safe] == instants) & (m_nft[safe] > instants)
+    out[hit] = m_nft[safe][hit]
+    return out
+
+
 def settlement_instants(series: Series, tspec: TypeSpec, spec: Spec) -> tuple[np.ndarray, dict, np.ndarray]:
     """(B) ii — settlements of the instrument inside the window kept when the gaps to the previous and to the next settlement
     match the filter (8 h ± 1 min), with a known realized rate. Returns the kept instants, the counts and the settlements with
-    another (known) interval and a known rate (the descriptive T02 stratum: 4 h, 2 h, 1 h)."""
+    another (known) interval and a known rate (the descriptive T02 stratum: 4 h, 2 h, 1 h). History: h+ is the next settlement
+    served (§5.1); the instants that only the h+ criterion removes are counted (`removed_by_next_neighbour_only`: the h+ gap is
+    known after the decision, CTO M1 — the protocol decides at the freeze). Capture: h+ is the decision-time `nextFundingTime`
+    (`next_settlement_at_decision`, `NEXT_AT_DECISION_RULE`), never the settlement realised after t_arm."""
     gen = tspec.generator
     every = np.unique(series.settlements_us)
     inside = every[(every >= spec.start_us) & (every < spec.end_us)]
@@ -1821,14 +2004,22 @@ def settlement_instants(series: Series, tspec: TypeSpec, spec: Spec) -> tuple[np
     inside = inside[inside % MINUTE_US == 0]
     pos = np.searchsorted(every, inside)
     prev_gap = np.where(pos > 0, inside - every[np.maximum(pos - 1, 0)], -1)
-    next_gap = np.where(pos + 1 < every.size, every[np.minimum(pos + 1, every.size - 1)] - inside, -1)
+    if series.source == "capture":
+        announced = next_settlement_at_decision(series, inside, tspec.arm_min)
+        next_gap = np.where(announced > 0, announced - inside, -1)
+        counts["next_unknown_at_decision"] = int((announced <= 0).sum())
+    else:
+        next_gap = np.where(pos + 1 < every.size, every[np.minimum(pos + 1, every.size - 1)] - inside, -1)
     known = (prev_gap >= 0) & (next_gap >= 0)
-    ok = known & (np.abs(prev_gap - gen["previous_gap_us"]) <= gen["tolerance_us"]) & (np.abs(next_gap - gen["next_gap_us"]) <= gen["tolerance_us"])
+    prev_ok = (prev_gap >= 0) & (np.abs(prev_gap - gen["previous_gap_us"]) <= gen["tolerance_us"])
+    next_ok = (next_gap >= 0) & (np.abs(next_gap - gen["next_gap_us"]) <= gen["tolerance_us"])
+    ok = prev_ok & next_ok
     rate = series.rate_at(inside)
     has_rate = np.isfinite(rate)
     counts["unknown_neighbour"] = int((~known).sum())
     counts["interval_other"] = int((known & ~ok).sum())
     counts["realized_rate_missing"] = int((ok & ~has_rate).sum())
+    counts["removed_by_next_neighbour_only"] = int((prev_ok & ~next_ok & has_rate).sum())
     kept = inside[ok & has_rate]
     counts["kept"] = int(kept.size)
     other = inside[known & ~ok & has_rate]
@@ -1842,11 +2033,12 @@ def generator_instants(series: Series, tspec: TypeSpec, spec: Spec, common: dict
     return instants.copy(), {"generated": int(instants.size)}, np.zeros(0, dtype=np.int64)
 
 
-def restrict(series: Series, instants: np.ndarray, tspec: TypeSpec, spec: Spec) -> tuple[np.ndarray, dict]:
+def restrict(series: Series, instants: np.ndarray, tspec: TypeSpec, spec: Spec, window: tuple[int, int] | None = None) -> tuple[np.ndarray, dict]:
     """(B) vii, iii — an instrument-instant exists only if its footprint starts at or after the instrument's eligibility and, for a
     funding_coverage type, its instant lies in D_cov = [first settlement whose predecessor is served ; END_EXCLUSIVE) (LP-G5 §4.4:
     the settlement that opens D_cov is an instant of T01 — the audit count of 211 includes it) with its footprint before the end;
-    events and controls alike."""
+    events and controls alike. Capture (B xxi): the whole footprint inside the type's window [T0 ; end) (`window`, default
+    `g5_gate2.type_window`), and no footprint touching an unusable instrument-day (`quality`, `series.coverage['unusable_days']`)."""
     instants = np.asarray(instants, dtype=np.int64)
     start = instants + tspec.footprint[0] * MINUTE_US
     end = instants + tspec.footprint[1] * MINUTE_US
@@ -1860,9 +2052,22 @@ def restrict(series: Series, instants: np.ndarray, tspec: TypeSpec, spec: Spec) 
             counts["funding_coverage_unknown"] = int(keep.sum())
             keep[:] = False
         else:
-            inside = (instants >= series.d_cov_start_us) & (end <= spec.end_us)
+            lo = max(int(series.d_cov_start_us), int(window[0])) if window is not None else int(series.d_cov_start_us)
+            inside = (instants >= lo) & (end <= spec.end_us)
             counts["outside_funding_coverage"] = int((keep & ~inside).sum())
             keep &= inside
+    elif spec.source == "capture":
+        from . import g5_gate2  # lazy: g5_gate2 imports this module
+
+        lo, hi = window if window is not None else g5_gate2.type_window(spec, tspec)
+        inside = (start >= lo) & (end < hi)
+        counts["outside_window"] = int((keep & ~inside).sum())
+        keep &= inside
+        bad = sorted(series.coverage.get("unusable_days") or ())
+        if bad:
+            touched = np.isin(start // DAY_US, bad) | np.isin(end // DAY_US, bad)
+            counts["excluded_unusable_instrument_day"] = int((keep & touched).sum())
+            keep &= ~touched
     else:
         inside = end <= spec.end_us
         counts["outside_window"] = int((keep & ~inside).sum())
@@ -1928,7 +2133,7 @@ def violates(starts: np.ndarray, ends: np.ndarray, a: np.ndarray, b: np.ndarray,
     return out
 
 
-def control_instants(series: Series, tspec: TypeSpec, spec: Spec, raw_events: np.ndarray, union: dict) -> tuple[np.ndarray, dict]:
+def control_instants(series: Series, tspec: TypeSpec, spec: Spec, raw_events: np.ndarray, union: dict, window: tuple[int, int] | None = None) -> tuple[np.ndarray, dict]:
     """(B) xi — every hour of the instrument's event days at the type's minute of the hour, kept when inside the window, eligible
     (and inside D_cov for a funding_coverage type) and admissible against every footprint of the exclusion union."""
     days = np.unique(np.asarray(raw_events, dtype=np.int64) // DAY_US)
@@ -1947,7 +2152,7 @@ def control_instants(series: Series, tspec: TypeSpec, spec: Spec, raw_events: np
         bad |= hit
     diag["excluded_by_component"] = excluded_by
     diag["excluded_union"] = int(bad.sum())
-    admitted, rcounts = restrict(series, cands[~bad], tspec, spec)
+    admitted, rcounts = restrict(series, cands[~bad], tspec, spec, window)
     diag["restriction"] = rcounts
     diag["kept"] = int(admitted.size)
     return np.unique(admitted), diag
@@ -1958,13 +2163,14 @@ def control_instants(series: Series, tspec: TypeSpec, spec: Spec, raw_events: np
 SIM_STATUS = ("filled", "unfilled", "stale", "crossed", "skipped_size", "funding_unknown", "no_exit_quote", "unavailable")
 
 
-def classify(values: np.ndarray, high: float, low: float) -> np.ndarray:
-    """+1 at or above `high`, −1 at or below `low`, 0 in between or unknown."""
+def classify(values: np.ndarray, high: float, low: float, strict: bool = False) -> np.ndarray:
+    """+1 at or above `high`, −1 at or below `low`, 0 in between or unknown; `strict`: above / below (the dead-zone variant of §9.4,
+    « P̂ > +0,06 % ou < −0,05 % »)."""
     values = np.asarray(values, dtype=np.float64)
     out = np.zeros(values.size, dtype=np.int8)
     finite = np.isfinite(values)
-    out[finite & (values >= high)] = 1
-    out[finite & (values <= low)] = -1
+    out[finite & ((values > high) if strict else (values >= high))] = 1
+    out[finite & ((values < low) if strict else (values <= low))] = -1
     return out
 
 
@@ -1975,15 +2181,20 @@ def _log_bp(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 def measure(series: Series, instants_us, tspec: TypeSpec, spec: Spec, role: str = "event", options: dict | None = None) -> dict:
     """Per instrument-instant measures of one type (arrays aligned on the kept instants) and the exclusion counts, each excluded
-    instant counted in the first rule that excludes it: out of grid → missing key price → zero-volume key candle → classifier
-    (not computable, inside the zone) or sign (zero) → fill proxy (window missing, unfilled) → unknown rate crossed. The same
-    rules at the events and at the controls. `options` (descriptive variants only): `thresholds` (hi, lo) of the classifier,
-    `fill` (False: no fill proxy), `side_from_rate` (hi, lo): events signed by the class of R_h, `price` ('mark'), `exit_min`,
-    `tick_move` (T05: |c(h+5) − c(h)| ≥ 1 tick)."""
+    instant counted in the first rule that excludes it: out of grid → (capture: key minute without print) → missing key price →
+    zero-volume key candle → classifier (not computable, inside the zone) or sign (zero) → fill proxy (window missing, unfilled) →
+    unknown rate crossed. The same rules at the events and at the controls. Capture (B xxi): after the classifier / sign, the
+    entry and exit are simulated on the captured book (`measure_lp_sim`); `options['construction'] = 'gate1'` gives instead the
+    Gate 1 construction on the minute bars of the prints with the design costs (descriptive). `options` (descriptive variants only):
+    `thresholds` (hi, lo) and `strict` of the classifier, `fill` (False: no fill proxy), `side_from_rate` (hi, lo): events signed by
+    the class of R_h, `price` ('mark'), `exit_min`, `tick_move` (T05: |c(h+5) − c(h)| ≥ 1 tick), `sim_rule` (capture)."""
     options = options or {}
+    capture = spec.source == "capture"
+    construction = "lp_sim" if capture and options.get("construction") != "gate1" else "candles"
     instants = np.unique(np.asarray(instants_us, dtype=np.int64))
     n = series.size
-    counts = {key: 0 for key in ("instants", "out_of_grid", "missing_key_price", spec.frozen_candle["count_field"], "classifier_not_computable", "classifier_inside_zone",
+    vol_field = spec.frozen_candle["count_field"]
+    counts = {key: 0 for key in ("instants", "out_of_grid", "missing_key_price", vol_field, "classifier_not_computable", "classifier_inside_zone",
                                  "zero_sign", "move_below_one_tick", "fill_window_missing", "unfilled", "funding_rate_missing", "kept")}
     counts["instants"] = int(instants.size)
     k0 = series.index_of(instants)
@@ -1993,16 +2204,22 @@ def measure(series: Series, instants_us, tspec: TypeSpec, spec: Spec, role: str 
     counts["out_of_grid"] = int((~alive).sum())
     prices = series.mark if options.get("price") == "mark" else series.close
     offsets = sorted(set(tspec.key_price_offsets) | {exit_min})
+    if capture:  # (B) xxi key_minute_without_print_exclusion: the capture analogue of vol = 0, before the missing-price rule
+        silent = np.zeros(instants.size, dtype=bool)
+        for off in sorted(set(tspec.key_candles) | {exit_min}):
+            silent |= ~(series.at(series.vol, k0 + off) > 0)
+        counts[vol_field] = int((alive & silent).sum())
+        alive &= ~silent
     present = np.ones(instants.size, dtype=bool)
     for off in offsets:
         present &= np.isfinite(series.at(prices, k0 + off))
     counts["missing_key_price"] = int((alive & ~present).sum())
     alive &= present
-    if spec.frozen_candle["applies"]:
+    if spec.frozen_candle["applies"] and not capture:
         zero = np.zeros(instants.size, dtype=bool)
         for off in tspec.key_candles:
             zero |= series.at(series.vol, k0 + off) == 0
-        counts[spec.frozen_candle["count_field"]] = int((alive & zero).sum())
+        counts[vol_field] = int((alive & zero).sum())
         alive &= ~zero
     p_hat = np.full(instants.size, np.nan)
     side = np.zeros(instants.size, dtype=np.int8)
@@ -2012,7 +2229,7 @@ def measure(series: Series, instants_us, tspec: TypeSpec, spec: Spec, role: str 
         computable = np.isfinite(p_hat)
         counts["classifier_not_computable"] = int((alive & ~computable).sum())
         alive &= computable
-        side = classify(p_hat, hi, lo)
+        side = classify(p_hat, hi, lo, strict=bool(options.get("strict")))
         if role == "event" and options.get("side_from_rate") is not None:
             r_hi, r_lo = options["side_from_rate"]
             side = classify(series.rate_at(instants), r_hi, r_lo)
@@ -2028,10 +2245,13 @@ def measure(series: Series, instants_us, tspec: TypeSpec, spec: Spec, role: str 
             big = np.abs(b - a) >= series.meta.tick_sz * (1.0 - 1e-6)
             counts["move_below_one_tick"] = int((alive & ~big).sum())
             alive &= big
+    if construction == "lp_sim":
+        return _measure_sim(series, instants, alive, side, p_hat, counts, tspec, spec, options)
     fill_attempted = int(alive.sum())
-    use_fill = tspec.fill_proxy is not None and tspec.fill_proxy["kind"] == "through_candles" and options.get("fill", True)
+    proxy = tspec.fill_proxy if tspec.fill_proxy is not None else ((tspec.gate2 or {}).get("construction_proxy") if capture else None)
+    use_fill = proxy is not None and options.get("fill", True)
     if use_fill:
-        ks = [k0 + j + 1 for j in range(tspec.fill_proxy["open_from_min"], tspec.fill_proxy["open_to_min"] + 1)]  # candles opening at h+j end at h+j+1
+        ks = [k0 + j + 1 for j in range(proxy["open_from_min"], proxy["open_to_min"] + 1)]  # candles opening at h+j end at h+j+1
         lows = np.vstack([series.at(series.low, k) for k in ks])
         highs = np.vstack([series.at(series.high, k) for k in ks])
         known = np.all(np.isfinite(lows), axis=0) & np.all(np.isfinite(highs), axis=0)
@@ -2070,45 +2290,75 @@ def measure(series: Series, instants_us, tspec: TypeSpec, spec: Spec, role: str 
            "fill": {"attempted": fill_attempted if use_fill else 0, "filled": counts["kept"] + counts["funding_rate_missing"] if use_fill else 0},
            "funding_settlements_crossed": f_count[keep], "funding_outside_coverage": int(outside[keep].sum()), "funding_nonzero": int((f_count[keep] > 0).sum()),
            "execution": "candles"}
-    out["counts"][spec.costs["funding_count_field"]] = int(outside[keep].sum())
-    if spec.source == "capture":
-        sim, status = measure_lp_sim(series, instants[keep], side[keep], tspec, spec)
-        filled = np.isfinite(sim["sim_net_bp"])
-        for key in ("instants_us", "sign", "p_hat", "rate_at_h", "funding_settlements_crossed"):
-            out[key] = out[key][filled]
-        out["r_bp"], out["funding_bp"], out["net_bp"], out["net_stress_bp"] = sim["sim_rt_bp"][filled], sim["sim_funding_bp"][filled], sim["sim_net_bp"][filled], sim["sim_net_bp_stress"][filled]
-        out["sim_status"] = status
-        out["fill"] = {"attempted": int(keep.sum()), "filled": int(status["filled"])}
-        out["counts"]["unfilled"] = int(keep.sum()) - int(status["filled"])
-        out["counts"]["kept"] = int(filled.sum())
-        out["execution"] = "lp_sim"
-        out["funding_nonzero"] = int((out["funding_bp"] != 0).sum())
+    if not capture:
+        out["counts"][spec.costs["funding_count_field"]] = int(outside[keep].sum())
     return out
 
 
-def measure_lp_sim(series: Series, instants: np.ndarray, signs: np.ndarray, tspec: TypeSpec, spec: Spec) -> tuple[dict, dict]:
-    """(B) xxi — Gate 2, on the captured book and prints (`lp_sim` primitives, `gate2.sim`): entry decided at h + arm_min,
-    post-only at the own touch resting until h + rest_until_min (`maker_maker`; a fill in [h ; h + grace) crosses the settlement
-    at h, "may take up to a minute") or taker at the opposite touch after the latency plus slippage (`taker_maker`); passive exit at
-    the opposite touch from h + exit offset until h + gate2.exit_until_min, remainder taker; adverse selection measured by the
-    simulation itself; funding of the settlements in (first fill − grace, exit]. NaN where not filled."""
+def _measure_sim(series: Series, instants: np.ndarray, alive: np.ndarray, side: np.ndarray, p_hat: np.ndarray, counts: dict, tspec: TypeSpec, spec: Spec,
+                 options: dict) -> dict:
+    """The capture branch of `measure`: the instants that pass the classifier / sign rules are simulated; an unfilled order, a stale
+    or crossed book, a size of 0, an exit without quote or an unknown settled rate excludes the observation (counted by status)."""
+    idx = np.nonzero(alive)[0]
+    sim, status = measure_lp_sim(series, instants[idx], side[idx], tspec, spec, options)
+    filled = np.isfinite(sim["sim_net_bp"])
+    keep = idx[filled]
+    counts["unfilled"] = int(idx.size) - int(filled.sum())
+    counts["kept"] = int(filled.sum())
+    counts[spec.costs["funding_count_field"]] = int(status["funding_unknown"])
+    out = {"inst": series.inst, "instants_us": instants[keep], "sign": side[keep], "r_bp": sim["sim_rt_bp"][filled], "funding_bp": sim["sim_funding_bp"][filled],
+           "net_bp": sim["sim_net_bp"][filled], "net_stress_bp": sim["sim_net_bp_stress"][filled], "p_hat": p_hat[keep], "rate_at_h": series.rate_at(instants[keep]),
+           "counts": counts, "costs": cost_terms(tspec.role, spec.costs), "fill": {"attempted": int(idx.size), "filled": int(status["filled"])},
+           "funding_settlements_crossed": sim["sim_funding_count"][filled], "funding_outside_coverage": 0, "funding_nonzero": int((sim["sim_funding_count"][filled] > 0).sum()),
+           "execution": "lp_sim", "sim_status": status, "sim_rule": options.get("sim_rule", spec.gate2["sim"]["rule"]),
+           "sim": {key: sim[key][filled] for key in ("sim_fee_bp", "sim_slippage_bp", "sim_maker_legs", "sim_markout_0_bp", "sim_markout_60_bp", "sim_markout_300_bp", "sim_half_spread_bp")}}
+    return out
+
+
+def measure_lp_sim(series: Series, instants: np.ndarray, signs: np.ndarray, tspec: TypeSpec, spec: Spec, options: dict | None = None) -> tuple[dict, dict]:
+    """(B) xxi — Gate 2, on the captured book and prints (`lp_sim` primitives, `execution_sim`): decision at d = h + arm_min (a book older
+    than `stale_s` at d: `stale`); `maker_maker`: post-only at the own touch of the decision snapshot, rounded to the tick, live after the
+    latency (cancelled when it would cross the opposite touch then: `crossed`), resting until h + rest_until_min under the fill rule
+    (`gate2_sim_maker_post_only_touch`); `taker_maker`: the opposite touch after the latency plus the slippage per taker leg
+    (`gate2_sim_taker_entry_opposite_touch_slippage`); exit: passive at the opposite touch from max(h + exit offset, fill + latency)
+    until h + exit_until_min, the remainder taker with its slippage (`gate2_sim_passive_exit_taker_remainder`); funding of the
+    settlements in (first fill − grace, exit] (`gate2_funding_fill_grace_crossing`), unknown rate ⇒ `funding_unknown`; a book ending before
+    h + exit_until_min, or an exit quote (at the passive start, or at h + exit_until_min for the taker remainder) older than `stale_s` ⇒
+    `no_exit_quote` (never a shortened or stale exit, CTO m1); the stressed net
+    multiplies fees and slippage and subtracts (m − 1) × the design value per filled maker leg and per taker entry
+    (`gate2_stress_add_on_for_measured_terms`); the band rule (`maxPxLmtPct` against the mark at d) is counted, not modelled. NaN where
+    not filled. `options`: `sim_rule` (descriptive fill rules), `exit_min` (descriptive horizons: the exit tail keeps its length)."""
+    options = options or {}
     n_obs = int(np.asarray(instants).size)
-    out = {k: np.full(n_obs, np.nan) for k in ("sim_net_bp", "sim_net_bp_stress", "sim_rt_bp", "sim_fee_bp", "sim_funding_bp")}
+    keys = ("sim_net_bp", "sim_net_bp_stress", "sim_rt_bp", "sim_fee_bp", "sim_slippage_bp", "sim_funding_bp", "sim_funding_count", "sim_maker_legs", "sim_markout_0_bp",
+            "sim_markout_60_bp", "sim_markout_300_bp", "sim_half_spread_bp")
+    out = {k: np.full(n_obs, np.nan) for k in keys}
     status = {key: 0 for key in SIM_STATUS}
+    status["band_rejected"] = 0
     book, prints, ispec = series.book, series.prints, series.inst_spec
     if book is None or prints is None or ispec is None or book.size == 0 or spec.gate2 is None:
         status["unavailable"] = n_obs
         return out, status
     sim, costs = spec.gate2["sim"], spec.costs
+    rule = options.get("sim_rule", sim["rule"])
     latency = int(round(sim["latency_ms"] * 1000))
     stale = int(round(sim["stale_s"] * tape.SECOND_US))
     grace = int(round(sim["funding_fill_grace_min"] * MINUTE_US))
     tol = ispec.tick * 1e-6
-    slip = costs["slippage_bp_per_round_trip"]
+    slip = costs["slippage_bp_per_taker_leg"]
     maker_bp, taker_bp, mult = costs["maker_fee_bp"], costs["taker_fee_bp"], costs["stress_multiplier_all_cost_terms"]
-    notional = spec.economic["notional"]
+    add_maker, add_taker = costs["stress_add_bp_per_maker_leg"], costs["stress_add_bp_per_taker_entry"]
+    notional = sim["notional"]
+    band = series.coverage.get("band_pct")
     last_ts = int(book.ts[-1])
-    exit_min, until_min = tspec.return_window[1], int(tspec.gate2["exit_until_min"])
+    exit_min = int(options.get("exit_min", tspec.return_window[1]))
+    until_min = exit_min + (int(tspec.gate2["exit_until_min"]) - tspec.return_window[1])
+    mid = book.mid
+
+    def mid_at(ts_us: int, strict: bool = False) -> float:
+        k = book.index_at(ts_us, strict=strict)
+        return float(mid[k]) if k >= 0 else math.nan
+
     for i in range(n_obs):
         h, s = int(instants[i]), int(signs[i])
         d = h + tspec.arm_min * MINUTE_US
@@ -2122,9 +2372,7 @@ def measure_lp_sim(series: Series, instants: np.ndarray, signs: np.ndarray, tspe
             status["stale"] += 1
             continue
         ka = book.index_at(a)
-        if ka < 0:
-            status["stale"] += 1
-            continue
+        maker_legs, taker_entries = 0.0, 0.0
         if tspec.role == "maker_maker":
             price = round((bid if s > 0 else ask) / ispec.tick) * ispec.tick
             size = ispec.size_for_notional(notional, price)
@@ -2134,12 +2382,17 @@ def measure_lp_sim(series: Series, instants: np.ndarray, signs: np.ndarray, tspe
             if (s > 0 and price >= float(book.ask[ka]) - tol) or (s < 0 and price <= float(book.bid[ka]) + tol):
                 status["crossed"] += 1
                 continue
-            first_fill, fill_ts, filled = lp_sim._fill(book, prints, s, price, size, a, h + int(tspec.rest_until_min) * MINUTE_US, book.displayed(s, price, ka, tol), sim["rule"], tol)
+            end = h + int(tspec.rest_until_min) * MINUTE_US
+            first_fill, fill_ts, filled = lp_sim._fill(book, prints, s, price, size, a, end, book.displayed(s, price, ka, tol), rule, tol)
             if filled <= 0:
                 status["unfilled"] += 1
                 continue
-            tau = fill_ts if fill_ts >= 0 else h + int(tspec.rest_until_min) * MINUTE_US
-            entry_px, entry_fee, entry_slip = price, maker_bp, 0.0
+            tau = fill_ts if fill_ts >= 0 else end
+            entry_px, entry_fee, entry_slip, maker_legs = price, maker_bp, 0.0, 1.0
+            m0 = s * (mid_at(first_fill, strict=True) - price) / price * 1e4
+            out["sim_markout_0_bp"][i] = m0
+            out["sim_markout_60_bp"][i] = s * (mid_at(first_fill + 60 * tape.SECOND_US) - price) / price * 1e4
+            out["sim_markout_300_bp"][i] = s * (mid_at(first_fill + 300 * tape.SECOND_US) - price) / price * 1e4
         else:
             price = float(book.ask[ka]) if s > 0 else float(book.bid[ka])
             size = ispec.size_for_notional(notional, price)
@@ -2147,37 +2400,49 @@ def measure_lp_sim(series: Series, instants: np.ndarray, signs: np.ndarray, tspe
                 status["skipped_size"] += 1
                 continue
             first_fill, tau, filled = a, a, size
-            entry_px, entry_fee, entry_slip = price, taker_bp, slip
-        ex_end = min(h + until_min * MINUTE_US, last_ts)
+            entry_px, entry_fee, entry_slip, taker_entries = price, taker_bp, slip, 1.0
+            out["sim_half_spread_bp"][i] = s * (price - float(mid[ka])) / float(mid[ka]) * 1e4
+        mark_d = series.at(series.mark, series.index_of(np.array([d])))[0]
+        if band is not None and math.isfinite(mark_d) and abs(entry_px / mark_d - 1.0) > band:
+            status["band_rejected"] += 1  # counted (maxPxLmtPct), not modelled
+        ex_end = h + until_min * MINUTE_US
+        if last_ts < ex_end:  # the book stops before the planned end of the exit: never a shortened holding (CTO m1)
+            status["no_exit_quote"] += 1
+            continue
         ex_start = min(max(tau + latency, h + exit_min * MINUTE_US), ex_end)
         ke = book.index_at(ex_start)
-        if ke < 0:
+        if ke < 0 or ex_start - int(book.ts[ke]) > stale:  # an exit quote older than stale_s (CTO m1)
             status["no_exit_quote"] += 1
             continue
         exit_price = round(((float(book.ask[ke])) if s > 0 else float(book.bid[ke])) / ispec.tick) * ispec.tick
-        _, ex_fill_ts, ex_filled = lp_sim._fill(book, prints, -s, exit_price, filled, ex_start, ex_end, book.displayed(-s, exit_price, ke, tol), sim["rule"], tol)
+        _, ex_fill_ts, ex_filled = lp_sim._fill(book, prints, -s, exit_price, filled, ex_start, ex_end, book.displayed(-s, exit_price, ke, tol), rule, tol)
         ex_filled = max(0.0, min(float(ex_filled), float(filled)))
         if ex_fill_ts >= 0:
             exit_ts, exit_px, exit_fee, exit_slip = int(ex_fill_ts), exit_price, maker_bp, 0.0
+            maker_legs += 1.0
         else:
             kl = book.index_at(ex_end)
+            if kl < 0 or ex_end - int(book.ts[kl]) > stale:  # the taker remainder needs a fresh quote at h + exit_until_min (CTO m1)
+                status["no_exit_quote"] += 1
+                continue
             taker_px = float(book.bid[kl]) if s > 0 else float(book.ask[kl])
             rest = float(filled) - ex_filled
             exit_px = (ex_filled * exit_price + rest * taker_px) / float(filled)
             exit_fee = (ex_filled * maker_bp + rest * taker_bp) / float(filled)
             exit_slip = slip * rest / float(filled)
+            maker_legs += ex_filled / float(filled)
             exit_ts = ex_end
-        open_f, close_f = int(first_fill) - grace, int(exit_ts)
-        count, rate_sum, unknown = series.funding_crossed(np.array([open_f]), np.array([close_f]))
+        count, rate_sum, unknown = series.funding_crossed(np.array([int(first_fill) - grace]), np.array([int(exit_ts)]))
         if unknown[0] > 0:
             status["funding_unknown"] += 1
             continue
         funding_bp = -s * float(rate_sum[0]) * 1e4
         rt = s * (exit_px - entry_px) / entry_px * 1e4
         fees, slip_cost = entry_fee + exit_fee, entry_slip + exit_slip
-        out["sim_rt_bp"][i], out["sim_fee_bp"][i], out["sim_funding_bp"][i] = rt, fees, funding_bp
+        out["sim_rt_bp"][i], out["sim_fee_bp"][i], out["sim_slippage_bp"][i], out["sim_funding_bp"][i] = rt, fees, slip_cost, funding_bp
+        out["sim_funding_count"][i], out["sim_maker_legs"][i] = float(count[0]), maker_legs
         out["sim_net_bp"][i] = math.fsum([rt, -fees, -slip_cost, funding_bp])
-        out["sim_net_bp_stress"][i] = math.fsum([rt, -mult * (fees + slip_cost), funding_bp])
+        out["sim_net_bp_stress"][i] = math.fsum([rt, -mult * fees, -mult * slip_cost, funding_bp, -add_maker * maker_legs, -add_taker * taker_entries])
         status["filled"] += 1
     return out, status
 
@@ -2577,7 +2842,7 @@ def report_portfolio(run: dict, spec: Spec, calendar_days: int) -> dict:
             "note": "the two posMode hypotheses coincide when no two positions of one instrument overlap; no market impact assumed"}
 
 
-def common_reports(series_by_inst: dict, spec: Spec, names: tuple) -> dict:
+def common_reports(series_by_inst: dict, spec: Spec, names: tuple, windows: dict | None = None) -> dict:
     """Reports that belong to no type (printed even when a type is sealed): minute 0 (T07), hourly and weekday seasonality of the
     1-minute |return| of the last price, histogram of the funding intervals."""
     out: dict = {}
@@ -2615,7 +2880,119 @@ def common_reports(series_by_inst: dict, spec: Spec, names: tuple) -> dict:
         out["weekday_seasonality"] = {"by_weekday": table(wd, 7, lambda k: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][k])}
     if "funding_intervals_histogram" in names:
         out["funding_intervals_histogram"] = intervals
+    if "T06_us_close_reversion" in names:
+        out["T06_us_close_reversion"] = report_us_close_reversion(series_by_inst, spec, windows)
     return out
+
+
+GATE2_TYPE_REPORTS = {
+    "T02_funding_4h_settlements_premium_settstate_book": lambda t: t.generator["kind"] == "funding_settlements",
+    "T18_cme_cf_brr_window": lambda t: True,
+    "fill_rules_through_and_queue": lambda t: True,
+    "premium_okx_channel_vs_premium_mark_index": lambda t: t.classifier is not None,
+    "net_bp_gate1_construction_on_last_prints": lambda t: True,
+    "adverse_selection_measured_vs_design_3_5": lambda t: t.role == "maker_maker",
+    "taker_half_spread_measured_vs_design_3": lambda t: t.role == "taker_maker",
+    "dst_regime_winter_vs_summer": lambda t: True,
+}
+DESCRIPTIVE_RULE_NOTES = {
+    "T02_funding_4h_settlements_premium_settstate_book": "the T01 rule (classifier, simulation) at the settlements of another interval (4 h, 2 h, 1 h); settState counts, "
+                                                         "mean |premium| of the funding-rate channel and book spread at the decision",
+    "T06_us_close_reversion": "16:00 New York of the NYSE days: s = sign(c(h) - c(h-5)), reversion = -s ln(c(h+15) / c(h)) x 1e4 (last price, no cost, no test)",
+    "adverse_selection_measured_vs_design_3_5": "filled maker entries: m_h = s (mid(first fill + h) - p) / p x 1e4 at h = 0 (mid just before), 60 s, 300 s; measured adverse "
+                                                "selection = -mean(m_60)",
+    "taker_half_spread_measured_vs_design_3": "taker entries: s (p - mid) / mid x 1e4 at the activation snapshot",
+    "dst_regime_winter_vs_summer": "instants split by events.us_dst_active of their New York date",
+    "premium_okx_channel_vs_premium_mark_index": "P_hat(t_arm) (premium_mark_index) against the funding-rate channel's last premium before t_arm, at the raw events and the controls: "
+                                                 "3 x 3 class matrix at the classifier thresholds, Cohen's kappa, Pearson correlation (descriptive only, CTO M2)",
+}
+
+
+def _us_summer_time(ts_us) -> np.ndarray:
+    """`events.us_dst_active` of the New York date of each instant."""
+    ny = ZoneInfo(NEW_YORK)
+    return np.array([ev.us_dst_active(datetime.fromtimestamp(int(t) / tape.SECOND_US, tz=UTC).astimezone(ny).date()) for t in np.asarray(ts_us).tolist()], dtype=bool)
+
+
+def _channel_premium(series: Series, at_us) -> np.ndarray:
+    """The funding-rate channel's `premium` (the official impact premium) last received at or before each instant (descriptive only)."""
+    ts, values = series.cache.get("premium_okx", (np.zeros(0, dtype=np.int64), np.zeros(0)))
+    at = np.asarray(at_us, dtype=np.int64)
+    if ts.size == 0:
+        return np.full(at.size, np.nan)
+    pos = np.searchsorted(ts, at, side="right") - 1
+    return np.where(pos >= 0, values[np.maximum(pos, 0)], np.nan)
+
+
+def _book_spread_bp(series: Series, at_us) -> np.ndarray:
+    book = series.book
+    at = np.asarray(at_us, dtype=np.int64)
+    if book is None or book.size == 0:
+        return np.full(at.size, np.nan)
+    k = np.searchsorted(book.ts, at, side="right") - 1
+    ok = k >= 0
+    out = np.full(at.size, np.nan)
+    bid, ask = book.bid[k[ok]], book.ask[k[ok]]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out[ok] = (ask - bid) / ((ask + bid) / 2.0) * 1e4
+    return out
+
+
+def _premium_agreement(run: dict, tspec: TypeSpec) -> dict:
+    hi, lo = tspec.classifier["high"], tspec.classifier["low"]
+    mine, theirs = [], []
+    for inst, s in run["series"].items():
+        for instants in (run["raw"].get(inst, np.zeros(0, dtype=np.int64)), run["controls"].get(inst, np.zeros(0, dtype=np.int64))):
+            if np.asarray(instants).size == 0:
+                continue
+            mine.append(s.p_hat(s.index_of(instants) + tspec.arm_min, tspec.classifier))
+            theirs.append(_channel_premium(s, np.asarray(instants, dtype=np.int64) + tspec.arm_min * MINUTE_US))
+    a = np.concatenate(mine) if mine else np.zeros(0)
+    b = np.concatenate(theirs) if theirs else np.zeros(0)
+    ok = np.isfinite(a) & np.isfinite(b)
+    a, b = a[ok], b[ok]
+    ca, cb = classify(a, hi, lo), classify(b, hi, lo)
+    matrix = {f"{x}|{y}": int(((ca == x) & (cb == y)).sum()) for x in (-1, 0, 1) for y in (-1, 0, 1)}
+    n = int(a.size)
+    kappa = None
+    if n:
+        po = math.fsum(matrix[f"{x}|{x}"] for x in (-1, 0, 1)) / n
+        pe = math.fsum((float((ca == x).sum()) / n) * (float((cb == x).sum()) / n) for x in (-1, 0, 1))
+        kappa = (po - pe) / (1.0 - pe) if pe < 1.0 else None
+    corr = float(np.corrcoef(a, b)[0, 1]) if n > 2 and np.std(a) > 0 and np.std(b) > 0 else None
+    return {"pairs": n, "matrix_premium_mark_index_class|premium_okx_class": matrix, "cohen_kappa": kappa, "pearson": corr,
+            "premium_mark_index_mean": _fmean(a), "premium_okx_mean": _fmean(b)}
+
+
+def report_us_close_reversion(series_by_inst: dict, spec: Spec, windows: dict | None) -> dict:
+    """§9.8 T06 (descriptive stratum, deferred to the Gate 2): the reversion after the 16:00 New York close (DESCRIPTIVE_RULE_NOTES)."""
+    session = next((x for x in spec.sessions if x["name"] == "us_cash_close"), None)
+    if session is None:
+        return {"status": "UNAVAILABLE", "reason": "no us_cash_close session in the spec"}
+    lo = spec.start_us
+    hi = max(b for _, b in windows.values()) if windows else spec.end_us
+    instants = []
+    for day in _local_days(lo, hi):
+        if day_matches(session["days"], day, spec.calendars):
+            m = local_to_utc_us(day, session["start_min"], session["tz_info"])
+            if lo <= m - 5 * MINUTE_US and m + 15 * MINUTE_US < hi:
+                instants.append(m)
+    instants = np.array(sorted(set(instants)), dtype=np.int64)
+    values, by_inst = [], {}
+    for inst, s in series_by_inst.items():
+        ts = instants[instants - 5 * MINUTE_US >= s.meta.eligible_from_us]
+        if ts.size == 0:
+            continue
+        k = s.index_of(ts)
+        before, at, after = s.at(s.close, k - 5), s.at(s.close, k), s.at(s.close, k + 15)
+        side = np.sign(np.nan_to_num(_log_bp(before, at), nan=0.0))
+        rev = -side * _log_bp(at, after)
+        ok = np.isfinite(rev) & (side != 0)
+        values.append(rev[ok])
+        by_inst[inst] = int(ok.sum())
+    pooled = np.concatenate(values) if values else np.zeros(0)
+    return {"rule": DESCRIPTIVE_RULE_NOTES["T06_us_close_reversion"], "instants": int(instants.size), "observations": int(pooled.size), "reversion_bp_mean": _fmean(pooled),
+            "by_instrument_observations": by_inst, "trades_source": "not captured (G2 0.9): no RPI split"}
 
 
 def type_reports(run: dict, spec: Spec, names: tuple, calendar_days: int) -> dict:
@@ -2623,6 +3000,7 @@ def type_reports(run: dict, spec: Spec, names: tuple, calendar_days: int) -> dic
     tspec, inst = run["tspec"], run["instant"]
     out: dict = {}
     mine = [n for n in names if n.split("_", 1)[0] == tspec.label] + [n for n in names if n in PER_TYPE_REPORTS]
+    mine += [n for n in names if n in GATE2_TYPE_REPORTS and GATE2_TYPE_REPORTS[n](tspec) and n not in mine]
     ev_hour = (inst["ev_ts"] % DAY_US) // HOUR_US
     for name in mine:
         if name == "T01_classified_by_realized_rate" or name.endswith("_classified_by_realized_rate"):
@@ -2631,7 +3009,7 @@ def type_reports(run: dict, spec: Spec, names: tuple, calendar_days: int) -> dic
                          **_variant_d(run, spec, {"side_from_rate": (v["rate_high"], v["rate_low"])}, {})}
         elif (m := DEAD_ZONE_RE.match(name)) is not None:
             hi, lo = float(f"{m.group('hi_a')}.{m.group('hi_b')}"), -float(f"{m.group('lo_a')}.{m.group('lo_b')}")
-            out[name] = {"thresholds": [hi, lo], **_variant_d(run, spec, {"thresholds": (hi, lo)})}
+            out[name] = {"thresholds": [hi, lo], "rule": "long if P_hat > hi, short if P_hat < lo (strict, LP-G5 §9.4)", **_variant_d(run, spec, {"thresholds": (hi, lo), "strict": True})}
         elif name.endswith("_without_fill_proxy"):
             out[name] = {"rule": "unconditional drift: the fill proxy off at events and controls", **_variant_d(run, spec, {"fill": False})}
         elif name.endswith("_dose_abs_rate"):
@@ -2697,7 +3075,7 @@ def type_reports(run: dict, spec: Spec, names: tuple, calendar_days: int) -> dic
             out[name] = {"rule": "the type's rule on the excluded macro dates (never in the test)", **_variant_d(run, spec, None, None, events, controls)}
         elif name.endswith("_ten_am_et_release_days"):
             out[name] = {"status": "UNAVAILABLE", "reason": "calendars carries no frozen list of the 10:00 ET releases (JOLTS, ISM; P-G5-5 pending)"}
-        elif name.endswith("_brr_adjacency"):
+        elif name.endswith("_brr_adjacency") or name == "T18_cme_cf_brr_window":
             brr = [x for x in session_intervals(spec, spec.pad_start_us, spec.end_us) if "brr" in x[2]]
             starts, ends = np.array([x[0] for x in brr], dtype=np.int64), np.array([x[1] for x in brr], dtype=np.int64)
 
@@ -2707,7 +3085,54 @@ def type_reports(run: dict, spec: Spec, names: tuple, calendar_days: int) -> dic
                 return violates(starts, ends, a, b, 0) if starts.size else np.zeros(np.asarray(ts).size, dtype=bool)
 
             ev_o, ct_o = overlap(inst["ev_ts"]), overlap(inst["ct_ts"])
-            out[name] = {"overlapping_brr_window": _subset_d(run, ev_o, ct_o), "not_overlapping": _subset_d(run, ~ev_o, ~ct_o)}
+            out[name] = {"rule": "return window overlapping the 15:00-16:00 Europe/London window (session cme_cf_brr_window) or not",
+                         "overlapping_brr_window": _subset_d(run, ev_o, ct_o), "not_overlapping": _subset_d(run, ~ev_o, ~ct_o)}
+        elif name == "T02_funding_4h_settlements_premium_settstate_book":
+            empty = np.zeros(0, dtype=np.int64)
+            parts = [measure(run["series"][i], run["other_interval"].get(i, empty), tspec, spec, "event") for i in run["series"]]
+            gaps, states, premiums, spreads = {}, {}, [], []
+            for i, s in run["series"].items():
+                ts = run["other_interval"].get(i, empty)
+                for t in ts.tolist():
+                    pos = int(np.searchsorted(s.settlements_us, t))
+                    if pos > 0:
+                        key = f"{(t - int(s.settlements_us[pos - 1])) / HOUR_US:g}h"
+                        gaps[key] = gaps.get(key, 0) + 1
+                    for st in (s.coverage.get("sett_states") or {}).get(str(t), []):
+                        states[str(st)] = states.get(str(st), 0) + 1
+                decision = ts + tspec.arm_min * MINUTE_US
+                premiums.append(np.abs(_channel_premium(s, decision)))
+                spreads.append(_book_spread_bp(s, decision))
+            out[name] = {"rule": DESCRIPTIVE_RULE_NOTES[name], "settlements_other_interval": int(sum(np.asarray(v).size for v in run["other_interval"].values())),
+                         "previous_gap_histogram": gaps, "sett_state_counts": states, "observations": int(sum(p["counts"]["kept"] for p in parts)),
+                         "net_bp_mean": _fmean(_pooled(parts, "net_bp")), "funding_bp_mean": _fmean(_pooled(parts, "funding_bp")),
+                         "abs_premium_okx_mean": _fmean(np.concatenate(premiums)) if premiums else None, "book_spread_bp_at_decision_mean": _fmean(np.concatenate(spreads)) if spreads else None}
+        elif name == "fill_rules_through_and_queue":
+            out[name] = {"rule": "the same simulation under each descriptive fill rule of execution_sim (the primary rule is execution_sim.entry_fill_rule)",
+                         **{rule: _variant_d(run, spec, {"sim_rule": rule}) for rule in spec.gate2["sim"]["descriptive_rules"]}}
+        elif name == "premium_okx_channel_vs_premium_mark_index":
+            out[name] = {"rule": DESCRIPTIVE_RULE_NOTES[name], **_premium_agreement(run, tspec)}
+        elif name == "net_bp_gate1_construction_on_last_prints":
+            out[name] = {"rule": "the Gate 1 construction (through proxy on the minute bars of the prints, c(t) = last print, Gate 1 design costs, channel funding)",
+                         **_variant_d(run, spec, {"construction": "gate1"})}
+        elif name == "adverse_selection_measured_vs_design_3_5":
+            res = {"rule": DESCRIPTIVE_RULE_NOTES[name], "design_bp_per_maker_leg": spec.costs["adverse_selection_bp_per_maker_leg"]}
+            for side, parts in (("events", run["ev_parts"]), ("controls", run["ct_parts"])):
+                m0, m60, m300 = (np.concatenate([np.asarray((p.get("sim") or {}).get(k, np.zeros(0))) for p in parts]) if parts else np.zeros(0)
+                                 for k in ("sim_markout_0_bp", "sim_markout_60_bp", "sim_markout_300_bp"))
+                mean60 = _fmean(m60)
+                res[side] = {"fills": int(np.isfinite(m60).sum()), "markout_0_bp_mean": _fmean(m0), "markout_60_bp_mean": mean60, "markout_300_bp_mean": _fmean(m300),
+                             "measured_adverse_selection_bp": None if mean60 is None else -mean60}
+            out[name] = res
+        elif name == "taker_half_spread_measured_vs_design_3":
+            res = {"rule": DESCRIPTIVE_RULE_NOTES[name], "design_bp": spec.costs["taker_entry_half_spread_bp"]}
+            for side, parts in (("events", run["ev_parts"]), ("controls", run["ct_parts"])):
+                hs = np.concatenate([np.asarray((p.get("sim") or {}).get("sim_half_spread_bp", np.zeros(0))) for p in parts]) if parts else np.zeros(0)
+                res[side] = {"entries": int(np.isfinite(hs).sum()), "half_spread_bp_mean": _fmean(hs)}
+            out[name] = res
+        elif name == "dst_regime_winter_vs_summer":
+            ev_s, ct_s = _us_summer_time(inst["ev_ts"]), _us_summer_time(inst["ct_ts"])
+            out[name] = {"rule": DESCRIPTIVE_RULE_NOTES[name], "us_summer_time": _subset_d(run, ev_s, ct_s), "us_winter_time": _subset_d(run, ~ev_s, ~ct_s)}
         elif name == "by_month":
             months = sorted({tape.date_of_day(int(d))[:7] for d in (inst["ev_ts"] // DAY_US).tolist()})
             ev_m = np.array([tape.date_of_day(int(d))[:7] for d in (inst["ev_ts"] // DAY_US).tolist()])
@@ -2770,9 +3195,15 @@ def _proxy_missing(series_by_inst: dict, raw_by_inst: dict, tspec: TypeSpec) -> 
     return missing, total
 
 
-def _calendar_days(spec: Spec, tspec: TypeSpec, series_by_inst: dict, d_cov_global: int | None) -> int:
+def _calendar_days(spec: Spec, tspec: TypeSpec, series_by_inst: dict, d_cov_global: int | None, window: tuple[int, int] | None = None) -> int:
     """Denominator of fills / day (LP-G5 §7.6): calendar days of D_cov (T01), NYSE days of the window with >= 1 eligible instrument
-    at h, macro days included (T05)."""
+    at h, macro days included (T05). Capture: the type's window [T0 ; end) (`economic.fills_per_day`)."""
+    if spec.source == "capture" and window is not None:
+        lo, hi = window
+        if tspec.generator["kind"] == "local_time":
+            eligible = [s.meta.eligible_from_us for s in series_by_inst.values()]
+            return sum(1 for m, _, _ in local_time_instants(tspec, spec, lo, hi, apply_exclusions=False) if any(m + tspec.footprint[0] * MINUTE_US >= e for e in eligible))
+        return int((hi - lo) // DAY_US)
     if tspec.window_rule == "funding_coverage":
         start = d_cov_global
         if start is None:
@@ -2797,14 +3228,18 @@ def _sum_counts(parts: list[dict]) -> dict:
 
 
 def evaluate_type(series_by_inst: dict, tspec: TypeSpec, spec: Spec, common: dict) -> dict:
-    """Instants, restrictions, controls and measures of one type on every instrument; the instant-level arrays."""
+    """Instants, restrictions, controls and measures of one type on every instrument; the instant-level arrays. Capture: the type's
+    window [T0 ; end) of `common['type_window']` (the data-gap extension applied by `run_study`)."""
+    window = (common.get("type_window") or {}).get(tspec.name)
+    if tspec.window_rule == "funding_coverage" and common.get("d_cov_global_us") is not None:
+        window = (int(common["d_cov_global_us"]), spec.end_us)  # LP-G5 §4.4: T01 entier se restreint à D_cov (the registry's single window)
     events, controls, raw_all, other, by_inst = {}, {}, {}, {}, {}
     excluded_instruments = []
     gen_totals, restrict_totals, control_totals = {}, {}, {"candidates": 0, "kept": 0, "excluded_union": 0, "excluded_by_component": {}}
     for inst, s in series_by_inst.items():
         instants, gdiag, other_i = generator_instants(s, tspec, spec, common)
-        raw, rdiag = restrict(s, instants, tspec, spec)
-        other[inst], _ = restrict(s, other_i, tspec, spec)
+        raw, rdiag = restrict(s, instants, tspec, spec, window)
+        other[inst], _ = restrict(s, other_i, tspec, spec, window)
         raw_all[inst] = raw
         for key, value in gdiag.items():
             gen_totals[key] = gen_totals.get(key, 0) + int(value)
@@ -2818,7 +3253,7 @@ def evaluate_type(series_by_inst: dict, tspec: TypeSpec, spec: Spec, common: dic
             by_inst[inst] = entry
             continue
         union = exclusion_intervals(s, tspec, spec, common)
-        ct, cdiag = control_instants(s, tspec, spec, raw, union)
+        ct, cdiag = control_instants(s, tspec, spec, raw, union, window)
         events[inst], controls[inst] = raw, ct
         for key in ("candidates", "kept", "excluded_union"):
             control_totals[key] += int(cdiag[key])
@@ -2850,8 +3285,8 @@ def evaluate_type(series_by_inst: dict, tspec: TypeSpec, spec: Spec, common: dic
                            f"{vol_field}_share_by_instrument": vol_share if spec.frozen_candle["applies"] else None,
                            "by_instrument": by_inst},
             "fill_rate": {side: {"attempted": attempted[side], "filled": filled[side], "rate": (filled[side] / attempted[side]) if attempted[side] else None} for side in attempted}
-            if tspec.fill_proxy is not None else None,
-            "macro_excluded": common["macro_excluded"].get(tspec.name, np.zeros(0, dtype=np.int64)), "common": common}
+            if tspec.fill_proxy is not None or spec.source == "capture" else None,
+            "macro_excluded": common["macro_excluded"].get(tspec.name, np.zeros(0, dtype=np.int64)), "common": common, "window": window}
 
 
 def _instruments_per_instant(counts: np.ndarray) -> dict:
@@ -2867,10 +3302,54 @@ def _by_hour(run: dict) -> dict:
     return {f"{h:02d}": _subset_d(run, hours == h, _same_days(run, hours == h)) for h in sorted(set(hours.tolist()))}
 
 
+def _gate2_context(series_by_inst: dict, spec: Spec, context: dict, device_global: list) -> dict:
+    """(B) xxi — the Gate 2 study conditions: the inscription read from the Gate 1 result (`gate2_inscription_from_gate1_result`), the
+    owner decisions still pending (global INCONCLUSIVE), the unusable instrument-days (`quality`; share > max ⇒ global INCONCLUSIVE),
+    the days lost by every instrument and the data-gap extension of each type window, the index availability (P-G5-10 (ii))."""
+    from . import g5_gate2  # lazy: g5_gate2 imports this module
+
+    verdicts1 = context.get("gate1_verdicts")
+    if verdicts1 is None:
+        raise ValueError("a Gate 2 study needs context['gate1_verdicts'] (the Gate 1 result, gate2_inscription.input)")
+    inscription = g5_gate2.inscription_of(spec, verdicts1)
+    if spec.gate2["pending"]:
+        device_global.append(f"owner_decision_pending_present: {spec.gate2['pending']} (owner_decisions.rule: replaced by the owner's dated choice before FROZEN)")
+    t0_day, end_day = int(spec.gate2["t0_us"] // DAY_US), max(int(g5_gate2.type_window(spec, t)[1] // DAY_US) for t in spec.types)
+    unusable = {i: set(s.coverage.get("unusable_days") or ()) for i, s in series_by_inst.items()}
+    scored = bad = 0
+    for i, s in series_by_inst.items():  # instrument-days of the base windows on which the instrument is eligible the whole day
+        days = [d for d in range(t0_day, end_day) if d * DAY_US >= s.meta.eligible_from_us]
+        scored += len(days)
+        bad += sum(1 for d in days if d in unusable[i])
+    share = (bad / scored) if scored else None
+    share_max = spec.verdict["unusable_share_max"]
+    if share is not None and share > share_max:
+        device_global.append(f"unusable_instrument_day_share_gt: {bad} of {scored} instrument-days unusable > {share_max:g} (quality)")
+    lost = []
+    for d in range(t0_day, end_day):
+        eligible = [i for i, s in series_by_inst.items() if s.meta.eligible_from_us <= d * DAY_US]
+        if eligible and all(d in unusable[i] for i in eligible):
+            lost.append(d)
+    extension = min(len(lost), spec.gate2["max_gap_days"])
+    windows = {t.name: g5_gate2.type_window(spec, t, extension) for t in spec.types}
+    index_minutes = sum(int(s.coverage.get("index_minutes", 0)) for s in series_by_inst.values())
+    choice = spec.gate2["index_choice"]
+    index_state = "unresolved" if choice == g5_gate2.PENDING else ("available" if index_minutes > 0 else "unavailable")
+    return {"inscription": inscription, "windows": windows,
+            "quality": {"instrument_days_scored": scored, "instrument_days_unusable": bad, "share": share, "share_max": share_max,
+                        "days_lost_by_every_instrument": [tape.date_of_day(d) for d in lost], "extension_days": extension,
+                        "extension_applied": {t.name: windows[t.name][1] != g5_gate2.type_window(spec, t)[1] for t in spec.types},
+                        "extension_beyond_2027_03_31_allowed": spec.gate2["beyond_allowed"]},
+            "index": {"choice": choice, "state": index_state, "minutes": index_minutes},
+            "window_utc": {n: [_iso(a), _iso(b)] for n, (a, b) in windows.items()}, "t0_provisional": spec.gate2["t0_provisional"],
+            "window_end_provisional": {t.name: t.gate2["window_end"]["provisional"] for t in spec.types}}
+
+
 def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> dict:
     """Every type on every instrument: instants, controls, measures, instant-level statistics, C6, criteria, verdicts, Holm, the
     economic reading, the descriptive reports, the sealing. `context`: `device` (global INCONCLUSIVE conditions that hold, with
-    their reasons), `d_cov_global_us` (the receipt's D_cov; None: unknown), `fetch_quality`, `mode` (`synthetic` | `tape`)."""
+    their reasons), `d_cov_global_us` (the receipt's D_cov; None: unknown), `fetch_quality`, `mode` (`synthetic` | `tape`); Gate 2:
+    `gate1_verdicts` (`{type: "G5_GATE1_…"}` of the Gate 1 result, required)."""
     context = dict(context or {})
     mode = context.get("mode", "synthetic")
     device_global = list(context.get("device", []))
@@ -2879,9 +3358,18 @@ def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> 
     else:
         known = [s.d_cov_start_us for s in series_by_inst.values() if s.d_cov_start_us is not None]
         d_cov_global = min(known) if known else None
+    capture = spec.source == "capture"
     common = common_instants(spec)
+    common["d_cov_global_us"] = None if capture else d_cov_global
+    g2 = _gate2_context(series_by_inst, spec, context, device_global) if capture else None
+    if g2 is not None:
+        common["type_window"] = g2["windows"]
     runs, pre = {}, {}
     for tspec in spec.types:
+        if g2 is not None and not g2["inscription"][tspec.name]["evaluated"]:
+            pre[tspec.name] = {"verdict": "NOT_EVALUATED", "reasons": [f"Gate 1 verdict {g2['inscription'][tspec.name]['gate1_verdict']}: {g2['inscription'][tspec.name]['rule']}"],
+                               "criteria": {}, "diff": {}, "validation": None, "proxy": None, "n_instants": 0, "n_days": 0}
+            continue
         run = evaluate_type(series_by_inst, tspec, spec, common)
         runs[tspec.name] = run
         device = list(device_global)
@@ -2902,8 +3390,9 @@ def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> 
                               f"{v.get('denominator_rate_inside_zone')} (min {tspec.validation['min_denominator']})")
             elif PROXY_MISSING_RE.match(cond) and proxy is not None and (proxy["share"] is None or proxy["share"] > proxy["max"]):
                 device.append(f"{cond}: {proxy['instrument_days_without_p_hat']} of {proxy['instrument_days']} instrument-days without P_hat")
-            elif cond == "index_source_none" and spec.gate2 is not None and spec.gate2["index_source"] == "none":
-                device.append("index_source_none: no index source at the capture (P-G5-10 ii): the classifier cannot be computed")
+            elif cond == "classifier_index_source_unresolved_or_unavailable" and g2 is not None and g2["index"]["state"] != "available":
+                device.append(f"classifier_index_source_unresolved_or_unavailable: P-G5-10 (ii) {g2['index']['choice']} ({g2['index']['state']}): "
+                              f"{spec.raw['classifier_index_source']['if_unresolved_or_unavailable']}")
         inst = run["instant"]
         n_instants, n_days = int(inst["ev_ts"].size), int(np.unique(inst["ev_ts"] // DAY_US).size)
         criteria, diff = criteria_for(spec, tspec, inst, validation)
@@ -2923,8 +3412,15 @@ def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> 
     family = holm(pvalues, spec.multiplicity["alpha"])
     types_out, sealed_payloads = {}, {}
     for tspec in spec.types:
-        name, p, run = tspec.name, pre[tspec.name], runs[tspec.name]
+        name, p = tspec.name, pre[tspec.name]
         test = family["tests"].get(name, {})
+        if p["verdict"] == "NOT_EVALUATED":
+            types_out[name] = {"type": name, "label": tspec.label, "decisive": True, "role": tspec.role, "verdict": "NOT_EVALUATED", "verdict_label": spec.gate + "NOT_EVALUATED",
+                               "verdict_reasons": p["reasons"], "n_instants": 0, "n_days": 0, "gate1_inscription": g2["inscription"][name],
+                               "holm": {"p_used": pvalues.get(name), "rank": test.get("rank"), "threshold": test.get("threshold"), "confirmed": False},
+                               "holm_local_confirmed": False, "pass_programme_immediate": False, "reading": spec.gate + "NOT_EVALUATED", "fail_annotation": None, "closure_scope": None}
+            continue
+        run = runs[name]
         holm_ok = bool(test.get("confirmed")) and p["verdict"] == "PENDING"
         all_criteria = all(c["pass"] for c in p["criteria"].values())
         annotation = None
@@ -2940,7 +3436,7 @@ def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> 
             verdict, reasons = p["verdict"], p["reasons"]
         p_value = p["diff"].get("p_one_sided")
         immediate = bool(verdict == "PASS" and p_value is not None and p_value <= spec.multiplicity["immediate_if_p_le"])
-        calendar_days = _calendar_days(spec, tspec, run["series"], d_cov_global)
+        calendar_days = _calendar_days(spec, tspec, run["series"], d_cov_global, run.get("window"))
         economic = economic_reading(run["ev_parts"], tspec, spec, calendar_days, verdict)
         descriptive = type_reports(run, spec, spec.descriptive["reports"], calendar_days)
         descriptive["instruments_per_instant"] = {"events": _instruments_per_instant(run["instant"]["ev_n"]), "controls": _instruments_per_instant(run["instant"]["ct_n"])}
@@ -2951,17 +3447,23 @@ def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> 
                 descriptive[report] = _subset_d(run, run["instant"]["ev_n"] >= 3, run["instant"]["ct_n"] >= 3)
         statistic = {"D": p["diff"].get("point"), "lb90": p["diff"].get("lb90"), "ub90": p["diff"].get("ub90"), "p_one_sided": p_value,
                      "event_mean": p["diff"].get("event_mean"), "control_mean": p["diff"].get("control_mean"), "n_control_instants": int(run["instant"]["ct_ts"].size),
-                     "blocks": p["diff"].get("blocks"), "resamples": p["diff"].get("resamples"), "seed": p["diff"].get("seed")}
+                     "blocks": p["diff"].get("blocks"), "resamples": p["diff"].get("resamples"), "seed": p["diff"].get("seed"), "measure": spec.raw["statistics"]["measure"]}
         criteria = p["criteria"]
         result = {"type": name, "label": tspec.label, "decisive": True, "role": tspec.role, "costs_bp": cost_terms(tspec.role, spec.costs), "days_per_year": tspec.days_per_year,
                   "window_rule": tspec.window_rule, "verdict": verdict, "verdict_label": spec.gate + verdict, "verdict_reasons": reasons, "n_instants": p["n_instants"],
                   "n_days": p["n_days"], "exclusions": {**run["exclusions"], "proxy_missing": p["proxy"]}, "fill_rate": run["fill_rate"], "validation": p["validation"],
-                  "gate2_inscription": spec.gate2_inscription[verdict], "fail_annotation": annotation, "closure_scope": spec.verdict["closure_scope"] if verdict == "FAIL" else None,
+                  "fail_annotation": annotation, "closure_scope": spec.verdict["closure_scope"] if verdict == "FAIL" else None,
                   "holm": {"p_used": pvalues.get(name), "rank": test.get("rank"), "threshold": test.get("threshold"), "confirmed": bool(test.get("confirmed"))},
                   "holm_local_confirmed": holm_ok, "pass_programme_immediate": immediate, "reading": economic["reading"],
                   "statistic": statistic, "criteria": criteria, "halves": criteria.get("C4", {}).get("halves"), "c5": criteria.get("C5"), "c7": criteria.get("C7"),
                   "by_month": descriptive.get("by_month"), "by_instrument": descriptive.get("by_instrument"), "by_hour": _by_hour(run), "economic": economic,
                   "descriptive": descriptive}
+        if capture:
+            result["gate1_inscription"] = g2["inscription"][name]
+            result["window_utc"] = g2["window_utc"][name]
+            result["sim_status"] = {side: _sum_status(run[f"{side}_parts"]) for side in ("ev", "ct")}
+        else:
+            result["gate2_inscription"] = spec.gate2_inscription[verdict]
         if verdict in spec.sealing["verdicts"]:
             public, sealed = _seal(result, spec)
             text = json.dumps(_clean(sealed), indent=1, sort_keys=True, ensure_ascii=False) + "\n"
@@ -2970,17 +3472,30 @@ def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> 
             types_out[name] = public
         else:
             types_out[name] = result
-    common_out = common_reports(series_by_inst, spec, spec.descriptive["reports"])
+    common_out = common_reports(series_by_inst, spec, spec.descriptive["reports"], (g2 or {}).get("windows"))
     summary = {"verdicts": {n: r["verdict_label"] for n, r in types_out.items()}, "holm_local_confirmed": [n for n, r in types_out.items() if r["holm_local_confirmed"]],
                "pass_programme_immediate": [n for n, r in types_out.items() if r["pass_programme_immediate"]],
-               "gate2_inscription": {n: r["gate2_inscription"] for n, r in types_out.items()}, "readings": {n: r["reading"] for n, r in types_out.items()},
+               "readings": {n: r["reading"] for n, r in types_out.items()},
                "sealed_sha256": {n: r["sealed"]["sha256"] for n, r in types_out.items() if "sealed" in r}, "global_device_defects": device_global, "mode": mode,
                "gate2_inscription_discretion": spec.notes.get("gate2_inscription.discretion"), "pass_programme_otherwise": spec.multiplicity["otherwise"]}
+    if capture:
+        summary["gate1_inscription"] = {n: g2["inscription"][n] for n in types_out}
+        summary["gate2"] = {k: g2[k] for k in ("quality", "index", "window_utc", "t0_provisional", "window_end_provisional")}
+    else:
+        summary["gate2_inscription"] = {n: r["gate2_inscription"] for n, r in types_out.items()}
     holm_public = {"alpha": family["alpha"], "m": family["m"], "tests": {n: {k: v for k, v in t.items() if k != "p" or n not in sealed_payloads} for n, t in family["tests"].items()}}
     document = {"types": types_out, "holm": holm_public, "summary": summary, "common_descriptive": common_out, "fetch_quality": context.get("fetch_quality"),
                 "d_cov_global": _iso(d_cov_global), "_sealed_payloads": sealed_payloads}
     check_forbidden(document, spec)
     return document
+
+
+def _sum_status(parts: list[dict]) -> dict:
+    total: dict = {}
+    for p in parts:
+        for key, value in (p.get("sim_status") or {}).items():
+            total[key] = total.get(key, 0) + int(value)
+    return total
 
 
 def _seal(result: dict, spec: Spec) -> tuple[dict, dict]:
@@ -3043,7 +3558,8 @@ def render_markdown(document: dict) -> str:
              f"fenêtre {spec['window'][0]} → {spec['window'][1]} (exclu) ; instruments : {len(document.get('instruments', []))} ; D_cov global : {document.get('d_cov_global')} ; "
              f"mode : {document['summary']['mode']}.", "",
              "Aucun paramètre n'a été recherché : signes, fenêtres, classifieur, contrôles, coûts et seuils viennent du spec.", "",
-             "## Verdicts", "", "| type | verdict | raisons | n instants | jours | D (pb) | LB90 | UB90 | p | Holm local | PASS_PROGRAMME immédiat | Gate 2 | lecture |",
+             "## Verdicts", "", f"| type | verdict | raisons | n instants | jours | D (pb) | LB90 | UB90 | p | Holm local | PASS_PROGRAMME immédiat | "
+             f"{'inscription (résultat du Gate 1)' if spec['source'] == 'capture' else 'Gate 2'} | lecture |",
              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for name, r in document["types"].items():
         sealed = "sealed" in r
@@ -3051,11 +3567,14 @@ def render_markdown(document: dict) -> str:
         cells = ["scellé"] * 4 if sealed else [_fmt(st.get("D")), _fmt(st.get("lb90")), _fmt(st.get("ub90")), _fmt(st.get("p_one_sided"), 3, signed=False)]
         lines.append(f"| `{name}` | **{r['verdict_label']}**{(' (' + r['fail_annotation'] + ')') if r.get('fail_annotation') else ''} | {' ; '.join(r['verdict_reasons'])} | "
                      f"{r['n_instants']} | {r['n_days']} | {' | '.join(cells)} | {'oui' if r['holm_local_confirmed'] else 'non'} | {'oui' if r['pass_programme_immediate'] else 'non'} | "
-                     f"{r['gate2_inscription']} | {r['reading']} |")
+                     f"{r.get('gate2_inscription') or (r.get('gate1_inscription') or {}).get('rule')} | {r['reading']} |")
     lines += ["", "`holm_local_confirmed` est la confirmation Holm locale (K = 2) ; `pass_programme_immediate` le test immédiat du programme (p ≤ α / m_max) : "
               "il n'a aucun effet sur l'inscription au Gate 2.", ""]
     for name, r in document["types"].items():
         lines += [f"## `{name}`", ""]
+        if r.get("verdict") == "NOT_EVALUATED":
+            lines += [f"Type **non évalué** : {' ; '.join(r['verdict_reasons'])} (p = 1 au Holm local).", ""]
+            continue
         if "sealed" in r:
             lines += [f"Type **scellé** ({r['verdict_label']}) : D, LB90, UB90, p, moyennes, critères et descriptifs du type sont dans `{r['sealed']['file']}`, "
                       f"sha256 `{r['sealed']['sha256']}`, ouvert après {r['sealed']['open_after']}.", ""]
@@ -3075,6 +3594,9 @@ def render_markdown(document: dict) -> str:
     lines += ["", "## Dispositif", "", f"- Garde : {json.dumps(document.get('guard'))}.", f"- Qualité du fetch : {json.dumps(document.get('fetch_quality'), ensure_ascii=False)[:2000]}.",
               f"- Défauts globaux : {document['summary']['global_device_defects'] or 'aucun'}.", f"- Instantané : {json.dumps(document.get('instruments_snapshot'), ensure_ascii=False)}.",
               f"- Funding scellé : {json.dumps(document.get('funding_seal'), ensure_ascii=False)}.", ""]
+    if spec["source"] == "capture":
+        lines[-1:-1] = [f"- Résultat du Gate 1 : {json.dumps(document.get('gate1_result'), ensure_ascii=False)}.",
+                        f"- Tape d'indice (P-G5-10 ii) : {json.dumps(document.get('index_tape'), ensure_ascii=False)}."]
     return "\n".join(lines)
 
 
@@ -3086,7 +3608,7 @@ def spec_summary(spec: Spec, sha: str, path: str) -> dict:
     return {"path": path, "sha256": sha, "spec_id": spec.spec_id, "schema": SPEC_SCHEMA, "version": spec.version, "status": spec.status, "source": spec.source,
             "dataset_id": spec.dataset_id, "window": [spec.start.isoformat(), spec.end_exclusive.isoformat()], "requires": list(spec.requires),
             "descriptive_rule": spec.descriptive["rule"], "protocol": spec.protocol, "protocol_sha256": tape.sha256_of(protocol) if protocol.is_file() else None,
-            "audit": spec.audit, "freeze_fill": {k: v for k, v in spec.freeze_fill.items() if k != "null"}, "notes": spec.notes}
+            "audit": spec.audit, "freeze_fill": {k: v for k, v in spec.freeze_fill.items() if k not in ("null", "absent")}, "notes": spec.notes}
 
 
 # ----------------------------------------------------------------------------- command line
@@ -3098,10 +3620,20 @@ def add_parser(sub) -> None:
     parser.add_argument("--spec", required=True, help="the frozen machine spec (schema g5-spec/2)")
     parser.add_argument("--expect-spec-sha256", required=True, help="the sha256 of the frozen spec (LP-G5 §13): a different file gives INCONCLUSIVE without reading anything")
     parser.add_argument("--instruments-file", default="", help="the freeze snapshot (default freeze_fill.instruments_snapshot_path); its sha256 must equal the spec's")
-    parser.add_argument("--expect-funding-seal-sha256", default="", help="the sha256 of the sealed funding receipt recorded at the freeze (registry)")
+    parser.add_argument("--expect-funding-seal-sha256", default="", help="optional: the sha256 of the sealed funding receipt (registry); the receipt must equal "
+                                                                          "freeze_fill.funding_seal_receipt_sha256 in any case (refuse_run)")
     parser.add_argument("--out-json", required=True)
     parser.add_argument("--out-md", default="")
     parser.add_argument("--sealed-dir", default="", help="where sealed/<type>.json go (default: <dir of --out-json>/sealed)")
+    gate2 = parser.add_argument_group("Gate 2 (source capture)")
+    gate2.add_argument("--gate1-result", default="", help="the Gate 1 result JSON of g5-eval (gate2_inscription.input; never a file under sealed/)")
+    gate2.add_argument("--expect-gate1-result-sha256", default="", help="its sha256 written in the register the day of the Gate 1 run")
+    gate2.add_argument("--p3-counts-file", default="", help="the P3 counts selection file (sha256 = freeze_fill.p3_counts_selection_sha256)")
+    gate2.add_argument("--index-tape", default="", help="P-G5-10 (ii) option b: the directory holding index_1m/<index_id> (default --tape)")
+    gate2.add_argument("--expect-index-tape-sha256", default="", help="P-G5-10 (ii) option b: the register's sha256 of the index tape "
+                                                                      "(g5_fetch.directory_digest of its index_1m/; required, refuse_run otherwise; CTO M3)")
+    gate2.add_argument("--gate1-spec", default="", help="the FROZEN Gate 1 spec frozen with this one (default: frozen_with.spec in the repository); "
+                                                       "its sha256 must equal freeze_fill.gate1_spec_sha256 (CTO M2)")
     parser.set_defaults(func=command_eval)
 
 
@@ -3162,9 +3694,14 @@ def command_eval(args: argparse.Namespace) -> int:
 
     started = time.time()
     try:
-        spec, spec_sha = load_spec(Path(args.spec))
+        spec, spec_sha = load_spec(Path(args.spec), Path(args.gate1_spec) if getattr(args, "gate1_spec", "") else None)
     except SpecError as error:
         raise SystemExit(f"spec error: {error}") from None
+    if spec.source == "capture":
+        return _command_eval_capture(args, spec, spec_sha, started)
+    for option in ("gate1_result", "expect_gate1_result_sha256", "p3_counts_file", "index_tape", "expect_index_tape_sha256", "gate1_spec"):
+        if getattr(args, option, ""):
+            raise SystemExit(f"--{option.replace('_', '-')} belongs to a capture (Gate 2) spec")
     guard = guard_window(spec)
     code_digest = cli.code_digest()
     base = {"kind": "lp-g5-eval", "evaluator": EVALUATOR_VERSION, "generated_at": tape.iso_now(), "spec": spec_summary(spec, spec_sha, str(args.spec)), "tape": str(args.tape),
@@ -3210,20 +3747,30 @@ def command_eval(args: argparse.Namespace) -> int:
             raise SystemExit(f"{tape_dir}: dataset {src.get('dataset_id')!r} is not the spec's {spec.dataset_id!r}")
         if src.get("decision_ref") != spec.freeze_fill["decision_ref_p_g5_1"]:
             raise SystemExit(f"{tape_dir}: the fetch's decision_ref is not freeze_fill.decision_ref_p_g5_1")
-        sealed_dir = tape_dir / g5_fetch.SEALED_DIR_NAME
+        # CTO M4: the sealed funding receipt is required and must be the one frozen in freeze_fill (refuse_run, never a silent
+        # INCONCLUSIVE); CTO m3: the sealed store is one archive, read in memory, its sha256, manifest and files equal to the receipt.
         receipt_path = tape_dir / g5_fetch.SEALED_RECEIPT_NAME
-        sealed_manifest = tape.read_manifest(sealed_dir) if sealed_dir.exists() else None
-        d_cov_global = None
-        if receipt_path.exists() and sealed_manifest is not None:
-            receipt, receipt_sha = g5_fetch.read_receipt(receipt_path)
-            if args.expect_funding_seal_sha256 and args.expect_funding_seal_sha256.lower() != receipt_sha:
-                raise SystemExit(f"funding receipt sha256 {receipt_sha} differs from --expect-funding-seal-sha256")
-            if tape.sha256_of(sealed_dir / tape.MANIFEST_NAME) != receipt.get("sealed_manifest_sha256") or g5_fetch.directory_digest(sealed_dir)[0] != receipt.get("sealed_files_digest"):
-                raise SystemExit(f"{sealed_dir}: the sealed funding store differs from its receipt (sealed manifest or files changed)")
-            d_cov_global = receipt.get("coverage_start_us")
-            seal = {"receipt_sha256": receipt_sha, "sealed_manifest_sha256": receipt.get("sealed_manifest_sha256"), "coverage_start_utc": receipt.get("coverage_start_utc")}
-        elif args.expect_funding_seal_sha256:
-            raise SystemExit("--expect-funding-seal-sha256 given but the tape holds no sealed funding receipt")
+        archive_path = tape_dir / g5_fetch.SEALED_ARCHIVE_NAME
+        if (tape_dir / g5_fetch.SEALED_DIR_NAME).exists():
+            raise SystemExit(f"{tape_dir / g5_fetch.SEALED_DIR_NAME}: an open sealed store (refuse_run): {g5_fetch.SEALED_ARCHIVE_RULE}")
+        if not receipt_path.exists() or not archive_path.exists():
+            raise SystemExit(f"{tape_dir}: no sealed funding receipt or archive (refuse_run: freeze_fill.{FREEZE_FILL_SEAL_KEY}, P-G5-3, CTO M4)")
+        receipt, receipt_sha = g5_fetch.read_receipt(receipt_path)
+        if receipt_sha != spec.freeze_fill[FREEZE_FILL_SEAL_KEY]:
+            raise SystemExit(f"funding receipt sha256 {receipt_sha} differs from freeze_fill.{FREEZE_FILL_SEAL_KEY} {spec.freeze_fill[FREEZE_FILL_SEAL_KEY]} (refuse_run)")
+        if args.expect_funding_seal_sha256 and args.expect_funding_seal_sha256.lower() != receipt_sha:
+            raise SystemExit(f"funding receipt sha256 {receipt_sha} differs from --expect-funding-seal-sha256 (refuse_run)")
+        try:
+            archive = g5_fetch.SealedArchive.open(archive_path)
+        except (OSError, ValueError, tarfile.TarError) as error:
+            raise SystemExit(f"{archive_path}: unreadable sealed archive ({error}) (refuse_run)") from None
+        if (archive.sha256 != receipt.get("sealed_archive_sha256") or archive.manifest_sha256 != receipt.get("sealed_manifest_sha256")
+                or archive.files_digest != receipt.get("sealed_files_digest")):
+            raise SystemExit(f"{archive_path}: the sealed funding store differs from its receipt (archive, sealed manifest or files changed)")
+        sealed_manifest = archive.manifest
+        d_cov_global = receipt.get("coverage_start_us")
+        seal = {"receipt_sha256": receipt_sha, "sealed_archive_sha256": archive.sha256, "sealed_manifest_sha256": receipt.get("sealed_manifest_sha256"),
+                "coverage_start_utc": receipt.get("coverage_start_utc")}
         context["d_cov_global_us"] = d_cov_global
         states = dict(manifest.get("g5_streams") or {})
         states.update((sealed_manifest or {}).get("g5_streams") or {})
@@ -3237,7 +3784,7 @@ def command_eval(args: argparse.Namespace) -> int:
             context["device"].append(f"fetch_job_error_share_gt: {len(bad)} of {len(keys)} jobs in error > {threshold:g} (§4.5)")
         if missing and "stream_end_reason_missing" in spec.verdict["conditions"]:
             context["device"].append(f"stream_end_reason_missing: {len(missing)} jobs without end_reason")
-        series = {i.inst_id: load_history_series(tape_dir, i, spec, manifest, sealed_manifest) for i in spec.universe}
+        series = {i.inst_id: load_history_series(tape_dir, i, spec, manifest, archive) for i in spec.universe}
     else:
         if manifest.get("kind") == g5_fetch.MANIFEST_KIND:
             raise SystemExit(f"{tape_dir}: a 1-minute history is not a capture tape")
@@ -3252,4 +3799,83 @@ def command_eval(args: argparse.Namespace) -> int:
     _finish(document, args, sealed_payloads)
     print(json.dumps({"spec_sha256": spec_sha, "code_digest": code_digest, "verdicts": study["summary"]["verdicts"], "sealed_sha256": study["summary"]["sealed_sha256"],
                       "gate2_inscription": study["summary"]["gate2_inscription"], "elapsed_seconds": document["elapsed_seconds"]}, ensure_ascii=False))
+    return 0
+
+
+def _refused_document(base: dict, spec: Spec, device: list) -> dict:
+    types = {t.name: {"type": t.name, "verdict": "INCONCLUSIVE", "verdict_label": spec.gate + "INCONCLUSIVE", "verdict_reasons": device, "n_instants": 0, "n_days": 0,
+                      "exclusions": {}, "fill_rate": None, "validation": None, "holm_local_confirmed": False, "pass_programme_immediate": False,
+                      "reading": spec.gate + "INCONCLUSIVE", "market_data_read": False} for t in spec.types}
+    document = {**base, "types": types, "summary": {"verdicts": {n: r["verdict_label"] for n, r in types.items()}, "global_device_defects": device, "market_data_read": False,
+                                                    "mode": "tape"}}
+    check_forbidden(document, spec)
+    return document
+
+
+def _command_eval_capture(args: argparse.Namespace, spec: Spec, spec_sha: str, started: float) -> int:
+    """The Gate 2 run (B xxi): global device conditions decided before any market value is read (spec, code, status, freeze_fill, the
+    FROZEN Gate 1 spec frozen with this one — `--gate1-spec` or `frozen_with.spec` —, the Gate 1 result and its register sha256, its kind,
+    mode and status, the capture manifest), then the snapshot, the P3 counts, the universe and, under P-G5-10 (ii) option b, the index tape
+    against its register sha256 (refuse_run), then the capture. Nothing is sealed at this gate (sealing.gate2_own_verdicts)."""
+    from . import cli  # lazy: cli imports this module
+    from . import g5_gate2
+
+    guard = guard_window(spec)
+    code_digest = cli.code_digest()
+    base = {"kind": "lp-g5-eval", "evaluator": EVALUATOR_VERSION, "generated_at": tape.iso_now(), "spec": spec_summary(spec, spec_sha, str(args.spec)), "tape": str(args.tape),
+            "guard": guard, "code": cli.code_identity(), "code_digest": code_digest}
+    device = []
+    if args.expect_spec_sha256.lower() != spec_sha:
+        device.append(f"spec_sha256_mismatch: file {spec_sha}, expected {args.expect_spec_sha256}")
+    gate1_path = Path(args.gate1_spec) if getattr(args, "gate1_spec", "") else REPO_ROOT / spec.gate2["frozen_with"]["spec"]
+    gate1_sha = tape.sha256_of(gate1_path) if gate1_path.is_file() else None
+    if gate1_sha != spec.freeze_fill.get("gate1_spec_sha256"):
+        device.append(f"spec_sha256_mismatch: the Gate 1 spec frozen with this one ({gate1_path}) is {gate1_sha}, freeze_fill.gate1_spec_sha256 {spec.freeze_fill.get('gate1_spec_sha256')}")
+    if spec.gate2["frozen_with"].get("status") != "FROZEN":
+        device.append(f"status_not_frozen: the Gate 1 spec read with this one is {spec.gate2['frozen_with'].get('status')} (frozen in the same freeze line, CTO M2)")
+    if not spec.frozen:
+        device.append(f"status_not_frozen: {spec.status} (market data are read under a FROZEN spec only)")
+    if spec.freeze_fill["null"]:
+        device.append(f"freeze_fill_null: {spec.freeze_fill['null']}")
+    if spec.gate2["pending"]:
+        device.append(f"owner_decision_pending_present: {spec.gate2['pending']}")
+    if spec.freeze_fill.get("code_digest_sha256") != code_digest:
+        device.append(f"code_digest_mismatch: running {code_digest}, frozen {spec.freeze_fill.get('code_digest_sha256')}")
+    gate1 = None
+    if not args.gate1_result:
+        device.append("gate1_result_sha256_mismatch: no --gate1-result (gate2_inscription.input)")
+    else:
+        gate1, defects = g5_gate2.read_gate1_result(Path(args.gate1_result), args.expect_gate1_result_sha256, spec)
+        device.extend(defects)
+    tape_dir = Path(args.tape)
+    manifest = tape.read_manifest(tape_dir)
+    device.extend(g5_gate2.check_capture_manifest(manifest, spec))
+    if device:
+        document = _refused_document(base, spec, device)
+        _write(Path(args.out_json), json.dumps(_clean(document), indent=1, sort_keys=True, ensure_ascii=False) + "\n")
+        print(json.dumps({"spec_sha256": spec_sha, "verdicts": document["summary"]["verdicts"], "market_data_read": False, "device": device}, ensure_ascii=False))
+        return 2
+    snapshot_path = Path(args.instruments_file or spec.freeze_fill["instruments_snapshot_path"])
+    if not snapshot_path.exists() or tape.sha256_of(snapshot_path) != spec.freeze_fill["instruments_snapshot_sha256"]:
+        raise SystemExit(f"instruments snapshot {snapshot_path}: missing or its sha256 differs from freeze_fill.instruments_snapshot_sha256 (mismatch_with_snapshot: refuse_run)")
+    if not args.p3_counts_file or not Path(args.p3_counts_file).is_file() or tape.sha256_of(Path(args.p3_counts_file)) != spec.freeze_fill["p3_counts_selection_sha256"]:
+        raise SystemExit("--p3-counts-file: missing or its sha256 differs from freeze_fill.p3_counts_selection_sha256 (refuse_run)")
+    rows = _snapshot_rows(snapshot_path)
+    problems = g5_gate2.check_universe(spec, rows)
+    if problems:
+        raise SystemExit("universe against the snapshot (refuse_run): " + "; ".join(problems[:20]))
+    index_dir = Path(args.index_tape) if args.index_tape else None
+    index_check = None
+    if spec.gate2["index_choice"] == g5_gate2.INDEX_OPTION_B:
+        index_check = g5_gate2.check_index_tape(index_dir or tape_dir, getattr(args, "expect_index_tape_sha256", ""))
+    series = {i.inst_id: load_capture_series(tape_dir, i, spec, rows.get(i.inst_id), index_dir) for i in spec.universe}
+    context = {"mode": "tape", "device": [], "gate1_verdicts": gate1["verdicts"], "d_cov_global_us": spec.pad_start_us}
+    study = run_study(series, spec, context)
+    study.pop("_sealed_payloads")
+    document = {**base, **study, "instruments": [i.inst_id for i in spec.universe], "instruments_snapshot": {"path": str(snapshot_path), "sha256": tape.sha256_of(snapshot_path)},
+                "gate1_result": {k: gate1[k] for k in ("path", "sha256", "market_data_read", "note")}, "index_tape": index_check,
+                "coverage": {i: s.coverage for i, s in series.items()}, "elapsed_seconds": round(time.time() - started, 1)}
+    _finish(document, args, {})
+    print(json.dumps({"spec_sha256": spec_sha, "code_digest": code_digest, "verdicts": study["summary"]["verdicts"], "gate1_inscription": study["summary"]["gate1_inscription"],
+                      "elapsed_seconds": document["elapsed_seconds"]}, ensure_ascii=False))
     return 0

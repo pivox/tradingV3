@@ -54,7 +54,9 @@ def _no_network(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", refuse)
     monkeypatch.setattr(socket.socket, "connect_ex", refuse)
+    monkeypatch.setattr(socket.socket, "sendto", refuse)
     monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)  # no name resolution either (CTO review-b m4)
     monkeypatch.setattr(urllib.request, "urlopen", refuse)
     monkeypatch.setattr(g5_fetch.UrllibClient, "get", refuse)
 

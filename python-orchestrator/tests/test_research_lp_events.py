@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import socket
+import urllib.request
+
 import json
 from datetime import date
 from pathlib import Path
@@ -17,6 +20,57 @@ from scripts.research_lp import tape
 US = tape.SECOND_US
 INST = "SOL-USD_UM_XPERP-310404"
 T0 = tape.parse_iso_utc("2026-11-03T00:00:00Z")
+
+
+# ----------------------------------------------------------------------------- no network (CTO review-b m4)
+
+LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+@pytest.fixture
+def allow_loopback_only():
+    """Explicit opt-in, `@pytest.mark.usefixtures("allow_loopback_only")` (CTO m4): the test may reach 127.0.0.1 / ::1 only (a fake server
+    of the test itself), never resolve or reach any other host."""
+    return LOOPBACK_HOSTS
+
+
+@pytest.fixture(autouse=True)
+def _no_network(request, monkeypatch):
+    """No connection and no name resolution: socket connect / connect_ex / sendto, create_connection, getaddrinfo and urlopen fail
+    loudly — except loopback addresses for a test that opts in with `allow_loopback_only`."""
+    loopback = "allow_loopback_only" in request.fixturenames
+    real = {"connect": socket.socket.connect, "connect_ex": socket.socket.connect_ex, "sendto": socket.socket.sendto, "getaddrinfo": socket.getaddrinfo,
+            "create_connection": socket.create_connection}
+
+    def local(address) -> bool:
+        return loopback and isinstance(address, tuple) and len(address) >= 2 and str(address[0]) in LOOPBACK_HOSTS
+
+    def guarded(name):
+        def method(self, *args):
+            address = args[-1] if name == "sendto" else args[0]
+            if not local(address):
+                raise AssertionError(f"network access attempted: {name} {address!r}")
+            return real[name](self, *args)
+        return method
+
+    def getaddrinfo(host, *args, **kwargs):
+        if not (loopback and str(host) in LOOPBACK_HOSTS):
+            raise AssertionError(f"name resolution attempted: {host!r}")
+        return real["getaddrinfo"](host, *args, **kwargs)
+
+    def create_connection(address, *args, **kwargs):
+        if not local(address):
+            raise AssertionError(f"network access attempted: create_connection {address!r}")
+        return real["create_connection"](address, *args, **kwargs)
+
+    def refuse(*args, **kwargs):  # pragma: no cover - the assertion is the point
+        raise AssertionError("network access attempted: urlopen")
+
+    for name in ("connect", "connect_ex", "sendto"):
+        monkeypatch.setattr(socket.socket, name, guarded(name))
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket, "create_connection", create_connection)
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
 
 
 # ----------------------------------------------------------------------------- liquidation clusters
@@ -302,3 +356,11 @@ def test_cli_clock_window_is_decided_at_the_arming_instant_on_a_tape_around_a_se
     # The synthetic tape prints a seller at the bid every 20 s (s % 20 == 1): the buy at 100.0 fills at 07:55:01 under `touch`, inside its window.
     assert buy["status"] == cli.lp_sim.STATUS["filled"] and buy["fill_ts"] == h - 5 * 60 * US + 1 * US
     capsys.readouterr()
+
+
+def test_no_test_can_open_a_socket_or_resolve_a_name():
+    """CTO m4: the guard of this module (no loopback opt-in here)."""
+    for attempt in (lambda: socket.create_connection(("127.0.0.1", 9)), lambda: socket.socket().connect(("127.0.0.1", 9)), lambda: socket.getaddrinfo("eea.okx.com", 443),
+                    lambda: urllib.request.urlopen("https://eea.okx.com/api/v5/public/time")):
+        with pytest.raises(AssertionError):
+            attempt()

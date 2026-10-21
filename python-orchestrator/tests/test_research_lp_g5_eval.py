@@ -1,12 +1,12 @@
 """Offline tests of the G5 evaluator (`scripts/research_lp/g5_eval.py`, schema `g5-spec/2`, LP-G5 §2.3 (B) xxii) on synthetic
-1-minute histories, a synthetic capture tape and the repository's own machine spec `specs/g5_gate1_spec.json`: the strict reader
+1-minute histories and the repository's own machine spec `specs/g5_gate1_spec.json`: the strict reader
 on the real spec (unknown keys, unknown values, capabilities, look-ahead, audits), eligibility at listTime + 30 days, the local-time
 generator of T05 and the 8 h filter of T01, the controls at the type's minute of the hour with footprint exclusions (the protocol's
 own hour lists), the one classifier P̂(t_arm) at events and controls, the through fill proxy, zero-volume and missing candles, the
 costs by role, the funding, the instant unit, C6 (3 × 3 matrix, thresholds, INCONCLUSIVE), the verdict precedence and C1–C7, Holm
-and the programme field, the sealing of INCONCLUSIVE / NOT_INFORMATIVE, the economic reading, the descriptive reports, the Gate 2
-simulation and the command line end to end. The calibration under H0 over 1 000 seeds and the B2 non-regression are in
-`test_research_lp_g5_calibration.py`.
+and the programme field, the sealing of INCONCLUSIVE / NOT_INFORMATIVE, the economic reading, the descriptive reports and the
+command line end to end. The calibration under H0 over 1 000 seeds and the B2 non-regression are in
+`test_research_lp_g5_calibration.py`; the Gate 2 (the real `specs/g5_gate2_spec.json`, B xxi) is in `test_research_lp_g5_gate2.py`.
 
 Rewritten on 2026-10-21 for the code (B): the earlier tests read the intermediate format `g5_eval/2`, which the protocol replaces
 by `g5-spec/2` (B xviii); each of their concerns is covered here on the new format. No test opens a connection (socket-level
@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from scripts.research_lp import cli, g5_eval, g5_fetch, lp_sim, tape
+from scripts.research_lp import cli, g5_eval, g5_fetch, tape
 from scripts.research_lp import events as ev
 
 US = tape.SECOND_US
@@ -41,12 +41,16 @@ LISTED = {BTC: "2026-03-30T04:30:00Z", ETH: "2026-04-01T04:00:00Z", SOL: "2026-0
 
 @pytest.fixture(autouse=True)
 def _no_network(monkeypatch):
+    """No connection, no name resolution (CTO m4): socket connect / connect_ex / sendto, create_connection, getaddrinfo, urlopen, the
+    fetcher's client."""
     def refuse(*args, **kwargs):  # pragma: no cover - the assertion is the point
         raise AssertionError("network access attempted")
 
     monkeypatch.setattr(socket.socket, "connect", refuse)
     monkeypatch.setattr(socket.socket, "connect_ex", refuse)
+    monkeypatch.setattr(socket.socket, "sendto", refuse)
     monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
     monkeypatch.setattr(urllib.request, "urlopen", refuse)
     monkeypatch.setattr(g5_fetch.UrllibClient, "get", refuse)
 
@@ -170,7 +174,10 @@ def test_the_real_spec_is_accepted_and_every_field_is_read():
     spec, sha = g5_eval.load_spec(REAL_SPEC)
     assert sha == REAL_SPEC_SHA256_DRAFT and spec.status == "DRAFT_NOT_FROZEN" and spec.source == "history" and spec.gate == "G5_GATE1_"
     assert spec.requires == tuple(BASE["requires"]) and set(spec.requires) == set(g5_eval.HISTORY_REQUIRES) and len(spec.requires) == 27
-    assert spec.freeze_fill["null"] == ["instruments_snapshot_path", "instruments_snapshot_sha256", "calendars_verified_utc", "code_digest_sha256", "decision_ref_p_g5_1"]
+    # CTO M4: the sha256 of the sealed funding receipt is a freeze_fill value; the draft predates the key (absent = null, listed).
+    assert spec.freeze_fill["null"] == ["instruments_snapshot_path", "instruments_snapshot_sha256", "calendars_verified_utc", "code_digest_sha256", "decision_ref_p_g5_1",
+                                        "funding_seal_receipt_sha256"]
+    assert spec.notes["freeze_fill.absent_keys"] == ["funding_seal_receipt_sha256"] and "absent" not in g5_eval.spec_summary(spec, sha, "x")["freeze_fill"]
     assert len(spec.universe) == 25 and [e["inst_id"] for e in spec.excluded] == ["PONS-USD_UM_XPERP-310919", "STRK-USD_UM_XPERP-310919", "CT-USD_UM_XPERP-311003", "QUANT-USD_UM_XPERP-311003"]
     assert spec.instrument(BTC).eligible_from_us == tape.parse_iso_utc("2026-04-29T04:30:00Z") and spec.eligibility_days == 30.0
     assert (spec.start.isoformat(), spec.end_exclusive.isoformat(), spec.end_us) == ("2026-04-28", "2026-10-14", g5_fetch.END_EXCLUSIVE_US)
@@ -243,7 +250,8 @@ def test_the_strict_reader_refuses_unknown_keys_values_capabilities_and_inconsis
         # requires: the version lock
         (lambda d: d["requires"].append("funding_snipe"), "not implemented"),
         (lambda d: d["requires"].remove("fill_proxy_through_candles"), "without declaring"),
-        (lambda d: d["requires"].append("gate2_capture_simulation"), "not applicable"),
+        (lambda d: d["requires"].append("gate2_sim_maker_post_only_touch"), "not applicable"),  # a Gate 2 capability in a history spec
+        (lambda d: d["requires"].append("gate2_capture_simulation"), "not implemented"),  # the ad-hoc name of the first (B) xxi draft, retired
         (lambda d: d["requires"].append("price_source_last_only"), "distinct"),
         # implemented values only
         (lambda d: d["price"].update({"source": "mark"}), "implemented rule"),
@@ -317,7 +325,40 @@ def test_the_strict_reader_refuses_unknown_keys_values_capabilities_and_inconsis
         (lambda d: d["universe"]["analysed"].append({"inst_id": "PONS-USD_UM_XPERP-310919", "index_id": "PONS-USD", "list_time_utc": "2026-09-16T08:00:00Z",
                                                      "eligible_from_utc": "2026-10-16T08:00:00Z", "ct_val": 10, "tick_sz": 0.0001}), "excluded_never_eligible"),
         (lambda d: d["universe"].update({"mismatch_with_snapshot": "warn"}), "not implemented"),
-        (lambda d: d.update({"gate2": {}}), "capture"),
+        (lambda d: d.update({"gate2": {}}), "unknown key"),
+        # every field with an implemented meaning is checked, one mutation each (B xviii)
+        (lambda d: d["macro_filter"].update({"evaluate": True}), "only false"),
+        (lambda d: d["eligibility"].update({"reference": "instant"}), "not implemented"),
+        (lambda d: d["eligibility"].update({"applies_to": ["events"]}), "events and the controls"),
+        (lambda d: d["universe"]["excluded_never_eligible"][0].update({"fetched": True}), "only false"),
+        (lambda d: d["price"].update({"mixing_sources": "allowed"}), "implemented rule"),
+        (lambda d: d["price"].update({"confirm_zero_rows": "keep"}), "implemented rule"),
+        (lambda d: d["unit"].update({"instant_weight": "by_instruments"}), "implemented rule"),
+        (lambda d: d["costs"]["funding"].update({"cap_stress": "in_net"}), "implemented rule"),
+        (lambda d: d["costs"]["funding"].update({"outside_coverage": "skip"}), "implemented rule"),
+        (lambda d: d["costs"].update({"margin_opportunity_cost": "subtracted"}), "not implemented"),
+        (lambda d: d["sealing"].update({"print_sha256": False}), "only true"),
+        (lambda d: d["sealing"].update({"file": "sealed.json"}), "implemented rule"),
+        (lambda d: d["fetch_plan"]["pre_freeze"].update({"register_status": "consumed"}), "not implemented"),
+        (lambda d: d["fetch_plan"]["pre_freeze"].update({"mode": "values"}), "not implemented"),
+        (lambda d: d["fetch_plan"]["post_freeze"]["mark_1m"].update({"start": "list_time_utc"}), "implemented start"),
+        (lambda d: d["statistics"]["bootstrap"].update({"p_value": "share of resamples with D* < 0"}), "implemented rule"),
+        (lambda d: d["statistics"].update({"difference": "D = median difference"}), "implemented rule"),
+        (lambda d: d["controls_common"].update({"selection": "sample"}), "implemented rule"),
+        (lambda d: d["controls_common"].update({"funding_at_controls": "ignored"}), "implemented rule"),
+        (lambda d: t01(d)["fill_proxy"].update({"applies_to": ["events"]}), "events and controls"),
+        (lambda d: t01(d)["c7"].update({"controls": "all_days"}), "not implemented"),
+        (lambda d: t01(d)["funding_coverage"].update({"unknown": "assume 2026-08-01"}), "implemented rule"),
+        (lambda d: t05(d)["sign"].update({"zero": "keep"}), "not implemented"),
+        (lambda d: t05(d)["sign"].update({"price": "mark"}), "not implemented"),
+        (lambda d: t05(d)["exit"].update({"price": "c(h+55)"}), "implemented rule"),
+        (lambda d: d["verdict"].update({"fail": "G5_GATE1_FAIL(type) whenever C1 fails"}), "implemented rule"),
+        (lambda d: d["multiplicity"]["local_holm"].update({"p_for_inconclusive_or_not_informative": 0.5}), "only 1.0"),
+        (lambda d: d["economic"].update({"admission_order_within_instant": "random"}), "implemented rule"),
+        (lambda d: d["economic"].update({"measure": "D"}), "implemented rule"),
+        (lambda d: d["freeze_fill"].update({"signature": "x"}), "unknown key"),
+        (lambda d: d["events"][0].update({"inconclusive_if": ["funding_coverage_unknown", "C6_failed_or_not_computable", "proxy_missing_instrument_day_share_gt_0_50",
+                                                               "classifier_index_source_unresolved_or_unavailable"]}), "capture"),
     ]
     for mutate, match in cases:
         _refused(mutate, match)
@@ -338,18 +379,31 @@ def test_no_information_after_the_decision_is_refused_at_parse_time():
     assert t01.lookback_min == -484 and max(t05.sign["from_min"], t05.sign["to_min"]) <= t05.arm_min
 
 
+def verified_sessions(d: dict) -> None:
+    """At the freeze the sessions marked verify_at_freeze are verified (P-G5-5) and written false."""
+    for session in d["sessions"]:
+        if "verify_at_freeze" in session:
+            session["verify_at_freeze"] = False
+
+
 def test_a_frozen_spec_needs_its_freeze_fill_and_the_c5_trim_share_is_read_from_its_text():
     def frozen(d):
+        verified_sessions(d)
         d.update({"status": "FROZEN", "spec_version": "1.0.0"})
         d["freeze_fill"].update({"instruments_snapshot_path": "snapshot.json", "instruments_snapshot_sha256": "a" * 64, "calendars_verified_utc": "2026-11-02T10:00:00Z",
-                                 "code_digest_sha256": "b" * 64, "decision_ref_p_g5_1": "owner, 2026-11-02: scale confirmed"})
+                                 "code_digest_sha256": "b" * 64, "decision_ref_p_g5_1": "owner, 2026-11-02: scale confirmed", "funding_seal_receipt_sha256": "d" * 64})
 
     document = copy.deepcopy(BASE)
     frozen(document)
     spec = g5_eval.parse_spec(document)
-    assert spec.frozen and spec.freeze_fill["null"] == []
+    assert spec.frozen and spec.freeze_fill["null"] == [] and spec.freeze_fill["funding_seal_receipt_sha256"] == "d" * 64
+    # CTO M4: a FROZEN Gate 1 names its sealed funding receipt (absent or null refused; a lower-case sha256).
+    _refused(lambda d: (frozen(d), d["freeze_fill"].pop("funding_seal_receipt_sha256")), "funding_seal_receipt_sha256")
+    _refused(lambda d: (frozen(d), d["freeze_fill"].update({"funding_seal_receipt_sha256": None})), "funding_seal_receipt_sha256")
+    _refused(lambda d: (frozen(d), d["freeze_fill"].update({"funding_seal_receipt_sha256": "D" * 64})), "sha256")
     _refused(lambda d: (frozen(d), d["freeze_fill"].update({"code_digest_sha256": "not-a-sha"})), "sha256")
     _refused(lambda d: (frozen(d), d["freeze_fill"].update({"calendars_verified_utc": "yesterday"})), "ISO")
+    _refused(lambda d: (frozen(d), d["sessions"][5].update({"verify_at_freeze": True})), "verify_at_freeze")  # the BRR window left unverified
     document = copy.deepcopy(BASE)
     document["verdict"]["criteria"]["C5"] = document["verdict"]["criteria"]["C5"].replace("0.05", "0.10")
     assert g5_eval.parse_spec(document).verdict["c5_trim_share"] == 0.10
@@ -396,10 +450,13 @@ def test_t01_instants_keep_8h_settlements_with_both_neighbours_and_a_realized_ra
     hours = [(t - base) // HOUR_US for t in kept.tolist()]
     assert hours == [8, 16, 40] and counts["unknown_neighbour"] == 1 and counts["realized_rate_missing"] == 1 and counts["misaligned"] == 1
     assert counts["interval_other"] == 4 and sorted((t - base) // HOUR_US for t in other.tolist()) == [24, 28, 32, 56]  # the T02 stratum (descriptive)
-    # The settlement of 2026-10-13 16:00 has no next one before END_EXCLUSIVE: excluded (LP-G5 §4.2).
+    # CTO M1: the h+ gap is known after the decision; the instants removed by that criterion alone are counted (24 h: next at 4 h;
+    # 56 h: next 30 s later), the protocol deciding at the freeze between filtering on h- only and declaring the exception.
+    assert counts["removed_by_next_neighbour_only"] == 2 and "next_unknown_at_decision" not in counts  # history: h+ = the next settlement served
+    # The settlement of 2026-10-13 16:00 has no next one before END_EXCLUSIVE: excluded (LP-G5 §4.2), counted with the h+ criterion.
     last = flat(spec, meta, settlements=settlements_8h(spec), rates=np.full(settlements_8h(spec).size, 1e-4), d_cov_us=base)
     kept, counts, _ = g5_eval.settlement_instants(last, spec.type("T01_funding_8h"), spec)
-    assert iso(int(kept[-1])) == "2026-10-13T08:00:00Z"
+    assert iso(int(kept[-1])) == "2026-10-13T08:00:00Z" and counts["removed_by_next_neighbour_only"] == 1
 
 
 def test_eligibility_at_list_time_plus_30_days_applies_to_the_footprint_of_events_and_controls():
@@ -626,6 +683,26 @@ def test_costs_by_role_funding_signs_and_funding_outside_coverage():
     # Control funding is computed: a control crossing a settlement is counted as an anomaly (none by construction of the controls).
     c = g5_eval.measure(series, [tape.parse_iso_utc("2026-09-02T11:00:00Z")], t05, spec, "control")
     assert c["funding_nonzero"] == 0
+
+
+def test_t01_reads_one_d_cov_the_receipt_window_on_top_of_the_instrument_coverage():
+    """LP-G5 §4.4: « T01 entier (événements et contrôles) se restreint à D_cov », the single window of the sealed receipt (registry);
+    an instrument whose own history starts earlier is cut at it, one whose history starts later keeps its own start."""
+    spec = spec_of(universe=[uni(BTC)], window=SHORT)
+    meta = spec.instrument(BTC)
+    st = settlements_8h(spec)
+    own = tape.parse_iso_utc("2026-08-10T08:00:00Z")
+    series = flat(spec, meta, settlements=st, rates=np.full(st.size, 1e-4), d_cov_us=own)
+    common = g5_eval.common_instants(spec)
+    t01 = spec.type("T01_funding_8h")
+    run = g5_eval.evaluate_type({BTC: series}, t01, spec, common)
+    assert iso(int(run["raw"][BTC].min())) == "2026-08-10T08:00:00Z"  # no receipt window: the instrument's own coverage
+    common["d_cov_global_us"] = tape.parse_iso_utc("2026-08-20T00:00:00Z")
+    run = g5_eval.evaluate_type({BTC: series}, t01, spec, common)
+    assert iso(int(run["raw"][BTC].min())) == "2026-08-20T00:00:00Z" and run["exclusions"]["restriction"]["outside_funding_coverage"] > 0
+    assert int(run["controls"][BTC].min()) >= common["d_cov_global_us"]
+    common["d_cov_global_us"] = tape.parse_iso_utc("2026-08-01T00:00:00Z")  # earlier than the instrument's own: its own start holds
+    assert iso(int(g5_eval.evaluate_type({BTC: series}, t01, spec, common)["raw"][BTC].min())) == "2026-08-10T08:00:00Z"
 
 
 def test_the_unit_is_the_instant_with_equal_weights_and_n_unique_instants():
@@ -856,121 +933,13 @@ def test_day_block_bootstrap_moves_events_and_controls_of_a_day_together_and_hol
     assert g5_eval.holm({"a": 0.06, "b": 1.0}, 0.10)["confirmed"] == []
 
 
-# ----------------------------------------------------------------------------- Gate 2: the capture simulation (B xxi)
-
-
-def gate2_document(universe: list[dict], index_source: str = "history_index_candles") -> dict:
-    """The Gate 2 spec of LP-G5 Annexe B built from the Gate 1 spec (the Gate 2 file is written at the freeze): source capture,
-    the capture's price and premium, the simulated fill, the passive exit end per type, `gate2.sim`, the G5_GATE2_ labels."""
-    document = derived(universe=universe, window={"start": "2026-11-03", "end_exclusive": "2026-11-05"})
-    document = json.loads(json.dumps(document).replace("G5_GATE1_", "G5_GATE2_"))
-    document.update({"spec_id": "LP-G5-GATE2-2026", "source": "capture", "dataset_id": "okx-xperp-prospective-G5", "requires": document["requires"] + ["gate2_capture_simulation"]})
-    document["universe"]["excluded_never_eligible"] = []
-    document["price"].update({"series": "trades.last_print_of_minute", "boundary_convention": "c(t) = last print of the minute ending at t"})
-    document["frozen_candle"]["rule"] = "not_applicable_capture_has_no_candles"
-    document["costs"]["funding"]["source"] = "funding.settled_rate"
-    document["controls_common"]["exclusions"] = [e.replace("read in funding_hist", "read in funding") for e in document["controls_common"]["exclusions"]]
-    document.pop("fetch_plan")
-    document["gate2"] = {"sim": {"rule": "touch", "latency_ms": 250.0, "stale_s": 10.0, "funding_fill_grace_min": 1.0}, "index_source": index_source,
-                         "validation_rate_source": "funding_channel_settled_rate"}
-    t01, t05 = document["events"]
-    t01.pop("funding_coverage")
-    t01.update({"window_rule": "spec_window", "inconclusive_if": ["proxy_missing_instrument_day_share_gt_0_50", "C6_failed_or_not_computable", "index_source_none"],
-                "fill_proxy": {"kind": "lp_sim", "applies_to": ["events", "controls"], "unfilled": "exclude_from_primary_and_count", "report": "fill_rate_events_and_controls"},
-                "gate2": {"exit_until_min": 60}})
-    t01["generator"]["stream"] = "funding"
-    t01["controls"]["within"] = "spec_window"
-    t01["classifier"]["premium_proxy"] = g5_eval.PREMIUM_PROXY["capture"]
-    t05["gate2"] = {"exit_until_min": 75}
-    return document
-
-
-def write_capture(root: Path, inst: str, index_id: str) -> None:
-    """Three days (2026-11-02 → 11-05) of a quiet one-tick book (bid 100.0, ask 100.2), prints alternating at the bid and the ask every
-    10 s (buyers at 100.2 from 14:30:10 to 14:35 on 11-03: the T05 sign is +1), a mark of 100.1 with a premium of +0.0012 over the
-    eight hours before 2026-11-03 07:56 (P̂(07:55) is long), index candles at 100.1, settlements every 8 h at 5 bp (settled)."""
-    store = tape.TapeStore(root, "values", source={"ws": "synthetic"}, not_before="2026-11-02T00:00:00Z")
-    day0 = tape.parse_iso_utc("2026-11-02T00:00:00Z")
-    pos_from, pos_to = tape.parse_iso_utc("2026-11-02T23:00:00Z"), tape.parse_iso_utc("2026-11-03T07:56:00Z")
-    t05 = tape.parse_iso_utc("2026-11-03T14:30:00Z")
-    for s in range(0, 3 * tape.DAY_S, 10):
-        ts = day0 + s * US
-        store.append("books5", inst, ts, (ts, ts + 1000, s, [100.0, 99.9, 99.8, 99.7, 99.6], [5.0] * 5, [100.2, 100.3, 100.4, 100.5, 100.6], [5.0] * 5))
-        buyer = s % 20 != 0
-        if t05 - 60 * US <= ts <= t05:
-            buyer = False
-        elif t05 < ts <= t05 + 5 * MINUTE_US:
-            buyer = True
-        store.append("trades", inst, ts, (ts, ts + 1000, 100.2 if buyer else 100.0, 2.0, 1 if buyer else 0, s, 1))
-        if s % 60 == 0:
-            premium = 0.0012 if pos_from <= ts < pos_to else 0.0
-            store.append("mark", inst, ts, (ts, ts + 1000, 100.1 * (1 + premium)))
-            store.append("index_1m", index_id, ts - MINUTE_US, (ts - MINUTE_US, ts, 100.1, 100.1, 100.1, 100.1, 1))
-        if s % 3600 == 0:
-            nxt = ((ts // (8 * HOUR_US)) + 1) * 8 * HOUR_US
-            prev = nxt - 8 * HOUR_US
-            store.append("funding", inst, ts, (ts, ts + 1, nxt, 5e-4, nxt + 8 * HOUR_US, np.nan, 0.0, 5e-4, 1, 1, 0.00375, -0.00375, 0.0001))
-            store.append("funding", inst, ts + 1, (ts + 1, ts + 2, prev, 5e-4, nxt, np.nan, 0.0, 5e-4, 1, 1, 0.00375, -0.00375, 0.0001))
-    store.checkpoint()
-    store.finalize_days_before(tape.day_of_date("2026-11-06"), force=True)
-
-
-def test_gate2_simulates_the_maker_and_taker_entries_on_the_captured_book(tmp_path: Path):
-    document = gate2_document([uni(BTC, "2026-09-01T00:00:00Z", tick=0.1)])
-    spec = g5_eval.parse_spec(document)
-    assert spec.source == "capture" and spec.gate == "G5_GATE2_" and spec.gate2["sim"]["funding_fill_grace_min"] == 1.0 and spec.fetch_plan is None
-    root = tmp_path / "capture"
-    write_capture(root, BTC, "BTC-USD")
-    meta = spec.instrument(BTC)
-    series = g5_eval.load_capture_series(root, meta, spec, {"instId": BTC, "lotSz": "1", "minSz": "1"})
-    t01, t05 = spec.types
-    h = tape.parse_iso_utc("2026-11-03T08:00:00Z")
-    assert series.p_hat(series.index_of([h - 5 * MINUTE_US]), t01.classifier)[0] == pytest.approx(0.0012, rel=1e-6)
-    # T01: post-only long at the bid 100.0 armed at h − 5, filled by the next seller before h (the settlement is crossed: the long pays 5 bp);
-    # passive exit at the ask 100.2 from h + 15: +20 bp, fees 2 + 2.
-    m = g5_eval.measure(series, [h], t01, spec, "event")
-    assert m["execution"] == "lp_sim" and m["sim_status"]["filled"] == 1 and m["net_bp"][0] == pytest.approx(20.0 - 4.0 - 5.0, abs=0.05) and m["funding_bp"][0] == pytest.approx(-5.0)
-    # T05: 09:30 New York = 14:30 UTC in November; the first five minutes go up; taker entry at the ask after the latency (+2 bp
-    # slippage), passive exit at the ask from h + 60: 0 bp, fees 5 + 2, slippage 2.
-    h5 = tape.parse_iso_utc("2026-11-03T14:30:00Z")
-    assert [m_ for m_, _, _ in g5_eval.local_time_instants(t05, spec)][0] == h5
-    m5 = g5_eval.measure(series, [h5], t05, spec, "event")
-    assert m5["sign"].tolist() == [1] and m5["net_bp"][0] == pytest.approx(0.0 - 7.0 - 2.0, abs=0.05)
-    # A fill in [h ; h + 1) crosses the settlement ("may take up to a minute"): the grace of gate2.sim.
-    import dataclasses
-
-    late = dataclasses.replace(t01, arm_min=0, rest_until_min=1, return_window=(0, 15))
-    sim, status = g5_eval.measure_lp_sim(series, np.array([h]), np.array([1], dtype=np.int8), late, spec)
-    assert status["filled"] == 1 and sim["sim_funding_bp"][0] == pytest.approx(-5.0)
-    no_grace = g5_eval.parse_spec({**document, "gate2": {**document["gate2"], "sim": {**document["gate2"]["sim"], "funding_fill_grace_min": 0.0}}})
-    sim, _ = g5_eval.measure_lp_sim(series, np.array([h]), np.array([1], dtype=np.int8), late, no_grace)
-    assert sim["sim_funding_bp"][0] == pytest.approx(0.0)
-    # The study: C6 on the settled rate of the funding channel (too few settlements in two days: INCONCLUSIVE, sealed).
-    doc = g5_eval.run_study({BTC: series}, spec, {"d_cov_global_us": spec.pad_start_us})
-    r = doc["types"]["T01_funding_8h"]
-    assert r["verdict_label"] == "G5_GATE2_INCONCLUSIVE" and r["validation"]["population"] >= 1 and r["validation"]["computable"] is False
-    assert doc["types"]["T05_us_open"]["verdict_label"] == "G5_GATE2_NOT_INFORMATIVE"
-    # Without an index source (P-G5-10 ii undecided) T01 is INCONCLUSIVE by construction.
-    blind = g5_eval.parse_spec(gate2_document([uni(BTC, "2026-09-01T00:00:00Z", tick=0.1)], index_source="none"))
-    s2 = g5_eval.load_capture_series(root, blind.instrument(BTC), blind, {"instId": BTC})
-    assert np.isnan(s2.index).all()
-    doc = g5_eval.run_study({BTC: s2}, blind, {"d_cov_global_us": blind.pad_start_us})
-    assert any(x.startswith("index_source_none") for x in doc["types"]["T01_funding_8h"]["verdict_reasons"])
-    # Keys of one gate are refused in the other.
-    with pytest.raises(g5_eval.SpecError, match="capture is not fetched"):
-        g5_eval.parse_spec({**document, "fetch_plan": BASE["fetch_plan"]})
-    with pytest.raises(g5_eval.SpecError, match="gate2"):
-        g5_eval.parse_spec({k: v for k, v in document.items() if k != "gate2"})
-    with pytest.raises(g5_eval.SpecError, match="quarantine floor|quarantine"):
-        g5_eval.parse_spec({**document, "window": {"start": "2026-10-20", "end_exclusive": "2026-11-05"}})
-
-
 # ----------------------------------------------------------------------------- the command line, end to end (B xviii, xx)
 
 
-def write_history(root: Path, spec: g5_eval.Spec, series_by_inst: dict, funding_from_us: int, decision_ref: str, drop_state: str | None = None) -> None:
+def write_history(root: Path, spec: g5_eval.Spec, series_by_inst: dict, funding_from_us: int, decision_ref: str, drop_state: str | None = None) -> str:
     """The synthetic series in the `g5_fetch` layouts (candles opening at g_{k−1}, closing at g_k), finalized day files, the manifest
-    states of the jobs, the funding history in the sealed store from `funding_from_us` (the server's horizon) and its receipt."""
+    states of the jobs, the funding history in the sealed store from `funding_from_us` (the server's horizon), archived as the fetcher
+    does (`g5_fetch.archive_sealed_store`, CTO m3), and its receipt. Returns the receipt's sha256 (freeze_fill, CTO M4)."""
     store = tape.TapeStore(root, "values", source={"rest": "synthetic", "decision_ref": decision_ref, "dataset_id": spec.dataset_id}, kind=g5_fetch.MANIFEST_KIND)
     sealed = tape.TapeStore(root / g5_fetch.SEALED_DIR_NAME, "values", source={"rest": "synthetic", "decision_ref": decision_ref}, kind=g5_fetch.MANIFEST_KIND)
     fetched = tape.parse_iso_utc("2026-11-03T00:00:00Z")
@@ -1014,12 +983,13 @@ def write_history(root: Path, spec: g5_eval.Spec, series_by_inst: dict, funding_
     store.save_manifest()
     sealed.manifest["g5_streams"] = sealed_states
     sealed.save_manifest()
-    digest, _ = g5_fetch.directory_digest(root / g5_fetch.SEALED_DIR_NAME)
+    archived = g5_fetch.archive_sealed_store(root)
+    assert not (root / g5_fetch.SEALED_DIR_NAME).exists()
     coverage = max(v["d_cov_start_us"] for v in sealed_states.values())
     receipt = {"kind": g5_fetch.RECEIPT_KIND, "end_exclusive": g5_fetch.END_EXCLUSIVE, "jobs_total": len(sealed_states), "jobs_complete": len(sealed_states), "jobs_error": 0,
-               "coverage_start_us": coverage, "coverage_start_utc": tape.iso_utc(coverage), "sealed_manifest_sha256": tape.sha256_of(root / g5_fetch.SEALED_DIR_NAME / tape.MANIFEST_NAME),
-               "sealed_files_digest": digest}
+               "coverage_start_us": coverage, "coverage_start_utc": tape.iso_utc(coverage), **archived}
     (root / g5_fetch.SEALED_RECEIPT_NAME).write_text(json.dumps(receipt, indent=1, sort_keys=True))
+    return tape.sha256_of(root / g5_fetch.SEALED_RECEIPT_NAME)
 
 
 def snapshot_file(path: Path, spec_doc: dict, tick: str = "0.01") -> Path:
@@ -1038,19 +1008,28 @@ def test_the_command_line_end_to_end_on_a_synthetic_tape(tmp_path: Path, capsys)
     def frozen(document):
         document["statistics"]["bootstrap"]["resamples"] = 1000
         lowered_floor(document, instants=40, days=20)
+        verified_sessions(document)
         document.update({"status": "FROZEN", "spec_version": "1.0.0-test"})
 
     document = derived(universe=[uni(BTC), uni(ETH)], window=SHORT, mutate=frozen)
     snapshot = snapshot_file(tmp_path / "snapshot.json", document)
     document["freeze_fill"].update({"instruments_snapshot_path": str(snapshot), "instruments_snapshot_sha256": tape.sha256_of(snapshot), "calendars_verified_utc": "2026-11-02T10:00:00Z",
-                                    "code_digest_sha256": cli.code_digest(), "decision_ref_p_g5_1": decision})
+                                    "code_digest_sha256": cli.code_digest(), "decision_ref_p_g5_1": decision, "funding_seal_receipt_sha256": "0" * 64})
     spec = g5_eval.parse_spec(document)
     series = {i: market(spec, spec.instrument(i), seed=21 + j, t01_drift_bp=40.0, d_cov_us=D_COV) for j, i in enumerate((BTC, ETH))}
+
+    def spec_file(name: str, receipt_sha: str) -> tuple[Path, str]:
+        """The frozen spec naming the sealed receipt of one tape (freeze_fill.funding_seal_receipt_sha256, CTO M4)."""
+        doc = copy.deepcopy(document)
+        doc["freeze_fill"]["funding_seal_receipt_sha256"] = receipt_sha
+        path = tmp_path / name
+        path.write_text(json.dumps(doc, indent=1, ensure_ascii=False))
+        return path, g5_fetch.sha256_bytes(path.read_bytes())
+
     root = tmp_path / "history"
-    write_history(root, spec, series, funding_from, decision)
-    spec_path = tmp_path / "spec.json"
-    spec_path.write_text(json.dumps(document, indent=1, ensure_ascii=False))
-    sha = g5_fetch.sha256_bytes(spec_path.read_bytes())
+    receipt_sha = write_history(root, spec, series, funding_from, decision)
+    document["freeze_fill"]["funding_seal_receipt_sha256"] = receipt_sha
+    spec_path, sha = spec_file("spec.json", receipt_sha)
     out_json, out_md = tmp_path / "run" / "g5.json", tmp_path / "run" / "g5.md"
     args = ["g5-eval", "--tape", str(root), "--spec", str(spec_path), "--expect-spec-sha256", sha, "--out-json", str(out_json), "--out-md", str(out_md)]
     assert cli.main(args) == 0
@@ -1059,7 +1038,8 @@ def test_the_command_line_end_to_end_on_a_synthetic_tape(tmp_path: Path, capsys)
     assert printed["spec_sha256"] == sha == result["spec"]["sha256"] and result["code_digest"] == cli.code_digest() and result["evaluator"] == g5_eval.EVALUATOR_VERSION
     t01, t05 = result["types"]["T01_funding_8h"], result["types"]["T05_us_open"]
     assert t01["verdict_label"] == "G5_GATE1_PASS" and t05["verdict_label"] == "G5_GATE1_FAIL" and result["d_cov_global"] == iso(D_COV)
-    assert result["funding_seal"]["receipt_sha256"] == tape.sha256_of(root / g5_fetch.SEALED_RECEIPT_NAME) and result["fetch_quality"]["error_share"] == 0.0
+    assert result["funding_seal"]["receipt_sha256"] == tape.sha256_of(root / g5_fetch.SEALED_RECEIPT_NAME) == receipt_sha and result["fetch_quality"]["error_share"] == 0.0
+    assert result["funding_seal"]["sealed_archive_sha256"] == tape.sha256_of(root / g5_fetch.SEALED_ARCHIVE_NAME) and result["spec"]["freeze_fill"]["funding_seal_receipt_sha256"] == receipt_sha
     cov = result["coverage"][BTC]
     assert cov["unconfirmed_dropped"]["candles_1m"] == 1 and cov["rows_at_or_after_end_dropped"] == 1 and cov["d_cov_start"] == iso(D_COV)
     assert '"pass_programme"' not in out_json.read_text() and printed["gate2_inscription"] == {"T01_funding_8h": "inscribed", "T05_us_open": "not_inscribed"}
@@ -1069,7 +1049,8 @@ def test_the_command_line_end_to_end_on_a_synthetic_tape(tmp_path: Path, capsys)
                        ("verdict.closure_scope", BASE["verdict"]["closure_scope"]), ("fetch_plan.max_requests", BASE["fetch_plan"]["max_requests"]),
                        ("freeze_fill.rule", BASE["freeze_fill"]["rule"]), ("calendars.read_by", BASE["calendars"]["read_by"])):
         assert notes[key] == value
-    assert notes["sessions_to_verify_at_freeze"] == ["cme_cf_brr_window"] and notes["classifier.threshold_origin"]["T01_funding_8h"] == BASE["events"][0]["classifier"]["threshold_origin"]
+    assert notes["sessions_to_verify_at_freeze"] == [] and notes["classifier.threshold_origin"]["T01_funding_8h"] == BASE["events"][0]["classifier"]["threshold_origin"]  # verified at the freeze
+    assert g5_eval.load_spec(REAL_SPEC)[0].notes["sessions_to_verify_at_freeze"] == ["cme_cf_brr_window"]  # the draft still lists the BRR window
     protocol = REAL_SPEC.parents[4] / BASE["protocol"]
     assert result["spec"]["protocol_sha256"] == tape.sha256_of(protocol) and result["summary"]["gate2_inscription_discretion"] == "none"
     text = out_md.read_text()
@@ -1077,9 +1058,9 @@ def test_the_command_line_end_to_end_on_a_synthetic_tape(tmp_path: Path, capsys)
     # A sealed type: drop T01's sensitivity (rates of the opposite class) → INCONCLUSIVE, its statistics in sealed/<type>.json only.
     series_c6 = {i: market(spec, spec.instrument(i), seed=21 + j, t01_drift_bp=40.0, d_cov_us=D_COV, rate_of=lambda c, n: -5e-4 * c if c else 1e-4) for j, i in enumerate((BTC, ETH))}
     root2 = tmp_path / "history-c6"
-    write_history(root2, spec, series_c6, funding_from, decision)
+    spec_path2, sha2 = spec_file("spec-c6.json", write_history(root2, spec, series_c6, funding_from, decision))
     out2 = tmp_path / "run2" / "g5.json"
-    assert cli.main(["g5-eval", "--tape", str(root2), "--spec", str(spec_path), "--expect-spec-sha256", sha, "--out-json", str(out2), "--out-md", str(tmp_path / "run2" / "g5.md")]) == 0
+    assert cli.main(["g5-eval", "--tape", str(root2), "--spec", str(spec_path2), "--expect-spec-sha256", sha2, "--out-json", str(out2), "--out-md", str(tmp_path / "run2" / "g5.md")]) == 0
     printed = json.loads(capsys.readouterr().out)
     r2 = json.loads(out2.read_text())["types"]["T01_funding_8h"]
     sealed_path = tmp_path / "run2" / "sealed" / "T01_funding_8h.json"
@@ -1111,15 +1092,32 @@ def test_the_command_line_end_to_end_on_a_synthetic_tape(tmp_path: Path, capsys)
         cli.main(["g5-eval", "--tape", str(root), "--spec", str(p), "--expect-spec-sha256", g5_fetch.sha256_bytes(p.read_bytes()), "--out-json", str(tmp_path / "x.json")])
     with pytest.raises(SystemExit, match="snapshot"):
         cli.main(args[:-4] + ["--instruments-file", str(bad_snapshot), "--out-json", str(tmp_path / "x.json")])
-    victim = next((root / g5_fetch.SEALED_DIR_NAME / "funding_hist" / BTC).iterdir())
-    victim.write_bytes(victim.read_bytes() + b"\0")
+    # CTO M4: the sealed receipt is the one frozen in freeze_fill (another tape's receipt, or a wrong --expect-funding-seal-sha256: refuse_run).
+    with pytest.raises(SystemExit, match="freeze_fill.funding_seal_receipt_sha256"):
+        cli.main(["g5-eval", "--tape", str(root2), "--spec", str(spec_path), "--expect-spec-sha256", sha, "--out-json", str(tmp_path / "x.json")])
+    with pytest.raises(SystemExit, match="expect-funding-seal-sha256"):
+        cli.main(args + ["--expect-funding-seal-sha256", "f" * 64])
+    # CTO m3: the sealed store is one archive whose sha256, manifest and files are those of the receipt; an open tree is refused.
+    archive = root / g5_fetch.SEALED_ARCHIVE_NAME
+    original = archive.read_bytes()
+    archive.write_bytes(original + b"\0" * 1024)
     with pytest.raises(SystemExit, match="differs from its receipt"):
         cli.main(args)
+    archive.write_bytes(original)
+    (root / g5_fetch.SEALED_DIR_NAME).mkdir()
+    with pytest.raises(SystemExit, match="open sealed store"):
+        cli.main(args)
+    (root / g5_fetch.SEALED_DIR_NAME).rmdir()
+    receipt_text = (root / g5_fetch.SEALED_RECEIPT_NAME).read_text()
+    (root / g5_fetch.SEALED_RECEIPT_NAME).unlink()
+    with pytest.raises(SystemExit, match="no sealed funding receipt"):  # never a silent INCONCLUSIVE of T01 (CTO M4)
+        cli.main(args)
+    (root / g5_fetch.SEALED_RECEIPT_NAME).write_text(receipt_text)
     # A job without end_reason: global INCONCLUSIVE (stream_end_reason_missing), both types sealed.
     root3 = tmp_path / "history-missing"
-    write_history(root3, spec, series, funding_from, decision, drop_state=f"{ETH}:mark_1m")
+    spec_path3, sha3 = spec_file("spec-missing.json", write_history(root3, spec, series, funding_from, decision, drop_state=f"{ETH}:mark_1m"))
     out3 = tmp_path / "run3" / "g5.json"
-    assert cli.main(["g5-eval", "--tape", str(root3), "--spec", str(spec_path), "--expect-spec-sha256", sha, "--out-json", str(out3)]) == 0
+    assert cli.main(["g5-eval", "--tape", str(root3), "--spec", str(spec_path3), "--expect-spec-sha256", sha3, "--out-json", str(out3)]) == 0
     r3 = json.loads(out3.read_text())
     assert all(r["verdict"] == "INCONCLUSIVE" and "sealed" in r for r in r3["types"].values()) and any("stream_end_reason_missing" in x for x in r3["summary"]["global_device_defects"])
     with pytest.raises(SystemExit):  # the command line exposes no threshold, sign, window or seed

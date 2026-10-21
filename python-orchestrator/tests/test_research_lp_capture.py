@@ -1,7 +1,8 @@
 """Tests of the `lp` collector (`scripts/research_lp/{tape,xperp_capture}.py`) on hand-written
 WebSocket frames and a local fake server: parsing, counting mode (no value written), the
 not-before guard and its quarantine floor, SIGTERM handling, the segment store's resume, the
-lock, the manifest hashes. No network (the fake server listens on 127.0.0.1 only)."""
+lock, the manifest hashes. No network: an autouse guard refuses every connection and name resolution (CTO review-b m4); the two
+fake-server tests opt in explicitly (`@pytest.mark.usefixtures("allow_loopback_only")`) and may then reach 127.0.0.1 / ::1 only."""
 
 from __future__ import annotations
 
@@ -9,7 +10,9 @@ import asyncio
 import json
 import os
 import signal
+import socket
 import time
+import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +28,57 @@ DAY_MS = (NB_US // tape.SECOND_US + 3 * tape.DAY_S) * 1000  # 2026-11-05T00:00:0
 T0_MS = DAY_MS + 10 * 3600 * 1000  # 10:00 UTC
 PAST = "2026-01-01T00:00:00Z"  # a not-before already passed on the test's wall clock; below the floor → test hook required
 FAR = "2099-01-01T00:00:00Z"  # above the floor, never reached by the wall clock
+
+
+# ----------------------------------------------------------------------------- no network (CTO review-b m4)
+
+LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+@pytest.fixture
+def allow_loopback_only():
+    """Explicit opt-in, `@pytest.mark.usefixtures("allow_loopback_only")` (CTO m4): the test may reach 127.0.0.1 / ::1 only (a fake server
+    of the test itself), never resolve or reach any other host."""
+    return LOOPBACK_HOSTS
+
+
+@pytest.fixture(autouse=True)
+def _no_network(request, monkeypatch):
+    """No connection and no name resolution: socket connect / connect_ex / sendto, create_connection, getaddrinfo and urlopen fail
+    loudly — except loopback addresses for a test that opts in with `allow_loopback_only`."""
+    loopback = "allow_loopback_only" in request.fixturenames
+    real = {"connect": socket.socket.connect, "connect_ex": socket.socket.connect_ex, "sendto": socket.socket.sendto, "getaddrinfo": socket.getaddrinfo,
+            "create_connection": socket.create_connection}
+
+    def local(address) -> bool:
+        return loopback and isinstance(address, tuple) and len(address) >= 2 and str(address[0]) in LOOPBACK_HOSTS
+
+    def guarded(name):
+        def method(self, *args):
+            address = args[-1] if name == "sendto" else args[0]
+            if not local(address):
+                raise AssertionError(f"network access attempted: {name} {address!r}")
+            return real[name](self, *args)
+        return method
+
+    def getaddrinfo(host, *args, **kwargs):
+        if not (loopback and str(host) in LOOPBACK_HOSTS):
+            raise AssertionError(f"name resolution attempted: {host!r}")
+        return real["getaddrinfo"](host, *args, **kwargs)
+
+    def create_connection(address, *args, **kwargs):
+        if not local(address):
+            raise AssertionError(f"network access attempted: create_connection {address!r}")
+        return real["create_connection"](address, *args, **kwargs)
+
+    def refuse(*args, **kwargs):  # pragma: no cover - the assertion is the point
+        raise AssertionError("network access attempted: urlopen")
+
+    for name in ("connect", "connect_ex", "sendto"):
+        monkeypatch.setattr(socket.socket, name, guarded(name))
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket, "create_connection", create_connection)
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
 
 
 def frame_trades(inst, ts_ms, px, sz, side, trade_id, count=1):
@@ -391,6 +445,7 @@ def test_health_journal_quotes_values_with_spaces(tmp_path: Path):
 # ----------------------------------------------------------------------------- fake server (loopback, no venue)
 
 
+@pytest.mark.usefixtures("allow_loopback_only")
 def test_fake_websocket_server_end_to_end(tmp_path: Path):
     websockets = pytest.importorskip("websockets")
     frames = [f for f in recorded_frames() if f not in ("pong", "not json at all")]
@@ -446,6 +501,7 @@ def test_fake_websocket_server_end_to_end(tmp_path: Path):
     assert merged["selected"] == [INST, OTHER, "SOL-USD_UM_XPERP-310404"] and [r["instId"] for r in merged["instruments"]] == [INST, "SOL-USD_UM_XPERP-310404"] and "updated_at" in merged
 
 
+@pytest.mark.usefixtures("allow_loopback_only")
 def test_sigterm_stops_the_capture_cleanly_and_flushes_the_ram_buffer(tmp_path: Path):
     """M4: a standard `systemctl stop` (SIGTERM) must end like a STOP file — last segment written, `stopped` journaled, manifest saved."""
     websockets = pytest.importorskip("websockets")
@@ -484,3 +540,21 @@ def test_sigterm_stops_the_capture_cleanly_and_flushes_the_ram_buffer(tmp_path: 
     # `request_stop` is what the handler calls; it is idempotent and keeps the first reason.
     capture.request_stop("SIGINT")
     assert capture.stop_reason == "SIGTERM"
+
+
+def test_no_test_can_open_a_socket_or_resolve_a_name():
+    """CTO m4: the guard of this module (no loopback opt-in here)."""
+    for attempt in (lambda: socket.create_connection(("127.0.0.1", 9)), lambda: socket.socket().connect(("127.0.0.1", 9)), lambda: socket.getaddrinfo("eea.okx.com", 443),
+                    lambda: urllib.request.urlopen("https://eea.okx.com/api/v5/public/time")):
+        with pytest.raises(AssertionError):
+            attempt()
+
+
+@pytest.mark.usefixtures("allow_loopback_only")
+def test_the_loopback_opt_in_reaches_no_other_host():
+    """CTO m4: a test that opts in may reach the loopback only; any other address or name is still refused before any packet."""
+    for attempt in (lambda: socket.create_connection(("192.0.2.1", 9)), lambda: socket.socket().connect(("192.0.2.1", 9)), lambda: socket.getaddrinfo("eea.okx.com", 443),
+                    lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b"x", ("192.0.2.1", 53)), lambda: urllib.request.urlopen("https://eea.okx.com")):
+        with pytest.raises(AssertionError):
+            attempt()
+    assert socket.getaddrinfo("127.0.0.1", 0)  # the loopback itself is allowed (no resolver involved for a numeric host)

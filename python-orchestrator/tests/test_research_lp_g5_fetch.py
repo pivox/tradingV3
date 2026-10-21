@@ -10,8 +10,11 @@ Adapted on 2026-10-21 (code (B) xix): the funding history is fetched in sealed m
 that fetched `funding_hist` openly now run it sealed and read the sealed manifest; a real run is driven by
 `--spec --phase` (the old real-run test without a spec is now a refusal).
 
-No test opens a connection: an autouse fixture makes `socket.socket.connect`, `socket.create_connection`,
-`urllib.request.urlopen` and `UrllibClient.get` fail loudly, and the fetcher only ever sees `FakeOkx`."""
+Adapted again on 2026-10-21 (CTO review-b m3): a sealed run ends by archiving its store into the one file `funding-sealed.tar`
+(the tree is removed); the tests read the sealed manifest and rows through `g5_fetch.SealedArchive`, in memory.
+
+No test opens a connection: an autouse fixture makes `socket.socket.connect` / `connect_ex` / `sendto`, `socket.create_connection`,
+`socket.getaddrinfo`, `urllib.request.urlopen` and `UrllibClient.get` fail loudly, and the fetcher only ever sees `FakeOkx`."""
 
 from __future__ import annotations
 
@@ -44,9 +47,17 @@ def _no_network(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", refuse)
     monkeypatch.setattr(socket.socket, "connect_ex", refuse)
+    monkeypatch.setattr(socket.socket, "sendto", refuse)
     monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
     monkeypatch.setattr(urllib.request, "urlopen", refuse)
     monkeypatch.setattr(g5_fetch.UrllibClient, "get", refuse)
+
+
+def sealed_view(out: Path) -> g5_fetch.SealedArchive:
+    """The sealed store of a finished sealed run, read from its archive (CTO m3: the tree is gone)."""
+    assert not (out / g5_fetch.SEALED_DIR_NAME).exists() and (out / g5_fetch.SEALED_ARCHIVE_NAME).is_file()
+    return g5_fetch.SealedArchive.open(out / g5_fetch.SEALED_ARCHIVE_NAME)
 
 
 def snapshot(path: Path, rows=None) -> Path:
@@ -245,18 +256,25 @@ def test_funding_truncation_is_recorded_and_never_read_as_a_complete_history(tmp
         g5_fetch.Fetcher(make_config(tmp_path / "open", one_inst(listed_ms), streams=("funding_hist",)), server, sleep=no_sleep)
     summary = g5_fetch.Fetcher(make_config(tmp_path / "t", one_inst(listed_ms), streams=("funding_hist",), sealed=True), server, sleep=no_sleep).run()
     assert tape.read_manifest(tmp_path / "t") is None  # nothing per instrument outside the sealed store
-    state = tape.read_manifest(tmp_path / "t" / g5_fetch.SEALED_DIR_NAME)["g5_streams"][f"{INST}:funding_hist"]
+    state = sealed_view(tmp_path / "t").manifest["g5_streams"][f"{INST}:funding_hist"]
     oldest = (END_MS - 30 * 8 * 3600 * MS) * 1000
     assert state["complete"] is True and state["end_reason"] == "server_empty_before_start" and state["truncated"] is True
     assert state["coverage_start_us"] == oldest and state["start_us"] == listed_ms * 1000 and state["d_cov_start_us"] == oldest + 8 * 3600 * US
     assert summary == {"jobs_total": 1, "jobs_complete": 1, "jobs_error": 0, "coverage_start_utc": tape.iso_utc(oldest + 8 * 3600 * US), "mode": "sealed",
                        "receipt": str(tmp_path / "t" / g5_fetch.SEALED_RECEIPT_NAME), "receipt_sha256": summary["receipt_sha256"],
-                       "sealed_manifest_sha256": summary["sealed_manifest_sha256"], "sealed_files_digest": summary["sealed_files_digest"]}
+                       "sealed_manifest_sha256": summary["sealed_manifest_sha256"], "sealed_files_digest": summary["sealed_files_digest"],
+                       "sealed_archive_sha256": tape.sha256_of(tmp_path / "t" / g5_fetch.SEALED_ARCHIVE_NAME)}
     assert server.calls[0]["limit"] == "400" and len(server.calls) == 2  # docs-v5 default page 400; one page, then the empty page
+    # A second sealed session on the same directory resumes the archived store (unpacked, then archived again): its manifest holds
+    # both sessions and the complete job is not re-walked (CTO m3).
+    again = g5_fetch.Fetcher(make_config(tmp_path / "t", one_inst(listed_ms), streams=("funding_hist",), sealed=True), server, sleep=no_sleep).run()
+    view = sealed_view(tmp_path / "t")
+    assert len(view.manifest["sessions"]) == 2 and view.manifest["g5_streams"][f"{INST}:funding_hist"]["rows"] == 30 and len(server.calls) == 2
+    assert again["jobs_complete"] == 1 and view.load_days("funding_hist", INST, [tape.date_of_day(d) for d in range(tape.day_of_us(oldest), tape.day_of_us(END_MS * 1000))]).size == 30
     # A server with no row at all: complete, truncated, no coverage (the evaluator then gives the stream no D_cov).
     empty = FakeOkx({})
     summary = g5_fetch.Fetcher(make_config(tmp_path / "e", one_inst(listed_ms), streams=("funding_hist",), sealed=True), empty, sleep=no_sleep).run()
-    state = tape.read_manifest(tmp_path / "e" / g5_fetch.SEALED_DIR_NAME)["g5_streams"][f"{INST}:funding_hist"]
+    state = sealed_view(tmp_path / "e").manifest["g5_streams"][f"{INST}:funding_hist"]
     assert state["end_reason"] == "server_empty_before_start" and state["coverage_start_us"] is None and state["truncated"] is True and state["d_cov_start_us"] is None
     assert summary["coverage_start_utc"] is None and summary["jobs_complete"] == 1
     with pytest.raises(ValueError, match="sealed run fetches"):
@@ -312,10 +330,10 @@ def test_every_stream_is_fetched_and_the_index_stream_is_shared_by_the_underlyin
     states = tape.read_manifest(tmp_path / "tape")["g5_streams"]
     assert states[f"{INST}:candles_1m"]["unconfirmed_rows"] == 1  # stored, counted; the evaluator drops it
     assert states[f"{INST}:candles_1m"]["end_reason"] == "server_empty_before_start" and states[f"{INST}:candles_1m"]["coverage_start_us"] == start_ms * 1000
-    assert f"{INST}:funding_hist" not in states and f"{INST}:funding_hist" in tape.read_manifest(tmp_path / "tape" / g5_fetch.SEALED_DIR_NAME)["g5_streams"]
+    assert f"{INST}:funding_hist" not in states and f"{INST}:funding_hist" in sealed_view(tmp_path / "tape").manifest["g5_streams"]
     index_rows, _ = tape.load_days(tmp_path / "tape", "index_1m", "BTC-USD", ["2026-10-13"])
     assert index_rows.size == 30 and index_rows["close"][0] == pytest.approx(99.1)
-    funding, _ = tape.load_days(tmp_path / "tape" / g5_fetch.SEALED_DIR_NAME, "funding_hist", INST, ["2026-10-13"])
+    funding = sealed_view(tmp_path / "tape").load_days("funding_hist", INST, ["2026-10-13"])
     assert funding.size == 2 and funding["method"].tolist() == [1, 1] and funding["realized_rate"][0] == pytest.approx(0.00009)
     assert not (tmp_path / "tape" / "funding_hist").exists()
     assert {c["path"] for c in server.calls} == {spec.path for spec in g5_fetch.STREAMS.values()}
@@ -573,7 +591,7 @@ def test_sealed_mode_shows_only_global_totals_and_seals_the_per_instrument_manif
     assert g5_fetch.command_fetch(args, client_factory=lambda: server) == 0
     captured = capsys.readouterr()
     printed = json.loads(captured.out)
-    assert set(printed) == set(g5_fetch.SEALED_PRINTED) | {"mode", "receipt", "receipt_sha256", "sealed_manifest_sha256", "sealed_files_digest"}
+    assert set(printed) == set(g5_fetch.SEALED_PRINTED) | {"mode", "receipt", "receipt_sha256", "sealed_manifest_sha256", "sealed_files_digest", "sealed_archive_sha256"}
     assert printed["jobs_total"] == 2 and printed["jobs_complete"] == 2 and printed["jobs_error"] == 0
     d_cov_inst = (END_MS - 29 * eight_h) * 1000  # second oldest settlement served of the truncated job
     assert printed["coverage_start_utc"] == tape.iso_utc(d_cov_inst)
@@ -589,11 +607,16 @@ def test_sealed_mode_shows_only_global_totals_and_seals_the_per_instrument_manif
         fields = [part.split("=", 1)[0] for part in line.split()[3:] if "=" in part]
         assert set(fields) <= set(g5_fetch.SEALED_JOURNAL[event]), line
     receipt = json.loads(receipt_text)
-    sealed_dir = out / g5_fetch.SEALED_DIR_NAME
-    assert receipt["sealed_manifest_sha256"] == tape.sha256_of(sealed_dir / tape.MANIFEST_NAME) == printed["sealed_manifest_sha256"]
-    assert receipt["sealed_files_digest"] == g5_fetch.directory_digest(sealed_dir)[0] and printed["receipt_sha256"] == tape.sha256_of(out / g5_fetch.SEALED_RECEIPT_NAME)
+    # CTO m3: one archive, hashed in the receipt; the tree is gone, so no listing shows a file or a size per instrument and day.
+    archive = sealed_view(out)
+    assert receipt["sealed_archive_sha256"] == archive.sha256 == tape.sha256_of(out / g5_fetch.SEALED_ARCHIVE_NAME) == printed["sealed_archive_sha256"]
+    assert receipt["sealed_manifest_sha256"] == archive.manifest_sha256 == printed["sealed_manifest_sha256"] and receipt["archive_rule"] == g5_fetch.SEALED_ARCHIVE_RULE
+    assert receipt["sealed_files_digest"] == archive.files_digest and printed["receipt_sha256"] == tape.sha256_of(out / g5_fetch.SEALED_RECEIPT_NAME)
+    assert (out / g5_fetch.SEALED_ARCHIVE_NAME).stat().st_mode & 0o777 == 0o600
+    listed = " ".join(p.relative_to(out).as_posix() for p in out.rglob("*"))
+    assert INST not in listed and INST2 not in listed and "funding_hist" not in listed
     assert receipt["inst_ids_sha256"] == g5_fetch.inst_ids_digest([INST, INST2]) and receipt["register_status"] == "unread" and receipt["coverage_start_us"] == d_cov_inst
-    sealed = tape.read_manifest(sealed_dir)["g5_streams"]
+    sealed = archive.manifest["g5_streams"]
     assert sealed[f"{INST}:funding_hist"]["rows"] == 30 and sealed[f"{INST2}:funding_hist"]["rows"] == 104 and sealed[f"{INST}:funding_hist"]["pages"] == 2
     assert not (out / tape.MANIFEST_NAME).exists() and not (out / "funding_hist").exists()
     # The receipt is what the post-freeze phase reads: D_cov = coverage_start_utc.
@@ -657,3 +680,5 @@ def test_no_test_can_open_a_socket():
         socket.socket().connect(("127.0.0.1", 9))
     with pytest.raises(AssertionError):
         urllib.request.urlopen("https://eea.okx.com/api/v5/public/time")
+    with pytest.raises(AssertionError):  # no name resolution either (CTO m4)
+        socket.getaddrinfo("eea.okx.com", 443)

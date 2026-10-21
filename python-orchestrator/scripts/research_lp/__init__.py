@@ -23,11 +23,15 @@ Modules:
                    funding history), paginated backwards from the constant `END_EXCLUSIVE`
                    (2026-10-14T00:00:00Z — no row at or after it is ever persisted), documented rate
                    limits, backoff, resume through the segment store, dry run; driven by the G5 spec
-                   (per-stream starts, phases), the funding history in sealed mode (P-G5-3);
-- `g5_eval`        the G5 Gate 1 / Gate 2 evaluator of the frozen machine spec `specs/g5_gate1_spec.json`
-                   (schema `g5-spec/2`, strict): one classifier P̂(t_arm), fill proxy, controls at the type's
-                   minute of the hour with footprint exclusions, instant unit, day-block bootstrap, C1–C7,
-                   C6 validation, Holm, sealing of INCONCLUSIVE / NOT_INFORMATIVE, economic reading,
-                   descriptive reports, Gate 2 simulation on the capture;
+                   (per-stream starts, phases), the funding history in sealed mode (P-G5-3), its store archived
+                   into one hashed file read in memory by the evaluator (`SealedArchive`);
+- `g5_eval`        the G5 Gate 1 / Gate 2 evaluator of the frozen machine specs `specs/g5_gate1_spec.json`
+                   and `specs/g5_gate2_spec.json` (schema `g5-spec/2`, strict): one classifier P̂(t_arm), fill
+                   proxy, controls at the type's minute of the hour with footprint exclusions, instant unit,
+                   day-block bootstrap, C1–C7, C6 validation, Holm, sealing of INCONCLUSIVE / NOT_INFORMATIVE,
+                   economic reading, descriptive reports, Gate 2 simulation on the capture;
+- `g5_gate2`       the strict reader of the Gate 2 spec (owner decisions, identity with the Gate 1, calcul
+                   d'audit, calendars covering the window) and its runtime helpers (T0, per-type windows,
+                   unusable instrument-days, inscription read from the Gate 1 result, capture manifest);
 - `cli`            `capture`, `count`, `simulate`, `events`, `verify`, `g5-fetch`, `g5-eval`.
 """

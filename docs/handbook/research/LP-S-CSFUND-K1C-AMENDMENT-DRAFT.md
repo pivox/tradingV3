@@ -1,5 +1,8 @@
 # Track S — amendement de CS-FUND pour la variante auto-collatéralisée K1(c)
 
+> **Statut au 2026-10-21 : CLASSÉ SANS SUITE par le propriétaire (décision D8, [LP-OWNER-DECISIONS-2026-10-21.md](LP-OWNER-DECISIONS-2026-10-21.md)).** Ce brouillon reste comme archive du raisonnement ; il n'est pas gelé et rien n'est lancé pour la piste S.
+
+
 **Statut : `DRAFT_NOT_FROZEN`** (rédigé le 2026-10-21, desk ; révisé le même jour). Prêt à geler **après S-O8** (verdict
 `fwd-okx-r1`, après le 2026-10-31), après les prérequis du §12.1 et la check-list du propriétaire (§10). Ce texte ne gèle rien,
 ne lance rien, ne lit rien et n'autorise rien.

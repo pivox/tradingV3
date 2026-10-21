@@ -10,6 +10,9 @@
         --max-requests N --decision-ref TEXT                                  (sealed funding history, before the freeze)
     python -m scripts.research_lp.cli g5-fetch … --phase post_freeze --funding-receipt DIR/funding-sealed-receipt.json …   (candles, mark, index)
     python -m scripts.research_lp.cli g5-eval  --tape DIR --spec SPEC --expect-spec-sha256 H --out-json R.json --out-md R.md [--expect-funding-seal-sha256 H]
+    python -m scripts.research_lp.cli g5-eval  --tape CAPTURE --spec GATE2_SPEC --expect-spec-sha256 H --gate1-result G1.json --expect-gate1-result-sha256 H \
+        --p3-counts-file P3 [--gate1-spec G1_SPEC] [--index-tape DIR --expect-index-tape-sha256 H] --out-json R.json --out-md R.md
+                                          (Gate 2: also the FROZEN Gate 1 spec frozen with it and the capture manifest)
 
 `capture`, `count` and `g5-fetch` are the only commands that open a network connection (the public
 WebSocket, and the public instruments list unless `--inst-ids` / `--instruments-file` is given;
@@ -22,7 +25,8 @@ the global host also needs `--host-reason`; the funding history only in sealed m
 touching the quarantine [2026-10-14, 2026-11-02), any unknown key or value of the spec and any capability
 it requires but the code does not implement; it reads no market value unless the spec is FROZEN with a
 complete `freeze_fill`, its sha256 equals `--expect-spec-sha256` and `code_digest()` equals the frozen
-`freeze_fill.code_digest_sha256` (see `g5_eval`). `code_digest()` is the sha256 of `code_identity()` (one
+`freeze_fill.code_digest_sha256`, and (Gate 1) the sealed funding receipt equals `freeze_fill.funding_seal_receipt_sha256`
+(see `g5_eval`). `code_digest()` is the sha256 of `code_identity()` (one
 sha256 per module of this package).
 
 Quarantine guard (rule 13 of the theory report; `LP-PROGRAMME-GATES.md`): `--not-before` is
