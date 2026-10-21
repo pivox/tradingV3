@@ -9,17 +9,23 @@
     python -m scripts.research_lp.cli g5-fetch --out DIR --instruments-file F --inst-ids-file IDS --spec SPEC --phase pre_freeze --plan plan.json \
         --max-requests N --decision-ref TEXT                                  (sealed funding history, before the freeze)
     python -m scripts.research_lp.cli g5-fetch … --phase post_freeze --funding-receipt DIR/funding-sealed-receipt.json …   (candles, mark, index)
+    python -m scripts.research_lp.cli g5-index-fetch --out DIR --spec GATE2_SPEC --expect-spec-sha256 H [--gate1-spec G1_SPEC] --index-ids-file IDS \
+        --max-requests N --decision-ref TEXT      (Gate 2 index candles, P-G5-10 (ii) option b / D10: FROZEN spec, once, after the window)
     python -m scripts.research_lp.cli g5-eval  --tape DIR --spec SPEC --expect-spec-sha256 H --out-json R.json --out-md R.md [--expect-funding-seal-sha256 H]
     python -m scripts.research_lp.cli g5-eval  --tape CAPTURE --spec GATE2_SPEC --expect-spec-sha256 H --gate1-result G1.json --expect-gate1-result-sha256 H \
         --p3-counts-file P3 [--gate1-spec G1_SPEC] [--index-tape DIR --expect-index-tape-sha256 H] --out-json R.json --out-md R.md
                                           (Gate 2: also the FROZEN Gate 1 spec frozen with it and the capture manifest)
 
-`capture`, `count` and `g5-fetch` are the only commands that open a network connection (the public
+`capture`, `count`, `g5-fetch` and `g5-index-fetch` are the only commands that open a network connection (the public
 WebSocket, and the public instruments list unless `--inst-ids` / `--instruments-file` is given;
 `g5-fetch` the public REST history endpoints, never in `--dry-run`, and never without `--decision-ref`,
 the G5 spec and its phase (`--spec`, `--phase`; `--funding-receipt` after the freeze), an instrument list
 equal to the spec's universe (hashed), `--max-requests` and the dry-run `--plan` of the same configuration;
-the global host also needs `--host-reason`; the funding history only in sealed mode, LP-G5 P-G5-3).
+the global host also needs `--host-reason`; the funding history only in sealed mode, LP-G5 P-G5-3;
+`g5-index-fetch` the public `history-index-candles` endpoint only, never in `--dry-run`, and never without the FROZEN
+Gate 2 spec and its sha256, `--decision-ref`, `--max-requests` at least the plan, the index ids of the spec's universe
+(hashed), and a current time after the end of the Gate 2 window; rows outside [first t_arm − 480 min − margin ; window end),
+never before the quarantine floor, are dropped before the store, `g5_index_fetch`).
 `g5-fetch` persists no row whose market timestamp is at or after `g5_fetch.END_EXCLUSIVE`
 (2026-10-14T00:00:00Z, a constant); `g5-eval` reads the schema `g5-spec/2` only and refuses any window
 touching the quarantine [2026-10-14, 2026-11-02), any unknown key or value of the spec and any capability
@@ -58,7 +64,7 @@ from pathlib import Path
 import numpy as np
 
 from . import events as ev
-from . import g5_eval, g5_fetch, lp_sim, tape, xperp_capture as xc
+from . import g5_eval, g5_fetch, g5_index_fetch, lp_sim, tape, xperp_capture as xc
 
 
 def code_identity() -> dict[str, str]:
@@ -440,6 +446,7 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument("--tape", required=True)
     ver.set_defaults(func=command_verify)
     g5_fetch.add_parser(sub)
+    g5_index_fetch.add_parser(sub)
     g5_eval.add_parser(sub)
     return parser
 

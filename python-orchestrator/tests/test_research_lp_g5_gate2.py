@@ -9,9 +9,12 @@ unusable instrument-days and the data-gap extension; the inscription read from t
 Adapted on 2026-10-21 for CTO review-b: the synthetic `funding-rate` messages follow docs-v5 (a settled message carries in
 settFundingRate the rate of the previous settlement, its fundingTime is the upcoming one; a processing message at each settlement),
 so a settled rate attributed to its own fundingTime (B1) fails here; C6 is computed at the Gate 2 on such a tape (M5); h+ of T01 is
-the decision-time nextFundingTime (M1); a FROZEN Gate 2 needs a FROZEN Gate 1 (M2) and refuses index option (b) while no fetcher
-exists (M3, simulated by `index_fetcher_exists`); exits are never shortened or stale (m1); no day file before the floor is opened
-(m2); the Gate 1 result is checked for its kind, mode and status (m5).
+the decision-time nextFundingTime (M1); a FROZEN Gate 2 needs a FROZEN Gate 1 (M2) and refused index option (b) while no fetcher
+existed (M3; since 2026-10-21 `g5_index_fetch` exists and `INDEX_FROZEN_ALLOWED` admits (b) and D10, the refusal is still tested with
+the constant emptied); exits are never shortened or stale (m1); no day file before the floor is opened (m2); the Gate 1 result is
+checked for its kind, mode and status (m5). Adapted 2026-10-21 (pre-freeze pass): the owner decisions D7 (i) (T05 window end
+2027-03-31, option a) and D8 (P-S3 moot, `moot_track_s_closed`) are written in the draft, so it carries no `owner_decision_pending`
+value any more; the pending path is tested on documents set back to pending; T05 below the power floor by construction is stated.
 
 No market data exists here: every tape is written by the tests. No test opens a connection or resolves a name (socket-level autouse
 guard)."""
@@ -60,8 +63,8 @@ def _no_network(monkeypatch):
 
 @pytest.fixture
 def index_fetcher_exists(monkeypatch):
-    """Simulates the dedicated fetcher that P-G5-10 (ii) option (b) needs before a FROZEN spec may choose it (CTO M3): without it the
-    option is refused at FROZEN (`g5_gate2.INDEX_FROZEN_ALLOWED` is empty in the code)."""
+    """Option (b) admitted at FROZEN (CTO M3). Since 2026-10-21 the code admits it itself (`g5_index_fetch` exists, `INDEX_FROZEN_ALLOWED`
+    holds (b) and D10); the fixture is kept as an explicit statement of the tests that rely on it."""
     monkeypatch.setattr(g5_gate2, "INDEX_FROZEN_ALLOWED", (g5_gate2.INDEX_OPTION_B,))
 
 
@@ -164,15 +167,29 @@ def test_the_real_gate2_draft_is_accepted_and_every_block_is_read():
     assert sha == tape.sha256_of(GATE2_SPEC) and spec.status == "DRAFT_NOT_FROZEN" and spec.source == "capture" and spec.gate == "G5_GATE2_"
     assert set(spec.requires) == set(g5_eval.CAPTURE_REQUIRES) and len(spec.requires) == 37 and "calendars_cover_the_window" in spec.requires
     assert not set(spec.requires) & set(g5_eval.GATE1_ONLY) and set(g5_eval.HISTORY_REQUIRES) & set(spec.requires) == set(g5_eval.HISTORY_REQUIRES) - set(g5_eval.GATE1_ONLY)
-    # Owner decisions pending: accepted at DRAFT, listed, every type INCONCLUSIVE in a study (below). Adapted 2026-10-21 (D10): the index
-    # source is decided (both sources, primary by selection_rule) — two paths and six values pending instead of three and nine.
-    assert spec.gate2["pending"] == ["events[T05_us_open].window_end", "universe.p_s3_track_s"]
-    assert len(spec.gate2["pending_values"]) == 6 and spec.gate2["decisions"] == {"classifier_index_source": g5_gate2.INDEX_CHOICE_D10, "t05_window_end": PENDING, "p_s3": PENDING}
+    # Owner decisions: every block decided since 2026-10-21 — D10 (index source, both sources, primary by selection_rule), D7 (i) (T05 window
+    # end 2027-03-31, option a, no extension) and D8 (P-S3 moot: track S closed, BTC and ETH stay); no owner_decision_pending value is left.
+    assert spec.gate2["pending"] == [] and spec.gate2["pending_values"] == []
+    assert spec.gate2["decisions"] == {"classifier_index_source": g5_gate2.INDEX_CHOICE_D10, "t05_window_end": "a_end_2027_03_31", "p_s3": g5_gate2.P_S3_MOOT}
+    assert all(e["status"] == "owner_decided" for lst in ("pending", "related_not_p_g5_10") for e in spec.raw["owner_decisions"][lst])
+    assert spec.gate2["universe"] == {"p_s3": "moot_track_s_closed", "p_s3_scope": spec.raw["universe"]["p_s3_track_s"]["gate2_scope"], "btc_eth_removed": False}
     assert "index-tickers" in xc.CHANNELS and "index-tickers" not in spec.raw["capture"]["channels_conditional"]
-    assert spec.universe == () and spec.freeze_fill["null"] == list(g5_gate2.FREEZE_FILL_KEYS) and spec.gate2["t0_provisional"]
+    # freeze_fill: the three decision references hold the owner's dated texts (accepted before the freeze); every other value is null until then.
+    refs = ("decision_ref_p_g5_10_i", "decision_ref_p_g5_10_ii", "decision_ref_p_s3")
+    assert spec.universe == () and spec.freeze_fill["null"] == [k for k in g5_gate2.FREEZE_FILL_KEYS if k not in refs] and spec.gate2["t0_provisional"]
+    assert '"Nn"' in spec.freeze_fill["decision_ref_p_g5_10_i"] and "On essaye des deux un par un" in spec.freeze_fill["decision_ref_p_g5_10_ii"]
+    assert '"Clore s"' in spec.freeze_fill["decision_ref_p_s3"] and all("2026-10-21" in spec.freeze_fill[k] for k in refs)
+    assert spec.freeze_fill["t05_end_inclusive_utc"] is None  # written at the freeze (2027-03-31 under D7)
     assert (spec.start.isoformat(), spec.end_exclusive.isoformat(), spec.gate2["t0_date"].isoformat()) == ("2026-11-02", "2027-04-01", "2026-11-02")
     t01, t05 = spec.types
-    assert t01.gate2["window_end"]["end_exclusive"] == date(2027, 4, 1) and t05.gate2["window_end"]["provisional"]
+    assert t01.gate2["window_end"]["end_exclusive"] == date(2027, 4, 1) and not t05.gate2["window_end"]["provisional"]
+    assert t05.gate2["window_end"]["choice"] == "a_end_2027_03_31" and t05.gate2["window_end"]["end_exclusive"] == date(2027, 4, 1) and not spec.gate2["beyond_allowed"]
+    # D7 (i): T05 below the power floor by construction, stated (audit, notes). On the draft (T0 provisional 2026-11-02, CPI and Employment
+    # Situation lists incomplete) the bound is 102 NYSE days - 2 CPI dates = 100, not yet below the floor: the statement holds from a
+    # reachable T0 (>= 2026-11-03) or with the complete lists required at FROZEN (test_t05_gate2_is_not_informative_by_construction_under_d7).
+    pbc = spec.audit["power_by_construction"]["T05_us_open"]
+    assert (pbc["raw_instants_upper_bound"], pbc["min_instants"], pbc["not_informative_by_construction"], pbc["calendars_complete"]) == (100, 100, False, False)
+    assert spec.notes["power_by_construction"]["T05_us_open"]["window_end_choice"] == "a_end_2027_03_31" and set(spec.audit["power_by_construction"]) == {"T05_us_open"}
     assert t01.gate2["exit_until_min"] == 60 and t05.gate2["exit_until_min"] == 75 and t01.gate2["fill_sim"] == {"kind": "lp_sim_post_only_touch", "decided_at_min": -5,
                                                                                                                    "resting_until_min": 1}
     assert t01.gate2["construction_proxy"] == {"open_from_min": -5, "open_to_min": 0} and t05.gate2["construction_proxy"] is None and t01.fill_proxy is None
@@ -205,12 +222,15 @@ def test_the_real_gate2_draft_is_accepted_and_every_block_is_read():
     notes = spec.notes
     assert notes["capture_dataset_id"] == BASE["capture_dataset_id"] and notes["verdict.pass_effect"] == BASE["verdict"]["pass_effect"]
     assert notes["owner_decisions.pending"] == spec.gate2["pending"] and notes["costs.funding.fallback"] == BASE["costs"]["funding"]["fallback"]
+    assert notes["classifier_index_source.frozen_allowed"] == [g5_gate2.INDEX_OPTION_B, g5_gate2.INDEX_CHOICE_D10]
 
 
 def test_a_frozen_gate2_spec_is_refused_while_an_owner_decision_or_a_null_remains(index_fetcher_exists):
     """(B) xxi, owner_decisions.rule: FROZEN refused while owner_decision_pending is present anywhere, or a null (the spec's note). The
-    index option (b) is admitted at FROZEN here only because `index_fetcher_exists` simulates its fetcher (CTO M3)."""
-    refused(lambda d: d.update({"status": "FROZEN", "spec_version": "1.0.0"}), "owner_decision_pending")
+    index option (b) is admitted at FROZEN (CTO M3: `g5_index_fetch`, 2026-10-21). Adapted 2026-10-21: the draft holds no pending decision
+    any more (D7, D8, D10 written), so FROZEN on the draft is refused for its nulls, and a pending block is set back explicitly."""
+    refused(lambda d: d.update({"status": "FROZEN", "spec_version": "1.0.0"}), "null values")
+    refused(lambda d: (resolve(d, t05=PENDING), d.update({"status": "FROZEN", "spec_version": "1.0.0"})), "owner_decision_pending")
     spec = parse(frozen(copy.deepcopy(BASE)))
     assert spec.frozen and spec.gate2["pending"] == [] and spec.gate2["decisions"] == {"classifier_index_source": "b_history_index_candles_after_window",
                                                                                          "t05_window_end": "a_end_2027_03_31", "p_s3": "beta"}
@@ -246,6 +266,12 @@ def test_a_frozen_gate2_spec_is_refused_while_an_owner_decision_or_a_null_remain
     # Index option (a) and an undecided P-S3 alpha are refused at any status (not implemented / not decided).
     refused(lambda d: resolve(d, index="a_capture_index_tickers"), "not the owner's decision")  # adapted 2026-10-21: (a) alone is not D10
     refused(lambda d: resolve(d, p_s3="alpha"), "Gate 2 scope")
+    # D8 (2026-10-21): P-S3 moot, BTC and ETH stay at both gates; a FROZEN spec without them is refused under moot_track_s_closed as under beta.
+    moot = frozen(copy.deepcopy(BASE))
+    resolve(moot, p_s3=g5_gate2.P_S3_MOOT)
+    assert parse(moot).gate2["decisions"]["p_s3"] == g5_gate2.P_S3_MOOT and not parse(moot).gate2["universe"]["btc_eth_removed"]
+    refused(lambda d: d["universe"].update({"analysed": [item(ETH, "2026-04-01T04:00:00Z", 0.01)]}), "always_included", base=moot)
+    refused(lambda d: resolve(d, p_s3="gamma"), "p_s3_track_s")
     alpha = resolve(copy.deepcopy(BASE), p_s3="alpha")
     alpha["universe"]["p_s3_track_s"]["gate2_scope"] = "gate1_and_gate2"
     alpha["universe"]["analysed"] = [item(BTC)]
@@ -255,6 +281,34 @@ def test_a_frozen_gate2_spec_is_refused_while_an_owner_decision_or_a_null_remain
     # status decided, choice pending (adapted 2026-10-21: the draft's block is decided by D10, so the pending choice is written here)
     refused(lambda d: d["classifier_index_source"].update({"status": "owner_decided", "choice": PENDING}), "disagree")
     refused(lambda d: d["classifier_index_source"].update({"status": PENDING}), "disagree")  # status pending, choice decided
+
+
+def test_t05_gate2_is_not_informative_by_construction_under_d7():
+    """Owner decision D7 (i), 2026-10-21: the T05 Gate 2 window stops at 2027-03-31 (option a, no extension, no data-gap extension beyond
+    it). The reader computes the most T05 instants the frozen window can hold (one per NYSE day outside the CPI / Employment Situation
+    lists, from T0) and states that the floor of 100 is out of reach — written in the audit, the notes and the T05 verdict reasons, never
+    hidden; the floor rule itself (power_floor.below_floor) then gives G5_GATE2_NOT_INFORMATIVE whatever the data."""
+    base = frozen(copy.deepcopy(BASE))
+    # T0 = 2026-11-02 (an upper bound, not reachable) with the draft's two CPI dates: 102 - 2 = 100, the floor is reachable on paper only.
+    pbc = parse(base).audit["power_by_construction"]["T05_us_open"]
+    assert (pbc["raw_instants_upper_bound"], pbc["not_informative_by_construction"], pbc["calendars_complete"]) == (100, False, True)
+    # Any reachable T0 (>= 2026-11-03: T0 >= freeze >= end of P3, P3 starting 2026-11-02): 101 NYSE days - 2 = 99 < 100.
+    late = copy.deepcopy(base)
+    late["freeze_fill"]["t0_utc"] = "2026-11-03T00:00:00Z"
+    pbc = parse(late).audit["power_by_construction"]["T05_us_open"]
+    assert (pbc["t0"], pbc["raw_instants_upper_bound"], pbc["not_informative_by_construction"]) == ("2026-11-03", 99, True)
+    # Complete lists (about two BLS dates a month; illustrative dates, the real ones are recorded at the freeze, P-G5-5): about 91.
+    full = copy.deepcopy(late)
+    full["calendars"]["employment_situation"] = ["2026-11-06", "2026-12-04", "2027-01-08", "2027-02-05", "2027-03-05", "2027-04-02"]
+    full["calendars"]["cpi"] = ["2026-11-10", "2026-12-10", "2027-01-13", "2027-02-10", "2027-03-10", "2027-04-13"]
+    pbc = parse(full).audit["power_by_construction"]["T05_us_open"]
+    assert pbc["raw_instants_upper_bound"] == 101 - 10 == 91 and pbc["not_informative_by_construction"] and pbc["window_end_choice"] == "a_end_2027_03_31"
+    assert pbc["end_exclusive_with_max_extension"] == "2027-04-01"  # no extension beyond 2027-03-31 under D7
+    # Under the refused option (b) the extension may go beyond 2027-03-31: the bound grows (stated for comparison only, D7 refused it).
+    b = copy.deepcopy(full)
+    b["events"][1]["window_end"]["choice"] = "b_end_2027_04_12"
+    b["freeze_fill"]["t05_end_inclusive_utc"] = "2027-04-12"
+    assert parse(b).audit["power_by_construction"]["T05_us_open"]["raw_instants_upper_bound"] > 91
 
 
 def test_the_strict_gate2_reader_refuses_unknown_keys_changed_rules_and_wrong_audits():
@@ -538,10 +592,12 @@ def test_the_inscription_owner_decisions_and_gate2_verdicts(capture_root: Path):
     # FAIL at the Gate 1: not evaluated, p = 1 in the local Holm; INCONCLUSIVE: evaluated automatically (gate2_inscription.rule).
     assert t01["verdict_label"] == "G5_GATE2_NOT_EVALUATED" and t01["holm"]["p_used"] == 1.0 and t01["gate1_inscription"]["rule"] == "not_evaluated"
     assert t05["gate1_inscription"]["rule"] == "evaluated_automatically_without_futility" and t05["verdict_label"] == "G5_GATE2_NOT_INFORMATIVE"
+    # The short window holds at most 2 T05 instants (11-02, 11-03, 11-04 minus the CPI-free count): below the floor by construction, stated.
+    assert any(r.startswith("power_floor_unreachable_by_construction") and "says nothing for or against an effect" in r for r in t05["verdict_reasons"])
     assert "sealed" not in t05 and t05["statistic"]["measure"] == "sim_net_bp" and doc["summary"]["sealed_sha256"] == {}  # no sealing at the Gate 2
     assert "gate2_inscription" not in t05 and doc["summary"]["gate1_inscription"]["T01_funding_8h"]["evaluated"] is False
     # Pending owner decisions (DRAFT): every evaluated type INCONCLUSIVE (owner_decision_pending_present).
-    pending = short_spec(t05=None)
+    pending = short_spec(t05=PENDING)  # adapted 2026-10-21 (D7 written in the draft): pending set back explicitly
     doc = g5_eval.run_study({BTC: g5_eval.load_capture_series(capture_root, pending.instrument(BTC), pending, {"instId": BTC})}, pending,
                             {"gate1_verdicts": {"T01_funding_8h": "G5_GATE1_PASS", "T05_us_open": "G5_GATE1_PASS"}})
     assert all(r["verdict"] == "INCONCLUSIVE" and r["verdict_reasons"][0].startswith("owner_decision_pending_present") for r in doc["types"].values())
@@ -758,12 +814,17 @@ def test_no_day_file_before_the_quarantine_floor_is_opened(capture_root: Path, m
 def test_a_frozen_gate2_needs_a_frozen_gate1_and_a_fetchable_index(tmp_path: Path, monkeypatch):
     """CTO M2 (trap 7, protocol §13 point 5): a FROZEN Gate 2 is refused against a DRAFT Gate 1 and against a FROZEN Gate 1 file that
     is not the one of freeze_fill.gate1_spec_sha256. CTO M3: index option (b) is refused at FROZEN while no fetcher can read
-    history-index-candles of the Gate 2 period. CTO B1: the draft text of costs.funding.source is accepted at DRAFT only."""
+    history-index-candles of the Gate 2 period — since 2026-10-21 `g5_index_fetch` does, and the code admits (b) and D10 (the refusal is
+    still checked with the constant emptied). CTO B1: the draft text of costs.funding.source is accepted at DRAFT only."""
+    from scripts.research_lp import g5_index_fetch
+
     document = frozen(copy.deepcopy(BASE))
-    with pytest.raises(g5_eval.SpecError, match="no fetcher"):
-        g5_eval.parse_spec(document, FROZEN_GATE1)
-    monkeypatch.setattr(g5_gate2, "INDEX_FROZEN_ALLOWED", (g5_gate2.INDEX_OPTION_B,))
+    assert g5_gate2.INDEX_FROZEN_ALLOWED == (g5_gate2.INDEX_OPTION_B, g5_gate2.INDEX_CHOICE_D10) == g5_index_fetch.CHOICES_NEEDING_B
     assert g5_eval.parse_spec(document, FROZEN_GATE1).gate2["frozen_with"]["status"] == "FROZEN"
+    monkeypatch.setattr(g5_gate2, "INDEX_FROZEN_ALLOWED", ())
+    with pytest.raises(g5_eval.SpecError, match="not admitted at FROZEN"):
+        g5_eval.parse_spec(document, FROZEN_GATE1)
+    monkeypatch.setattr(g5_gate2, "INDEX_FROZEN_ALLOWED", (g5_gate2.INDEX_OPTION_B, g5_gate2.INDEX_CHOICE_D10))
     with pytest.raises(g5_eval.SpecError, match="FROZEN Gate 1"):
         g5_eval.parse_spec(document)  # the repository's Gate 1 is DRAFT_NOT_FROZEN
     with pytest.raises(g5_eval.SpecError, match="FROZEN Gate 1"):
@@ -940,7 +1001,7 @@ def test_d10_selection_rule_is_read_strictly_and_frozen_only_with_option_b_fetch
     owner's thresholds (98 %, 0.5 bp) are the only ones accepted; a FROZEN spec choosing D10 needs option (b) fetchable (CTO M3)."""
     spec, _ = g5_eval.load_spec(GATE2_SPEC)
     assert spec.gate2["index_choice"] == D10 and spec.raw["classifier_index_source"]["status"] == "owner_decided"
-    assert spec.raw["owner_decisions"]["pending"][1]["status"] == "owner_decided" and spec.raw["owner_decisions"]["pending"][0]["status"] == PENDING
+    assert spec.raw["owner_decisions"]["pending"][1]["status"] == "owner_decided" and spec.raw["owner_decisions"]["pending"][0]["status"] == "owner_decided"  # D7 (i) too
     rule = spec.raw["classifier_index_source"]["selection_rule"]
     assert (rule["coverage_min_share"], rule["agreement_max_median_abs_bp"]) == (0.98, 0.5) and rule["sources"] == [A_SRC, B_SRC]
     sel = lambda d: d["classifier_index_source"]["selection_rule"]  # noqa: E731
@@ -957,9 +1018,11 @@ def test_d10_selection_rule_is_read_strictly_and_frozen_only_with_option_b_fetch
         refused(mutate, match)
     d10_frozen = frozen(copy.deepcopy(BASE))
     resolve(d10_frozen, index=D10)
+    assert parse(d10_frozen).gate2["index_choice"] == D10  # since 2026-10-21: the fetcher of (b) exists (g5_index_fetch)
+    monkeypatch.setattr(g5_gate2, "INDEX_FROZEN_ALLOWED", ())  # without it, refused (CTO M3)
     with pytest.raises(g5_eval.SpecError, match="D10 needs option b"):
         parse(d10_frozen)
-    monkeypatch.setattr(g5_gate2, "INDEX_FROZEN_ALLOWED", (B_SRC,))  # the dedicated fetcher of (b), simulated
+    monkeypatch.setattr(g5_gate2, "INDEX_FROZEN_ALLOWED", (B_SRC,))  # (b) alone admitted: D10 follows
     assert parse(d10_frozen).gate2["index_choice"] == D10
 
 

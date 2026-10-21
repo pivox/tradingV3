@@ -11,11 +11,15 @@ What this module enforces (fail-closed, `SpecError`):
   (`owner_decision_pending`, or `owner_decided` with one of their options); a `FROZEN` spec is refused while the string
   `owner_decision_pending` or a `null` remains anywhere in the document (the spec's own note), while `calendars.incomplete_at_draft`
   is not empty, or while a declared-but-unimplemented path is chosen (index option (a) alone: not the owner's decision, D10 reaches it
-  through its selection rule only; index option (b), and D10 which needs (b) as comparison and fallback: no fetcher can read
-  history-index-candles of the Gate 2 period, `INDEX_FROZEN_ALLOWED` is empty, CTO M3; the REST
-  funding fallback: `g5_fetch` cannot read after END_EXCLUSIVE; the draft text of `costs.funding.source`, which attributes a
-  settled rate to its own fundingTime against docs-v5, CTO B1). At `DRAFT_NOT_FROZEN` the spec is accepted and every type of a
-  study is `G5_GATE2_INCONCLUSIVE` (`owner_decision_pending_present`);
+  through its selection rule only; the REST funding fallback: `g5_fetch` cannot read after END_EXCLUSIVE, a FROZEN spec writes
+  `costs.funding.fallback` as `none…`; the draft text of `costs.funding.source`, which attributes a settled rate to its own
+  fundingTime against docs-v5, CTO B1). Index option (b), and D10 which needs (b) as comparison and fallback, are admitted at
+  FROZEN since 2026-10-21 (`INDEX_FROZEN_ALLOWED`, CTO M3 closed): `g5_index_fetch` reads history-index-candles of the Gate 2
+  period once, after the window, from the FROZEN spec only. At `DRAFT_NOT_FROZEN` the spec is accepted and every type of a
+  study is `G5_GATE2_INCONCLUSIVE` (`owner_decision_pending_present`) while a decision block is pending;
+- **owner decisions D7 and D8** (2026-10-21): `events[T05_us_open].window_end` = `a_end_2027_03_31` (no extension; T05 below the
+  power floor by construction, `power_by_construction`, stated in the audit, the notes and the T05 verdict reasons) and
+  `universe.p_s3_track_s` = `moot_track_s_closed` (track S closed, P-S3 moot, BTC and ETH stay at both gates);
 - **identity with the Gate 1** (`frozen_with`, `gate1_identity`, piège 7): the fields each type names in `gate1_identity`, and the
   sessions, macro releases, eligibility, unit, floor, α, threshold, bootstrap, margin, fees, stress multiplier, design costs,
   Holm family, m_max, C4, C5, C7 and the economic constants are equal to those of the Gate 1 spec named by `frozen_with.spec`
@@ -65,15 +69,19 @@ INDEX_OPTION_B = "b_history_index_candles_after_window"
 INDEX_CHOICE_D10 = "d10_both_primary_by_quality_rule"
 INDEX_CHOICES = INDEX_OPTIONS + (INDEX_CHOICE_D10,)
 INDEX_IMPLEMENTED = (INDEX_OPTION_B, INDEX_CHOICE_D10)  # (b) from an index_1m tape; D10 from index_tick (capture) and index_1m
-# CTO M3: the options a FROZEN spec may choose. Option (b) reads history-index-candles of the Gate 2 period, which no tool can fetch:
-# g5_fetch.EndGuard drops every row at or after END_EXCLUSIVE (2026-10-14, a module constant). Empty until a dedicated fetcher exists.
-INDEX_FROZEN_ALLOWED: tuple = ()
-INDEX_B_NOT_FETCHABLE = ("classifier_index_source option b_history_index_candles_after_window: no fetcher reads history-index-candles of the Gate 2 period "
-                         "(g5_fetch persists nothing at or after END_EXCLUSIVE 2026-10-14, a module constant): a FROZEN spec needs a dedicated fetcher first "
-                         "(its own window guard [T0 - 480 min ; end of the window), run after the end of the window, a hashed receipt) - code to write, "
-                         "to tell the owner before decision P-G5-10 (ii) (CTO M3)")
+# CTO M3: the options a FROZEN spec may choose. Option (b) reads history-index-candles of the Gate 2 period: g5_fetch cannot (its EndGuard
+# drops every row at or after END_EXCLUSIVE 2026-10-14, a module constant, untouched); the dedicated fetcher `g5_index_fetch` (2026-10-21)
+# does, once, after the end of the window, from the FROZEN spec whose sha256 is given, inside [first t_arm - 480 min - margin ; window end),
+# never before the quarantine floor, with a hashed receipt whose index_1m digest is the --expect-index-tape-sha256 of g5-eval. D10 needs (b)
+# as comparison and fallback: admitted with it.
+INDEX_FROZEN_ALLOWED: tuple = (INDEX_OPTION_B, INDEX_CHOICE_D10)
+INDEX_B_NOT_FETCHABLE = ("classifier_index_source: the choice is not admitted at FROZEN (INDEX_FROZEN_ALLOWED): option b_history_index_candles_after_window "
+                         "needs its dedicated fetcher (g5_index_fetch: FROZEN spec and its sha256, after the end of the window, window guard "
+                         "[first t_arm - 480 min - margin ; window end), hashed receipt ; CTO M3)")
 T05_END_OPTIONS = ("a_end_2027_03_31", "b_end_2027_04_12", "c_end_by_calendar_rule")
-P_S3_CHOICES = ("alpha", "beta")
+# D8 (owner, 2026-10-21): track S closed without follow-up, P-S3 moot, BTC and ETH stay in the universe at both gates (neither alpha nor beta).
+P_S3_MOOT = "moot_track_s_closed"
+P_S3_CHOICES = ("alpha", "beta", P_S3_MOOT)
 P_S3_SCOPES = ("gate1_only", "gate1_and_gate2")
 GATES_1_3_LAST_SCORED_DAY = Date(2027, 3, 31)  # GATES §1.3: end of scoring <= 2027-03-31 (and D1: capture until then at the latest)
 NOT_EVALUATED = "NOT_EVALUATED"
@@ -1354,6 +1362,7 @@ def parse_capture_spec(document: dict, gate1=None) -> g5.Spec:
                    eligibility_days, count_field, price, frozen_candle, unit, statistics, power, costs, controls_common, sessions, calendars, macro, types, verdict, multiplicity,
                    sealing, {**inscription, "rule": dict(INSCRIPTION)}, economic, descriptive, None, gate2, {}, {})
     audit = _check_type_audits(types, calendars, power)
+    audit["power_by_construction"] = power_by_construction(spec, bool(cal_extra["incomplete"]))
     if "audit_expected_utc" in document["controls_common"]:
         audit["control_hours"] = check_control_hours(spec, document["controls_common"]["audit_expected_utc"])
     spec.audit.update(audit)
@@ -1384,8 +1393,35 @@ def parse_capture_spec(document: dict, gate1=None) -> g5.Spec:
                        "frozen_candle.gate1_equivalent": document["frozen_candle"]["gate1_equivalent"], "calendars.covers_rule": cal_extra["covers_rule"],
                        "controls_common.audit_expected_utc.rule": (document["controls_common"].get("audit_expected_utc") or {}).get("rule"),
                        "sealing.gate1_sealed_files.files": document["sealing"]["gate1_sealed_files"]["files"],
-                       "owner_decisions.ids": decisions, "universe.always_included": document["universe"]["always_included"]})
+                       "owner_decisions.ids": decisions, "universe.always_included": document["universe"]["always_included"],
+                       "power_by_construction": {name: {k: v for k, v in item.items() if k in ("raw_instants_upper_bound", "min_instants", "not_informative_by_construction",
+                                                                                              "window_end_choice", "calendars_complete")}
+                                                 for name, item in audit["power_by_construction"].items()}})
     return spec
+
+
+POWER_BY_CONSTRUCTION_RULE = ("upper bound of n for a local_time type: one instant per NYSE day of [T0 ; end of the type window with the largest data-gap extension "
+                              "the chosen option allows) outside the CPI and Employment Situation lists ; n < power_floor.min_instants gives "
+                              "G5_GATE2_NOT_INFORMATIVE whatever the data (power_floor.below_floor) ; with incomplete calendars the bound is too high "
+                              "(exclusion dates missing) ; a statement written in advance, never a reading")
+
+
+def power_by_construction(spec: g5.Spec, calendars_incomplete: bool) -> dict:
+    """Calcul d'audit (no data): for each `local_time` type (T05), the most instants its frozen window can hold and whether the power floor
+    is out of reach by construction (P-G5-10 (i), owner decision D7 of 2026-10-21: end 2027-03-31, no extension, NOT_INFORMATIVE by
+    construction). Stated in the audit, the notes and the type's verdict reasons, never hidden."""
+    out = {}
+    for t in spec.types:
+        if t.generator["kind"] != "local_time":
+            continue
+        we = t.gate2["window_end"]
+        hi_date = extended_end(we["end_exclusive"], spec.gate2["max_gap_days"], spec.gate2["max_gap_days"], spec.gate2["beyond_allowed"])
+        n = len(g5.local_time_instants(t, spec, spec.gate2["t0_us"], _day_us(hi_date)))
+        floor = int(spec.power["min_instants"])
+        out[t.name] = {"window_end_choice": we["choice"], "t0": spec.gate2["t0_date"].isoformat(), "t0_provisional": spec.gate2["t0_provisional"],
+                       "end_exclusive_with_max_extension": hi_date.isoformat(), "raw_instants_upper_bound": n, "min_instants": floor,
+                       "not_informative_by_construction": n < floor, "calendars_complete": not calendars_incomplete, "rule": POWER_BY_CONSTRUCTION_RULE}
+    return out
 
 
 # ----------------------------------------------------------------------------- runtime helpers (used by g5_eval)

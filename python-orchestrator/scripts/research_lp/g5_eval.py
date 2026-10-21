@@ -3907,6 +3907,12 @@ def run_study(series_by_inst: dict, spec: Spec, context: dict | None = None) -> 
                 reasons.append(f"n_days={n_days} < min_days={spec.power['min_days']}")
             if diff.get("point") is None or diff.get("lb90") is None:
                 reasons.append("no statistic (no control instant, or fewer than two day blocks)")
+            by_construction = (spec.audit.get("power_by_construction") or {}).get(tspec.name) if capture else None
+            if by_construction and by_construction["not_informative_by_construction"]:  # Gate 2 T05 under D7: stated, never hidden
+                reasons.append(f"power_floor_unreachable_by_construction: at most {by_construction['raw_instants_upper_bound']} instants in the frozen window "
+                               f"(window_end {by_construction['window_end_choice']}) < min_instants={by_construction['min_instants']} ; written in advance "
+                               f"(P-G5-10 (i){', owner decision D7 of 2026-10-21' if by_construction['window_end_choice'] == 'a_end_2027_03_31' else ''}) ; "
+                               "says nothing for or against an effect")
             verdict = "NOT_INFORMATIVE" if reasons else "PENDING"
         pre[tspec.name] = {"verdict": verdict, "reasons": reasons, "criteria": criteria, "diff": diff, "validation": validation, "proxy": proxy, "n_instants": n_instants, "n_days": n_days}
     pvalues = {name: (pre[name]["diff"].get("p_one_sided") if pre[name]["verdict"] == "PENDING" else 1.0) for name in spec.family}

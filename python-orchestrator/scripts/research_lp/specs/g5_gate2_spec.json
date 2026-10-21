@@ -1,11 +1,11 @@
 {
   "spec_id": "LP-G5-GATE2-2026",
   "spec_schema": "g5-spec/2",
-  "spec_version": "0.1.4-draft",
+  "spec_version": "0.1.5-draft",
   "status": "DRAFT_NOT_FROZEN",
   "protocol": "docs/handbook/research/LP-G5-DRAFT-PREREGISTRATION.md",
   "protocol_sections": "section 10 (Gate 2), section 5.5 (simulated scalp), section 8 (inscription), Annex B (this file)",
-  "note": "Spec machine du G5 Gate 2 (prospectif, confirmation). Gele EN MEME TEMPS que le spec Gate 1 (piege 7) : memes types, classifieur, seuils, signes, fenetres, controles, unite et criteres ; seules changent la source (capture), l'execution (simulee sur carnet reel, lp_sim) et les calendriers (2026-11 -> 2027-04). Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee ; toute valeur null ou owner_decision_pending interdit le statut FROZEN. Le sha256 de la version FROZEN fait partie du gel (protocole section 13). Revision 0.1.2-draft (2026-10-21, passe de correction apres tradingV3-private/research/20261020T2321Z-g5-periods/review-b/quant.md) : textes libres seulement, chaque texte lie au lecteur strict est inchange. Les reponses du proprietaire D7 (P-G5-10 (i) : option a ; (ii) : refus lu dans Nn, remplace par D10 du 2026-10-21 : les deux sources, choix sur la qualite, recopie dans classifier_index_source) et D8 (piste S close, P-S3 sans objet, BTC et ETH restent) sont ecrites dans les textes et au journal du registre ; elles sont recopiees dans les blocs de decision au gel (status et choice restent owner_decision_pending jusque-la : echec ferme). Une valeur qui contient le marqueur freeze_pending suivi d un deux-points marque un choix de redaction que le corps du protocole ne fixe pas encore (a1, sections 10 et 11) ; elle interdit FROZEN (regle a coder, a2). Avant le gel, le canal funding-rate n est verifie que sur la documentation et sur un echantillon de schema (noms de champs, valeurs de settState, fundingTime contre ts ; aucun taux affiche ni persiste hors de la tape ; GATES 9.5) ; le texte FROZEN de costs.funding.source est g5_gate2.FUNDING_SOURCE. Revision 0.1.3-draft (2026-10-21, amendement A1 du Gate 1, avant tout gel et toute lecture) : events[T01_funding_8h].adverse_selection_entry_leg = measured_by_fill_proxy, identique au Gate 1 (piege 7, verifie par check_gate1_identity) ; il ne regle que la construction descriptive du Gate 1 sur les derniers prints (9,5 pb au lieu de 13) ; la mesure primaire simulee mesure tous ses termes et n est pas touchee.",
+  "note": "Spec machine du G5 Gate 2 (prospectif, confirmation). Gele EN MEME TEMPS que le spec Gate 1 (piege 7) : memes types, classifieur, seuils, signes, fenetres, controles, unite et criteres ; seules changent la source (capture), l'execution (simulee sur carnet reel, lp_sim) et les calendriers (2026-11 -> 2027-04). Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee ; toute valeur null ou owner_decision_pending interdit le statut FROZEN. Le sha256 de la version FROZEN fait partie du gel (protocole section 13). Revision 0.1.2-draft (2026-10-21, passe de correction apres tradingV3-private/research/20261020T2321Z-g5-periods/review-b/quant.md) : textes libres seulement, chaque texte lie au lecteur strict est inchange. Les reponses du proprietaire D7 (P-G5-10 (i) : option a ; (ii) : refus lu dans Nn, remplace par D10 du 2026-10-21 : les deux sources, choix sur la qualite, recopie dans classifier_index_source) et D8 (piste S close, P-S3 sans objet, BTC et ETH restent) sont ecrites dans les textes et au journal du registre ; elles sont recopiees dans les blocs de decision au gel (status et choice restent owner_decision_pending jusque-la : echec ferme). Revision 0.1.5-draft (2026-10-21, passe avant gel) : D7 (i) et D8 sont ecrites dans leurs blocs avant le gel (events[T05_us_open].window_end = a_end_2027_03_31, universe.p_s3_track_s = moot_track_s_closed, valeur ajoutee au lecteur ; owner_decided ; decision_ref_p_g5_10_i, decision_ref_p_g5_10_ii et decision_ref_p_s3 de freeze_fill = textes dates du proprietaire) : plus aucune valeur owner_decision_pending ; T05 au Gate 2 est G5_GATE2_NOT_INFORMATIVE par construction, ecrit par le lecteur (audit power_by_construction, raison power_floor_unreachable_by_construction) ; le fetcher de l option b existe (g5_index_fetch), le lecteur admet D10 en FROZEN. Une valeur qui contient le marqueur freeze_pending suivi d un deux-points marque un choix de redaction que le corps du protocole ne fixe pas encore (a1, sections 10 et 11) ; elle interdit FROZEN (regle a coder, a2). Avant le gel, le canal funding-rate n est verifie que sur la documentation et sur un echantillon de schema (noms de champs, valeurs de settState, fundingTime contre ts ; aucun taux affiche ni persiste hors de la tape ; GATES 9.5) ; le texte FROZEN de costs.funding.source est g5_gate2.FUNDING_SOURCE. Revision 0.1.3-draft (2026-10-21, amendement A1 du Gate 1, avant tout gel et toute lecture) : events[T01_funding_8h].adverse_selection_entry_leg = measured_by_fill_proxy, identique au Gate 1 (piege 7, verifie par check_gate1_identity) ; il ne regle que la construction descriptive du Gate 1 sur les derniers prints (9,5 pb au lieu de 13) ; la mesure primaire simulee mesure tous ses termes et n est pas touchee.",
 
   "frozen_with": {
     "spec": "python-orchestrator/scripts/research_lp/specs/g5_gate1_spec.json",
@@ -25,7 +25,7 @@
     "lookback_before_t0": "allowed for the classifier only (the 480 min of mark and index before t_arm), never before quarantine_floor_utc, never scored",
     "instant_in_window_if": "the whole footprint of the instant lies in [T0 ; end_exclusive of its type)",
     "end_exclusive": "2027-04-01",
-    "end_rule": "GATES 1.3 (end of scoring <= 2027-03-31) and D1 (capture until 2027-03-31 at the latest) ; per type: events[].window_end ; T05 per owner decision P-G5-10 (i): answer D7 (2026-10-21) = option a, end 2027-03-31, copied at freeze ; data-gap extension as implemented (g5_eval, g5_gate2.extended_end ; review-b quant m3): a lost day is a UTC day on which every eligible instrument is unusable (quality.unusable_instrument_day), the extension adds calendar days (a weekend day added brings no NYSE day to T05), at most max_days, and goes beyond 2027-03-31 only under the decisions of the chosen option, dated before the freeze ; under D7 no extension is possible (both type windows end on 2027-03-31): unusable days are counted, never replaced",
+    "end_rule": "GATES 1.3 (end of scoring <= 2027-03-31) and D1 (capture until 2027-03-31 at the latest) ; per type: events[].window_end ; T05 per owner decision P-G5-10 (i): answer D7 (2026-10-21) = option a, end 2027-03-31, written in events[T05_us_open].window_end since 0.1.5-draft ; data-gap extension as implemented (g5_eval, g5_gate2.extended_end ; review-b quant m3): a lost day is a UTC day on which every eligible instrument is unusable (quality.unusable_instrument_day), the extension adds calendar days (a weekend day added brings no NYSE day to T05), at most max_days, and goes beyond 2027-03-31 only under the decisions of the chosen option, dated before the freeze ; under D7 no extension is possible (both type windows end on 2027-03-31): unusable days are counted, never replaced",
     "data_gap_extension": {
       "rule": "one day added per unusable day (quality.unusable_instrument_day), never on a result",
       "max_days": 14,
@@ -76,11 +76,11 @@
   "owner_decisions": {
     "rule": "every value owner_decision_pending is replaced by the owner's dated choice (text copied in freeze_fill and in the register journal) before status FROZEN ; the evaluator refuses a FROZEN spec that still contains owner_decision_pending anywhere",
     "pending": [
-      {"id": "P-G5-10 (i)", "subject": "end of the T05 Gate 2 window (owner answer D7, 2026-10-21: option a, end 2027-03-31, NOT_INFORMATIVE by construction ; copied at freeze)", "path": "events[T05_us_open].window_end", "status": "owner_decision_pending"},
+      {"id": "P-G5-10 (i)", "subject": "end of the T05 Gate 2 window: owner decision D7 (i), 2026-10-21, owner, 2026-10-21 about 06:40 UTC, second lot, point 3: \"Nn\" (LP-OWNER-DECISIONS-2026-10-21.md D7 (i): no extension of the T05 Gate 2 window, it stops at 2027-03-31 ; with about 92 instants < 100, T05 at Gate 2 is G5_GATE2_NOT_INFORMATIVE by construction, as the protocol writes in advance) ; choice a_end_2027_03_31 written in events[T05_us_open].window_end (spec 0.1.5-draft, before the freeze) ; the reader states the consequence: audit power_by_construction and the T05 verdict reason power_floor_unreachable_by_construction", "path": "events[T05_us_open].window_end", "status": "owner_decided"},
       {"id": "P-G5-10 (ii)", "subject": "source of the per-minute index for the classifier P_hat (owner decision D10, 2026-10-21, which supersedes the reading of D7 on this point: both sources, a = capture index-tickers and b = history-index-candles after the window ; primary chosen by classifier_index_source.selection_rule on coverage and agreement only, before any T01 evaluation ; the other source reported as a sensitivity)", "path": "classifier_index_source", "status": "owner_decided"}
     ],
     "related_not_p_g5_10": [
-      {"id": "P-S3 (track S, LP-S-CSFUND-K1C-AMENDMENT-DRAFT.md section 4.3)", "subject": "BTC and ETH in the G5 universe (owner answer D8, 2026-10-21: track S closed without follow-up, P-S3 moot, BTC and ETH stay at both gates ; the strict reader accepts alpha or beta only: a value moot_track_s_closed is to add, a2, then copied at freeze)", "path": "universe.p_s3_track_s", "status": "owner_decision_pending"}
+      {"id": "P-S3 (track S, LP-S-CSFUND-K1C-AMENDMENT-DRAFT.md section 4.3)", "subject": "BTC and ETH in the G5 universe: owner decision D8, 2026-10-21, owner, 2026-10-21 about 06:40 UTC, second lot, point 4: \"Clore s\" (LP-OWNER-DECISIONS-2026-10-21.md D8: track S closed without follow-up, the P-S3 conflict disappears, BTC and ETH stay in the G5 universe at both gates) ; choice moot_track_s_closed (accepted by the strict reader since 2026-10-21, g5_gate2.P_S3_MOOT) written in universe.p_s3_track_s (spec 0.1.5-draft, before the freeze) ; neither alpha nor beta", "path": "universe.p_s3_track_s", "status": "owner_decided"}
     ]
   },
 
@@ -93,11 +93,11 @@
     "calendars_verified_utc": null,
     "code_digest_sha256": null,
     "decision_ref_d1_capture": null,
-    "decision_ref_p_g5_10_i": null,
-    "decision_ref_p_g5_10_ii": null,
-    "decision_ref_p_s3": null,
+    "decision_ref_p_g5_10_i": "D7 (i), owner, 2026-10-21 about 06:40 UTC, second lot, point 3: \"Nn\" (LP-OWNER-DECISIONS-2026-10-21.md D7 (i): no extension of the T05 Gate 2 window, it stops at 2027-03-31 ; with about 92 instants < 100, T05 at Gate 2 is G5_GATE2_NOT_INFORMATIVE by construction, as the protocol writes in advance)",
+    "decision_ref_p_g5_10_ii": "D10, owner, 2026-10-21: \"On essaye des deux un par un puis on decide\" (LP-OWNER-DECISIONS-2026-10-21.md D10: both index sources, a = capture index-tickers, b = history-index-candles fetched once after the window ; primary by classifier_index_source.selection_rule on coverage and agreement only, before any T01 evaluation)",
+    "decision_ref_p_s3": "D8, owner, 2026-10-21 about 06:40 UTC, second lot, point 4: \"Clore s\" (LP-OWNER-DECISIONS-2026-10-21.md D8: track S closed without follow-up, the P-S3 conflict disappears, BTC and ETH stay in the G5 universe at both gates)",
     "t05_end_inclusive_utc": null,
-    "rule": "toutes ces valeurs sont non nulles dans la version FROZEN ; l'evaluateur refuse un spec FROZEN qui en contient une nulle ; decision_ref_p_g5_10_i = texte de D7 (point 3 du 2026-10-21) et t05_end_inclusive_utc = 2027-03-31 ; decision_ref_p_s3 = texte de D8 (piste S close, P-S3 sans objet) ; decision_ref_p_g5_10_ii = texte de D10 (2026-10-21, les deux sources, choix sur la qualite)"
+    "rule": "toutes ces valeurs sont non nulles dans la version FROZEN ; l'evaluateur refuse un spec FROZEN qui en contient une nulle ; decision_ref_p_g5_10_i = texte de D7 (point 3 du 2026-10-21) et t05_end_inclusive_utc = 2027-03-31 ; decision_ref_p_s3 = texte de D8 (piste S close, P-S3 sans objet) ; decision_ref_p_g5_10_ii = texte de D10 (2026-10-21, les deux sources, choix sur la qualite) ; les trois decision_ref_* sont ecrits depuis la version 0.1.5-draft (2026-10-21, le lecteur accepte un texte non nul avant le gel) ; t05_end_inclusive_utc et les autres valeurs restent nulles jusqu au gel"
   },
 
   "universe": {
@@ -108,10 +108,10 @@
     "analysed": null,
     "analysed_rule": "list of {inst_id, index_id, list_time_utc, ct_val, tick_sz, lot_sz, min_sz} copied from the freeze snapshot ; index_id = uly",
     "p_s3_track_s": {
-      "status": "owner_decision_pending",
+      "status": "owner_decided",
       "decision": "P-S3: (alpha, recommended by the track S) BTC-USD_UM_XPERP-310404 and ETH-USD_UM_XPERP-310404 removed from the G5 Gate 1 universe and outputs ; (beta) CS-FUND 0.4 amended (G5 reading declared as exposure E9) ; owner answer D8 (2026-10-21, Clore s): track S closed without follow-up (S-O5), the P-S3 conflict disappears, BTC and ETH stay in the G5 Gate 1 universe and in this Gate 2 universe ; neither alpha nor beta is chosen (no CS-FUND to amend) ; a reopening of the track S is a new decision and never removes BTC or ETH from G5 after the freeze",
       "gate2_scope": "moot under D8 (BTC and ETH stay at both gates) ; was: P-S3 names the Gate 1 only ; whether option alpha also removes BTC and ETH from the Gate 2 (their capture between 2026-11-02 and the track S T0, read at the single Gate 2 evaluation) is not decided ; to be written with P-S3",
-      "choice": "owner_decision_pending"
+      "choice": "moot_track_s_closed"
     },
     "mismatch_with_snapshot": "refuse_run"
   },
@@ -207,7 +207,7 @@
     "decision": "P-G5-10 (ii)",
     "status": "owner_decided",
     "choice": "d10_both_primary_by_quality_rule",
-    "why": "P_hat needs idx(g) at every minute boundary of the 480-min lookback ; owner decision D10 (2026-10-21, LP-OWNER-DECISIONS-2026-10-21.md: On essaye des deux un par un puis on decide) : (a) the public channel index-tickers is added to the continuous capture (extension of D1 under section 9.4: one more public channel, same instruments, same host, same period ; xperp_capture.CHANNELS and the tape layout index_tick since 2026-10-21) and (b) history-index-candles is fetched once after the end of the Gate 2 window ; the primary source follows selection_rule, the other one is a reported sensitivity ; option b still has no fetcher for the Gate 2 period (g5_fetch stops at END_EXCLUSIVE ; a FROZEN spec choosing D10 is refused by the reader until that fetcher exists, CTO review-b M3: code to write)",
+    "why": "P_hat needs idx(g) at every minute boundary of the 480-min lookback ; owner decision D10 (2026-10-21, LP-OWNER-DECISIONS-2026-10-21.md: On essaye des deux un par un puis on decide) : (a) the public channel index-tickers is added to the continuous capture (extension of D1 under section 9.4: one more public channel, same instruments, same host, same period ; xperp_capture.CHANNELS and the tape layout index_tick since 2026-10-21) and (b) history-index-candles is fetched once after the end of the Gate 2 window ; the primary source follows selection_rule, the other one is a reported sensitivity ; option b has its dedicated fetcher since 2026-10-21 (g5_index_fetch, command g5-index-fetch: FROZEN spec and its sha256, once, after the end of the window, rows inside [first t_arm - 480 min - 60 min ; window end) and never before the quarantine floor, index ids of universe.analysed only, decision_ref and max_requests mandatory, hashed receipt whose index_1m digest is the --expect-index-tape-sha256 of g5-eval ; g5_fetch and its END_EXCLUSIVE untouched) ; the reader admits D10 at FROZEN since then (g5_gate2.INDEX_FROZEN_ALLOWED, CTO review-b M3 closed)",
     "options": {
       "a_capture_index_tickers": {
         "source": "public WS channel index-tickers (docs-v5 l.43897, URL path /ws/v5/public, EEA host wss://wseea.okx.com/ws/v5/public), instId = index_id (uly), captured from before T0 ; tape layout index_tick (ts_us, recv_us, idx_px) keyed by index_id",
@@ -217,7 +217,7 @@
       "b_history_index_candles_after_window": {
         "source": "GET /api/v5/market/history-index-candles (bar 1m, instId = index_id), fetched once after the end of the window",
         "idx_minute": "close of the 1m index candle ending at g (Gate 1 convention)",
-        "requires": ["D10 (2026-10-21): fetched once after the end of the Gate 2 window (REST history read of the Gate 2 period)", "a dedicated fetcher (g5_fetch stops at END_EXCLUSIVE ; code to write before FROZEN, CTO review-b M3)", "depth served for the whole window (from recent years ; UNKNOWN per X-Perp)", "fetch plan and max_requests (about 2 160 pages per index for 150 days)"]
+        "requires": ["D10 (2026-10-21): fetched once after the end of the Gate 2 window (REST history read of the Gate 2 period)", "the dedicated fetcher g5_index_fetch (2026-10-21 ; g5_fetch stops at END_EXCLUSIVE and is untouched ; CTO review-b M3 closed): FROZEN spec sha256, after the window end, window guard, index ids of the universe, decision_ref, max_requests >= plan, hashed receipt", "depth served for the whole window (from recent years ; UNKNOWN per X-Perp)", "fetch plan and max_requests (about 2 160 pages per index for 150 days)"]
       }
     },
     "selection_rule": {
@@ -405,8 +405,8 @@
       "window_rule": "spec_window",
       "window_end": {
         "decision": "P-G5-10 (i)",
-        "status": "owner_decision_pending",
-        "choice": "owner_decision_pending",
+        "status": "owner_decided",
+        "choice": "a_end_2027_03_31",
         "options": {
           "a_end_2027_03_31": {
             "end_inclusive": "2027-03-31",
