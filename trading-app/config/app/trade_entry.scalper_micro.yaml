@@ -57,7 +57,7 @@ trade_entry:
         # --- Order Preferences ---
         order_type: 'limit'
         open_type: 'isolated'
-        order_mode: 1                     # micro scalper agit en taker par défaut
+        order_mode: 1                     # 1 = limite GTC sans post-only (maker si l'ordre repose, taker s'il croise) ; 4 = post-only
 
         # --- Market & Spread Guards ---
         market_max_spread_pct: 0.001

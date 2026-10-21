@@ -50,7 +50,7 @@ trade_entry:
         # --- Order Configuration ---
         order_type: 'limit'                        # Type d'ordre ('limit' ou 'market')
         open_type: 'isolated'                      # Type d'ouverture ('isolated' ou 'cross')
-        order_mode: 1                              # Mode d'ordre (1=taker, 4=maker)
+        order_mode: 1                              # 1 = limite GTC sans post-only, 2 = FOK, 3 = IOC, 4 = post-only (ExchangeExecutionService)
 
         # --- Market & Spread Guards ---
         market_max_spread_pct: 0.001               # Spread max accepté (converti si > 1.0)

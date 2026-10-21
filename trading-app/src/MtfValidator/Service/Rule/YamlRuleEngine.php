@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Service\Rule;
 
+use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 use Symfony\Component\DependencyInjection\Attribute\Lazy;
 
@@ -11,6 +12,17 @@ use Symfony\Component\DependencyInjection\Attribute\Lazy;
 #[AsAlias]
 class YamlRuleEngine implements RuleEngineInterface
 {
+    /**
+     * Fallback engine (used when the compiled ConditionRegistry engine throws). It only understands the YAML
+     * primitives below. Any other block — notably compiled conditions such as `spread_bps_lte` or
+     * `order_flow_imbalance_gte`, whose validation needs a canonical microstructure proof — cannot be checked
+     * here and therefore FAILS CLOSED. It used to return true "pour ne pas bloquer toute la validation",
+     * which let proof-bound conditions pass without any proof whenever the fallback ran.
+     */
+    public function __construct(private readonly ?LoggerInterface $logger = null)
+    {
+    }
+
     /**
      * Évalue un bloc de règle YAML (string, all_of, any_of, primitif ou alias).
      *
@@ -215,10 +227,14 @@ class YamlRuleEngine implements RuleEngineInterface
             return $this->evaluateScalarComparison($block, $indicators);
         }
 
-        // TODO: ajouter derivative_gt/lt, slope_left, increasing, decreasing, near_vwap, etc.
-        // ⚠️ Pour l'instant, si on tombe ici avec un bloc inconnu, on retourne true
-        // pour ne pas bloquer toute la validation. Tu pourras durcir plus tard.
-        return true;
+        // Unknown block: this engine cannot evaluate it (compiled condition, unsupported primitive or typo).
+        // Fail closed and say so; never let an unevaluated condition pass.
+        $this->logger?->warning('[MTF] YAML fallback engine: unsupported rule block, failing closed', [
+            'timeframe' => $timeframe,
+            'block_keys' => \array_keys($block),
+        ]);
+
+        return false;
     }
 
     /**
@@ -228,7 +244,7 @@ class YamlRuleEngine implements RuleEngineInterface
     private function evaluateLtFields(array $fields, array $indicators): bool
     {
         if (\count($fields) !== 2) {
-            return true;
+            return false;
         }
 
         [$leftKey, $rightKey] = $fields;
@@ -247,7 +263,7 @@ class YamlRuleEngine implements RuleEngineInterface
     private function evaluateGtFields(array $fields, array $indicators): bool
     {
         if (\count($fields) !== 2) {
-            return true;
+            return false;
         }
 
         [$leftKey, $rightKey] = $fields;

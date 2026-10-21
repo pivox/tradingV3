@@ -701,8 +701,8 @@ final class TimeframeValidationService
 
         // Déjà fourni par une autre couche → ne pas écraser.
         $hasSpread = \array_key_exists('spread_bps', $context) && \is_numeric($context['spread_bps']);
-        $hasOfi = \array_key_exists('order_flow_imbalance', $context) && \is_numeric($context['order_flow_imbalance']);
-        if ($hasSpread && $hasOfi) {
+        $hasDepthImbalance = \array_key_exists('book_depth_imbalance_20', $context) && \is_numeric($context['book_depth_imbalance_20']);
+        if ($hasSpread && $hasDepthImbalance) {
             return;
         }
 
@@ -733,12 +733,16 @@ final class TimeframeValidationService
             }
         }
 
-        if (!$hasOfi) {
+        // Displayed-depth imbalance of an untimestamped REST book (20 levels). It is NOT the canonical order
+        // flow imbalance (`aggressor_volume_ratio.v1`: aggressive buy vs sell volume of public trades over a
+        // window, bound to a timestamped CanonicalMicrostructureSnapshot). Keeping it under its own key avoids
+        // presenting a depth snapshot as order flow; the proof-bound conditions never read it.
+        if (!$hasDepthImbalance) {
             $bidQty = $this->sumOrderBookQty($bids, 20);
             $askQty = $this->sumOrderBookQty($asks, 20);
             $denom = $bidQty + $askQty;
             if ($denom > 0.0) {
-                $context['order_flow_imbalance'] = ($bidQty - $askQty) / $denom;
+                $context['book_depth_imbalance_20'] = ($bidQty - $askQty) / $denom;
             }
         }
     }
