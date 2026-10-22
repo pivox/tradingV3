@@ -34,8 +34,9 @@ HOUR_US = 60 * MINUTE_US
 DAY_US = tape.DAY_S * US
 REAL_SPEC = Path(__file__).resolve().parents[1] / "scripts" / "research_lp" / "specs" / "g5_gate1_spec.json"
 # LP-G5 Annexe A (informative). A1 (2026-10-21): the draft 0.2.0 was d4189493…af80a; 0.3.0-draft (2ab0073c…62b15a6) carries the amendment A1;
-# 0.4.0-draft (2026-10-22) the freeze controls of the owner decision (a) of that day (Annexe B requests 11, 13, 14, 16, 18).
-REAL_SPEC_SHA256_DRAFT = "d2a22f7195ae423b6f5463904d5a3ccf9560f5a635a2ff212c3c0a1812b97f5e"
+# 0.4.0-draft (2026-10-22, d2a22f71…b97f5e) the freeze controls of the owner decision (a) of that day (Annexe B requests 11, 13, 14, 16, 18);
+# 0.4.1-draft (2026-10-22) the calendar pass: CPI 2026-10-14 recorded, sources dated (the content test reports no problem).
+REAL_SPEC_SHA256_DRAFT = "1d86d3f538da49010f5e70edb2d55d1200c34ac56e4d30cdec5cc96d4cd35a12"
 BASE = json.loads(REAL_SPEC.read_text())
 BTC, ETH, SOL = "BTC-USD_UM_XPERP-310404", "ETH-USD_UM_XPERP-310404", "SOL-USD_UM_XPERP-310404"
 LISTED = {BTC: "2026-03-30T04:30:00Z", ETH: "2026-04-01T04:00:00Z", SOL: "2026-04-01T04:25:00Z"}
@@ -187,7 +188,7 @@ def test_the_real_spec_is_accepted_and_every_field_is_read():
     # A1: 27 capabilities + the 7 of the amendment (a1_*, Gate 1 only); owner decision (a) of 2026-10-22: + the 4 freeze controls of Annexe B
     # (gate2_frozen_together, Gate 1 only; the calendar content test, the freeze_pending: marker, the S_eco floor, both gates).
     assert spec.requires == tuple(BASE["requires"]) and set(spec.requires) == set(g5_eval.HISTORY_REQUIRES) and len(spec.requires) == 38
-    assert set(g5_eval.A1_CAPABILITIES) <= set(spec.requires) and len(g5_eval.A1_CAPABILITIES) == 7 and spec.version == "0.4.0-draft"
+    assert set(g5_eval.A1_CAPABILITIES) <= set(spec.requires) and len(g5_eval.A1_CAPABILITIES) == 7 and spec.version == "0.4.1-draft"
     assert {"gate2_frozen_together", "calendars_content_test_at_freeze", "freeze_pending_marker_refuses_frozen", "economic_s_eco_at_least_d4"} <= set(spec.requires)
     assert spec.notes["frozen_with"] == {"spec": g5_eval.GATE2_SPEC_PATH, "spec_id": "LP-G5-GATE2-2026"} and spec.notes["freeze_pending_markers"] == []
     # CTO M4: the sha256 of the sealed funding receipt is a freeze_fill value; the draft predates the key (absent = null, listed).

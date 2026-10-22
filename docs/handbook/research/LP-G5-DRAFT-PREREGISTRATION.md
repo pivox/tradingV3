@@ -44,6 +44,16 @@ l'Annexe B sont codées et testées hors réseau (co-gel contrôlé par le Gate 
 décisives** — le résultat `touch` ne peut jamais sauver un `FAIL`, un `NOT_INFORMATIVE` ni un `INCONCLUSIVE`. Spec Gate 1 `0.4.0-draft`,
 spec Gate 2 `0.1.6-draft`. Le gel reste impossible : prérequis ouverts en §2.4.
 
+**Passe calendriers et rédaction du 2026-10-22 (après-midi ; avant tout gel et toute lecture ; aucune donnée de marché ; réseau limité
+aux pages officielles des calendriers ; détail en §2.4, Annexes A à C).** Statut inchangé (`DRAFT_NOT_FROZEN`). Calendriers des deux
+portes relevés le 2026-10-22 sur bls.gov, federalreserve.gov et nyse.com (Annexe C ; sources datées dans `calendars.sources`) : le test
+de contenu ne rapporte plus aucun problème, ni au Gate 1 (CPI 2026-10-14 inscrite) ni au Gate 2 (CPI 2027-01 → 04, Employment Situation
+2026-11 → 2027-04, FOMC 2027-04-28, demi-séances NYSE 2026-11-27 et 2026-12-24). Les sept choix de rédaction de l'Annexe B (huit
+marqueurs `freeze_pending:`) et les cinq écritures signalées par la relecture review-b (M1, M3, m1, m3, m4) sont écrits au corps (§7.4,
+§8, §10.1 à §10.4) ; plus aucun marqueur dans les specs. Spec Gate 1 `0.4.1-draft`, spec Gate 2 `0.1.7-draft`. Le gel reste impossible :
+prérequis ouverts en §2.4, dont deux constatés par cette passe (règle d'une date de calendrier changée après le gel ; liste des
+publications de 10:00 ET).
+
 **Mandat.** Propriétaire, 2026-10-20 : « Ok go. Mais ta mission reste de trouver comment faire un PnL positif avec le
 scalping, même sur des périodes précises ». Décisions du 2026-10-21 (`LP-OWNER-DECISIONS-2026-10-21.md`) : D1 licence §9.4
 accordée, **y compris** « la lecture historique unique de G5 Gate 1 : bougies 1 minute dernier prix, mark et indice, et
@@ -278,7 +288,7 @@ photo **et** ouverture de Londres : même règle. Les sessions définies en heur
 | **P-G5-2** | **Verdict `fwd-okx-r1` rendu** (après le 2026-10-31) : rien de G5 ne tourne avant (`GATES` §8 ; plan §5 d.11) | — | `fwd-okx-r1` clos | pas de fetch, pas de gel |
 | **P-G5-3** | **Fetch aveugle du funding seul avant le gel** (quant M7) : `funding-rate-history` est le seul flux qui se périme (« up to three months », docs-v5) ; il est récupéré **le jour du verdict** en mode **scellé** (P-G5-11 (B) xix) : console et `fetch.log` ne portent que des totaux globaux (jobs, jobs complets, jobs en erreur) et D_cov ; le manifeste par instrument (lignes, bornes, pages), qui révélerait les escalades 2 h / 1 h donc des taux au plafond, est écrit dans un fichier **scellé**, haché, ouvert par aucun agent avant l'exécution ; ligne de registre `unread` avec sha256 avant le gel ; la PR de gel cite ces hashes. Bougies, mark et indice sont récupérés **après** le gel (`GATES` §9.5, lecture littérale). Chaque jour d'attente fait perdre ≈ 3 instants T01 (§4.4) | propriétaire | décision datée | perte de 3 instants T01 par jour de délai |
 | **P-G5-4** | **Univers** (quant M9) : règle par métadonnées appliquée au snapshot `public/instruments` (`instType FUTURES`, hôte EEE) relevé **après le 2026-10-31** (haché) : `ruleType xperp`, sous-jacent crypto `<BASE>-USD`, `listTime + 30 j < 2026-10-14T00:00Z`, intersectée avec la liste D1 (enveloppe de licence) ; attendu : les 25 instruments « analysés » de §3.1 (sinon le spec est corrigé au gel et l'écart écrit) ; **dérogation écrite du propriétaire** nommant l'exception : « liste D1 issue d'un volume du 2026-10-14 (quarantaine, `GATES` §9.5, M11), sélection sur la liquidité de fin de fenêtre ; biais déclarés §3.1 » ; aucun instrument ajouté par un volume ; retraits constatés et comptés | a2 / propriétaire | snapshot haché, Annexe I, phrase datée | gel impossible |
-| **P-G5-5** | **Calendriers et sessions gelés en listes explicites** (Annexe C, spec `calendars`, `sessions`, `macro_filter`) : fériés NYSE ; dates CPI et Employment Situation (BLS) ; FOMC (Fed) ; **re-vérifiés** sur bls.gov / federalreserve.gov / nyse.com au gel (`freeze_fill.calendars_verified_utc`) ; à relever en plus : fenêtre CME CF BRR (15:00–16:00 Londres, publication le week-end UNKNOWN), demi-séances NYSE, liste descriptive des publications de 10:00 ET (JOLTS, ISM) pour la strate §9.5 ; calendriers 2026-11 → 2027-04 pour le Gate 2 | a1 | listes dans les specs | T05 et les contrôles indéfinis |
+| **P-G5-5** | **Calendriers et sessions gelés en listes explicites** (Annexe C, spec `calendars`, `sessions`, `macro_filter`) : fériés NYSE ; dates CPI et Employment Situation (BLS) ; FOMC (Fed) ; **re-vérifiés** sur bls.gov / federalreserve.gov / nyse.com au gel (`freeze_fill.calendars_verified_utc`) ; à relever en plus : fenêtre CME CF BRR (15:00–16:00 Londres, publication le week-end UNKNOWN), demi-séances NYSE, liste descriptive des publications de 10:00 ET (JOLTS, ISM) pour la strate §9.5 ; calendriers 2026-11 → 2027-04 pour le Gate 2 | a1 | listes dans les specs (relevées le 2026-10-22, Annexe C ; restent §2.4 lignes 5 et 15) | T05 et les contrôles indéfinis |
 | **P-G5-6** | **Registre** : `tradingV3-private/research/20261020T1430Z-lp-programme/REGISTRY.md` **existe** (présence du fichier constatée le 2026-10-21 en fin de journée, contenu non relu dans cette passe) ; à créer avec les lignes `okx-xperp-1m-history-2026-03-30..2026-10-13` (`unread` → `consumed_equivalent` au jour de la lecture, D_cov et sha256 du fetch funding scellé inscrits) et `okx-xperp-prospective-G5` (`prospective`) | a1 / a3 | lignes | gel impossible |
 | **P-G5-7** | **Amendements de `LP-PROGRAMME-GATES.md` et du plan** (quant m3, m4), hors du périmètre d'écriture de cette passe, **avant** le gel : §2.3 m_max = 3 + 2K = **7** (G2-C2, G4-Gate2, G1, G5-Gate1-T01, G5-Gate1-T05, G5-Gate2-T01, G5-Gate2-T05), `PASS_PROGRAMME` immédiat si p ≤ 0,10/7 ≈ 0,0143 ; §1.1 « × 365 » → « × jours/an du calendrier du type (365 continu, 252 NYSE) » ; §3.1 « blocs de 3 600 s pour les instants » → G5 : blocs d'un jour UTC ; §3.3 et plan §2.2 « ≈ 600 instants par photo » → « ≤ 211 × f_inst (T01, D_cov), 105 (T05) » | a3 | textes amendés | Holm du programme et porte économique faux |
 | **P-G5-8** | **Porte économique** : S_éco = **97,25** USD/an (D4 ; règle unique de `GATES` §1.2 amendé le 2026-10-21 : max(97,25 ; 5 × SOFR du jour du gel × 500 ; coût fixe déclaré)), inscrite ici (§7.6) et dans les deux specs (`economic.s_eco_usd_per_year`, le lecteur refuse moins : capacité `economic_s_eco_at_least_d4`, décision (a) du 2026-10-22) ; coût fixe déclaré de G5 Gate 1 ≈ nul (code écrit, ≈ 3–6 h de requêtes, stockage de l'ordre de quelques centaines de Mo) ; Gate 2 : part du coût de la capture continue (`GATES` §1.2) | propriétaire | fait (D4 ; specs le 2026-10-22) | — |
@@ -357,10 +367,20 @@ l'indice du Gate 2 `g5_index_fetch` (§10.1) ; repli REST du funding : **pas** u
 Passe du 2026-10-22 (même branche, aucune donnée de marché, aucun réseau ; décisions du propriétaire du jour) : **(a)** « Finir les contrôles G5 réalisables dès maintenant »
 — demandes de code 11, 13, 14, 16 et 18 de l'Annexe B codées et testées ((B) xxiv–xxv ; ligne 7 ci-dessous) ; **(b)** « Choisir la traversée comme remplissage principal du Gate 2, et garder le simple contact comme comparaison descriptive »
 — `through` primaire au Gate 2, `touch` comparaison descriptive (ligne 9 ci-dessous ; §10.2, §11.1). Spec Gate 1 `0.4.0-draft`, spec
-Gate 2 `0.1.6-draft` (sha256 informatifs en Annexes A et B) ; commit `4dd1f6e8`. Sur les brouillons, le test de contenu rapporte
-(sans refuser, `audit.calendar_content`) : Gate 1 — aucune date CPI en octobre 2026 (2026-10-14, Annexe C, est hors de la liste) ;
-Gate 2 — CPI 2027-01 → 03 et Employment Situation 2026-11 → 2027-03 absents ; huit marqueurs `freeze_pending:` restent au Gate 2.
-Restent, **tous bloquants** :
+Gate 2 `0.1.6-draft` (sha256 informatifs en Annexes A et B) ; commit `4dd1f6e8`. Sur ces brouillons, le test de contenu rapportait
+(sans refuser, `audit.calendar_content`) : Gate 1 — aucune date CPI en octobre 2026 (2026-10-14, Annexe C, était hors de la liste) ;
+Gate 2 — CPI 2027-01 → 03 et Employment Situation 2026-11 → 2027-03 absents ; huit marqueurs `freeze_pending:` restaient au Gate 2.
+
+Passe calendriers et rédaction du 2026-10-22 (après-midi ; même branche ; aucune donnée de marché ; réseau limité aux pages officielles
+des calendriers, Annexe C) : listes des deux portes relevées sur bls.gov, federalreserve.gov et nyse.com le 2026-10-22, sources datées
+dans `calendars.sources` ; le test de contenu ne rapporte **plus aucun problème** aux deux portes (Gate 1 : CPI 2026-10-14 inscrite ;
+Gate 2 : CPI, Employment Situation, FOMC 2027-04-28 et demi-séances 2026-11-27 / 2026-12-24 inscrits) ; `calendars.incomplete_at_draft`
+du Gate 2 réduit à deux entrées **bloquantes** (lignes 5 et 15) ; les huit marqueurs `freeze_pending:` retirés, les choix (1) à (7) de
+l'Annexe B et les écritures M1, M3, m1, m3, m4 étant au corps (§7.4, §8, §10.1 à §10.4 ; lignes 8 et 13) ; `costs.funding.fallback`
+écrit `none…` ; texte `costs.stress_rule_status` corrigé (+4,75 pb au Gate 1 depuis A1 et non +6,5 pb, valeur d'avant A1). Borne de T05
+au Gate 2 sur les listes complètes : 92 au T0 provisoire du brouillon, 91 au plus pour un T0 atteignable (§10.3). Spec Gate 1
+`0.4.1-draft`, spec Gate 2 `0.1.7-draft` (sha256 informatifs en Annexes A et B). **État au 2026-10-22, fin de passe — restent, tous
+bloquants** :
 
 | # | Bloque le gel | Responsable | Preuve |
 |---|---|---|---|
@@ -368,16 +388,17 @@ Restent, **tous bloquants** :
 | 2 | Fetch scellé du funding le jour du verdict, reçu haché, D_cov au registre ; `freeze_fill.funding_seal_receipt_sha256` du Gate 1 | propriétaire (lancement daté) ; a2 | §2.1 P-G5-3 ; §13 points 1 et 5 |
 | 3 | Snapshot `public/instruments` relevé **après** le 2026-10-31, haché ; Annexe I ; `universe.analysed` des deux specs ; `freeze_fill.instruments_snapshot_*` | a2 ; propriétaire (D6 accordée) | §2.1 P-G5-4 ; §13 point 2 |
 | 4 | Comptages P3 (`selection`, univers ≤ 40 du Gate 2) et `freeze_fill.p3_counts_selection_sha256` ; T0 = premier 00:00 UTC ≥ max(plancher, gel, fin de P3) | a2 (capture ≥ 2026-11-02, canal `index-tickers` compris) | spec Gate 2 `window.start_rule`, `freeze_fill` |
-| 5 | Calendriers : CPI 2027-01 → 04, Employment Situation 2026-11 → 2027-04, FOMC 2027, fériés et demi-séances NYSE, publications de 10:00 ET ; `calendars.incomplete_at_draft` vidé ; `calendars_verified_utc` ; session `cme_cf_brr_window` (`verify_at_freeze`) aux deux specs ; Gate 1 : une date CPI d'octobre 2026 (2026-10-14, Annexe C) à inscrire dans `calendars.cpi`, sinon le test de contenu refuse `FROZEN` ; demi-séances NYSE des deux fenêtres dans `calendars.nyse_half_days` (vides dans les brouillons) ; le test de contenu est codé depuis le 2026-10-22 ((B) xxv) et refuse `FROZEN` sur toute liste incomplète | a1 | §2.1 P-G5-5 ; Annexe C ; spec Gate 2 `calendars.incomplete_at_draft` |
+| 5 | Calendriers — **listes relevées le 2026-10-22** (Annexe C ; test de contenu sans problème aux deux portes) ; restent : (a) `freeze_fill.calendars_verified_utc` aux deux specs (re-lecture des pages officielles au gel) et session `cme_cf_brr_window` (`verify_at_freeze`) aux deux specs ; (b) **liste des publications de 10:00 ET** (JOLTS, ISM ; strate descriptive de §9.5, P-G5-5) : bls.gov ne publie aucune date JOLTS de janvier à avril 2027 (calendrier 2027 modifié le 2026-10-09) ; le calendrier ISM d'ismworld.org renvoie à une page de connexion ; aucun champ de liste dans les specs et strate `T05_ten_am_et_release_days` `UNAVAILABLE` dans `g5_eval` ; entrée `calendars.incomplete_at_draft.ten_am_et_releases` du Gate 2 (le Gate 1 n'a pas ce bloc : sa strate est aussi `UNAVAILABLE`, JOLTS de sa fenêtre relevés en Annexe C, ISM non relevé) — à lever par le relevé des dates une fois publiées, le champ et la strate codés, ou par une décision datée qui retire la strate de P-G5-5 | a1 (relevé) ; a2 (champ, strate) ; propriétaire (retrait éventuel) | §2.1 P-G5-5 ; Annexe C ; spec Gate 2 `calendars.incomplete_at_draft` ; `g5_eval` (`_ten_am_et_release_days`) |
 | 6 | Registre `REGISTRY.md` : le fichier existe (constaté le 2026-10-21) ; présence des lignes `unread` / `prospective` à vérifier au gel | a1 / a3 | §2.1 P-G5-6 ; plan §2.2 |
 | ~~7~~ | ~~Code (Annexe B, demandes 11, 13, 14, 16, 18) : capacité `gate2_frozen_together` au Gate 1 ; test de contenu des calendriers aux deux portes ; refus de `FROZEN` sur `freeze_pending:` ; S_éco ≥ 97,25 dans les deux specs (97,0 aujourd'hui) ; descriptif T01 filtré sur le seul règlement précédent~~ — **fait le 2026-10-22** (décision (a) du propriétaire, commit `4dd1f6e8`) : `gate2_frozen_together` (`g5_gate2.check_frozen_together`, `g5_eval.command_eval`, option `--gate2-spec`, bloc `frozen_with` du spec Gate 1) ; test de contenu (`g5_eval.calendar_content`, `calendars.content_rule`) ; refus de `FROZEN` sur le marqueur (`g5_eval.refuse_freeze_pending`) ; S_éco = 97,25 dans les deux specs et refus de moins (`g5_eval.check_s_eco`) ; descriptif `T01_previous_settlement_filter_only` ((B) xxiv–xxv) | ~~a2~~ | Annexe B, table « Code demandé » (lignes 11, 13, 14, 16, 18 faites) |
-| 8 | Huit marqueurs `freeze_pending:` du spec Gate 2 (choix (1) à (7) de l'Annexe B) : écrits au corps (§10, §11.1) ou retirés ; le lecteur refuse `FROZEN` tant qu'il en reste un (codé le 2026-10-22, demande 14) | a1 | spec Gate 2 ; Annexe B « Choix de rédaction » |
+| ~~8~~ | ~~Huit marqueurs `freeze_pending:` du spec Gate 2 (choix (1) à (7) de l'Annexe B) : écrits au corps (§10, §11.1) ou retirés~~ — **fait le 2026-10-22** (passe calendriers et rédaction) : (1), (2), (6), (7) en §10.2 ; (4) en §10.3 ; (3) en §10.4 ; (5) en §10.1 ; marqueurs retirés du spec `0.1.7-draft` (`notes.freeze_pending_markers` vide) ; `costs.funding.fallback` commence par `none` ; le lecteur refuse toujours `FROZEN` sur un marqueur (demande 14) | ~~a1~~ | Annexe B « Choix de rédaction » ; spec Gate 2 |
 | ~~9~~ | ~~Règle de fill primaire du Gate 2 (`touch`, borne optimiste, contre `through` au Gate 1) : garder déclarée ou changer~~ — **résolu par le propriétaire le 2026-10-22** (décision (b) : « Choisir la traversée comme remplissage principal du Gate 2, et garder le simple contact comme comparaison descriptive » ; commit `4dd1f6e8`) : `execution_sim.entry_fill_rule = through`, `touch` et `queue` descriptives (`fill_rules_touch_and_queue`), jamais décisives ; le lecteur refuse un autre primaire (`g5_gate2.PRIMARY_FILL_RULE`) | ~~a1 / relecture quant~~ propriétaire | §10.2, §11.1 ; spec `execution_sim.entry_fill_rule`, `entry_fill_rule_decision` |
 | 10 | Texte `FROZEN` de `costs.funding.source` = `g5_gate2.FUNDING_SOURCE`, après l'échantillon de schéma du canal `funding-rate` (aucun taux) | a2 / a4 | Annexe B, ligne `costs.funding` |
 | 11 | Relecture CTO du code (B), `g5_index_fetch` compris ; digest `cli.code_digest()` recalculé et recopié aux deux `freeze_fill` | CTO ; a2 | §2.1 P-G5-11 ; §13 point 4 |
-| 12 | Valeurs nulles restantes : Gate 2 `t0_utc`, `gate1_spec_sha256`, `instruments_snapshot_*`, `p3_counts_selection_sha256`, `calendars_verified_utc`, `code_digest_sha256`, `decision_ref_d1_capture` (texte de D1), `t05_end_inclusive_utc` (= 2027-03-31) ; Gate 1 `decision_ref_p_g5_1` (texte de D5) et les valeurs des points 2, 3, 5, 11 | a1 / a2 au gel | specs `freeze_fill` |
-| 13 | Corps : écritures signalées à a1 par la relecture review-b (M1 §8 `pass_effect`, M3 §10.1, m1 §10.4, m3 §10.3, m4 §7.4 ; B1 ligne (B) du §2.3 et m12 §11.1 **faits le 2026-10-22** : (B) xxiv, §11.1) | a1 | Annexe B, table de traitement |
+| 12 | Valeurs nulles restantes : Gate 2 `t0_utc`, `gate1_spec_sha256`, `instruments_snapshot_*`, `p3_counts_selection_sha256`, `calendars_verified_utc`, `code_digest_sha256`, `decision_ref_d1_capture` (texte de D1), `t05_end_inclusive_utc` (= 2027-03-31) ; Gate 1 `decision_ref_p_g5_1` (texte de D5) et les valeurs des points 2, 3, 5, 11 ; constat du 2026-10-22 : `decision_ref_p_g5_1` (texte de D5), `decision_ref_d1_capture` (texte de D1) et `t05_end_inclusive_utc` (2027-03-31, D7) ne dépendent pas du gel (textes datés dans `LP-OWNER-DECISIONS-2026-10-21.md`) et peuvent être recopiés avant lui, comme les trois `decision_ref_*` du Gate 2 — non faits par cette passe ; les autres valeurs dépendent du gel (T0, `gate1_spec_sha256`, snapshots, P3, digest, `calendars_verified_utc`, reçu du funding scellé) | a1 / a2 au gel | specs `freeze_fill` |
+| ~~13~~ | ~~Corps : écritures signalées à a1 par la relecture review-b (M1 §8 `pass_effect`, M3 §10.1, m1 §10.4, m3 §10.3, m4 §7.4)~~ — **fait le 2026-10-22** (passe calendriers et rédaction) : M1 en §8 (conjonction `G5_GATE2_PASS` + `PASS_PROGRAMME` de `G5-Gate2-<type>` + « PASS, poursuivi »), M3 en §10.1 (sémantique du funding sur la documentation et un échantillon de schéma, aucun taux), m1 en §10.4 (aucun scellement au Gate 2, protocole successeur), m3 en §10.3 (prolongation pour trous telle que codée, nulle sous D7), m4 en §7.4 (variance des contrôles) ; B1 et m12 faits plus tôt le même jour ((B) xxiv, §11.1) | ~~a1~~ | Annexe B, table de traitement |
 | 14 | Gel avant la lecture de G2 ; PR de gel publiée avant tout fetch des bougies, du mark et de l'indice du Gate 1 | a1 / propriétaire | §2.1 P-G5-9 ; §13 points 5–6 |
+| 15 | **Règle d'une date de calendrier changée après le gel** (constat de la passe du 2026-10-22) : federalreserve.gov écrit que chaque date FOMC est « tentative » jusqu'à la réunion qui la précède (2027-01-27, 2027-03-17 et 2027-04-28 ne sont confirmables qu'après T0) ; bls.gov écrit que son calendrier est mis à jour « as needed » ; `calendars.content_exceptions` s'écrit au gel et ne couvre pas FOMC ; le protocole n'écrit aucune règle pour une date déplacée, ajoutée ou annulée après le gel (liste gelée appliquée telle quelle, ou correction datée, et laquelle) ; entrée `calendars.incomplete_at_draft.fomc_statement` du Gate 2 bloquante jusqu'à l'écriture de cette règle au corps (aucune valeur inventée ici) | a1 (texte) ; propriétaire si la règle touche la fenêtre ou les listes | spec Gate 2 `calendars.incomplete_at_draft.fomc_statement` ; Annexe C |
 
 Hors blocage : P-G5-7 (amendements de `GATES` et du plan, faits le 2026-10-21, `GATES` §1.1, §2.3, §3.1 ; plan §2.2) ; P-G5-8 (D4) ;
 P-G5-10 (décidé, ci-dessus) ; champ P-S3 du spec Gate 1 (Annexe B, demande 12 : sans objet sous D8, le spec Gate 1 n'a pas ce bloc).
@@ -672,6 +693,13 @@ d'événement **et** ≥ 30 jours distincts par type ; sous le plancher : `NOT_I
 Avec se = σ × √1,3 / √n (σ = écart-type de la valeur par instant, DE 1,3), la condition LB90 > 0 seule détecte δ_min ≈ 2,12 se ; la
 règle C1 exige **aussi** D ≥ +10 pb au point, donc l'effet vrai qui donne une puissance de 0,80 est **δ₈₀ = max(10 + 0,84 se ;
 2,12 se)** (si l'effet vrai vaut +10 pb, la probabilité de PASS est d'au plus 50 %). σ est **UNKNOWN** avant lecture.
+**Variance des contrôles** (relecture review-b quant m4 ; `GATES` §3.2 amendé le 2026-10-21 ; écrit au corps le 2026-10-22) : se
+ci-dessus ignore la variance de la moyenne des contrôles. Pour D = moyenne des événements − moyenne des contrôles, se(D) ≈ σ × √1,3 ×
+√(1/n_e + 1/n_c) = (σ √1,3 / √n_e) × √(1 + n_e/n_c), soit un facteur ≈ 1,15–1,16 avec n_c ≈ 3 n_e : **T05** (105 événements contre
+≈ 311 contrôles) δ_min ≈ **0,27 σ** et δ₈₀ ≈ **+16,5 à +32,7 pb** pour σ de conception 60–120 pb (les valeurs 0,236 σ et +15,6 à
++28,3 pb ci-dessous sont l'approximation sans les contrôles, gardée pour mémoire) ; **T01** (≈ 211 contre ≈ 665) : facteur ≈ 1,15. La
+covariance des chocs de jour communs aux événements et aux contrôles d'un même jour (rééchantillonnés ensemble) joue en sens inverse,
+ampleur UNKNOWN. Calcul d'audit : planchers de conception, jamais recalculés sur la donnée.
 - **T05** : n = **105** par calendrier (marge de 5 sur le plancher ; la perte d'un instant exige que tous ses instruments soient
   exclus, ce qui n'est plausible qu'aux 2 instants à BTC seul) ; se ≈ 0,111 σ, δ_min ≈ **0,236 σ** ; σ de conception 60–120 pb
   (hypothèse, pas une mesure) ⇒ δ₈₀ ≈ **+15,6 à +28,3 pb** : **+10 pb n'est pas détectable** avec une puissance de 0,80 (écrit
@@ -744,8 +772,14 @@ brute de remplissage, ils baissent de 3,5 pb pour T01 puisque le net y retire 9,
   repos à c(h−5) rempli `through`, sortie h+15 ; T05 : continuation preneur du signe de [h ; h+5], sortie h+60, jours non macro —, pas
   sur le mécanisme. Au plus, le type devient un **filtre** descriptif pour G1/G2/G4 (« ne pas poster autour de la photo à |P̂| élevé »,
   « ne pas suivre l'ouverture »), sous la règle de §9 (p = 1 s'il entre dans un protocole gelé après cette lecture).
-- **`G5_GATE2_PASS`** autorise une **proposition écrite** au propriétaire : Phase 4 de l'architecture A1 (`lp-executor-architecture.md`
-  §5, **démo seulement**), avec la lecture économique et le budget de multiplicité du programme ; **aucun ordre** par lui-même.
+- **`G5_GATE2_PASS(type)`** n'ouvre une **proposition écrite** au propriétaire — Phase 4 de l'architecture A1
+  (`lp-executor-architecture.md` §5, **démo seulement**), avec la lecture économique et le budget de multiplicité du programme — **que
+  si** trois conditions tiennent ensemble (relecture review-b quant M1 ; `GATES` §2.3 amendé le 2026-10-21 ; spec Gate 2
+  `verdict.pass_effect` ; écrit au corps le 2026-10-22) : `G5_GATE2_PASS(type)` **et** le `PASS_PROGRAMME` de `G5-Gate2-<type>`
+  (immédiat si p ≤ 0,10 / 7 ≈ 0,0143, sinon Holm à la clôture de la famille) **et** la lecture « PASS, poursuivi » (§7.6) ; sinon la
+  proposition attend la clôture de la famille. Un `PASS_PROGRAMME` d'un test historique (`G5-Gate1-*`) n'ouvre **aucune** Phase 4 et
+  ne compte pas pour `GATES` §1.3. Sous D7, T05 est `NOT_INFORMATIVE` par construction au Gate 2 (§10.3) : seul T01 peut atteindre
+  `G5_GATE2_PASS`. **Aucun ordre** par lui-même.
 - **`G5_GATE2_FAIL`** : forme close pour cette architecture ; filtre au plus ; même annotation qu'au Gate 1 (spec `verdict.fail_annotation`) :
   « absence d'effet non démontrée » si UB90(D) ≥ +10 pb, « effet ≥ +10 pb exclu sous la forme testée » sinon.
 - **`NOT_INFORMATIVE` et `INCONCLUSIVE` (aux deux portes)** : **aucune conclusion sur l'effet**, ni preuve d'un effet, ni preuve de son
@@ -830,7 +864,18 @@ pour mot ; aucun p-value ; scellés avec le type s'il est `INCONCLUSIVE` ou `NOT
 `source: "capture"` ; prix de référence = derniers prints à la minute (dernier prix, cohérent avec le Gate 1) ; classifieur P̂ = mark de
 la capture et **indice** selon la décision P-G5-10 (ii) — une seule grandeur `premium_mark_index` aux deux portes (CTO M2) ; le champ
 `premium` du canal (prime officielle) sert à la seule comparaison descriptive ; règlements lus dans la tape, intervalle par instrument.
-Univers = celui de G2 §3 (métadonnées + comptages P3, ≤ 40 X-Perps), filtre `listTime + 30 j`.
+Univers = celui de G2 §3 (métadonnées + comptages P3, ≤ 40 X-Perps), filtre `listTime + 30 j`. **La règle de liquidité de G2 §3.3**
+(instrument-jour éligible si le notionnel du jour UTC précédent atteint 1 M USD) **n'est pas appliquée** au Gate 2 de G5 : l'univers ne
+dépend que des métadonnées, des comptages P3 et de `listTime + 30 j`, fixés au gel (choix (5) de l'Annexe B, écrit le 2026-10-22 ; spec
+`universe.liquidity_rule_g2_3_3`, le lecteur n'admet que `not applied…`).
+
+**Funding du Gate 2** (relecture review-b quant M3 ; écrit au corps le 2026-10-22) : taux réglé du canal `funding-rate`. Avant le gel,
+sa sémantique est vérifiée sur la documentation et sur un **échantillon de schéma** seulement — noms de champs, valeurs de `settState`,
+`fundingTime` contre `ts` —, **aucun taux affiché ni persisté hors de la tape** (`GATES` §9.5 ; ligne `selection` annoncée au registre ;
+variante admise sous la même restriction : les deux swaps globaux, hors univers G5) ; jamais une lecture des taux de « la première
+capture ». Le texte `FROZEN` de `costs.funding.source` est `g5_gate2.FUNDING_SOURCE` (taux réglé attribué au règlement **précédent**,
+docs-v5 ; relecture CTO review-b B1), écrit au gel après l'échantillon (§2.4 ligne 10) ; le texte du brouillon reste tant que le
+lecteur l'accepte en brouillon.
 
 **D10 (2026-10-21)** — source d'indice de P̂ (P-G5-10 (ii), `LP-OWNER-DECISIONS-2026-10-21.md` D10 : « On essaye des deux un par un
 puis on décide ») : **les deux sources**. (a) Canal public `index-tickers` ajouté à la capture continue (extension de D1 au titre du
@@ -876,24 +921,59 @@ ni dans la porte économique. Le lecteur refuse un spec dont `execution_sim.entr
 (`execution_sim.entry_fill_rule_decision`). Le mot `touch` de `fill_sim.kind` (`lp_sim_post_only_touch`) et de `entry.kind`
 (`post_only_touch`) nomme le **placement** de l'ordre (au touch propre), pas la règle de remplissage.
 
+**Choix de rédaction écrits au corps le 2026-10-22** (Annexe B « Choix de rédaction », relecture review-b quant M5 ; marqueurs
+`freeze_pending:` retirés du spec `0.1.7-draft`) :
+- **(1) Stress des termes mesurés (C3)** : frais et glissement × 1,5 ; les termes mesurés (sélection adverse, demi-spread) sont dans les
+  prix simulés et ne peuvent pas y être multipliés : le net stressé retire en plus 0,5 × la valeur de conception du Gate 1 de chaque terme
+  mesuré, **1,75 pb par jambe maker remplie** (sélection adverse 3,5 pb) et **1,5 pb par entrée preneuse** (demi-spread 3 pb) (spec
+  `costs.stress_rule`, `g5_eval.measure_lp_sim`). Jamais plus faible que le stress du Gate 1 sur les termes supposés. **Écart déclaré**
+  (relecture review-b m9, calcul d'audit) : le stress ajoute +5,5 pb à T01 au Gate 2 (frais 4 → 6 pb, aucune jambe preneuse,
+  2 × 1,75 pb) contre +4,75 pb au Gate 1 depuis l'amendement A1 (9,5 → 14,25 pb ; +6,5 pb avant A1, 13 → 19,5 pb), le glissement de
+  conception de 2 pb d'un aller-retour maker/maker disparaissant quand les deux jambes sont maker ; T05 : +7,75 pb aux deux portes.
+- **(2) Holm local au Gate 2** : comme au Gate 1, `G5_GATE2_PASS(type)` exige les critères du type **et** la confirmation Holm locale à
+  K = 2, α = 0,10 (`holm_local_confirmed`) ; un type non inscrit, `INCONCLUSIVE` ou `NOT_INFORMATIVE` y compte p = 1 (spec
+  `multiplicity.local_holm`). Le `PASS_PROGRAMME` (m_max = 7) en est distinct (§8).
+- **(6) Empreintes** : la queue de sortie simulée (T01 : h+15 → h+60 ; T05 : h+60 → h+75) **n'entre pas** dans les empreintes de
+  l'exclusion des contrôles, gardées égales à celles du Gate 1 ([−5 ; +15] et [0 ; +60]), dont dépendent les heures de contrôle de §7.1
+  (spec `events[*].footprint_note`). Calcul d'audit : la marge de 60 min de §7.1 tient ces queues hors des contrôles (un contrôle de T01
+  après l'événement commence au plus tôt à h+75 > h+60, avant lui sa queue finit au plus tard à h−20 ; T05 : h+120 > h+75, et h−45).
+- **(7) Repli REST du funding : aucun.** `GATES` §5.1 (lecture REST de `public/funding-rate-history` après T0) n'est pas implémenté
+  (`g5_fetch` ne persiste rien à partir d'END_EXCLUSIVE) et n'est pas couvert par D1 (il faudrait une décision de lecture nouvelle) ; un
+  taux réglé inconnu exclut l'observation (`costs.funding.unknown_rate`), comptée (`funding_unknown`). Spec : `costs.funding.fallback`
+  commence par `none` depuis le 2026-10-22 (le lecteur refuse tout autre texte en `FROZEN`).
+
 10.3 **Fenêtre et puissance (calcul d'audit).** T0 = gel du Gate 2 (≥ 2026-11-02, ≥ P3) ; fin ≤ **2027-03-31** (`GATES` §1.3).
 - **T01** : 3 photos/jour sur ≤ 150 jours ⇒ 450 f_inst instants ; ≥ 100 si f_inst ≥ 0,23 ; sans source d'indice : `INCONCLUSIVE` par
   construction (P-G5-10 ii). **D10 (2026-10-21)** : source choisie par la règle de 10.1 avant T01 ; `INCONCLUSIVE` seulement si la source
   retenue n'a aucune minute (`classifier_index_source_unresolved_or_unavailable`) ou si > 50 % des instrument-jours sont sans P̂.
-- **T05** : du 2026-11-02 au 2027-03-31, **102 jours NYSE** (fériés 11-26, 12-25, 01-01, 01-18, 02-15, 03-26), moins ≈ 10 dates CPI/NFP
-  (BLS, à relever, P-G5-5) ⇒ **≈ 92 < 100** : `NOT_INFORMATIVE` **par construction** si la fenêtre s'arrête au 2027-03-31. **D7
+- **T05** : du 2026-11-02 au 2027-03-31, **102 jours NYSE** (fériés 11-26, 12-25, 01-01, 01-18, 02-15, 03-26), moins **10** dates
+  CPI / Employment Situation, toutes un jour NYSE (relevées le 2026-10-22, Annexe C) ⇒ **92 < 100** : `NOT_INFORMATIVE` **par construction** si la fenêtre s'arrête au 2027-03-31. **D7
   (2026-10-21, P-G5-10 i)** : la fenêtre s'arrête au 2027-03-31, aucune prolongation ; le `NOT_INFORMATIVE` est accepté d'avance. Pour un
-  T0 atteignable (≥ 2026-11-03) : 101 jours NYSE au plus, moins ≈ 10 dates CPI / Employment Situation ⇒ **≈ 91** instants au plus. Le
+  T0 atteignable (≥ 2026-11-03) : 101 jours NYSE au plus, moins 10 dates CPI / Employment Situation ⇒ **91** instants au plus (T0 au
+  2026-11-05 : 89 ; 11-10 : 87 ; 11-20 : 80 ; calcul d'audit sur les listes du spec `0.1.7-draft`). Le
   lecteur calcule cette borne sur les listes gelées (`g5_gate2.power_by_construction` : un instant par jour NYSE de [T0 ; fin) hors listes
   macro, prolongation maximale permise comprise) et l'écrit dans l'audit, les notes et les raisons du verdict de T05
   (`power_floor_unreachable_by_construction`). Ce `NOT_INFORMATIVE` ne dit **rien** de l'effet de T05, ni pour ni contre (§8). (L'option
   2027-04-12, refusée, n'atteignait pas 100 non plus pour un T0 atteignable : ≈ 97–98 au mieux ; « ≈ 100 instants » était faux.)
 - Futilité : **aucune** lecture intermédiaire des types d'horloge (une seule exécution à la fin) ; prolongation **pour trous** de données
-  seulement (jour inexploitable ⇒ un jour ajouté, au plus 14), écrite au gel.
+  seulement, **telle que codée** (relecture review-b quant m3 ; écrit au corps le 2026-10-22 ; spec `window.data_gap_extension`,
+  `g5_gate2.extended_end`) : un **jour perdu** est un jour UTC où **tous** les instruments éligibles sont inexploitables (point suivant) ;
+  un jour **civil** ajouté par jour perdu (un samedi ajouté n'apporte aucun jour NYSE à T05), au plus 14, jamais sur un résultat ;
+  au-delà du 2027-03-31 seulement sous les deux décisions de l'option (b) de P-G5-10 (i), refusée par D7 ⇒ **sous D7, aucune
+  prolongation** (les deux fenêtres finissent le 2027-03-31) : les jours inexploitables sont comptés, jamais remplacés.
+- **Instrument-jour inexploitable** (choix (4) de l'Annexe B, repris de G2 §4.4 ; écrit au corps le 2026-10-22 ; spec `quality`) :
+  couverture `books5` (minutes avec ≥ 1 snapshot) < 90 % ou période `stale` de plus de 10 min qui traverse l'instrument-jour ; retiré
+  avant tout calcul et compté ; plus de 20 % d'instrument-jours inexploitables dans la fenêtre ⇒ `G5_GATE2_INCONCLUSIVE` global ; plus de
+  50 % d'instrument-jours sans P̂ ⇒ T01 `INCONCLUSIVE`.
 
 10.4 **Ce que le Gate 2 ne fait jamais** : aucun ordre, aucune démo, aucun drapeau (règle 13) ; aucune analyse promue depuis les strates
 du Gate 1 ; aucun type ajouté sans nouveau pré-enregistrement gelé **avant** la lecture du Gate 1 ; aucune ouverture des fichiers scellés
-avant son propre verdict.
+avant son propre verdict. **Scellement** (choix (3) de l'Annexe B ; relecture review-b quant m1 ; écrit au corps le 2026-10-22 ; spec
+`sealing.gate2_own_verdicts`) : **aucun** scellement des verdicts propres du Gate 2 — aucune porte ultérieure ne dépend de ses
+statistiques ; chaque verdict imprime D, LB90, UB90 et p. En contrepartie : un protocole successeur sur une forme testée à ce Gate 2
+entre dans la famille m du programme par un amendement de m_max daté **avant** son propre gel, et **aucune** extension ni prolongation de
+fenêtre n'est jamais motivée par ces valeurs, ni par les D, LB90, UB90 imprimés d'un `NOT_INFORMATIVE` ou d'un `INCONCLUSIVE`
+(`GATES` §2.3 amendé le 2026-10-21).
 
 ---
 
@@ -930,7 +1010,7 @@ la décision (aucune information postérieure).
 11.2 **Dépendance aux UNKNOWN** : couverture de `history-candles` / `history-mark-price-candles` / `history-index-candles` pour les
 X-Perps et id de l'indice (sonde `limit = 1` **après** P-G5-1 seulement, hachée, valeur non affichée) ; f_inst et f_obs ; date du fetch
 du funding (D_cov) ; application de l'escalade 2 h / 1 h aux X-Perps (lue dans `fundingTime`) ; σ des valeurs par instant ; fenêtre de la
-moyenne mobile du mark ; écart P̂ / prime d'impact (mesuré par C6) ; part des X-Perps à 4 h ; `posMode` ; calendriers BLS/Fed 2027 ;
+moyenne mobile du mark ; écart P̂ / prime d'impact (mesuré par C6) ; part des X-Perps à 4 h ; `posMode` ; dates FOMC 2027 (« tentative » jusqu'à la réunion qui précède, toutes après T0) et toute date de calendrier changée après le gel (§2.4 ligne 15) ;
 publication du BRR le week-end ; source d'indice au Gate 2.
 
 11.3 **Pièges de la red team → où ils sont traités.** 1 DST → §4.6, §5.2, §10.2 ; 2 instants partagés → §1.4 ; 3 fenêtres recouvertes →
@@ -1153,8 +1233,10 @@ Spec Gate 2 (ligne du 2026-10-21, volet `docs-b`) : `python-orchestrator/scripts
 ## Annexe A — Spec Gate 1 (fichier du dépôt)
 
 **Chemin** : `python-orchestrator/scripts/research_lp/specs/g5_gate1_spec.json` (schéma `g5-spec/2`, `status: "DRAFT_NOT_FROZEN"`,
-version `0.4.0-draft` depuis les décisions du propriétaire du 2026-10-22, `0.3.0-draft` pour l'amendement A1). sha256 du brouillon
-`0.4.0-draft` (2026-10-22), **informatif** (le sha256 qui compte est celui de la version `FROZEN`, §13) :
+version `0.4.1-draft` depuis la passe calendriers du 2026-10-22 — CPI 2026-10-14 inscrite dans `calendars.cpi`, sources datées,
+textes libres seulement —, `0.4.0-draft` depuis les décisions du propriétaire du 2026-10-22, `0.3.0-draft` pour l'amendement A1). sha256
+du brouillon `0.4.1-draft` (2026-10-22), **informatif** (le sha256 qui compte est celui de la version `FROZEN`, §13) :
+`1d86d3f538da49010f5e70edb2d55d1200c34ac56e4d30cdec5cc96d4cd35a12` ; brouillon `0.4.0-draft` (2026-10-22, décisions (a) et (b)) :
 `d2a22f7195ae423b6f5463904d5a3ccf9560f5a635a2ff212c3c0a1812b97f5e` ; brouillon `0.3.0-draft` (2026-10-21, après A1) :
 `2ab0073cf53003d65ff46b3f62700faac46ec2fd00cdef7a529baeca362b15a6` (version `0.2.0-draft` d'avant A1 :
 `d4189493d896fe508b36f32da6433c03305cd4867fdc5fe94ff67d17f85af80a`, aussi dans `a1-protocol/NOTES.md` §9). Valeurs clés, à lire dans le fichier (en cas d'écart, le texte de ce protocole fait foi au gel et
@@ -1175,12 +1257,12 @@ le spec est corrigé avant le gel, jamais après) :
 | T01 | `funding_settlements` (8 h ± 1 min des deux côtés, réalisé requis), D_cov, empreinte [−5 ; +15], `arm_min −5`, `rest_until_min 1`, classifieur `premium_wavg` à t_arm (480 min, ≥ 90 %, ±0,0009), proxy `through_candles`, bougies clés −5 / +15, validation C6 (±0,0004 ; 0,80 / 0,20 ; ≥ 30), contrôles minute 0, grille 00/08/16, C7 à 16:00 |
 | T05 | 09:30 `America/New_York`, jours NYSE hors CPI / Employment Situation, empreinte [0 ; 60], signe [0 ; 5], `arm_min 5`, entrée preneur, sortie h+60, bougies clés 0 / 5 / 60, contrôles minute 30, grille 00/04/…/20 |
 | `controls_common` | toutes les heures admissibles, aucun tirage, marge 60 min entre empreintes |
-| `sessions`, `macro_filter`, `calendars` | listes de §4.6 et de l'Annexe C, heure locale |
+| `sessions`, `macro_filter`, `calendars` | listes de §4.6 et de l'Annexe C, heure locale ; relues sur les pages officielles le 2026-10-22 (`calendars.sources` datées) ; aucune demi-séance NYSE dans la fenêtre |
 | `verdict`, `multiplicity`, `sealing`, `gate2_inscription` | §7.5, §8 |
 | `economic` | S_éco **97,25** (≥ 97,25 exigé par le lecteur, D4 ; 97 avant le 2026-10-22), 4 × 100 USD, 1×, 365 / 252 ; seuils de rentabilité recalculés (10,66 / 2,22 / 8,88 pb) |
 | `fetch_plan` | funding scellé avant le gel ; ≈ 58 285 requêtes au total (D_cov supposé au 2026-08-04) |
 | `freeze_fill` | snapshot, calendriers vérifiés, digest du code, `decision_ref` : nuls dans le brouillon, obligatoires au gel |
-| Décision (a) du 2026-10-22 | capacités `gate2_frozen_together` (Gate 1 seul), `calendars_content_test_at_freeze`, `freeze_pending_marker_refuses_frozen`, `economic_s_eco_at_least_d4` ; bloc `frozen_with` (chemin du spec Gate 2, `spec_id`, règle lue mot pour mot) ; `calendars.nyse_half_days` (vide), `calendars.content_rule`, `calendars.content_exceptions` (vide) ; session `us_cash_close` à 13:00 ET les demi-séances (`on_nyse_half_days`) ; descriptif `T01_previous_settlement_filter_only` ; sur ce brouillon, le test de contenu rapporte l'absence d'une date CPI en octobre 2026 (2026-10-14, Annexe C, à inscrire au gel) |
+| Décision (a) du 2026-10-22 | capacités `gate2_frozen_together` (Gate 1 seul), `calendars_content_test_at_freeze`, `freeze_pending_marker_refuses_frozen`, `economic_s_eco_at_least_d4` ; bloc `frozen_with` (chemin du spec Gate 2, `spec_id`, règle lue mot pour mot) ; `calendars.nyse_half_days` (vide), `calendars.content_rule`, `calendars.content_exceptions` (vide) ; session `us_cash_close` à 13:00 ET les demi-séances (`on_nyse_half_days`) ; descriptif `T01_previous_settlement_filter_only` ; sur le brouillon `0.4.0-draft`, le test de contenu rapportait l'absence d'une date CPI en octobre 2026 ; 2026-10-14 inscrite le 2026-10-22 (`0.4.1-draft`, Annexe C) : plus aucun problème |
 
 ## Annexe B — Spec Gate 2 (fichier du dépôt, brouillon)
 
@@ -1220,7 +1302,7 @@ textes datés du propriétaire (le lecteur accepte un texte non nul avant le gel
 valeur `owner_decision_pending`** : un `FROZEN` n'est plus refusé que par ses nulls, ses listes incomplètes et ses autres contrôles. Code :
 `g5_index_fetch` (commande `g5-index-fetch`, §10.1) ; `g5_gate2.INDEX_FROZEN_ALLOWED = (b, D10)` ; `g5_gate2.power_by_construction` (borne
 du nombre d'instants de T05, `spec.audit`, `spec.notes`) et raison `power_floor_unreachable_by_construction` ajoutée par `g5_eval.run_study`
-au `NOT_INFORMATIVE` de T05. Sur le brouillon (T0 provisoire au 2026-11-02, deux dates CPI seulement) la borne vaut 100 = le plancher :
+au `NOT_INFORMATIVE` de T05. Sur le brouillon (T0 provisoire au 2026-11-02, deux dates CPI seulement) la borne valait 100 = le plancher (92 depuis `0.1.7-draft`, listes relevées le 2026-10-22) :
 l'énoncé « par construction » tient pour tout T0 atteignable (99 au 2026-11-03 avec ces seules listes, ≈ 91 avec des listes complètes ;
 `test_t05_gate2_is_not_informative_by_construction_under_d7`).
 
@@ -1233,6 +1315,18 @@ session `us_cash_close` à 13:00 ET les demi-séances (`on_nyse_half_days`, iden
 `execution_sim.entry_fill_rule = through`, `descriptive_fill_rules = [touch, queue]`, texte daté `execution_sim.entry_fill_rule_decision`
 (exigé par le lecteur), descriptif renommé `fill_rules_touch_and_queue`. Les huit marqueurs `freeze_pending:` restent (ligne 8 de §2.4,
 a1) : le lecteur les liste (`notes.freeze_pending_markers`) et refuse `FROZEN` tant qu'il en reste un. Code : commit `4dd1f6e8`.
+
+**Passe calendriers et rédaction (2026-10-22, après-midi) — version `0.1.7-draft`**, sha256 informatif
+`4e4be20b63686ecf07f9ae3be84e842db1e4f0f531024fc3e7c83fdb3d81650a`, brouillon accepté par le lecteur. Calendriers relevés sur les pages officielles le
+2026-10-22 (Annexe C ; `calendars.sources` datées) : `cpi` + 2027-01-13, 02-11, 03-10, 04-13 ; `employment_situation` 2026-11-06,
+12-04, 2027-01-08, 02-05, 03-05, 04-02 ; `fomc_statement` + 2027-04-28 ; `nyse_half_days` 2026-11-27, 2026-12-24 ; fériés inchangés
+(confirmés) ; test de contenu sans problème ; `calendars.incomplete_at_draft` réduit à `fomc_statement` et `ten_am_et_releases`,
+bloquantes (§2.4 lignes 15 et 5) ; borne de T05 par construction 92 au T0 provisoire (100 avec les deux dates CPI de `0.1.6-draft`).
+Huit marqueurs retirés, choix écrits au corps (§10.1 à §10.4) ; `costs.funding.fallback` = `none…` (choix (7)) ; `costs.stress_rule_status`
+corrigé (+4,75 pb au Gate 1 depuis A1 ; le texte écrivait +6,5 pb, valeur d'avant A1). Aucun texte que le lecteur compare mot pour mot
+n'a changé ; tests adaptés (`tests/test_research_lp_g5_gate2.py`, `_g5_eval.py`, `_g5_a1.py` : versions, marqueurs, problèmes de
+contenu, borne de T05, premier jour CPI / Employment Situation des heures de contrôle 2026-11-06, refus du repli REST sur un texte
+explicite).
 
 **Parseur (constats datés, heure de la machine).** À 07:52 (seconde passe `docs-b`, `g5_eval/3` `148d52eb…6566327`), ce brouillon était
 **refusé** (neuf clés de premier niveau inconnues). Depuis 08:18 (`g5_gate2.py` `94b8bec7…`, `g5_eval.py` `38cbe452…`), `g5_eval.load_spec`
@@ -1269,25 +1363,25 @@ specs ensemble le 2026-10-22** (décision (a) ; le lecteur exige l'égalité des
 | T01 | post-only au touch du côté s décidé à h−5, vivant jusqu'à h+1 ; un fill dans [h ; h+1) traverse la photo et paie ; sortie passive au touch opposé de h+15 à h+60, reliquat taker |
 | T05 | preneur au touch opposé à h+5 (+ latence) plus 2 pb de glissement ; sortie passive de h+60 à h+75, reliquat taker ; 14:30 UTC jusqu'au 2027-03-12, 13:30 dès le 2027-03-15 |
 | `costs` | frais 2 / 5 pb ; glissement 2 pb par jambe preneuse ; sélection adverse et demi-spread **mesurés** ; stress : frais et glissement × 1,5 **plus** 0,5 × la valeur de conception de chaque terme mesuré (1,75 pb par jambe maker remplie, 1,5 pb par entrée preneuse) ; **écart déclaré** (relecture review-b m9, calcul d'audit) : le stress ajoute +5,5 pb à T01 au Gate 2 (frais 4 → 6 pb, aucune jambe preneuse, 2 × 1,75 pb) contre +4,75 pb au Gate 1 depuis l'amendement A1 (9,5 → 14,25 pb ; +6,5 pb avant A1, 13 → 19,5 pb), car le glissement de conception de 2 pb d'un aller-retour maker/maker disparaît quand les deux jambes sont maker ; T05 : +7,75 pb aux deux portes ; « jamais plus faible que le stress du Gate 1 » ne vaut que sur les termes supposés |
-| `costs.funding` | taux réglé du canal `funding-rate`. Le texte du brouillon (« attributed to fundingTime ; field semantics UNKNOWN, to verify on the documentation and the first capture before freeze ») est **remplacé dans sa portée** : avant le gel, la sémantique est vérifiée sur la documentation et sur un **échantillon de schéma** seulement — noms de champs, valeurs de `settState`, `fundingTime` contre `ts`, **aucun taux affiché ni persisté hors de la tape** (`GATES` §9.5 ; relecture review-b M3 ; ligne `selection` annoncée au registre ; variante admise sous la même restriction : les deux swaps globaux, hors univers G5). Le texte `FROZEN` est `g5_gate2.FUNDING_SOURCE` (taux réglé attribué au règlement **précédent**, docs-v5 ; relecture CTO review-b B1), qui porte déjà cette restriction ; le texte du brouillon reste dans le fichier parce que le lecteur l'accepte en brouillon et que `tests/test_research_lp_g5_gate2.py` le fige. Repli REST : non implémenté, non couvert par D1, écrit `none…` au gel (`freeze_pending:`). Taux inconnu ⇒ observation exclue, comptée |
+| `costs.funding` | taux réglé du canal `funding-rate`. Le texte du brouillon (« attributed to fundingTime ; field semantics UNKNOWN, to verify on the documentation and the first capture before freeze ») est **remplacé dans sa portée** : avant le gel, la sémantique est vérifiée sur la documentation et sur un **échantillon de schéma** seulement — noms de champs, valeurs de `settState`, `fundingTime` contre `ts`, **aucun taux affiché ni persisté hors de la tape** (`GATES` §9.5 ; relecture review-b M3 ; ligne `selection` annoncée au registre ; variante admise sous la même restriction : les deux swaps globaux, hors univers G5). Le texte `FROZEN` est `g5_gate2.FUNDING_SOURCE` (taux réglé attribué au règlement **précédent**, docs-v5 ; relecture CTO review-b B1), qui porte déjà cette restriction ; le texte du brouillon reste dans le fichier parce que le lecteur l'accepte en brouillon et que `tests/test_research_lp_g5_gate2.py` le fige. Repli REST : non implémenté, non couvert par D1, écrit `none…` (choix (7) ; marqueur `freeze_pending:` jusqu'au `0.1.6-draft`). Taux inconnu ⇒ observation exclue, comptée. **Depuis `0.1.7-draft`** : `fallback` écrit `none…` (choix (7), §10.2) ; sémantique écrite au corps (§10.1, M3) |
 | C6 | même matrice, R lu dans le canal `funding-rate` ; échec ⇒ `G5_GATE2_INCONCLUSIVE` |
-| `universe` | règle de G2 §3 au gel (métadonnées, comptages P3 `selection`, ≤ 40), `listTime + 30 j` ; liste `analysed` remplie au gel ; **BTC et ETH inclus** : P-S3 sans objet depuis D8 (recopie au gel, plus bas) ; règle de liquidité de G2 §3.3 non appliquée (`freeze_pending:`) |
-| `calendars` | fériés NYSE 2026-11-26, 12-25, 2027-01-01, 01-18, 02-15, 03-26 ; CPI 2026-11-10, 12-10 ; FOMC 2026-12-09, 2027-01-27, 03-17 (2027 « tentative ») ; Employment Situation et CPI 2027 **à relever** (`incomplete_at_draft`, refus du statut `FROZEN` tant que non vide) ; **couverture de la fenêtre** codée (`calendars_cover_the_window` : T0, fins par type, options et prolongation dans `covers`) ; **test de contenu codé le 2026-10-22** (décision (a) ; relecture review-b M4 ; `calendars.content_rule`, `g5_eval.calendar_content` ; même test au spec Gate 1 sur sa fenêtre ; problèmes rapportés à tout statut, refus en `FROZEN`) : en `FROZEN`, ≥ 1 date CPI et ≥ 1 date Employment Situation par mois civil de [T0 ; dernier jour scoré + prolongation], sauf exceptions datées et sourcées écrites dans le spec (report, fermeture des services fédéraux) ; ≥ 1 FOMC par 8 semaines ; fériés NYSE égaux à ceux d'un générateur par règles (Pâques calculé, Thanksgiving = 4ᵉ jeudi de novembre, jours reportés ; toute exception écrite) ; demi-séances NYSE listées (une clôture à 13:00 ET déplace l'exclusion `us_cash_close`). Sans ce test, une liste vidée par erreur ouvrirait la porte de puissance vers le PASS, comme les 108 instants trouvés par `docs-b` |
+| `universe` | règle de G2 §3 au gel (métadonnées, comptages P3 `selection`, ≤ 40), `listTime + 30 j` ; liste `analysed` remplie au gel ; **BTC et ETH inclus** : P-S3 sans objet depuis D8 (recopie au gel, plus bas) ; règle de liquidité de G2 §3.3 non appliquée (choix (5), écrit en §10.1 le 2026-10-22) |
+| `calendars` | fériés NYSE 2026-11-26, 12-25, 2027-01-01, 01-18, 02-15, 03-26 ; demi-séances 2026-11-27, 12-24 ; CPI 2026-11-10, 12-10, 2027-01-13, 02-11, 03-10, 04-13 ; Employment Situation 2026-11-06, 12-04, 2027-01-08, 02-05, 03-05, 04-02 ; FOMC 2026-12-09, 2027-01-27, 03-17, 04-28 (2027 « tentative ») — relevés le 2026-10-22 (Annexe C) ; `incomplete_at_draft` (refus du statut `FROZEN` tant que non vide) : `fomc_statement` (règle d'une date changée après le gel, §2.4 ligne 15) et `ten_am_et_releases` (§2.4 ligne 5) ; **couverture de la fenêtre** codée (`calendars_cover_the_window` : T0, fins par type, options et prolongation dans `covers`) ; **test de contenu codé le 2026-10-22** (décision (a) ; relecture review-b M4 ; `calendars.content_rule`, `g5_eval.calendar_content` ; même test au spec Gate 1 sur sa fenêtre ; problèmes rapportés à tout statut, refus en `FROZEN`) : en `FROZEN`, ≥ 1 date CPI et ≥ 1 date Employment Situation par mois civil de [T0 ; dernier jour scoré + prolongation], sauf exceptions datées et sourcées écrites dans le spec (report, fermeture des services fédéraux) ; ≥ 1 FOMC par 8 semaines ; fériés NYSE égaux à ceux d'un générateur par règles (Pâques calculé, Thanksgiving = 4ᵉ jeudi de novembre, jours reportés ; toute exception écrite) ; demi-séances NYSE listées (une clôture à 13:00 ET déplace l'exclusion `us_cash_close`). Sans ce test, une liste vidée par erreur ouvrirait la porte de puissance vers le PASS, comme les 108 instants trouvés par `docs-b` |
 | `controls_common.audit_expected_utc` | heures UTC des contrôles par régime d'heure d'été (hiver jusqu'au 2027-03-13 : T01 03–06, 10–13, 18, 19 h ; T05 05:30, 09:30, 17:30 — comme §7.1) |
-| `quality` | instrument-jour inexploitable = couverture `books5` < 90 % ou période `stale` > 10 min (G2 §4.4) ; > 20 % ⇒ `INCONCLUSIVE` (`freeze_pending:`) |
+| `quality` | instrument-jour inexploitable = couverture `books5` < 90 % ou période `stale` > 10 min (G2 §4.4) ; > 20 % ⇒ `INCONCLUSIVE` (choix (4), écrit en §10.3 le 2026-10-22) |
 | `verdict` | `G5_GATE2_*` ; `INCONCLUSIVE` global en plus si une valeur `owner_decision_pending` subsiste ou si le sha256 du résultat du Gate 1 diffère du registre ; **`pass_effect`** (relecture review-b M1) : proposition écrite de Phase 4 (démo) **si et seulement si** `G5_GATE2_PASS(type)` **et** `PASS_PROGRAMME` de `G5-Gate2-<type>` (immédiat, p ≤ 0,10/7, ou Holm à la clôture) **et** « PASS, poursuivi » ; sinon attente de la clôture ; un `PASS_PROGRAMME` historique (G5-Gate1-*) n'ouvre aucune Phase 4 ; sous D7, si le refus de (ii) est confirmé, aucun `G5_GATE2_PASS` n'est possible (écrit d'avance) |
-| `multiplicity` | Holm local K = 2 (`freeze_pending:`) ; programme : m_max = 7, tests G5-Gate2-T01 et G5-Gate2-T05 ; **T05 reste dans m** (p = 1 sous D7, jamais retiré après lecture ; relecture review-b m2) |
+| `multiplicity` | Holm local K = 2 (choix (2), écrit en §10.2 le 2026-10-22) ; programme : m_max = 7, tests G5-Gate2-T01 et G5-Gate2-T05 ; **T05 reste dans m** (p = 1 sous D7, jamais retiré après lecture ; relecture review-b m2) |
 | `gate2_inscription` | lit le JSON du résultat du Gate 1 (sha256 au registre) ; `PASS`, `NOT_INFORMATIVE`, `INCONCLUSIVE` évalués, `FAIL` non évalué (p = 1) ; aucune discrétion, aucune lecture intermédiaire |
-| `sealing` | les fichiers scellés du Gate 1 ne sont ouverts qu'après le verdict du Gate 2 du même type ; l'évaluateur du Gate 2 ne lit jamais `sealed/` ; aucun scellement des verdicts propres du Gate 2 (`freeze_pending:`) ; **un protocole successeur** sur une forme testée ici entre dans m par un amendement de m_max daté avant son propre gel, et **aucune prolongation** n'est jamais motivée par les D, LB90, UB90 imprimés d'un `NOT_INFORMATIVE` ou d'un `INCONCLUSIVE` (relecture review-b m1 ; `GATES` §2.3 amendé) |
+| `sealing` | les fichiers scellés du Gate 1 ne sont ouverts qu'après le verdict du Gate 2 du même type ; l'évaluateur du Gate 2 ne lit jamais `sealed/` ; aucun scellement des verdicts propres du Gate 2 (choix (3), écrit en §10.4 le 2026-10-22) ; **un protocole successeur** sur une forme testée ici entre dans m par un amendement de m_max daté avant son propre gel, et **aucune prolongation** n'est jamais motivée par les D, LB90, UB90 imprimés d'un `NOT_INFORMATIVE` ou d'un `INCONCLUSIVE` (relecture review-b m1 ; `GATES` §2.3 amendé) |
 | `frozen_with` | gel dans la même ligne ; **règle réécrite** (relecture review-b B1) : avant toute lecture, l'évaluateur du **Gate 1** lit ce fichier et refuse de tourner s'il n'est pas `FROZEN`, s'il garde une valeur `owner_decision_pending`, un marqueur `freeze_pending:` ou un `null`, ou si son `freeze_fill.gate1_spec_sha256` diffère du sha256 du spec Gate 1 lu (capacité `gate2_frozen_together` du spec Gate 1, ligne (B) xxiv, **codée le 2026-10-22** : `g5_gate2.check_frozen_together`, option `--gate2-spec`) ; le sha256 de ce fichier est imprimé dans la sortie du Gate 1 et inscrit au registre le jour de l'exécution ; côté Gate 2, un `FROZEN` est refusé si son Gate 1 n'est pas `FROZEN` avec ce sha256 (codé à 09:04, relecture CTO review-b M2) ; la clause « refusé s'il est gelé après une lecture du Gate 1 », invérifiable faute d'horodatage, est retirée |
 
 **Décisions du propriétaire (P-G5-10, P-S3) : réponses du 2026-10-21, recopiées dans le spec au gel**
 (`LP-OWNER-DECISIONS-2026-10-21.md`, second lot, D7 et D8 ; journal du registre).
 - **(i) fin de la fenêtre T05** (`events[T05_us_open].window_end`) — **D7 : option (a)**, fin au **2027-03-31** ;
   `G5_GATE2_NOT_INFORMATIVE` par construction, accepté par écrit. Comptes (calcul d'audit sur les fériés de l'Annexe C ; dates BLS 2027
-  UNKNOWN, ≈ 2 par mois ; relecture review-b M2) : « ≈ 92 instants » n'est que la borne de T0 = 2026-11-02, **inatteignable** (T0 ≥ gel ≥
+  UNKNOWN au 2026-10-21, ≈ 2 par mois, **relevées le 2026-10-22** : 10 dates dans la fenêtre ; relecture review-b M2) : « ≈ 92 instants » n'est que la borne de T0 = 2026-11-02, **inatteignable** (T0 ≥ gel ≥
   fin de P3, P3 commençant le 2026-11-02, et le gel précède la lecture de G2, ≈ 2026-11-20) ; pour un T0 atteignable : 2026-11-03 :
-  101 jours NYSE, ≈ 91 instants ; 11-05 : 99, ≈ 89 ; 11-10 : 96, ≈ 87 ; 11-20 : 88, ≈ 79. Options refusées, pour mémoire : (b)
+  101 jours NYSE, ≈ 91 instants ; 11-05 : 99, ≈ 89 ; 11-10 : 96, ≈ 87 ; 11-20 : 88, ≈ 79 (exactement 91, 89, 87 et **80** sur les listes relevées le 2026-10-22, §10.3). Options refusées, pour mémoire : (b)
   2027-04-12 : ≈ 97–98 instants (T0 11-03) → ≈ 85 (T0 11-20), **jamais 100** pour un T0 atteignable — le corps (§2.1 « ≥ 2027-04-12 ⇒ ≥ 100
   instants », §10.3 « ≈ 100 instants hors macro ») était faux sur ce point, **corrigé le 2026-10-21** (passe avant gel) ; (c) fin fixée par le calendrier (proposée par
   le brouillon `0.1.1`, jamais écrite dans le corps) : seule à atteindre 100, en capturant jusqu'au ≈ 2027-04-15 (T0 11-03) → ≈ 2027-04-30
@@ -1322,22 +1416,24 @@ empreintes, gardées égales à celles du Gate 1, dont dépendent les heures de 
 du funding non implémenté, écrit `none…` au gel (`costs.funding.fallback`). Sans objet depuis D7 : l'option (c) de (i). Sémantique du
 funding : ligne `costs.funding` ci-dessus (M3). **Règle** : avant le gel, a1 écrit chacun de ces choix dans le corps (§10 ; §11.1 pour un
 biais) ou le retire du spec, et le marqueur disparaît ; une valeur qui contient `freeze_pending:` interdit `FROZEN` — refus **codé le 2026-10-22** (demande 14,
-`g5_eval.refuse_freeze_pending`, aux deux portes : clés et valeurs), comme le demandait la relecture.
+`g5_eval.refuse_freeze_pending`, aux deux portes : clés et valeurs), comme le demandait la relecture. **Fait le 2026-10-22** (passe
+calendriers et rédaction, version `0.1.7-draft`) : (1), (2), (6) et (7) écrits en §10.2, (4) en §10.3, (3) en §10.4, (5) en §10.1 ; les
+huit marqueurs sont retirés du spec ; aucun choix n'a changé de valeur.
 
 **Écarts avec le code** (refaits le 2026-10-21 sur `g5_gate2.py` `94b8bec7…` de 08:18, relu par cette passe ; le fichier est réécrit
 pendant la passe, constat final sur le code gelé, P-G5-11). Les dix écarts du constat précédent (`g5_eval/3` `148d52eb…`, 07:52) :
 
 | # | Exigence | État au code du 2026-10-21 08:18 | Reste avant le gel |
 |---|---|---|---|
-| 1 | Calendriers complets et couvrant la fenêtre (P-G5-5, §10.3) | **couverture codée** (`calendars_cover_the_window` : T0, fins par type, options, prolongation dans `covers` ; listes hors `covers` refusées ; `incomplete_at_draft` non vide refuse `FROZEN`) | test de contenu **codé le 2026-10-22** (ligne 13 ci-dessous) ; restent les listes complètes (§2.4 ligne 5) |
+| 1 | Calendriers complets et couvrant la fenêtre (P-G5-5, §10.3) | **couverture codée** (`calendars_cover_the_window` : T0, fins par type, options, prolongation dans `covers` ; listes hors `covers` refusées ; `incomplete_at_draft` non vide refuse `FROZEN`) | test de contenu **codé le 2026-10-22** (ligne 13 ci-dessous) ; listes relevées le 2026-10-22 (Annexe C, test sans problème) ; restent §2.4 lignes 5 et 15 |
 | 2 | Fin de fenêtre par type (P-G5-10 (i)) | **codée** (`gate2_window_end_per_type` : options a / b / c, règle du calendrier, fin recopiée dans `freeze_fill.t05_end_inclusive_utc`, `beyond_allowed` lié à l'option) | fait (`0.1.5-draft`, 2026-10-21) ; reste `freeze_fill.t05_end_inclusive_utc` au gel |
 | 3 | Source d'indice (P-G5-10 (ii)) | option (b) lue sur une tape `index_1m` ; option (a) refusée (aucun canal) ; à 09:04, (b) refusée en `FROZEN` (aucun fetcher, CTO M3) ; **D10 (2026-10-21)** : canal `index-tickers` et layout `index_tick` codés, choix `d10_both_primary_by_quality_rule` lu, règle, hash et refus sans choix codés | — : fetcher de (b) écrit le 2026-10-21 (`g5_index_fetch`), D10 admis en `FROZEN` |
 | 4 | Types lus = inscrits par le résultat du Gate 1 (§8, §10.2) | **codé** (`gate2_inscription_from_gate1_result`, `read_gate1_result` : sha256 au registre, spec Gate 1 = `freeze_fill.gate1_spec_sha256`, jamais `sealed/`) | — |
 | 5 | `entry` / `exit` de l'exécution simulée (§5.5) | **codé** (textes de capture exacts : post-only au touch, preneur au touch opposé, sortie passive puis preneur) | — |
-| 6 | C3 « tous les termes × 1,5 » (§7.5) | **codé** avec l'ajout de 0,5 × la valeur de conception (1,75 / 1,5 pb) | écart de T01 déclaré (m9) ; choix (1) à écrire au corps |
-| 7 | `INCONCLUSIVE` globaux de capture ; prolongation pour trous (§10.3) | **codés** (`owner_decision_pending_present`, `gate1_result_sha256_mismatch`, `capture_manifest_missing`, part de jours inexploitables ; `extended_end`) | texte du corps aligné sur le code (m3, a1) |
+| 6 | C3 « tous les termes × 1,5 » (§7.5) | **codé** avec l'ajout de 0,5 × la valeur de conception (1,75 / 1,5 pb) | écart de T01 déclaré (m9) ; choix (1) écrit au corps le 2026-10-22 (§10.2) |
+| 7 | `INCONCLUSIVE` globaux de capture ; prolongation pour trous (§10.3) | **codés** (`owner_decision_pending_present`, `gate1_result_sha256_mismatch`, `capture_manifest_missing`, part de jours inexploitables ; `extended_end`) | texte du corps aligné sur le code le 2026-10-22 (§10.3, m3) |
 | 8 | `freeze_fill` du Gate 2 | **codé** (`FREEZE_FILL_KEYS`, nuls refusés en `FROZEN`, T0 et fin de T05 vérifiés) | champ du reçu de funding scellé côté Gate 1 (CTO M4, a2) |
-| 9 | Scellement au Gate 2 (choix (3)) | **codé** : aucun scellement des verdicts du Gate 2 | choix à écrire au corps (§10.4, a1) |
+| 9 | Scellement au Gate 2 (choix (3)) | **codé** : aucun scellement des verdicts du Gate 2 | choix écrit au corps le 2026-10-22 (§10.4) |
 | 10 | Strates différées (§9.8 : T02, T06, T18) | **codées** en descriptifs (`DESCRIPTIVE_REPORTS`) | — |
 
 Code demandé par la relecture `review-b/quant.md` (hors du périmètre de la passe du 2026-10-21 ; a2 sauf mention ; demandes 11, 13, 14, 16 et
@@ -1369,29 +1465,45 @@ sont aussi dans la table de `GATES` §12.
 |---|---|
 | **B1** — co-gel imposé dans un seul sens | **Appliqué** : `frozen_with.rule` réécrite (règle de la relecture ; clause invérifiable retirée) ; ligne `frozen_with` ci-dessus. **Signalé** : capacité `gate2_frozen_together`, spec Gate 1 et code (a2, écart 11) ; ligne (B) du §2.3 (a1) **Code : fait le 2026-10-22** (capacité `gate2_frozen_together`, (B) xxiv). |
 | **B2** — P-S3 absent du spec Gate 1 | **Sans objet depuis D8** : textes du spec Gate 2 ; comptes T05 = 105 / 103 (`GATES` §3.3) ; ordre « P-S3 avant le fetch scellé » au registre. **Signalé** : champ P-S3 du spec Gate 1 (a2, écart 12) ; P-G5-3 du corps (a1) |
-| **M1** — ce qu'ouvre un `PASS_PROGRAMME` | **Appliqué** : `verdict.pass_effect`, `multiplicity.programme.otherwise` ; `GATES` §2.3 ; plan. **Signalé** : §8 du corps (a1) |
+| **M1** — ce qu'ouvre un `PASS_PROGRAMME` | **Appliqué** : `verdict.pass_effect`, `multiplicity.programme.otherwise` ; `GATES` §2.3 ; plan. **Signalé** : §8 du corps (a1) **Corps : fait le 2026-10-22** (§8). |
 | **M2** — §2.1 et §10.3 faux ; T0 impossible ; option (c) | **Appliqué** : textes de T01 et des options de T05 (comptes pour un T0 atteignable ; options b et c refusées par D7) ; `GATES` §3.3, §8 ; ci-dessus. **Signalé** : §2.1, §10.3 du corps (a1). **Réponse à la revue** : la décision P-G5-10 (i) est déjà prise (D7) et n'est pas affectée (l'erreur favorisait une option refusée) ; ni extension de `covers` ni borne de (c) : sans objet sous D7 |
-| **M3** — « vérifier sur la première capture » | **Appliqué** : `note` du spec, ligne `costs.funding` ci-dessus, registre (ligne `selection` de schéma annoncée). **Réponse à la revue** : le texte de `costs.funding.source` n'est pas réécrit dans le brouillon : il est comparé mot pour mot par le lecteur, qui n'accepte en brouillon que ce texte ou `g5_gate2.FUNDING_SOURCE`, et un test figé l'exige ; le texte `FROZEN` (`FUNDING_SOURCE`) porte déjà la restriction au schéma. **Signalé** : §10.1 du corps (a1) |
+| **M3** — « vérifier sur la première capture » | **Appliqué** : `note` du spec, ligne `costs.funding` ci-dessus, registre (ligne `selection` de schéma annoncée). **Réponse à la revue** : le texte de `costs.funding.source` n'est pas réécrit dans le brouillon : il est comparé mot pour mot par le lecteur, qui n'accepte en brouillon que ce texte ou `g5_gate2.FUNDING_SOURCE`, et un test figé l'exige ; le texte `FROZEN` (`FUNDING_SOURCE`) porte déjà la restriction au schéma. **Signalé** : §10.1 du corps (a1) **Corps : fait le 2026-10-22** (§10.1). |
 | **M4** — calendriers déclaratifs | **Appliqué** : `calendars.covers_rule` (test de contenu écrit), ligne `calendars` ci-dessus. **Signalé** : code aux deux portes (a2, écart 13) **Code : fait le 2026-10-22** (test de contenu, (B) xxv). |
-| **M5** — choix « à confirmer au gel » | **Appliqué** : marqueur `freeze_pending:` sur les sept choix ; option (c) refusée (D7). **Signalé** : écriture au corps (a1) ; refus de `FROZEN` sur le marqueur (a2, écart 14). **Réponse à la revue** : le marqueur n'est pas la valeur `owner_decision_pending` (qui bloquerait dès aujourd'hui) ; ces choix sont de rédaction, pas du propriétaire, et le test figé compte neuf valeurs `owner_decision_pending` **Code : fait le 2026-10-22** (refus de `FROZEN` sur le marqueur) ; écriture au corps : reste (a1). |
-| **m1** — pas de scellement au Gate 2 | **Appliqué** : `sealing.gate2_own_verdicts.rule` (protocole successeur, aucune prolongation motivée) ; `GATES` §2.3. **Signalé** : §10.4 du corps (a1) |
+| **M5** — choix « à confirmer au gel » | **Appliqué** : marqueur `freeze_pending:` sur les sept choix ; option (c) refusée (D7). **Signalé** : écriture au corps (a1) ; refus de `FROZEN` sur le marqueur (a2, écart 14). **Réponse à la revue** : le marqueur n'est pas la valeur `owner_decision_pending` (qui bloquerait dès aujourd'hui) ; ces choix sont de rédaction, pas du propriétaire, et le test figé compte neuf valeurs `owner_decision_pending` **Code : fait le 2026-10-22** (refus de `FROZEN` sur le marqueur) ; écriture au corps : **faite le 2026-10-22** (§10.1 à §10.4), marqueurs retirés (`0.1.7-draft`). |
+| **m1** — pas de scellement au Gate 2 | **Appliqué** : `sealing.gate2_own_verdicts.rule` (protocole successeur, aucune prolongation motivée) ; `GATES` §2.3. **Signalé** : §10.4 du corps (a1) **Corps : fait le 2026-10-22** (§10.4). |
 | **m2** — T05 à p = 1 sous l'option a | **Appliqué** : « reste dans m » (`multiplicity.programme.otherwise`, option a ; `GATES` §2.3) |
-| **m3** — prolongation pour trous | **Appliqué** : `window.end_rule`, ligne `window` ci-dessus (texte aligné sur le code ; nulle sous D7). **Réponse à la revue** : les deux textes `data_gap_extension` sont comparés mot pour mot par le lecteur et restent ; l'alignement est écrit dans le texte libre voisin. **Signalé** : §10.3 du corps (a1) |
-| **m4** — variance des contrôles | `GATES` §3.2–3.3. **Signalé** : §7.4 du corps (a1) |
+| **m3** — prolongation pour trous | **Appliqué** : `window.end_rule`, ligne `window` ci-dessus (texte aligné sur le code ; nulle sous D7). **Réponse à la revue** : les deux textes `data_gap_extension` sont comparés mot pour mot par le lecteur et restent ; l'alignement est écrit dans le texte libre voisin. **Signalé** : §10.3 du corps (a1) **Corps : fait le 2026-10-22** (§10.3). |
+| **m4** — variance des contrôles | `GATES` §3.2–3.3. **Signalé** : §7.4 du corps (a1) **Corps : fait le 2026-10-22** (§7.4). |
 | **m5** — S_éco | `GATES` §1.2 ; paragraphe « Identique au Gate 1 ». **Réponse à la revue** : non recopié dans le spec Gate 2 seul (identité exigée avec le Gate 1, hors périmètre) ; écart 16 **Fait le 2026-10-22** : 97,25 dans les deux specs ensemble, le lecteur refuse moins. |
 | **m7** — Annexe B et plan périmés | **Appliqué** : paragraphe « Parseur » ; écarts refaits sur le code de 08:18 ; plan §2.2 (phrase datée) |
 | **m8** — « mêmes fenêtres » | **Appliqué** : `statistics.measure_definition` ; `GATES` §8. **Signalé** : impression (a2, écart 17) |
-| **m9** — stress C3 de T01 au Gate 2 | **Appliqué** : écart **déclaré** (`costs.stress_rule_status`, ligne `costs`). **Réponse à la revue** : le pb de plus au stress de T01 n'est pas ajouté : la règle de stress est un texte comparé mot pour mot au code et le choix (1) attend le corps (a1) ; la relecture admet l'une ou l'autre voie |
+| **m9** — stress C3 de T01 au Gate 2 | **Appliqué** : écart **déclaré** (`costs.stress_rule_status`, ligne `costs`). **Réponse à la revue** : le pb de plus au stress de T01 n'est pas ajouté : la règle de stress est un texte comparé mot pour mot au code et le choix (1) attend le corps (a1) ; la relecture admet l'une ou l'autre voie **Corps : choix (1) et écart écrits le 2026-10-22** (§10.2 ; `stress_rule_status` corrigé : +4,75 pb au Gate 1 depuis A1). |
 | **m12** — filtre « règlement suivant à 8 h » | **Signalé** : §11.1 du corps (a1) et version descriptive filtrée sur le seul règlement précédent (a2, écart 18 ; liste des descriptifs fixée par le code) **Fait le 2026-10-22** : §11.1 et descriptif `T01_previous_settlement_filter_only`. |
 | **m6, m10, m11** | `GATES` §1.2, §6.3, §11 ; registre ; `GATES` §2.1 (table de `GATES` §12) |
 
-## Annexe C — Calendriers et sessions (dates lues par la red team le 2026-10-21 sur bls.gov, federalreserve.gov, nyse.com ; à re-vérifier au gel)
+## Annexe C — Calendriers et sessions (dates lues par la red team le 2026-10-21 sur bls.gov, federalreserve.gov, nyse.com ; relevées sur les pages officielles le 2026-10-22 ; à re-vérifier au gel)
+
+**Relevé du 2026-10-22** (passe calendriers avant gel ; pages officielles seulement, aucune donnée de marché ; chaque liste recopiée
+dans les specs `0.4.1-draft` / `0.1.7-draft`, `calendars.sources` datées ; re-lecture au gel : `freeze_fill.calendars_verified_utc`) :
+
+| Liste | Source (URL ; lue le 2026-10-22) | Dates relevées |
+|---|---|---|
+| CPI (08:30 ET) | https://www.bls.gov/schedule/news_release/cpi.htm ; https://www.bls.gov/schedule/2027/home.htm (pages mensuelles 2027 modifiées le 2026-10-09) ; https://www.bls.gov/schedule/2026/10_sched.htm | Gate 1 : + **2026-10-14** (CPI de septembre 2026 ; hors fenêtre, inscrite pour le test de contenu d'octobre) ; Gate 2 : 2026-11-10, 2026-12-10, **2027-01-13, 2027-02-11, 2027-03-10, 2027-04-13** |
+| Employment Situation (08:30 ET) | https://www.bls.gov/schedule/news_release/empsit.htm ; https://www.bls.gov/schedule/2027/home.htm | Gate 2 : **2026-11-06, 2026-12-04, 2027-01-08, 2027-02-05, 2027-03-05, 2027-04-02** (jamais une règle « premier vendredi », piège 6) |
+| FOMC (communiqué le second jour, 14:00 ET) | https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm | 2026 : 01-28, 03-18, 04-29, 06-17, 07-29, 09-16, 10-28, 12-09 ; 2027 : 01-27, 03-17, **04-28**, 06-09, 07-28, 09-15, 10-27, 12-08 ; la page : « Each meeting date is tentative until confirmed at the meeting immediately preceding it » (§2.4 ligne 15) |
+| Fériés NYSE | https://www.nyse.com/markets/hours-calendars | 2026 : 01-01, 01-19, 02-16, 04-03, 05-25, 06-19, 07-03, 09-07, 11-26, 12-25 ; 2027 : 01-01, 01-18, 02-15, 03-26, 05-31, 06-18, 07-05, 09-06, 11-25, 12-24 — égaux au générateur par règles (`nyse_holidays_by_rule`) ; aucun férié du 2027-03-27 au 2027-04-30 |
+| Demi-séances NYSE (clôture 13:00 ET) | https://www.nyse.com/markets/hours-calendars | **2026-11-27, 2026-12-24** (Gate 2 ; 18:00 UTC en heure d'hiver) ; aucune dans la fenêtre du Gate 1 ; aucune en 2027 avant le 2027-11-26 |
+| JOLTS (10:00 ET ; strate descriptive §9.5) | https://www.bls.gov/schedule/news_release/jolts.htm ; https://www.bls.gov/schedule/2026/home.htm, `06_sched.htm`, `07_sched.htm` ; https://www.bls.gov/schedule/2027/home.htm | Gate 1 (fenêtre) : 2026-05-05, 06-02, 06-30, 08-04, 09-01, 09-29 ; Gate 2 : 2026-11-03, 2026-12-01 ; **2027 : aucune date publiée** de janvier à avril (pages 2027 modifiées le 2026-10-09) — bloquant (§2.4 ligne 5) |
+| ISM (10:00 ET ; strate descriptive §9.5 ; éditeur privé) | https://www.ismworld.org/supply-management-news-and-reports/reports/rob-report-calendar/ | **non relevé** : la page renvoie (302) à une page de connexion `ecommerce.ismworld.org` ; aucune date inscrite, aucune règle « premier jour ouvré » supposée — bloquant (§2.4 ligne 5) |
+
+Aucune notice de report sur les pages BLS lues ; les pages mensuelles disent que le calendrier est mis à jour « as needed » (§2.4
+ligne 15). Les listes 10:00 ET ne sont dans aucun spec (aucun champ ; strate `T05_ten_am_et_release_days` `UNAVAILABLE`).
 
 - **Fériés NYSE 2026 dans la fenêtre Gate 1** : 04-03 (Good Friday ; Pâques 2026 = 04-05), 05-25, 06-19, 07-03 (observé), 09-07.
   **Gate 2** : 2026-11-26, 2026-12-25, 2027-01-01, 2027-01-18, 2027-02-15, 2027-03-26 (Good Friday ; Pâques 2027 = 03-28) ⇒ 102 jours
   NYSE du 2026-11-02 au 2027-03-31 ; 110ᵉ jour le 2027-04-12.
-- **CPI 2026** (08:30 ET = 12:30 UTC en EDT) : 04-10, 05-12, 06-10, 07-14, 08-12, 09-11 ; 10-14 en quarantaine (hors fenêtre) — à inscrire
-  quand même dans `calendars.cpi` du Gate 1 au gel : le test de contenu (2026-10-22) exige une date CPI en octobre 2026, mois qui touche
+- **CPI 2026** (08:30 ET = 12:30 UTC en EDT) : 04-10, 05-12, 06-10, 07-14, 08-12, 09-11 ; 10-14 en quarantaine (hors fenêtre) — **inscrite**
+  dans `calendars.cpi` du Gate 1 le 2026-10-22 (`0.4.1-draft`) : le test de contenu exige une date CPI en octobre 2026, mois qui touche
   la fenêtre [2026-04-28 ; 2026-10-13] ; sans effet sur les instants (publication après la fin de la fenêtre).
 - **Employment Situation 2026** : 04-03 (vendredi, NYSE fermée), 05-08, 06-05, 07-02 (**jeudi**), 08-07, 09-04, 10-02.
 - **FOMC 2026** (14:00 ET = 18:00 UTC en EDT) : 04-29, 06-17, 07-29, 09-16 ; 10-27/28 en quarantaine.
@@ -1399,7 +1511,7 @@ sont aussi dans la table de `GATES` §12.
   11 dates CPI/NFP y tombent un jour de bourse ⇒ **105** instants ; 103 à ≥ 3 instruments ; moitiés C4 : 53 / 52. Sans éligibilité
   (première version) : 135 jours, 12 dates, 123 instants.
 - **Sessions** (spec `sessions`) : `us_cash_open` 09:30 et `us_cash_close` 16:00 `America/New_York` (jours NYSE ; 13:00 les
-  demi-séances de `calendars.nyse_half_days`, `on_nyse_half_days`, 2026-10-22 ; listes vides dans les brouillons, à relever au gel) ; `london_xetra_open`
+  demi-séances de `calendars.nyse_half_days`, `on_nyse_half_days`, 2026-10-22 ; Gate 2 : 2026-11-27 et 2026-12-24, relevées le 2026-10-22 ; Gate 1 : aucune) ; `london_xetra_open`
   08:00 `Europe/London` ; `hong_kong_open` 09:30 `Asia/Hong_Kong` ; `tokyo_open` 09:00 `Asia/Tokyo` (lundi–vendredi) ; `cme_cf_brr_window`
   15:00–16:00 `Europe/London` (tous les jours, à vérifier) ; `okx_dated_settlement_average` vendredi 07:30–08:00 UTC. Macro (spec
   `macro_filter`) : CPI et Employment Situation 08:30 NY, empreinte 60 min ; FOMC 14:00 NY, empreinte 90 min.
@@ -1421,7 +1533,8 @@ research-midcap-tick-2026-10-13, research-book-families-2026-10-13, research-sca
 41454, 41624–41655, 41799–41830, 43897, 40115–40174, 41382–41440, `xperps-specs.txt` l.934–944, `okx-mark-last-price.txt` l.238–250,
 `api-agreement-eea.txt` §1.8, §9.4). Documentation officielle (via a4 et la red team, pages non re-téléchargées ici) : OKX docs-v5,
 page funding EEE (màj 2026-08-27), API Agreement EEE (28 July 2026) ; calendriers BLS, Federal Reserve, NYSE, page d'aide Deribit
-(lus 2026-10-21). Littérature citée par le rapport théorie et la red team, **non relue ici** : Hansen-Kim-Kimbrough (arXiv 2109.12142),
+(lus 2026-10-21) ; calendriers BLS (CPI, Employment Situation, JOLTS), Federal Reserve (FOMC) et NYSE (fériés, demi-séances) **relus
+directement le 2026-10-22** (URL en Annexe C ; le calendrier ISM n'a pas pu être lu : page de connexion). Littérature citée par le rapport théorie et la red team, **non relue ici** : Hansen-Kim-Kimbrough (arXiv 2109.12142),
 Baur et al. 2019, Eross et al. 2019, Wang-Liu-Hsu 2020, Bouchaud-Farmer-Lillo 2009, Nagel 2012, Kim & Hansen 2026 (arXiv 2607.09426),
 He-Manela-Ross-von Wachter (2212.06888, 2506.08573).
 

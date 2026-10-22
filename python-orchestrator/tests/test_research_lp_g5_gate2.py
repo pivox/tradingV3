@@ -202,15 +202,16 @@ def test_the_real_gate2_draft_is_accepted_and_every_block_is_read():
     assert set(spec.requires) == set(g5_eval.CAPTURE_REQUIRES) and len(spec.requires) == 40 and "calendars_cover_the_window" in spec.requires
     # Owner decision (a) of 2026-10-22: the freeze controls of Annexe B (13, 14, 16) are capabilities of both gates; 11 is the Gate 1's.
     assert {"calendars_content_test_at_freeze", "freeze_pending_marker_refuses_frozen", "economic_s_eco_at_least_d4"} <= set(spec.requires)
-    assert "gate2_frozen_together" not in spec.requires and spec.version == "0.1.6-draft" and spec.economic["s_eco"] == 97.25
-    # The eight freeze_pending: choices (Annexe B, (1) to (7)) are still in the draft (a1): listed, and FROZEN is refused while one remains.
-    assert spec.notes["freeze_pending_markers"] == ["spec.costs.funding.fallback", "spec.costs.stress_rule_status", "spec.events[0].footprint_note",
-                                                    "spec.events[1].footprint_note", "spec.multiplicity.local_holm.status", "spec.quality.status",
-                                                    "spec.sealing.gate2_own_verdicts.status", "spec.universe.liquidity_rule_g2_3_3"]
-    # The content test on the draft's lists (reported, enforced at FROZEN only): CPI 2027-01 .. 03 and every Employment Situation month missing.
+    assert "gate2_frozen_together" not in spec.requires and spec.version == "0.1.7-draft" and spec.economic["s_eco"] == 97.25
+    # 0.1.7-draft (2026-10-22): the eight freeze_pending: choices (Annexe B, (1) to (7)) are written in the protocol body (10.1 to 10.4), no
+    # marker is left (a FROZEN spec with one is still refused: test_freeze_pending_markers_and_the_economic_floor_at_both_gates).
+    assert spec.notes["freeze_pending_markers"] == [] and spec.costs["funding_fallback"].startswith("none")
+    # The content test on the draft's lists (reported, enforced at FROZEN only): the lists recorded from the official pages on 2026-10-22 pass;
+    # incomplete_at_draft keeps two blocking entries (the rule for a date changed after the freeze, the 10:00 ET releases).
     content = spec.audit["calendar_content"]
     assert content["range"] == ["2026-11-02", "2027-03-31"] and content["holidays_by_rule"] == ["2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26"]
-    assert len(content["problems"]) == 8 and all("cpi" in p or "employment_situation" in p for p in content["problems"]) and spec.notes["calendars.content_problems"] == content["problems"]
+    assert content["problems"] == [] and spec.notes["calendars.content_problems"] == [] and content["half_days"] == ["2026-11-27", "2026-12-24"]
+    assert sorted(spec.gate2["calendars"]["incomplete"]) == ["fomc_statement", "ten_am_et_releases"]
     assert not set(spec.requires) & set(g5_eval.GATE1_ONLY) and set(g5_eval.HISTORY_REQUIRES) & set(spec.requires) == set(g5_eval.HISTORY_REQUIRES) - set(g5_eval.GATE1_ONLY)
     # Owner decisions: every block decided since 2026-10-21 — D10 (index source, both sources, primary by selection_rule), D7 (i) (T05 window
     # end 2027-03-31, option a, no extension) and D8 (P-S3 moot: track S closed, BTC and ETH stay); no owner_decision_pending value is left.
@@ -230,10 +231,10 @@ def test_the_real_gate2_draft_is_accepted_and_every_block_is_read():
     assert t01.gate2["window_end"]["end_exclusive"] == date(2027, 4, 1) and not t05.gate2["window_end"]["provisional"]
     assert t05.gate2["window_end"]["choice"] == "a_end_2027_03_31" and t05.gate2["window_end"]["end_exclusive"] == date(2027, 4, 1) and not spec.gate2["beyond_allowed"]
     # D7 (i): T05 below the power floor by construction, stated (audit, notes). On the draft (T0 provisional 2026-11-02, CPI and Employment
-    # Situation lists incomplete) the bound is 102 NYSE days - 2 CPI dates = 100, not yet below the floor: the statement holds from a
-    # reachable T0 (>= 2026-11-03) or with the complete lists required at FROZEN (test_t05_gate2_is_not_informative_by_construction_under_d7).
+    # Situation lists recorded 2026-10-22: 5 + 5 dates on NYSE days of the window) the bound is 102 NYSE days - 10 = 92 < 100 (adapted
+    # 2026-10-22; 100 with the two CPI dates of 0.1.6-draft); calendars_complete stays False while incomplete_at_draft is not empty.
     pbc = spec.audit["power_by_construction"]["T05_us_open"]
-    assert (pbc["raw_instants_upper_bound"], pbc["min_instants"], pbc["not_informative_by_construction"], pbc["calendars_complete"]) == (100, 100, False, False)
+    assert (pbc["raw_instants_upper_bound"], pbc["min_instants"], pbc["not_informative_by_construction"], pbc["calendars_complete"]) == (92, 100, True, False)
     assert spec.notes["power_by_construction"]["T05_us_open"]["window_end_choice"] == "a_end_2027_03_31" and set(spec.audit["power_by_construction"]) == {"T05_us_open"}
     assert t01.gate2["exit_until_min"] == 60 and t05.gate2["exit_until_min"] == 75 and t01.gate2["fill_sim"] == {"kind": "lp_sim_post_only_touch", "decided_at_min": -5,
                                                                                                                    "resting_until_min": 1}
@@ -257,7 +258,7 @@ def test_the_real_gate2_draft_is_accepted_and_every_block_is_read():
     assert spec.audit["T05_us_open"] == {"nyse_days_if_t0_2026_11_02.to_2027_03_31": 102, "nyse_days_if_t0_2026_11_02.to_2027_04_12": 110,
                                          "nyse_days_if_t0_2026_11_05.to_2027_03_31": 99, "nyse_days_if_t0_2026_11_05.to_2027_04_12": 107}
     hours = spec.audit["control_hours"]
-    assert hours["us_winter_uk_winter_t0_to_2027_03_13"]["T01"] == {"ordinary": "2026-11-02", "CPI / Employment Situation": "2026-11-10", "FOMC": "2026-12-09"}
+    assert hours["us_winter_uk_winter_t0_to_2027_03_13"]["T01"] == {"ordinary": "2026-11-02", "CPI / Employment Situation": "2026-11-06", "FOMC": "2026-12-09"}
     assert hours["us_summer_uk_winter_2027_03_14_to_2027_03_27"]["T05"] == {"ordinary": "2027-03-15", "FOMC": "2027-03-17"}
     assert g5_gate2.control_hours_on(spec, t01, date(2026, 11, 2)) == ["03:00", "04:00", "05:00", "06:00", "10:00", "11:00", "12:00", "13:00", "18:00", "19:00"]
     assert g5_gate2.control_hours_on(spec, t05, date(2026, 11, 2)) == ["05:30", "09:30", "17:30"]
@@ -289,9 +290,10 @@ def test_a_frozen_gate2_spec_is_refused_while_an_owner_decision_or_a_null_remain
         (lambda d: d["events"][0].update({"expected_cost_bp": None}), "null"),
         (lambda d: d["universe"].update({"analysed": None}), "null"),
         (lambda d: d["calendars"].update({"incomplete_at_draft": {"employment_situation": "to record"}}), "incomplete_at_draft"),
-        (lambda d: d["costs"]["funding"].update({"fallback": written_in_the_body(BASE["costs"]["funding"]["fallback"])}), "not implemented"),
-        (lambda d: d["costs"]["funding"].update({"fallback": BASE["costs"]["funding"]["fallback"]}), "freeze_pending: in a FROZEN spec"),  # request 14
-        (lambda d: d["quality"].update({"status": BASE["quality"]["status"]}), r"freeze_pending: in a FROZEN spec at \['spec.quality.status'\]"),
+        # Adapted 2026-10-22: the draft writes the fallback none (choice (7)) and no marker is left; the refusals are kept on explicit texts.
+        (lambda d: d["costs"]["funding"].update({"fallback": "GATES 5.1: REST public/funding-rate-history read after T0 only (test)"}), "not implemented"),
+        (lambda d: d["costs"]["funding"].update({"fallback": "none ; freeze_pending: to write (test)"}), "freeze_pending: in a FROZEN spec"),  # request 14
+        (lambda d: d["quality"].update({"status": "freeze_pending: to write (test)"}), r"freeze_pending: in a FROZEN spec at \['spec.quality.status'\]"),
         (lambda d: d["calendars"]["employment_situation"].remove("2027-02-05"), "content test.*employment_situation: no date in 2027-02"),  # request 13
         (lambda d: d["costs"]["funding"].update({"source": BASE["costs"]["funding"]["source"]}), "implemented rule"),  # CTO B1: the draft text
         (lambda d: d["freeze_fill"].update({"gate1_spec_sha256": None}), "null"),
@@ -1277,9 +1279,12 @@ def test_the_nyse_holiday_generator_and_the_calendar_content_test():
                        ({"list": "cpi", "period": "2027-01", "change": "no_release_in_month", "written_utc": "yesterday", "source": "s", "reason": "r"}, "ISO"),
                        ({"list": "cpi", "period": "2027-01", "change": "no_release_in_month", "written_utc": "2026-11-20T10:00:00Z", "reason": "r"}, "missing")):
         refused(lambda d: d["calendars"].update({"content_exceptions": [bad]}), match)
-    # The draft (DRAFT_NOT_FROZEN) keeps its incomplete lists: the problems are reported, not enforced (the Gate 1 too: CPI of October 2026).
+    # The problems of a draft are reported, not enforced; since 2026-10-22 (0.4.1-draft) the Gate 1 lists carry the CPI of October 2026
+    # (2026-10-14, bls.gov) and pass; removing it brings the problem back.
     gate1 = g5_eval.load_spec(GATE1_SPEC)[0]
-    assert gate1.audit["calendar_content"]["problems"] == ["calendars.cpi: no date in 2026-10 (R = 2026-04-28 .. 2026-10-13) and no dated, sourced exception"]
+    assert gate1.audit["calendar_content"]["problems"] == [] and date(2026, 10, 14) in gate1.calendars["cpi"]
+    assert g5_eval.calendar_content({**gate1.calendars, "cpi": gate1.calendars["cpi"] - {date(2026, 10, 14)}}, gate1.sessions, date(2026, 4, 28), date(2026, 10, 13))["problems"] == [
+        "calendars.cpi: no date in 2026-10 (R = 2026-04-28 .. 2026-10-13) and no dated, sourced exception"]
 
 
 def test_freeze_pending_markers_and_the_economic_floor_at_both_gates():
@@ -1346,9 +1351,11 @@ def test_the_gate1_reads_its_gate2_before_any_market_value(tmp_path: Path):
         assert any(re.search(match, p) for p in check(document)["problems"]), match
     assert "not JSON" in check("{")["problems"][0]
     assert "absent" in g5_gate2.check_frozen_together(gate1_spec, FROZEN_GATE1_SHA, tmp_path / "none.json")["problems"][0]
-    # The repository's Gate 2 draft is refused as the Gate 2 of a Gate 1 run (DRAFT, nulls, the eight markers).
+    # The repository's Gate 2 draft is refused as the Gate 2 of a Gate 1 run (DRAFT, nulls, another Gate 1 sha256; adapted 2026-10-22:
+    # no freeze_pending: marker is left since 0.1.7-draft, the eight choices being written in the protocol body).
     real = g5_gate2.check_frozen_together(gate1_spec, FROZEN_GATE1_SHA, GATE2_SPEC)
-    assert real["sha256"] == tape.sha256_of(GATE2_SPEC) and real["status"] == "DRAFT_NOT_FROZEN" and len(real["problems"]) >= 4
+    assert real["sha256"] == tape.sha256_of(GATE2_SPEC) and real["status"] == "DRAFT_NOT_FROZEN" and len(real["problems"]) >= 3
+    assert not any("freeze_pending" in p for p in real["problems"]) and any("not FROZEN" in p for p in real["problems"])
 
 
 def test_no_test_can_open_a_socket():
