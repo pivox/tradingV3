@@ -186,6 +186,8 @@ nav:
           - "Contracts V2 design (D)": research/H3-CONTRACTS-V2-DESIGN.md
           - "H3-A — independent reviews and responses": research/H3-A-INDEPENDENT-REVIEWS.md
           - "H3-A — status and next decision (SCORING_UNTESTABLE)": research/H3-A-NEXT-DECISION.md
+          - "H3-A / CS-EARN — US-equity data amendment (DRAFT, not frozen)": research/H3-A-CS-EARN-DATA-AMENDMENT-DRAFT.md
+          - "New candidate-source search — closure (2026-10-16)": research/H3-NEW-SOURCE-SEARCH-CLOSURE-2026-10-16.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 

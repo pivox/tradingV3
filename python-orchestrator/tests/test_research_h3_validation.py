@@ -1062,6 +1062,31 @@ def test_registry_rules_and_conclusion():
     assert rg.check_provenance(s.SYNTHETIC_PROVENANCE) == 'registry_synthetic'
 
 
+def test_us_equity_rows_cannot_be_read_under_the_limited_go():
+    """Owner decision 2026-10-16: registry, amendment and plan only; nothing acquired, nothing read."""
+    for dataset_id in ('us-equity-underlying-history', 'edgar-filing-metadata'):
+        e = rg.entry(dataset_id)
+        assert e.status is rg.DatasetStatus.POTENTIAL_NOT_ACQUIRED
+        assert e.h3_use is rg.H3Use.DEVELOPMENT_AFTER_LICENCE_AND_FROZEN_AMENDMENT
+        assert e.market != rg.TARGET_MARKET
+        for label in (c.DataLabel.DEVELOPMENT, c.DataLabel.VALIDATION, c.DataLabel.HOLDOUT, c.DataLabel.PROSPECTIVE):
+            for consent in (False, True):
+                with pytest.raises(rg.RegistryError, match='registry_dataset_not_acquired'):
+                    rg.check_use(dataset_id, label, owner_consent=consent)
+    window = rg.entry('us-equity-underlying-evaluation-window')
+    assert window.status is rg.DatasetStatus.RESERVED
+    assert window.h3_use is rg.H3Use.MECHANISM_EVALUATION_OFF_TARGET_NOT_XPERP_VALIDATION
+    assert 'NOT an independent validation' in window.read_by
+    for label in (c.DataLabel.DEVELOPMENT, c.DataLabel.HOLDOUT):
+        with pytest.raises(rg.RegistryError, match='registry_dataset_reserved'):
+            rg.check_use('us-equity-underlying-evaluation-window', label, owner_consent=True)
+    # development and evaluation windows are chronologically distinct, with the embargo in between
+    assert rg.US_EQUITY_DEVELOPMENT_END < rg.US_EQUITY_EMBARGO[:10] < rg.US_EQUITY_EVALUATION_START
+    assert rg.US_EQUITY_HISTORY_END < '2026-06-01' < rg.PROSPECTIVE_EARLIEST_START_DRAFT
+    # equity history is never independent historical validation of the X-Perp target
+    assert rg.independent_historical_validation() == rg.INDEPENDENT_DATA_NOT_AVAILABLE
+
+
 def test_registry_matches_the_eligibility_document():
     text = (REPO / 'docs/handbook/research/H3-DATA-ELIGIBILITY.md').read_text(encoding='utf-8')
     rows = {}

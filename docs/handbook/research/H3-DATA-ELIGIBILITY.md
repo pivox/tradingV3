@@ -48,9 +48,12 @@ table below has the same id, status and H3 use as the code.
 
 ## 2. Registry
 
-Status: `consumed`, `consumed_equivalent`, `reserved`, `possibly_independent`, `missing`, `prospective`.
+Status: `consumed`, `consumed_equivalent`, `reserved`, `possibly_independent`, `missing`, `prospective`,
+`potential_not_acquired` (added 2026-10-16: registered by an owner decision, not acquired, not read; the code refuses
+every use).
 H3 use: `development_after_owner_consent`, `statistics_only_off_target`, `never`, `not_available`,
-`prospective_confirmation`.
+`prospective_confirmation`, `development_after_licence_and_frozen_amendment` and
+`mechanism_evaluation_off_target_not_xperp_validation` (both added 2026-10-16; neither authorises a read today).
 
 ### Binance USD-M (blocked from France; CC BY-NC-SA 4.0, research only, no live-trading use)
 
@@ -107,6 +110,26 @@ H3 use: `development_after_owner_consent`, `statistics_only_off_target`, `never`
 | `coinbase-eea-history` | perpetual-style futures | since 2026-03 | unread; availability unverified | `missing` | `not_available` | `TRADABLE-INSTRUMENT-UNIVERSE.md` |
 | `token-unlock-calendar` | unlock calendar (needed by CS-UNLOCK) | unknown | nobody; source and licence not chosen | `missing` | `not_available` | `H1-NEXT-DECISION.md` |
 | `historical-specs-and-delistings` | historical contract specs, delisting settlement prices, listing-day books | past | not observed by H1 | `missing` | `not_available` | `H1-DATA-MANIFEST.md` |
+
+### US-equity underlyings and corporate events (owner's limited GO, 2026-10-16; nothing acquired, nothing read)
+
+The owner registered these rows as **potential** data only. The GO covers the registry, the DRAFT amendment
+([H3-A-CS-EARN-DATA-AMENDMENT-DRAFT.md](H3-A-CS-EARN-DATA-AMENDMENT-DRAFT.md)) and the research plan. It does not
+cover any read, collection, paid acquisition, calibration, optimisation, historical simulation or trading. Windows
+are DRAFT, chosen by rule (amendment §5), not by looking at data.
+
+| Id | Kind / scope | Window | Read by | Status | H3 use | Source |
+|---|---|---|---|---|---|---|
+| `us-equity-underlying-history` | daily OHLCV (split-adjusted and unadjusted), corporate actions, delisting prices, permanent ids; rule-based US-domestic common-stock universe, X-Perp underlyings only a later subset | decision dates 2007-01-01 → 2019-03-31 (DRAFT) | nobody: not acquired, not read | `potential_not_acquired` | `development_after_licence_and_frozen_amendment` | amendment §2-§5 |
+| `us-equity-underlying-evaluation-window` | same kind and universe | decision dates 2019-07-01 → 2025-12-31 (DRAFT); embargo 2019-04-01 → 2019-06-30 in neither window | nobody: reserved, never read. At most one out-of-training evaluation of the **mechanism** on US equities, after a frozen protocol and the owner's go. **Not** an independent validation of the X-Perp strategy | `reserved` | `mechanism_evaluation_off_target_not_xperp_validation` | amendment §5, §9 |
+| `edgar-filing-metadata` | SEC EDGAR index metadata only (form type, 8-K item codes, acceptance date-time, filing date, CIK) for 10-Q, 10-K and 8-K Item 2.02 | 2007-01-01 → 2025-12-31 (DRAFT); a prospective feed needs a separate collection approval | nobody: not collected, not read | `potential_not_acquired` | `development_after_licence_and_frozen_amendment` | amendment §3; SEC fair-access policy |
+
+- Equity history from 2026-06-01 (first equity X-Perp listing) is in **neither** window: during the cash session the
+  X-Perp index follows the stock, so those paths are the target product's own history (not registered here; a
+  separate decision). From 2026-11-02 they are the paths of the prospective X-Perp confirmation and must never be
+  read as history.
+- `independent_historical_validation()` is unchanged: `INDEPENDENT_DATA_NOT_AVAILABLE`. Equity history is off the
+  target market; it can never confirm an X-Perp claim (amendment §9, §10).
 
 Notes:
 
