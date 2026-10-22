@@ -146,6 +146,7 @@ nav:
       - "État des campagnes de recherche (2026-10-15)": research/RESEARCH-CAMPAIGN-STATUS.md
       - "Diagnostic infrastructure H2 (disque, swap) 2026-10-15": research/RESEARCH-INFRA-DIAGNOSTIC.md
       - "H1 — état et prochaine décision (2026-10-15)": research/H1-NEXT-DECISION.md
+      - "TP/SL adaptés au carnet — inventaire de faisabilité (2026-10-22)": research/BOOK-TPSL-INVENTORY-2026-10-22.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 
