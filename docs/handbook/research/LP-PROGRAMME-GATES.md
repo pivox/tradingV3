@@ -257,7 +257,7 @@ prolongation **pour trous de données** seulement, bornée et écrite au gel.
 - **Gate 2 : « T05 ≈ 92 » et « T01 ≈ 449 × f_inst » sont des bornes hautes**, celles de T0 = 2026-11-02, instant
   **inatteignable** : T0 ≥ gel ≥ fin de P3, et P3 commence le 2026-11-02. Pour un T0 atteignable, du 2026-11-03 au 2026-11-20
   (calcul d'audit sur les fériés de l'Annexe C de G5 ; dates BLS 2027 UNKNOWN, ≈ 2 par mois) : T05 au 2027-03-31 = 101 → 88 jours
-  NYSE, soit **≈ 91 → 79 instants** ; T01 = **446 → 395** instants bruts × f_inst (seuil de f_inst : 0,224 → 0,253).
+  NYSE, soit **91 → 80 instants** (décompte exact sur les calendriers relevés le 2026-10-22) ; T01 = **446 → 395** instants bruts × f_inst (seuil de f_inst : 0,224 → 0,253).
 - **D7** (point 3 du 2026-10-21). P-G5-10 (i) est refusée : la fenêtre de T05 s'arrête au 2027-03-31, et **T05 au Gate 2 est
   `NOT_INFORMATIVE` par construction**, accepté par écrit. Pour mémoire, l'option refusée « fin au 2027-04-12 » ne donnait
   ≈ 97–98 instants qu'à T0 = 2026-11-03 et ≈ 85 à T0 = 2026-11-20, jamais 100 ; seule une fin fixée par le calendrier, refusée

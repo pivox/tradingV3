@@ -130,3 +130,23 @@ Réponse du propriétaire, 2026-10-21 : « On essaye des deux un par un puis on 
   (a) et (b) est inférieur ou égal à 0,5 pb ; sinon (b). Le choix est fait et haché sur les seules mesures de couverture et
   d'accord entre séries, **avant** toute évaluation de T01. L'autre source sert de sensibilité rapportée.
 - Ce qui reste interdit : comparer les résultats de T01 obtenus avec chaque source pour choisir.
+
+## D11 — Contrôles de gel réalisables tout de suite (2026-10-22)
+
+Réponse du propriétaire, 2026-10-22 : « Finir les contrôles G5 réalisables dès maintenant ». Les demandes de code 11, 13, 14,
+16 et 18 de l'Annexe B du protocole G5 sont écrites et testées : commits `4dd1f6e8` et `b5d9c0a7` sur
+`claude/g5-gate2-prefreeze`. Rien n'est gelé.
+
+## D12 — Remplissage du Gate 2 de G5 : traversée en règle principale (2026-10-22)
+
+Réponse du propriétaire, 2026-10-22 : « Choisir la traversée comme remplissage principal du Gate 2, et garder le simple contact
+comme comparaison descriptive ». Le contact et la file sont rapportés à titre descriptif. Ils ne peuvent jamais rattraper un
+échec, un résultat non informatif ou non concluant.
+
+## D13 — Pilote de capture L2 BTC et ETH (2026-10-22)
+
+Autorisation du propriétaire, 2026-10-22 : un pilote de capture publique, sans ordre, démarré au plus tôt le 2026-11-02 dans le
+respect des prérequis du programme. Il porte sur deux X-Perps, BTC et ETH, sélectionnés par leurs métadonnées. Sa durée est de
+24 heures au plus, avec au plus 5 Gio écrits et au moins 10 Gio laissés libres. Il s'arrête proprement à la première limite
+atteinte, sans prolongation automatique. Aucun lancement n'est programmé. Le dispositif et ses règles de protection sont dans
+`L2-CAPTURE-PILOT.md`, sur la branche `claude/research-l2-capture-pilot`.
