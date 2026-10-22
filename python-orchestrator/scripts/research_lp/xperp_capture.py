@@ -6,7 +6,7 @@
 
 Public data only: no credential, no private endpoint, no order. Channels (per instrument unless
 noted): `trades`, `books5`, `mark-price`, `funding-rate`, `liquidation-orders` and `index-tickers`. Hosts: the
-global public endpoint `wss://ws.okx.com:8443/ws/v5/public` (the task's default) or the EEA host
+global public endpoint `wss://ws.okx.com/ws/v5/public` (the task's default) or the EEA host
 `wss://wseea.okx.com/ws/v5/public` in the form the EEA documentation gives (no port;
 `docs/handbook/research/LP-DATA-DESK-2026-10-20.md` §0.1 — whether a port is accepted is UNKNOWN,
 `--host` takes a raw URL for the counting trial).
@@ -81,7 +81,7 @@ try:  # orjson is optional (absent from CI)
 except ImportError:  # pragma: no cover
     _orjson = None
 
-WS_PUBLIC_GLOBAL = "wss://ws.okx.com:8443/ws/v5/public"
+WS_PUBLIC_GLOBAL = "wss://ws.okx.com/ws/v5/public"  # no :8443 — OKX stops port 8443 for public-internet WebSockets on 2026-10-31 (docs-v5 changelog, "WebSocket port 8443 discontinuation", update of 2026-10-16)
 WS_PUBLIC_EEA = "wss://wseea.okx.com/ws/v5/public"  # documented form, no port (LP-DATA-DESK §0.1)
 REST_GLOBAL = "https://www.okx.com"
 REST_EEA = "https://eea.okx.com"
