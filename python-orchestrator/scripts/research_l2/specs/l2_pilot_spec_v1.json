@@ -1,0 +1,92 @@
+{
+  "schema": "l2-pilot-spec/1",
+  "spec_id": "okx-xperp-l2-capture-pilot",
+  "version": "1.0.0",
+  "status": "FROZEN",
+  "frozen_at_utc": "2026-10-22",
+  "purpose": "Public-data capture pilot of OKX Europe X-Perps order-book depth (L2) and public trades, to study LATER the feasibility of take-profit / stop-loss rules adapted to the order book. Development / exploration only, never a confirmation. Nothing is scheduled; one run, started by hand.",
+  "authorization": {
+    "date": "2026-10-22",
+    "text": "a public-data capture pilot, start no earlier than 2026-11-02 and respecting the LP programme prerequisites; two X-Perps contracts, BTC and ETH, selected by authorized metadata; max 24 h; at most 5 GiB written and at least 10 GiB kept free; clean stop as soon as a limit is hit; no automatic extension or restart.",
+    "today": "prepare the tool and its exact command only; schedule nothing (no cron, no systemd unit, no scheduled task). No orders, no flags, no merge."
+  },
+  "venue": {
+    "ws_public": "wss://wseea.okx.com/ws/v5/public",
+    "rest": "https://eea.okx.com",
+    "instruments_path": "/api/v5/public/instruments?instType=FUTURES",
+    "login": false
+  },
+  "selection": {
+    "inst_type": "FUTURES",
+    "rule_type": "xperp",
+    "state": "live",
+    "underlyings": ["BTC-USD", "ETH-USD"],
+    "inst_id_regex": "^[A-Z0-9]+-USD_UM_XPERP-\\d{6}$",
+    "exactly_one_per_underlying": true,
+    "units_kept": ["instId", "instType", "instFamily", "uly", "ruleType", "state", "ctType", "ctVal", "ctValCcy", "ctMult", "settleCcy", "tickSz", "lotSz", "minSz", "listTime", "expTime"]
+  },
+  "channels": {
+    "depth_primary": "books",
+    "depth_fallback": "books5",
+    "trades": "trades",
+    "subscribed": ["books", "books5", "trades"],
+    "fallback_rule": "books5 is always subscribed next to books (declared fallback and cross-check). If books is refused for an instrument (error event), the run continues with books5 + trades for it, the refusal is written in the manifest (depth_status = books5_only) and the dataset is labelled 5-level only for that instrument. Never an automatic switch to another channel, host or login.",
+    "excluded": {
+      "books-l2-tbt": "VIP4+ and login (docs: error 64003; trick page: login, VIP5)",
+      "books50-l2-tbt": "VIP4+ and login",
+      "bbo-tbt": "1 level only; not needed for L2 (speed not required by the authorization)",
+      "books-rpi": "consolidated with RPI depth; not part of the authorization",
+      "trades-all": "URL path /ws/v5/business (a second connection, no cross-connection ordering with books); trades on /ws/v5/public keeps the documented sequential publication of book and aggregated trades"
+    },
+    "doc_copies_sha256": {"my-docs-v5-en.txt": "893cccb2b7154a85e7ace6d8ef13aaf5d48a4ed330741fa0f202161c621fc14c", "docs-v5-en.txt": "a7e949639846d080506d554985985419521b8a94b58cbf1f7423de4e144342dd", "docs-v5-log_en.txt": "3d2f48e02f3920d1b55815d65b019db57b7cb305195fa79190d2fbec8287a225"},
+    "doc_citations": [
+      "docs-v5 WS / Order book channel (EEA local copy my-docs-v5-en.txt l.15095-15349; global docs-v5-en.txt l.30510-30766): books 400 levels snapshot + incremental every 100 ms; books5 5-level snapshot every 100 ms; URL path /ws/v5/public; l2-tbt channels VIP4+",
+      "docs-v5 Sequence ID (EEA l.15352-15371; global l.30767-30786): prevSeqId/seqId continuity, heartbeat with empty asks/bids after ~60 s, sequence reset",
+      "changelog 2026-06-23 Deprecation of checksum field in order book channels (docs-v5-log_en.txt l.2212-2228): checksum fixed to 0 for books, use seqId/prevSeqId; books5 has no checksum",
+      "docs-v5 Checksum algorithm, still written only in the Spread Trading order book section (sprd-books-l2-tbt; global l.38728-38742): merge rule and CRC32 (32-bit signed) of the first 25 bids and asks; used only if a non-zero checksum is delivered",
+      "docs-v5 WS / Trades channel (EEA l.14750-14930; global l.30165-30345): URL path /ws/v5/public, one message per taker order, filled price and source, count, seqId; 'Order book and the aggregated trades data are still published sequentially'",
+      "docs-v5 WS / All trades channel (EEA l.14931-15094; global l.30346-30509): URL path /ws/v5/business",
+      "trick_en Market data (fetched 2026-10-22): books publishes changes every 100 ms; books-l2-tbt / books50-l2-tbt need login and VIP5 / VIP4",
+      "changelog Upcoming Changes, WebSocket port 8443 discontinuation (l.1171-1207): from 2026-10-31 no :8443; the pilot host has no port"
+    ]
+  },
+  "limits": {
+    "not_before_utc": "2026-11-02T00:00:00Z",
+    "max_duration_s": 86400,
+    "max_bytes_written": 5368709120,
+    "stop_margin_bytes": 67108864,
+    "min_free_bytes": 10737418240,
+    "free_space_check_every_s": 30,
+    "segment_max_s": 3600,
+    "segment_max_bytes": 268435456,
+    "flush_every_s": 5,
+    "max_reconnects": 48,
+    "resync_min_interval_s": 5,
+    "resync_max_per_hour": 120,
+    "ping_every_s": 20,
+    "recv_timeout_s": 30
+  },
+  "storage": {
+    "format": "gzip JSONL, one record per line, segments seg-NNNNNN.jsonl.gz",
+    "record_frame": "{rx, recv_ns, mono_ns, conn, k: frame, h: header (ids, seq, counts; no price), raw: frame text exactly as received}",
+    "record_meta": "{rx, recv_ns, mono_ns, conn, k: meta, event, ...}",
+    "availability_order": "rx (reception order of the process = write order)"
+  },
+  "quality_criteria": {
+    "book_valid_fraction_min": 0.95,
+    "minute_coverage_min": 0.99,
+    "gaps_per_instrument_max": 24,
+    "resync_snapshot_within_s_p95_max": 10,
+    "checksum_failures_max": 0,
+    "out_of_order_max": 0,
+    "reconnects_max": 24,
+    "verdict_rule": "PASS if every criterion holds on both instruments with books; PASS_WITH_RESERVATIONS if the run stopped on a limit or a signal before 24 h, or only books5 was available, while the criteria hold on what was captured; FAIL otherwise (or if a segment hash does not verify)"
+  },
+  "protected_path_tokens": ["forward-okx", "fwd-okx", "g5", "scalp-q3", "scalping-diagnostic", "sealed", "okx-xperp-capture"],
+  "protection": {
+    "dataset_id": "okx-xperp-l2-pilot-r1",
+    "status": "prospective",
+    "use": "development / exploration of book-adapted TP/SL feasibility only",
+    "content_sealed": "During the pilot and until the owner decides otherwise, only quality and volume summaries (header fields, no price) are allowed. Prices, books and trades of the pilot stay sealed until the G5 Gate 2 verdict (and until the verdicts of any other LP protocol whose window, look-back included, covers the pilot interval: G2, G4 Gate 2), unless the owner excludes the pilot interval from that protocol in its spec before its freeze."
+  }
+}
