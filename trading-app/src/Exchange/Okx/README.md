@@ -25,7 +25,7 @@ API-first OKX demo integration slice for SWAP instruments.
 - Metadata normalization exposes OKX native tick/step/min/max/contract/leverage,
   public funding, and private fee rates without submitting orders.
 - Entry orders use `/api/v5/trade/order`; standalone stop-loss/take-profit protection uses `/api/v5/trade/order-algo` conditional orders.
-- WebSocket public demo is documented as `wss://wseeapap.okx.com:8443/ws/v5/public`, but OKX-003 keeps runtime market data on REST polling.
+- WebSocket public demo is documented as `wss://wseeapap.okx.com/ws/v5/public`, but OKX-003 keeps runtime market data on REST polling.
 - The private demo WebSocket observer is implemented but operationally disabled by default. It is started only through the Compose profile `okx-observability`.
 
 ## Private WebSocket observer
@@ -165,9 +165,9 @@ OKX_DEMO_API_KEY=
 OKX_DEMO_API_SECRET=
 OKX_DEMO_API_PASSPHRASE=
 OKX_API_BASE_URI=https://eea.okx.com
-OKX_WS_PUBLIC_URI=wss://wseeapap.okx.com:8443/ws/v5/public
-OKX_WS_PRIVATE_URI=wss://wseeapap.okx.com:8443/ws/v5/private
-OKX_WS_BUSINESS_URI=wss://wseeapap.okx.com:8443/ws/v5/business
+OKX_WS_PUBLIC_URI=wss://wseeapap.okx.com/ws/v5/public
+OKX_WS_PRIVATE_URI=wss://wseeapap.okx.com/ws/v5/private
+OKX_WS_BUSINESS_URI=wss://wseeapap.okx.com/ws/v5/business
 OKX_SIMULATED_TRADING=1
 OKX_DEMO_TRADING_ENABLED=0
 OKX_LIVE_ENABLED=0

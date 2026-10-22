@@ -63,7 +63,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
 
         $opened = false;
         $transport->connect(
-            'wss://wseeapap.okx.com:8443/ws/v5/private',
+            'wss://wseeapap.okx.com/ws/v5/private',
             static function () use (&$opened): void {
                 $opened = true;
             },
@@ -88,7 +88,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             connector: static fn (string $uri): PromiseInterface => resolve($connection),
         );
         $transport->connect(
-            'wss://wseeapap.okx.com:8443/ws/v5/private',
+            'wss://wseeapap.okx.com/ws/v5/private',
             static function (): void {},
             static function (): void {},
             static function (): void {},
@@ -109,7 +109,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             connector: static fn (string $uri): PromiseInterface => $deferred->promise(),
         );
         $transport->connect(
-            'wss://wseeapap.okx.com:8443/ws/v5/private',
+            'wss://wseeapap.okx.com/ws/v5/private',
             static function () use (&$opened): void { $opened = true; },
             static function (): void {},
             static function (): void {},
@@ -135,14 +135,14 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         );
         $oldCallbacks = ['message' => 0, 'close' => 0, 'error' => 0];
         $transport->connect(
-            'wss://wseeapap.okx.com:8443/ws/v5/private',
+            'wss://wseeapap.okx.com/ws/v5/private',
             static function (): void {},
             static function () use (&$oldCallbacks): void { ++$oldCallbacks['message']; },
             static function () use (&$oldCallbacks): void { ++$oldCallbacks['close']; },
             static function () use (&$oldCallbacks): void { ++$oldCallbacks['error']; },
         );
         $transport->connect(
-            'wss://wseeapap.okx.com:8443/ws/v5/private',
+            'wss://wseeapap.okx.com/ws/v5/private',
             static function (): void {},
             static function (): void {},
             static function (): void {},
@@ -165,7 +165,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         $received = [];
         foreach (['old', 'current'] as $label) {
             $transport->connect(
-                'wss://wseeapap.okx.com:8443/ws/v5/private',
+                'wss://wseeapap.okx.com/ws/v5/private',
                 static function (): void {},
                 static function (string $message) use (&$received, $label): void {
                     $received[] = $label . ':' . $message;
@@ -190,7 +190,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         $worker->start();
 
         self::assertSame(
-            ['wss://wseeapap.okx.com:8443/ws/v5/private'],
+            ['wss://wseeapap.okx.com/ws/v5/private'],
             $transport->connections,
         );
         self::assertFalse($store->saved[0]->connected);
@@ -217,11 +217,11 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         $worker->start();
 
         self::assertSame(
-            ['wss://wseeapap.okx.com:8443/ws/v5/private'],
+            ['wss://wseeapap.okx.com/ws/v5/private'],
             $privateTransport->connections,
         );
         self::assertSame(
-            ['wss://wseeapap.okx.com:8443/ws/v5/business'],
+            ['wss://wseeapap.okx.com/ws/v5/business'],
             $businessTransport->connections,
         );
     }
@@ -1419,7 +1419,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             apiKey: 'demo-key',
             apiSecret: 'demo-secret',
             apiPassphrase: 'demo-passphrase',
-            wsPrivateUri: 'wss://wseeapap.okx.com:8443/ws/v5/private',
+            wsPrivateUri: 'wss://wseeapap.okx.com/ws/v5/private',
             simulatedTrading: true,
             liveEnabled: false,
         );

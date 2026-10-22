@@ -63,11 +63,19 @@ final class OkxPrivateWebSocketCommandTest extends TestCase
             'okx_private_ws_credentials_missing',
         ];
         yield 'endpoint not allowlisted' => [
-            ['wsPrivateUri' => 'wss://ws.okx.com:8443/ws/v5/private'],
+            ['wsPrivateUri' => 'wss://ws.okx.com/ws/v5/private'],
             'okx_demo_private_ws_endpoint_not_allowed',
         ];
         yield 'business endpoint not allowlisted' => [
-            ['wsBusinessUri' => 'wss://ws.okx.com:8443/ws/v5/business'],
+            ['wsBusinessUri' => 'wss://ws.okx.com/ws/v5/business'],
+            'okx_demo_private_ws_endpoint_not_allowed',
+        ];
+        yield 'legacy port 8443 private endpoint not allowlisted' => [
+            ['wsPrivateUri' => 'wss://wseeapap.okx.com:8443/ws/v5/private'],
+            'okx_demo_private_ws_endpoint_not_allowed',
+        ];
+        yield 'legacy port 8443 business endpoint not allowlisted' => [
+            ['wsBusinessUri' => 'wss://wseeapap.okx.com:8443/ws/v5/business'],
             'okx_demo_private_ws_endpoint_not_allowed',
         ];
     }
@@ -80,8 +88,8 @@ final class OkxPrivateWebSocketCommandTest extends TestCase
             'apiKey' => 'demo-key',
             'apiSecret' => 'demo-secret',
             'apiPassphrase' => 'demo-passphrase',
-            'wsPrivateUri' => 'wss://wseeapap.okx.com:8443/ws/v5/private',
-            'wsBusinessUri' => 'wss://wseeapap.okx.com:8443/ws/v5/business',
+            'wsPrivateUri' => 'wss://wseeapap.okx.com/ws/v5/private',
+            'wsBusinessUri' => 'wss://wseeapap.okx.com/ws/v5/business',
             'simulatedTrading' => true,
             'liveEnabled' => false,
         ], $overrides);
