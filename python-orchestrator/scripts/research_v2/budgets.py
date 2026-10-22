@@ -5,6 +5,13 @@ the notional capped so that the open notional never exceeds 2 × equity (the lev
 quantity rounded down to the instrument step, trade skipped when the quantity or the notional
 falls below the exchange minimums. Costs and funding are proportional to the quantity, so each
 re-sized trade's net PnL is the reference net PnL scaled by the quantity ratio.
+
+Equity is realized equity: a position changes it only when it is settled, and positions are
+settled in the order of their exits. The drawdown is therefore a realized drawdown: at every
+settlement, the fall of equity relative to the highest equity reached before it, the maximum of
+those relative falls being ``max_drawdown_share``. Unrealized (mark-to-market) losses of open
+positions are not measured; ``max_open_risk_share`` bounds them by the sum of the open
+positions' stop risks relative to equity (a gap through a stop can exceed that bound).
 """
 
 from __future__ import annotations
@@ -26,11 +33,40 @@ def budget_study(outcomes: np.ndarray, instruments: dict[str, costs.Instrument],
     return results
 
 
+class DrawdownTracker:
+    """Realized equity path: relative drawdown measured against the peak reached before each fall."""
+
+    def __init__(self, start: float) -> None:
+        self.equity = float(start)
+        self.peak = float(start)
+        self.max_drawdown_quote = 0.0
+        self.max_drawdown_share = 0.0
+
+    def settle(self, net: float) -> None:
+        self.equity += net
+        if self.equity > self.peak:
+            self.peak = self.equity
+            return
+        fall = self.peak - self.equity
+        self.max_drawdown_quote = max(self.max_drawdown_quote, fall)
+        if self.peak > 0:
+            self.max_drawdown_share = max(self.max_drawdown_share, fall / self.peak)
+        else:  # equity never positive: the relative drawdown is undefined
+            self.max_drawdown_share = float("nan")
+
+
+def relative_drawdown(start: float, nets_in_exit_order) -> float:
+    """Maximum relative fall of realized equity (``start`` plus the cumulated nets)."""
+    tracker = DrawdownTracker(start)
+    for net in nets_in_exit_order:
+        tracker.settle(float(net))
+    return tracker.max_drawdown_share
+
+
 def _run_budget(outcomes: np.ndarray, instruments: dict[str, costs.Instrument], profile: str, budget: float) -> dict:
-    equity = budget
-    peak = budget
-    max_drawdown = 0.0
-    open_positions: list[tuple[int, float, float]] = []  # (exit_ms, notional, net)
+    tracker = DrawdownTracker(budget)
+    open_positions: list[tuple[int, float, float, float]] = []  # (exit_ms, notional, net, risk)
+    max_open_risk_share = 0.0
     taken = 0
     skipped = {"leverage": 0, "minimum": 0}
     notionals = []
@@ -43,24 +79,20 @@ def _run_budget(outcomes: np.ndarray, instruments: dict[str, costs.Instrument], 
     for i in range(outcomes.size):
         row = outcomes[i]
         decision_ms = int(row["decision_ms"])
-        # Settle the positions closed before this decision.
-        still_open = []
-        for exit_ms, notional, net in open_positions:
-            if exit_ms <= decision_ms:
-                equity += net
-                net_total += net
-                peak = max(peak, equity)
-                max_drawdown = max(max_drawdown, peak - equity)
-            else:
-                still_open.append((exit_ms, notional, net))
-        open_positions = still_open
+        # Settle, in exit order, the positions closed at or before this decision.
+        open_positions.sort(key=lambda position: position[0])
+        while open_positions and open_positions[0][0] <= decision_ms:
+            _, _, net, _ = open_positions.pop(0)
+            tracker.settle(net)
+            net_total += net
+        equity = tracker.equity
         symbol = str(row["symbol"])
         per_pair_attempts[symbol] = per_pair_attempts.get(symbol, 0) + 1
         instrument = instruments[symbol]
         risk_per_unit = float(risk_column[i]) / float(row["quantity"])
         risk_quantity = RISK_FRACTION * equity / risk_per_unit if risk_per_unit > 0 else 0.0
         entry = float(row["entry"])
-        capacity = LEVERAGE_CAP * equity - sum(position[1] for position in open_positions)
+        capacity = LEVERAGE_CAP * equity - sum(position[1] for position in open_positions) if equity > 0 else 0.0
         if capacity <= 0:
             skipped["leverage"] += 1
             continue
@@ -75,15 +107,15 @@ def _run_budget(outcomes: np.ndarray, instruments: dict[str, costs.Instrument], 
         net = float(net_column[i]) * scale
         notional = quantity * entry
         notionals.append(notional)
-        open_positions.append((int(row["exit_ms"]), notional, net))
+        open_positions.append((int(row["exit_ms"]), notional, net, float(risk_column[i]) * scale))
+        if equity > 0:
+            max_open_risk_share = max(max_open_risk_share, sum(position[3] for position in open_positions) / equity)
         max_concurrent = max(max_concurrent, len(open_positions))
         taken += 1
         per_pair_taken[symbol] = per_pair_taken.get(symbol, 0) + 1
-    for _, _, net in sorted(open_positions):
-        equity += net
+    for _, _, net, _ in sorted(open_positions, key=lambda position: position[0]):
+        tracker.settle(net)
         net_total += net
-        peak = max(peak, equity)
-        max_drawdown = max(max_drawdown, peak - equity)
     attempts = int(outcomes.size)
     return {
         "budget": budget,
@@ -93,9 +125,11 @@ def _run_budget(outcomes: np.ndarray, instruments: dict[str, costs.Instrument], 
         "tradable_share": taken / attempts if attempts else None,
         "net": net_total,
         "roi": net_total / budget,
-        "final_equity": equity,
-        "max_drawdown_quote": max_drawdown,
-        "max_drawdown_share": max_drawdown / peak if peak > 0 else None,
+        "final_equity": tracker.equity,
+        "max_drawdown_quote": tracker.max_drawdown_quote,
+        "max_drawdown_share": tracker.max_drawdown_share,
+        "drawdown_basis": "realized equity, settlements in exit order, relative to the running peak; unrealized losses not measured",
+        "max_open_risk_share": max_open_risk_share,
         "max_concurrent": max_concurrent,
         "mean_notional": float(np.mean(notionals)) if notionals else None,
         "pairs_never_tradable": sorted(symbol for symbol in per_pair_attempts if per_pair_taken.get(symbol, 0) == 0),

@@ -16,6 +16,8 @@ publié est repris.
 - **H1 et H2 sont clos.** Le propriétaire l'a confirmé le 2026-10-15 à 19:05:53Z : « conserver H1 et H2 clôturées,
   puis examiner les éventuelles propositions H3 avant d'autoriser une nouvelle campagne ».
 - La seule campagne en cours est le test forward `fwd-okx-r1` (verdict prévu après le 2026-10-30).
+- **Sorties dynamiques S1 clos (2026-10-21)** : `NO_IMPROVEMENT_DEMONSTRATED`, exploration seulement ; le simulateur
+  est conservé (voir le tableau).
 
 > **Correction importante.** H1 n'attend plus de décision d'exécutabilité. Après GATE1_PASS (#505), le Gate 2
 > historique a été exécuté sous l'amendement A3 et a donné **`GATE2_FAIL`** (#508, 2026-10-15). Par la règle v1 §17,
@@ -57,6 +59,7 @@ publié est repris.
 | **Day trading** (setup 1.1.0, pullback MTF) | INVALIDATED : filtres publiés à 0 trade ; la meilleure version relâchée fait +0,12 R sur 31 trades en 2025. | Binance (bloqué). | **clos** | #461 | Binance 1m → 15m, majors 2023-24 et 2025. | 2026-10-11 |
 | **Sélection v2** (24 setups, 15m/4h) | INVALIDATED : 8 passent l'entraînement ; les 4 sélectionnés perdent en 2025 (PF 0,72–0,88). | Binance (bloqué). | **clos** | #476 | Majors 2023-24 et 2025. | 2026-10-12 |
 | **Scalping sur bougies** (5m/1m) | INVALIDATED : 0/40, médianes −0,30 R / −0,62 R. | Binance (bloqué). | **clos** | #477 | Majors 2023-24. | 2026-10-12 |
+| **Sorties dynamiques S1** — mêmes entrées S1 5m, sorties A fixe / B stop suiveur / C adaptative, puis portefeuille réaliste | **`NO_IMPROVEMENT_DEMONSTRATED`, `EXPLORATION_ONLY`**, sans validation indépendante. 42 987 trades sur 731 jours : A −0,339 R, B −0,390 R, C −0,350 R ; B − A −0,051 R [−0,060 ; −0,042], C − A −0,010 R [−0,012 ; −0,009]. Aucune méthode positive, sur aucune année ni aucun profil de coûts ; portefeuille de 1 000 USDT simulé ruiné en 2023 pour les trois. Établi : les trois méthodes testées ne rendent pas S1 rentable dans ce modèle. Non établi : qu'aucune autre sortie ne le pourrait. | Binance (bloqué). | **clos : candidat S1 + A/B/C** (2026-10-21). Aucune confirmation supplémentaire justifiée. Simulateur `research_v2/exits_dynamic.py` conservé pour des hypothèses distinctes. | PR de clôture (branche `claude/research-dynamic-exits`) | Majors 2023-24 (1m, funding, instruments), autorisation du propriétaire du 2026-10-21, développement uniquement ; spec v1.1.0 gelée avant lecture. | 2026-10-21 |
 
 Sources des verdicts :
 
@@ -74,7 +77,7 @@ validation indépendante. Ce tableau complète celui du rapport de paysage (`res
 
 | Fenêtre | Univers / produit | Niveau | Études | Rôle |
 |---|---|---|---|---|
-| 2023-01 → 2024-12 | 10 majors Binance | 1m → 4h + funding | day trading, swing, campagne canonique, v2, scalping bougies, swing v2 | entraînement (lu de nombreuses fois) |
+| 2023-01 → 2024-12 | 10 majors Binance | 1m → 4h + funding | day trading, swing, campagne canonique, v2, scalping bougies, swing v2, sorties dynamiques S1 (2026-10-21) | entraînement (lu de nombreuses fois) ; exploration seulement |
 | 2025 | 10 majors Binance | 1m → 4h | day trading, swing, campagne, v2 | validation |
 | 2026-01-01 → 2026-10-09T06Z | 10 majors / 10 mid-caps Binance | 4h + funding | campagne swing (claim 1) ; swing v2 post hoc (claim 2) | holdout, **2 claims utilisés** |
 | 2023-01 → 2026-01-01 | 10 mid-caps Binance | 1m → 4h + funding | swing v2 | validation |
