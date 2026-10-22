@@ -436,7 +436,9 @@ def apply_criteria(summary: dict, criteria: dict, insts: list[str]) -> tuple[dic
     checks["reconnects"] = (summary.get("reconnects") or 0) <= criteria["reconnects_max"]
     if summary.get("verify") is not None:
         checks["verify"] = bool(summary["verify"]["ok"])
-    if summary.get("stop_reason") != "max_duration":
+    if summary.get("stop_reason") == "hard_end":  # P-L2-1: a start after 2026-11-02T00:00Z shortens the run, the hard end stops it
+        reservations.append("stopped by the hard end of the reserved window: started late, shorter than the full duration")
+    elif summary.get("stop_reason") != "max_duration":
         reservations.append(f"stopped by {summary.get('stop_reason')} before the full duration")
     if not all(checks.values()):
         verdict = "FAIL"

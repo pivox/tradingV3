@@ -28,8 +28,12 @@ from scripts.research_lp import xperp_capture as xc
 BTC = "BTC-USD_UM_XPERP-310404"
 ETH = "ETH-USD_UM_XPERP-310404"
 GIB = 1 << 30
-START_NS = tape.parse_iso_utc("2026-11-03T00:00:00Z") * 1000
+START_NS = tape.parse_iso_utc("2026-11-02T00:00:00Z") * 1000  # spec v2 (P-L2-1): the reserved window starts here (2026-11-03 before, adapted)
+HARD_END_NS = tape.parse_iso_utc("2026-11-03T00:00:00Z") * 1000
 BEFORE_NS = tape.parse_iso_utc("2026-11-01T23:59:59Z") * 1000
+V1_SPEC = pl.DEFAULT_SPEC.with_name("l2_pilot_spec_v1.json")
+V1_SHA256 = "16b1a6941f539c0a5a918d1a811ebbf6c291aedfe784f536a29ad675d52515a3"
+SEPARATION_REF = "P-L2-1 (D14, owner 2026-10-22)"
 PRICE_MARK = "98765.4321"  # a distinctive price string that must never leave the quality summary
 
 
@@ -109,9 +113,26 @@ def spec() -> pl.LoadedSpec:
     return pl.load_spec(pl.DEFAULT_SPEC, None)
 
 
-def make_capture(tmp_path: Path, clock=None, free=lambda path: 50 * GIB, name: str = "run", **limits) -> pl.PilotCapture:
+def g5_gate2_stub(directory: Path, **overrides) -> Path:
+    """The fields of the G5 Gate 2 spec the pilot reads (spec_id, spec_version, requires, pilot_separation), the block copied from the
+    pilot spec (the real spec of branch claude/g5-gate2-prefreeze, 0.1.8-draft, carries the same block: same sha256)."""
+    sep = spec().doc["separation"]
+    document = {"spec_id": sep["g5_gate2_spec_id"], "spec_version": "0.1.8-draft", "status": "DRAFT_NOT_FROZEN", "requires": ["calendars_cover_the_window", sep["g5_gate2_requires"]],
+                "pilot_separation": json.loads(json.dumps(sep["g5_gate2_block"]))}
+    document.update(overrides)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "g5_gate2_spec.json"
+    path.write_text(json.dumps(document, indent=1))
+    return path
+
+
+def make_capture(tmp_path: Path, clock=None, free=lambda path: 50 * GIB, name: str = "run", separation_spec: Path | None = None, separation_ref: str = SEPARATION_REF,
+                 **limits) -> pl.PilotCapture:
     loaded = spec()
-    cfg = pl.PilotConfig(out_dir=tmp_path / name, spec=loaded, authorization_ref="test fixture", limits=pl.PilotLimits.from_spec(loaded, **limits), echo=False)
+    if separation_spec is None:
+        separation_spec = g5_gate2_stub(tmp_path / "g5-stub")
+    cfg = pl.PilotConfig(out_dir=tmp_path / name, spec=loaded, authorization_ref="test fixture", limits=pl.PilotLimits.from_spec(loaded, **limits), echo=False,
+                         separation_spec=separation_spec, separation_ref=separation_ref)
     selected = pl.select_instruments(instrument_rows(), loaded.doc["selection"])
     return pl.PilotCapture(cfg, selected, instruments_raw(), clock=clock or FakeClock(), free_fn=free)
 
@@ -165,7 +186,17 @@ def test_existing_books5_path_keeps_all_five_levels():
 
 def test_committed_spec_is_frozen_and_agrees_with_its_sidecar():
     loaded = spec()
-    assert loaded.doc["status"] == "FROZEN"
+    assert loaded.doc["status"] == "FROZEN" and loaded.doc["schema"] == "l2-pilot-spec/2" and pl.DEFAULT_SPEC.name == "l2_pilot_spec_v2.json"
+    # v1 stays in the repository, unchanged (frozen 2026-10-22), and is refused for a run (no hard end, no separation check).
+    assert pl.sha256_bytes(V1_SPEC.read_bytes()) == V1_SHA256 == pl.sidecar_path(V1_SPEC).read_text().split()[0] == loaded.doc["supersedes"]["sha256"]
+    with pytest.raises(pl.PilotRefused) as error:
+        pl.load_spec(V1_SPEC, V1_SHA256)
+    assert error.value.reason == "spec_superseded"
+    # The reserved window (P-L2-1) and the separation block it pins (sha256 of the canonical JSON, as research_lp.separation.block_sha256).
+    assert loaded.doc["window"]["start_not_before_utc"] == "2026-11-02T00:00:00Z" and loaded.doc["window"]["hard_end_utc"] == "2026-11-03T00:00:00Z"
+    sep = loaded.doc["separation"]
+    assert sep["g5_gate2_block_sha256"] == pl.canonical_sha256(sep["g5_gate2_block"]) == "4b96e2bd3987e123b597b6534a9c464580d560db399401849cf992af004d489e"
+    assert sep["g5_gate2_block"]["excluded_interval_utc"] == ["2026-11-02T00:00:00Z", "2026-11-03T12:00:00Z"] and sep["g5_gate2_min_version"] == "0.1.8"
     assert pl.sidecar_path(pl.DEFAULT_SPEC).read_text().split()[0] == loaded.sha256
     assert loaded.doc["channels"]["depth_primary"] == "books" and loaded.doc["channels"]["subscribed"] == ["books", "books5", "trades"]
     assert loaded.limits["max_duration_s"] == 86400 and loaded.limits["max_bytes_written"] == 5 * GIB and loaded.limits["min_free_bytes"] == 10 * GIB
@@ -198,9 +229,97 @@ def test_refused_before_the_authorized_date_and_nothing_written(tmp_path):
     assert not (tmp_path / "run").exists()
 
 
+@pytest.mark.parametrize("now", ["2026-11-03T00:00:00Z", "2026-11-03T00:00:01Z", "2026-11-05T12:00:00Z"])
+def test_refused_at_or_after_the_hard_end_and_nothing_written(tmp_path, now):
+    """P-L2-1: the reserved window ends at 2026-11-03T00:00Z whatever the start; a later run is never allowed (no extension)."""
+    with pytest.raises(pl.PilotRefused) as error:
+        make_capture(tmp_path, clock=FakeClock(tape.parse_iso_utc(now) * 1000))
+    assert error.value.reason == "after_hard_end" and error.value.exit_code == pl.EXIT_REFUSED
+    assert not (tmp_path / "run").exists()
+
+
+@pytest.mark.parametrize("case", ["no_spec", "missing_file", "not_json", "other_spec_id", "old_version", "no_capability", "no_block", "other_block", "no_ref", "other_ref"])
+def test_refused_while_the_separation_is_not_recorded(tmp_path, case):
+    """P-L2-1: the run (and the reading of its content) needs the G5 Gate 2 spec carrying the pinned pilot_separation block and the
+    decision named; otherwise the overlap with the decisive windows is unresolved and the pilot refuses, before anything is written."""
+    stub_dir = tmp_path / "stub"
+    block = spec().doc["separation"]["g5_gate2_block"]
+    separation_spec, ref = g5_gate2_stub(stub_dir), SEPARATION_REF
+    if case == "no_spec":
+        separation_spec = ""
+    elif case == "missing_file":
+        separation_spec = stub_dir / "absent.json"
+    elif case == "not_json":
+        separation_spec.write_text("{not json")
+    elif case == "other_spec_id":
+        g5_gate2_stub(stub_dir, spec_id="LP-G5-GATE1-2026")
+    elif case == "old_version":
+        g5_gate2_stub(stub_dir, spec_version="0.1.7-draft")  # the version before the separation rule
+    elif case == "no_capability":
+        g5_gate2_stub(stub_dir, requires=["calendars_cover_the_window"])
+    elif case == "no_block":
+        g5_gate2_stub(stub_dir, pilot_separation=None)
+    elif case == "other_block":
+        g5_gate2_stub(stub_dir, pilot_separation={**block, "margin_s": 0})
+    elif case == "no_ref":
+        ref = ""
+    elif case == "other_ref":
+        ref = "owner said ok"
+    with pytest.raises(pl.PilotRefused) as error:
+        make_capture(tmp_path, separation_spec=separation_spec, separation_ref=ref)
+    assert error.value.reason == "separation_unresolved" and error.value.exit_code == pl.EXIT_INVALID
+    assert not (tmp_path / "run").exists()
+    # A FROZEN later version with the same block is accepted (the version is a floor, the block is matched by sha256).
+    record = pl.verify_separation(spec(), g5_gate2_stub(tmp_path / "ok", spec_version="1.0.0", status="FROZEN"), SEPARATION_REF)
+    assert record["block_sha256"] == spec().doc["separation"]["g5_gate2_block_sha256"] and record["g5_gate2_spec_version"] == "1.0.0"
+
+
+def test_a_late_start_is_truncated_at_the_hard_end(tmp_path):
+    """P-L2-1: duration = min(24 h, hard end - start); started at 06:00 the run stops at 2026-11-03T00:00Z (18 h), reason hard_end."""
+    clock = FakeClock(tape.parse_iso_utc("2026-11-02T06:00:00Z") * 1000)
+    capture = make_capture(tmp_path, clock=clock)
+    assert capture.duration_ns == 18 * 3600 * 10**9 and capture.duration_reason == "hard_end"
+    manifest = rp.read_manifest(tmp_path / "run")
+    assert manifest["bounds"]["planned_end_at_most_utc"].startswith("2026-11-03T00:00:00") and manifest["bounds"]["hard_end_utc"] == "2026-11-03T00:00:00Z"
+    assert manifest["bounds"]["duration_bound_by"] == "hard_end" and manifest["separation"]["decision_id"] == "P-L2-1"
+    clock.advance(18 * 3600 - 1)
+    assert capture.check_limits() is None
+    clock.advance(1)
+    assert capture.check_limits() == "hard_end"
+    capture.close()
+    assert rp.read_manifest(tmp_path / "run")["stop"]["reason"] == "hard_end"
+    # Started 30 s before the hard end: 30 s of run, never more; a stricter duration binds before the hard end.
+    last = FakeClock(HARD_END_NS - 30 * 10**9)
+    short_run = make_capture(tmp_path, clock=last, name="late")
+    assert short_run.duration_ns == 30 * 10**9
+    last.advance(30)
+    assert short_run.check_limits() == "hard_end"
+    short_run.close()
+    strict = make_capture(tmp_path, clock=FakeClock(tape.parse_iso_utc("2026-11-02T06:00:00Z") * 1000), name="strict", max_duration_s=3600)
+    assert strict.duration_ns == 3600 * 10**9 and strict.duration_reason == "max_duration"
+    strict.close()
+    # A wall clock set forward to the hard end stops the run whatever the elapsed monotonic time (the cap is never above hard end - start).
+    jump = FakeClock(tape.parse_iso_utc("2026-11-02T06:00:00Z") * 1000)
+    jumped = make_capture(tmp_path, clock=jump, name="jump")
+    jump.wall = HARD_END_NS
+    assert jumped.check_limits() == "hard_end"
+    jumped.close()
+
+
+def test_an_on_time_start_runs_the_full_24_hours(tmp_path):
+    clock = FakeClock()
+    capture = make_capture(tmp_path, clock=clock)
+    assert capture.duration_ns == 86400 * 10**9 and capture.duration_reason == "max_duration"
+    clock.advance(86399)
+    assert capture.check_limits() is None
+    clock.advance(1)
+    assert capture.check_limits() == "max_duration"
+    capture.close()
+
+
 def test_cli_plan_before_floor_refuses_without_network_or_writes(tmp_path, capsys, before_floor):
     out = tmp_path / "plan-run"
-    code = l2cli.main(["plan", "--out", str(out), "--authorization-ref", "x"])
+    code = l2cli.main(["plan", "--out", str(out), "--authorization-ref", "x", "--separation-spec", str(g5_gate2_stub(tmp_path / "stub")), "--separation-ref", SEPARATION_REF])
     assert code == pl.EXIT_REFUSED
     assert "before_not_before" in capsys.readouterr().out
     assert not out.exists()
@@ -209,13 +328,30 @@ def test_cli_plan_before_floor_refuses_without_network_or_writes(tmp_path, capsy
 def test_cli_capture_refused_before_date_never_fetches(tmp_path, before_floor):
     loaded = spec()
     code = l2cli.main(["capture", "--out", str(tmp_path / "c"), "--spec", str(pl.DEFAULT_SPEC), "--expect-spec-sha256", loaded.sha256,
-                       "--expect-code-digest", pl.code_digest(), "--authorization-ref", "x"])
+                       "--expect-code-digest", pl.code_digest(), "--authorization-ref", "x", "--separation-spec", str(g5_gate2_stub(tmp_path / "stub")),
+                       "--separation-ref", SEPARATION_REF])
     assert code == pl.EXIT_REFUSED and not (tmp_path / "c").exists()  # fetch_instruments_raw would have raised (guard)
+
+
+def test_cli_capture_and_plan_refuse_an_unresolved_separation_without_network(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(pl.SystemClock, "wall_ns", lambda self: START_NS + 3600 * 10**9)  # inside the reserved window
+    loaded = spec()
+    base = ["capture", "--out", str(tmp_path / "c"), "--spec", str(pl.DEFAULT_SPEC), "--expect-spec-sha256", loaded.sha256, "--expect-code-digest", pl.code_digest(),
+            "--authorization-ref", "x", "--separation-ref", SEPARATION_REF]
+    old = g5_gate2_stub(tmp_path / "old", spec_version="0.1.7-draft")
+    assert l2cli.main(base + ["--separation-spec", str(old)]) == pl.EXIT_INVALID and not (tmp_path / "c").exists()
+    assert "reason=separation_unresolved" in capsys.readouterr().err
+    assert l2cli.main(["plan", "--out", str(tmp_path / "p"), "--authorization-ref", "x"]) == pl.EXIT_INVALID  # plan: same guards, no --separation-spec
+    assert "separation_unresolved" in capsys.readouterr().out and not (tmp_path / "p").exists()
+    monkeypatch.setattr(pl.SystemClock, "wall_ns", lambda self: HARD_END_NS)
+    assert l2cli.main(base + ["--separation-spec", str(g5_gate2_stub(tmp_path / "ok"))]) == pl.EXIT_REFUSED and not (tmp_path / "c").exists()
+    assert "reason=after_hard_end" in capsys.readouterr().err
 
 
 def test_cli_capture_refuses_a_wrong_code_digest(tmp_path):
     code = l2cli.main(["capture", "--out", str(tmp_path / "c"), "--spec", str(pl.DEFAULT_SPEC), "--expect-spec-sha256", spec().sha256,
-                       "--expect-code-digest", "0" * 64, "--authorization-ref", "x"])
+                       "--expect-code-digest", "0" * 64, "--authorization-ref", "x", "--separation-spec", str(g5_gate2_stub(tmp_path / "stub")),
+                       "--separation-ref", SEPARATION_REF])
     assert code == pl.EXIT_INVALID
 
 
@@ -550,7 +686,7 @@ def test_manifest_and_hash_integrity(tmp_path):
     assert manifest["schema"] == pl.MANIFEST_SCHEMA and manifest["spec"]["sha256"] == spec().sha256
     assert manifest["code"]["digest"] == pl.code_digest() and "pilot.py" in manifest["code"]["files"]
     assert manifest["instruments"]["selected"] == [BTC, ETH]
-    assert manifest["bounds"]["started_at_utc"].startswith("2026-11-03T00:00:00") and manifest["bounds"]["ended_at_utc"]
+    assert manifest["bounds"]["started_at_utc"].startswith("2026-11-02T00:00:00") and manifest["bounds"]["ended_at_utc"]
     selected = json.loads((run / "instruments-selected.json").read_text())["selected"]
     assert selected[0]["ctVal"] == "0.0001" and selected[0]["tickSz"] == "0.1" and selected[0]["lotSz"] == "1" and selected[0]["ctMult"] == "1"
     assert rp.verify(run)["ok"]
@@ -682,3 +818,31 @@ def test_lp_collector_defaults_and_digest_scope_unchanged():
     assert xc.DEFAULT_NOT_BEFORE == xc.QUARANTINE_FLOOR == "2026-11-02T00:00:00Z"
     assert tape.LOCK_NAME != pl.LOCK_NAME
     assert not any("l2" in name for name in lp_cli.code_identity())  # the G5 code digest does not see this package
+
+
+# ----------------------------------------------------------------------------- P-L2-1: reading the content
+
+
+def test_replay_check_opens_the_content_only_once_the_separation_is_recorded(tmp_path, capsys):
+    """The books (content) are rebuilt only with the separation recorded: --unsealed-ref naming P-L2-1 and --separation-spec carrying the
+    pinned block. The quality summary (no price) needs neither; a run shortened by the hard end passes with a reservation."""
+    clock = FakeClock(tape.parse_iso_utc("2026-11-02T23:00:00Z") * 1000)
+    capture = make_capture(tmp_path, clock=clock)
+    capture.on_connected()
+    for inst in (BTC, ETH):
+        capture.handle_raw(books(inst, "snapshot", 1, -1, [["100.0", "1", "0", "1"]], [["101.0", "1", "0", "1"]]))
+    clock.advance(3600)
+    assert capture.check_limits() == "hard_end"
+    capture.close()
+    run = tmp_path / "run"
+    summary = rp.quality_summary(run)
+    assert summary["stop_reason"] == "hard_end" and any("hard end" in r for r in summary["criteria"]["reservations"])
+    capsys.readouterr()
+    assert l2cli.main(["replay-check", "--run", str(run), "--unsealed-ref", SEPARATION_REF]) == pl.EXIT_INVALID
+    assert "reason=separation_unresolved" in capsys.readouterr().err
+    stub = g5_gate2_stub(tmp_path / "stub")
+    assert l2cli.main(["replay-check", "--run", str(run), "--unsealed-ref", "owner said ok", "--separation-spec", str(stub)]) == pl.EXIT_INVALID
+    assert "reason=separation_unresolved" in capsys.readouterr().err
+    assert l2cli.main(["replay-check", "--run", str(run), "--unsealed-ref", SEPARATION_REF, "--separation-spec", str(stub)]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["separation"]["decision_id"] == "P-L2-1" and printed["unsealed_ref"] == SEPARATION_REF

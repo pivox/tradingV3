@@ -5,6 +5,12 @@ spec (`books`, `books5`, `trades`) for exactly two X-Perps (BTC-USD and ETH-USD 
 written, at least 10 GiB kept free. Every limit stops the run cleanly with a recorded reason; nothing restarts or extends a
 run (the output directory must be new or empty, so a second run needs a new command and a new directory).
 
+Spec `l2-pilot-spec/2` (P-L2-1, D14 of 2026-10-22): the run lives inside the reserved window [2026-11-02T00:00Z ; 2026-11-03T00:00Z):
+refused before its start and at or after its hard end, duration = min(24 h, hard end - start) (a later manual start shortens the run,
+never shifts its end; stop reason `hard_end`); refused unless `--separation-spec` names the G5 Gate 2 spec that carries the
+`pilot_separation` block whose sha256 the pilot spec pins (`verify_separation`) and `--separation-ref` names P-L2-1. The v1 spec stays
+in the repository unchanged and is refused for a run (no hard end, no separation check).
+
 What is stored, per received frame, in availability order: the receive counter `rx`, the local wall clock `recv_ns`, the
 monotonic clock `mono_ns`, the connection index, a header (`book.frame_header`: ids, seqId / prevSeqId, exchange ts, checksum
 value, counts — no price) and the frame text exactly as delivered (`raw`). Meta records (connect, subscribe sent,
@@ -36,16 +42,21 @@ from scripts.research_lp import xperp_capture as xc
 
 from . import book as bk
 
-SPEC_SCHEMA = "l2-pilot-spec/1"
+SPEC_SCHEMA = "l2-pilot-spec/2"
+SPEC_SCHEMA_V1 = "l2-pilot-spec/1"  # frozen 2026-10-22, kept unchanged, superseded by v2 (P-L2-1): refused for a run
 MANIFEST_SCHEMA = "l2-pilot-manifest/1"
 RECORD_SCHEMA = 1
 LOCK_NAME = ".l2-pilot.lock"
 SEGMENTS_DIR = "segments"
 MANIFEST_NAME = "manifest.json"
-DEFAULT_SPEC = Path(__file__).resolve().parent / "specs" / "l2_pilot_spec_v1.json"
+DEFAULT_SPEC = Path(__file__).resolve().parent / "specs" / "l2_pilot_spec_v2.json"
 KNOWN_CHANNELS = ("books", "books5", "trades")
-SPEC_KEYS = ("schema", "spec_id", "version", "status", "frozen_at_utc", "purpose", "authorization", "venue", "selection", "channels", "limits", "storage",
-             "quality_criteria", "protected_path_tokens", "protection")
+SPEC_KEYS = ("schema", "spec_id", "version", "status", "frozen_at_utc", "supersedes", "purpose", "authorization", "window", "separation", "venue", "selection",
+             "channels", "limits", "storage", "quality_criteria", "protected_path_tokens", "protection")
+WINDOW_KEYS = ("start_not_before_utc", "hard_end_utc", "duration_rule", "decision")
+SEPARATION_KEYS = ("decision_id", "decision_ref", "g5_gate2_spec_id", "g5_gate2_min_version", "g5_gate2_requires", "g5_gate2_block_key", "g5_gate2_block_sha256",
+                   "g5_gate2_block", "rule")
+VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$")
 EXIT_OK, EXIT_REFUSED, EXIT_LOCK, EXIT_INVALID, EXIT_FREE_SPACE = 0, 2, 3, 4, 5
 
 
@@ -89,6 +100,10 @@ class LoadedSpec:
     def not_before_ns(self) -> int:
         return tape.parse_iso_utc(self.limits["not_before_utc"]) * 1000
 
+    @property
+    def hard_end_ns(self) -> int:
+        return tape.parse_iso_utc(self.doc["window"]["hard_end_utc"]) * 1000
+
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -114,6 +129,8 @@ def load_spec(path: Path, expect_sha256: str | None) -> LoadedSpec:
     if expect_sha256 is not None and expect_sha256 != digest:
         raise PilotRefused("spec_sha256_mismatch", f"file {digest} != expected {expect_sha256}")
     doc = json.loads(data)
+    if doc.get("schema") == SPEC_SCHEMA_V1:
+        raise PilotRefused("spec_superseded", f"{path.name}: {SPEC_SCHEMA_V1} has no hard end and no separation check (P-L2-1); run {SPEC_SCHEMA} (l2_pilot_spec_v2.json)")
     if doc.get("schema") != SPEC_SCHEMA:
         raise PilotRefused("spec_schema", str(doc.get("schema")))
     if doc.get("status") != "FROZEN":
@@ -128,7 +145,57 @@ def load_spec(path: Path, expect_sha256: str | None) -> LoadedSpec:
     spec = LoadedSpec(path=path, sha256=digest, doc=doc)
     if spec.not_before_ns < xc.quarantine_floor_us() * 1000:
         raise PilotRefused("not_before_below_floor", f"{spec.limits['not_before_utc']} < {xc.QUARANTINE_FLOOR}", EXIT_REFUSED)
+    window, separation = doc["window"], doc["separation"]
+    if not isinstance(window, dict) or sorted(window) != sorted(WINDOW_KEYS) or window["start_not_before_utc"] != doc["limits"]["not_before_utc"]:
+        raise PilotRefused("spec_window", f"window keys {WINDOW_KEYS}, start_not_before_utc = limits.not_before_utc")
+    if not 0 < spec.hard_end_ns - spec.not_before_ns <= int(float(doc["limits"]["max_duration_s"]) * 1e9):
+        raise PilotRefused("spec_window", "hard_end_utc after the start, at most limits.max_duration_s later")
+    if not isinstance(separation, dict) or sorted(separation) != sorted(SEPARATION_KEYS):
+        raise PilotRefused("spec_separation", f"separation keys {SEPARATION_KEYS}")
+    if canonical_sha256(separation["g5_gate2_block"]) != separation["g5_gate2_block_sha256"]:
+        raise PilotRefused("spec_separation", "g5_gate2_block does not hash to g5_gate2_block_sha256")
+    if separation["g5_gate2_block"].get("reserved_interval_utc") != [window["start_not_before_utc"], window["hard_end_utc"]]:
+        raise PilotRefused("spec_separation", "the block's reserved interval is not this window")
     return spec
+
+
+def canonical_sha256(value) -> str:
+    """sha256 of the canonical JSON (sorted keys, no spaces, UTF-8) — `research_lp.separation.block_sha256`."""
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _version_tuple(text) -> tuple | None:
+    m = VERSION_RE.match(str(text))
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def verify_separation(spec: LoadedSpec, g5_spec_path, separation_ref: str | None) -> dict:
+    """P-L2-1: the separation is recorded and resolved. `separation_ref` starts with the decision id; the G5 Gate 2 spec at `g5_spec_path`
+    has the spec id, a version at or after the minimum, the capability in `requires`, and a `pilot_separation` block whose canonical sha256
+    is the one this pilot spec pins. Only these fields are read. Refused (`separation_unresolved`) otherwise; nothing is written."""
+    sep = spec.doc["separation"]
+    if not separation_ref or not str(separation_ref).strip().startswith(sep["decision_id"]):
+        raise PilotRefused("separation_unresolved", f"--separation-ref must name {sep['decision_id']} (the recorded decision)")
+    if not g5_spec_path:
+        raise PilotRefused("separation_unresolved", "--separation-spec: the G5 Gate 2 spec carrying the pilot_separation block is required")
+    path = Path(g5_spec_path)
+    try:
+        raw = path.read_bytes()
+        doc = json.loads(raw)
+    except (OSError, ValueError) as error:
+        raise PilotRefused("separation_unresolved", f"{path}: {type(error).__name__}") from None
+    if not isinstance(doc, dict) or doc.get("spec_id") != sep["g5_gate2_spec_id"]:
+        raise PilotRefused("separation_unresolved", f"{path.name}: spec_id is not {sep['g5_gate2_spec_id']}")
+    got, need = _version_tuple(doc.get("spec_version")), _version_tuple(sep["g5_gate2_min_version"])
+    if got is None or need is None or got < need:
+        raise PilotRefused("separation_unresolved", f"{path.name}: spec_version {doc.get('spec_version')!r} below {sep['g5_gate2_min_version']}")
+    if sep["g5_gate2_requires"] not in (doc.get("requires") or []):
+        raise PilotRefused("separation_unresolved", f"{path.name}: requires does not hold {sep['g5_gate2_requires']}")
+    block = doc.get(sep["g5_gate2_block_key"])
+    if not isinstance(block, dict) or canonical_sha256(block) != sep["g5_gate2_block_sha256"]:
+        raise PilotRefused("separation_unresolved", f"{path.name}: {sep['g5_gate2_block_key']} absent or its sha256 is not {sep['g5_gate2_block_sha256']}")
+    return {"decision_id": sep["decision_id"], "separation_ref": str(separation_ref).strip(), "g5_gate2_spec": str(path), "g5_gate2_spec_sha256": sha256_bytes(raw),
+            "g5_gate2_spec_version": doc.get("spec_version"), "g5_gate2_status": doc.get("status"), "block_sha256": sep["g5_gate2_block_sha256"]}
 
 
 # ----------------------------------------------------------------------------- limits
@@ -400,20 +467,33 @@ class PilotConfig:
     limits: PilotLimits
     argv: list[str] = field(default_factory=list)
     echo: bool = True
+    separation_spec: Path | None = None
+    separation_ref: str = ""
 
 
-def preflight(cfg: PilotConfig, clock, free_fn) -> None:
-    """Every guard that needs no network and writes nothing: authorization text, protected path, empty directory, date, free
-    space. Run by the CLI before the instruments request, and again by `PilotCapture` before anything is written."""
+def window_check(spec: LoadedSpec, now_ns: int) -> int:
+    """The reserved window (P-L2-1): refused before its start and at or after its hard end; returns the time left to the hard end (ns)."""
+    if now_ns < spec.not_before_ns:
+        raise PilotRefused("before_not_before", f"now {iso_ns(now_ns)} < {spec.limits['not_before_utc']}", EXIT_REFUSED)
+    if now_ns >= spec.hard_end_ns:
+        raise PilotRefused("after_hard_end", f"now {iso_ns(now_ns)} >= hard end {spec.doc['window']['hard_end_utc']} (the reserved window is over; never extended)",
+                           EXIT_REFUSED)
+    return spec.hard_end_ns - now_ns
+
+
+def preflight(cfg: PilotConfig, clock, free_fn) -> dict:
+    """Every guard that needs no network and writes nothing: authorization text, protected path, empty directory, reserved window
+    (start and hard end), recorded separation (P-L2-1), free space. Run by the CLI before the instruments request, and again by
+    `PilotCapture` before anything is written. Returns the separation record (copied into the manifest)."""
     if not cfg.authorization_ref or not cfg.authorization_ref.strip():
         raise PilotRefused("authorization_ref_missing", "--authorization-ref TEXT is required")
     check_output_dir(cfg.out_dir, cfg.spec.doc["protected_path_tokens"])
-    now = clock.wall_ns()
-    if now < cfg.spec.not_before_ns:
-        raise PilotRefused("before_not_before", f"now {iso_ns(now)} < {cfg.spec.limits['not_before_utc']}", EXIT_REFUSED)
+    window_check(cfg.spec, clock.wall_ns())
+    separation = verify_separation(cfg.spec, cfg.separation_spec, cfg.separation_ref)
     free = free_fn(cfg.out_dir)
     if free < cfg.limits.min_free_bytes:
         raise PilotRefused("free_space_below_min", f"{free} < {cfg.limits.min_free_bytes} bytes free", EXIT_FREE_SPACE)
+    return separation
 
 
 class PilotCapture:
@@ -425,7 +505,7 @@ class PilotCapture:
         self.limits = cfg.limits
         self.clock = clock or SystemClock()
         self.free_fn = free_fn
-        preflight(cfg, self.clock, free_fn)
+        self.separation = preflight(cfg, self.clock, free_fn)
         self.inst_ids = [str(row["instId"]) for row in selected]
         if len(self.inst_ids) != len(self.spec.doc["selection"]["underlyings"]):
             raise PilotRefused("selection_not_exactly_one", str(self.inst_ids))
@@ -469,6 +549,10 @@ class PilotCapture:
         self.closed = False
         self.started_wall_ns = self.clock.wall_ns()
         self.started_mono_ns = self.clock.mono_ns()
+        limit_ns = int(self.limits.max_duration_s * 1e9)
+        to_end_ns = self.spec.hard_end_ns - self.started_wall_ns  # > 0: preflight refused a start at or after the hard end
+        self.duration_ns = min(limit_ns, to_end_ns)  # P-L2-1: a later start shortens the run, never shifts its end
+        self.duration_reason = "max_duration" if limit_ns <= to_end_ns else "hard_end"
         self.last_free_check_mono = self.started_mono_ns
         self.last_flush_mono = self.started_mono_ns
         self.last_manifest_mono = self.started_mono_ns
@@ -621,9 +705,10 @@ class PilotCapture:
         if self.stopping:
             return self.stop_reason
         mono, wall = self.clock.mono_ns(), self.clock.wall_ns()
-        limit_ns = int(self.limits.max_duration_s * 1e9)
-        if mono - self.started_mono_ns >= limit_ns or wall - self.started_wall_ns >= limit_ns:
-            self.request_stop("max_duration", f"{self.limits.max_duration_s} s")
+        if mono - self.started_mono_ns >= self.duration_ns or wall - self.started_wall_ns >= self.duration_ns:
+            self.request_stop(self.duration_reason, f"{self.duration_ns / 1e9:g} s (min of {self.limits.max_duration_s:g} s and the hard end)")
+        elif wall >= self.spec.hard_end_ns:  # a wall clock set forward: the hard end binds whatever the elapsed time
+            self.request_stop("hard_end", f"wall clock at the hard end {self.spec.doc['window']['hard_end_utc']}")
         elif self.bytes_written() >= self.limits.max_bytes_written - self.limits.stop_margin_bytes:
             self.request_stop("max_bytes", f"{self.bytes_written()} >= {self.limits.max_bytes_written} - {self.limits.stop_margin_bytes}")
         elif mono - self.last_free_check_mono >= self.limits.free_space_check_every_s * 1e9:
@@ -667,7 +752,7 @@ class PilotCapture:
         return out
 
     def manifest(self) -> dict:
-        end_ns = self.started_wall_ns + int(self.limits.max_duration_s * 1e9)
+        end_ns = self.started_wall_ns + self.duration_ns
         return {
             "schema": MANIFEST_SCHEMA, "record_schema": RECORD_SCHEMA, "status": "stopped" if self.closed else "running",
             "spec": {"path": str(self.spec.path), "sha256": self.spec.sha256, "spec_id": self.spec.doc["spec_id"], "version": self.spec.doc["version"], "copy": "pilot-spec.json"},
@@ -676,8 +761,10 @@ class PilotCapture:
             "limits": {f.name: getattr(self.limits, f.name) for f in fields(self.limits)},
             "instruments": {"selected": self.inst_ids, "file": "instruments-selected.json", "raw_file": "instruments-futures-raw.json",
                             "raw_sha256": tape.sha256_of(self.out / "instruments-futures-raw.json")},
-            "bounds": {"not_before_utc": self.spec.limits["not_before_utc"], "started_at_utc": iso_ns(self.started_wall_ns), "planned_end_at_most_utc": iso_ns(end_ns),
-                       "ended_at_utc": iso_ns(self.clock.wall_ns()) if self.closed else None},
+            "bounds": {"not_before_utc": self.spec.limits["not_before_utc"], "hard_end_utc": self.spec.doc["window"]["hard_end_utc"],
+                       "started_at_utc": iso_ns(self.started_wall_ns), "duration_cap_s": self.duration_ns / 1e9, "duration_bound_by": self.duration_reason,
+                       "planned_end_at_most_utc": iso_ns(end_ns), "ended_at_utc": iso_ns(self.clock.wall_ns()) if self.closed else None},
+            "separation": self.separation,
             "stop": {"reason": self.stop_reason or None, "detail": self.stop_detail or None},
             "segments": list(self.writer.closed), "open_segment": self.writer.open_segment(),
             "bytes": {"segments_compressed": self.writer.total_bytes(), "segments_uncompressed": self.writer.uncompressed_total, "other_files": self.other_files_bytes(),

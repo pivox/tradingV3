@@ -1,13 +1,19 @@
 """Command line of the L2 capture pilot (`python -m scripts.research_l2.cli …`, from `python-orchestrator/`).
 
     spec-hash    --spec PATH                                  sha256 of the frozen spec and agreement with its sidecar
-    plan         --out DIR --authorization-ref TEXT [--instruments-file F] [limits]
+    plan         --out DIR --authorization-ref TEXT --separation-spec G5 --separation-ref P-L2-1… [--instruments-file F] [limits]
                                                               every guard, no network, nothing written; exit code = capture's
-    capture      --out DIR --spec PATH --expect-spec-sha256 H --expect-code-digest H --authorization-ref TEXT [limits]
+    capture      --out DIR --spec PATH --expect-spec-sha256 H --expect-code-digest H --authorization-ref TEXT
+                 --separation-spec G5 --separation-ref P-L2-1… [limits]
                                                               THE pilot run (network: REST instruments once, then public WS)
     verify       --run DIR                                    manifest, segment sizes and sha256
     quality      --run DIR [--out-json F]                     header-only quality summary and frozen verdict (no price)
-    replay-check --run DIR --unsealed-ref TEXT [--out-json F] full book reconstruction, counts only (needs the unsealing decision)
+    replay-check --run DIR --separation-spec G5 --unsealed-ref P-L2-1… [--out-json F]
+                                                              full book reconstruction, counts only (content: the separation recorded)
+
+Spec l2-pilot-spec/2 (P-L2-1): the run is refused before 2026-11-02T00:00Z, at or after the hard end 2026-11-03T00:00Z, and unless the G5 Gate 2
+spec given by --separation-spec carries the pilot_separation block the pilot spec pins (sha256); a later start shortens the run (stop
+reason hard_end), never shifts its end. The v1 spec is kept unchanged and refused for a run.
 
 Limits (`--max-duration-s`, `--max-bytes`, `--min-free-bytes`) can only be made stricter than the frozen spec. Exit codes:
 0 run stopped on a limit, a signal or the STOP file; 2 refused by the date / floor guard; 3 lock held; 4 invalid (spec hash,
@@ -28,7 +34,7 @@ from scripts.research_lp import tape
 from . import pilot as pl
 from . import replay as rp
 
-NORMAL_STOPS = {"max_duration", "max_bytes", "min_free_space", "stop_file", "SIGINT", "SIGTERM"}
+NORMAL_STOPS = {"max_duration", "hard_end", "max_bytes", "min_free_space", "stop_file", "SIGINT", "SIGTERM"}
 
 
 def _limits(args, spec: pl.LoadedSpec) -> pl.PilotLimits:
@@ -67,9 +73,11 @@ def command_plan(args) -> int:
         spec = pl.load_spec(Path(args.spec), args.expect_spec_sha256)
         verdicts["spec"] = f"ok {spec.sha256}"
         limits = _limits(args, spec)
-        cfg = pl.PilotConfig(out_dir=Path(args.out), spec=spec, authorization_ref=args.authorization_ref or "", limits=limits, argv=list(sys.argv[1:]))
-        pl.preflight(cfg, pl.SystemClock(), pl.free_bytes)
+        cfg = pl.PilotConfig(out_dir=Path(args.out), spec=spec, authorization_ref=args.authorization_ref or "", limits=limits, argv=list(sys.argv[1:]),
+                             separation_spec=Path(args.separation_spec) if args.separation_spec else None, separation_ref=args.separation_ref or "")
+        separation = pl.preflight(cfg, pl.SystemClock(), pl.free_bytes)
         verdicts["preflight"] = "ok"
+        verdicts["separation"] = f"ok {separation['block_sha256']} in {separation['g5_gate2_spec']} ({separation['g5_gate2_spec_version']})"
         if args.instruments_file:
             rows = pl.parse_instruments(Path(args.instruments_file).read_bytes())
             chosen = pl.select_instruments(rows, spec.doc["selection"])
@@ -90,7 +98,7 @@ def command_capture(args) -> int:
         if digest != args.expect_code_digest:
             raise pl.PilotRefused("code_digest_mismatch", f"running {digest} != expected {args.expect_code_digest}")
         cfg = pl.PilotConfig(out_dir=Path(args.out), spec=spec, authorization_ref=args.authorization_ref, limits=_limits(args, spec), argv=list(sys.argv[1:]),
-                             echo=not args.quiet)
+                             echo=not args.quiet, separation_spec=Path(args.separation_spec), separation_ref=args.separation_ref)
         pl.preflight(cfg, pl.SystemClock(), pl.free_bytes)  # before the instruments request: a refused run makes no network call
         venue = spec.doc["venue"]
         raw = pl.fetch_instruments_raw(venue["rest"], venue["instruments_path"])
@@ -122,8 +130,11 @@ def command_quality(args) -> int:
 def command_replay_check(args) -> int:
     if not args.unsealed_ref or not args.unsealed_ref.strip():
         raise SystemExit("replay-check rebuilds the books (content): --unsealed-ref TEXT (the owner's unsealing decision) is required")
+    # P-L2-1: the content is opened only once the separation is recorded (the block found in the G5 Gate 2 spec, the decision named).
+    separation = pl.verify_separation(pl.load_spec(pl.DEFAULT_SPEC, None), args.separation_spec, args.unsealed_ref)
     document = rp.replay_check(Path(args.run))
     document["unsealed_ref"] = args.unsealed_ref
+    document["separation"] = separation
     _print(document, args.out_json)
     return 0
 
@@ -139,6 +150,8 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--expect-spec-sha256", default=None)
     plan.add_argument("--authorization-ref", default=None)
     plan.add_argument("--instruments-file", default=None, help="a saved instruments response, for the selection check only")
+    plan.add_argument("--separation-spec", default=None, help="the G5 Gate 2 spec carrying the pilot_separation block (P-L2-1)")
+    plan.add_argument("--separation-ref", default=None, help="the recorded decision, starting with P-L2-1")
     _add_limits(plan)
     cap = sub.add_parser("capture", allow_abbrev=False)
     cap.add_argument("--out", required=True)
@@ -146,6 +159,8 @@ def build_parser() -> argparse.ArgumentParser:
     cap.add_argument("--expect-spec-sha256", required=True)
     cap.add_argument("--expect-code-digest", required=True)
     cap.add_argument("--authorization-ref", required=True)
+    cap.add_argument("--separation-spec", required=True, help="the G5 Gate 2 spec carrying the pilot_separation block (P-L2-1)")
+    cap.add_argument("--separation-ref", required=True, help="the recorded decision, starting with P-L2-1")
     cap.add_argument("--quiet", action="store_true")
     _add_limits(cap)
     ver = sub.add_parser("verify", allow_abbrev=False)
@@ -155,7 +170,8 @@ def build_parser() -> argparse.ArgumentParser:
     qual.add_argument("--out-json", default=None)
     rc = sub.add_parser("replay-check", allow_abbrev=False)
     rc.add_argument("--run", required=True)
-    rc.add_argument("--unsealed-ref", default=None)
+    rc.add_argument("--unsealed-ref", default=None, help="the recorded decision that opens the content, starting with P-L2-1")
+    rc.add_argument("--separation-spec", default=None, help="the G5 Gate 2 spec carrying the pilot_separation block (P-L2-1)")
     rc.add_argument("--out-json", default=None)
     return parser
 

@@ -13,8 +13,9 @@ Modules:
 
 - `book`    frame headers (identifiers, sequence numbers and counts — never a price), the seqId / prevSeqId tracker
             shared by the collector and the readers, the order book of the `books` channel, the CRC32 checksum;
-- `pilot`   frozen pilot spec (sha256-checked), guards (date, quarantine floor, duration, bytes, free space,
-            protected paths, non-empty directory, lock), instrument selection by metadata, gzip JSONL segment
+- `pilot`   frozen pilot spec (sha256-checked; `l2-pilot-spec/2`, v1 kept and refused for a run), guards (reserved window
+            2026-11-02T00:00Z -> hard end 2026-11-03T00:00Z, P-L2-1 separation recorded in the G5 Gate 2 spec, quarantine floor,
+            duration, bytes, free space, protected paths, non-empty directory, lock), instrument selection by metadata, gzip JSONL segment
             writer with per-segment sha256, versioned manifest, the WebSocket loop with resubscription on a gap;
 - `replay`  offline reader in availability order (book INVALID across any break), the header-only quality summary
             (counts, gaps, resyncs, coverage — never a price) and its frozen pass/fail criteria, `verify`;

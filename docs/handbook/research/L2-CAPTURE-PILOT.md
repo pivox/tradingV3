@@ -9,6 +9,12 @@ programmée.
 pendant la préparation. Aucune donnée de marché lue. Seule la documentation officielle OKX a été lue (pages en ligne
 `docs-v5/trick_en` le 2026-10-22, et copies locales du 2026-10-20 de la docs-v5, voir §2).
 
+**Décision P-L2-1 (D14, 2026-10-22) — spec v2.** Le propriétaire réserve au pilote une courte fenêtre d'exploration de développement,
+créneau 2026-11-02T00:00Z → 2026-11-03T00:00Z : un départ plus tardif raccourcit le pilote, ne décale jamais sa fin. Une marge de 12 h
+complète la fenêtre : rien de [2026-11-02T00:00Z ; 2026-11-03T12:00Z) n'entre dans un test décisif du programme LP (G5 Gate 2, G2, G4 Gate 2,
+comptages P3), lectures préalables comprises (`LP-PROGRAMME-GATES.md` §7.4 et `LP-OWNER-DECISIONS-2026-10-21.md` D14, branche
+`claude/g5-gate2-prefreeze`). Le spec v1 reste tel quel ; le spec v2 ajoute la fin dure et le contrôle de la séparation (§2.3, §4, §7).
+
 **Point de départ.** L'inventaire `BOOK-TPSL-INVENTORY-2026-10-22.md` (branche `claude/research-book-tpsl-inventory`) :
 aucune donnée sur disque ne donne le carnet par niveau de prix. La seule voie pour les variantes « murs » est une capture
 prospective L2 sur le produit exécutable.
@@ -109,9 +115,12 @@ still published sequentially » (EEE l.14928). `trades-all` exige une seconde co
 
 | Élément | Valeur |
 |---|---|
-| Fichier | `python-orchestrator/scripts/research_l2/specs/l2_pilot_spec_v1.json` |
-| Version | `l2-pilot-spec/1`, `1.0.0`, statut `FROZEN` (2026-10-22) |
-| sha256 | `16b1a6941f539c0a5a918d1a811ebbf6c291aedfe784f536a29ad675d52515a3` (fichier voisin `.sha256`) |
+| Fichier | `python-orchestrator/scripts/research_l2/specs/l2_pilot_spec_v2.json` (spec par défaut du code depuis P-L2-1) |
+| Version | `l2-pilot-spec/2`, `2.0.0`, statut `FROZEN` (2026-10-22) |
+| sha256 | `8ac57f2c601e04d113bf054a07aa1518ecaf3d12ce592db2c7442b050bca9c2c` (fichier voisin `.sha256`) |
+| Fenêtre | départ ≥ `2026-11-02T00:00:00Z`, fin dure `2026-11-03T00:00:00Z` ; durée = min(24 h ; fin dure − départ) |
+| Séparation | bloc `pilot_separation` du spec Gate 2 de G5 (≥ `0.1.8`), sha256 canonique `4b96e2bd3987e123b597b6534a9c464580d560db399401849cf992af004d489e`, recopié dans `separation.g5_gate2_block` |
+| Spec v1 | `l2_pilot_spec_v1.json`, `l2-pilot-spec/1`, sha256 `16b1a6941f539c0a5a918d1a811ebbf6c291aedfe784f536a29ad675d52515a3` : gardé tel quel, refusé pour un run (`spec_superseded` : ni fin dure ni contrôle de séparation) |
 | Hôte | `wss://wseea.okx.com/ws/v5/public` (sans port : le port 8443 ferme le 2026-10-31, changelog « Upcoming Changes ») |
 | Instruments | REST `https://eea.okx.com/api/v5/public/instruments?instType=FUTURES`, relevé **au lancement** |
 | Sélection | `instType = FUTURES`, `ruleType = xperp`, `state = live`, `uly` ∈ {`BTC-USD`, `ETH-USD`}, id `<BASE>-USD_UM_XPERP-<AAMMJJ>` ; **exactement un** par sous-jacent, sinon refus |
@@ -158,10 +167,12 @@ Aucune réduction au L1 : la trame brute porte tous les niveaux, `seqId`, `prevS
 | Garde | Règle | Code de sortie |
 |---|---|---|
 | Date | refus avant `2026-11-02T00:00:00Z` ; un spec dont le plancher est sous `QUARANTINE_FLOOR` est refusé | 2 |
+| Fin dure (P-L2-1) | refus à partir de `2026-11-03T00:00:00Z` (`after_hard_end`) ; un départ plus tardif raccourcit le run, l'arrêt a lieu à la fin dure (`hard_end`) ; jamais de prolongation | 2 au départ ; arrêt `hard_end` |
+| Séparation (P-L2-1) | `--separation-spec` : spec Gate 2 de G5 d'identifiant `LP-G5-GATE2-2026`, version ≥ `0.1.8`, `requires` contenant `pilot_separation_floor`, bloc `pilot_separation` de sha256 canonique égal à celui du spec du pilote ; `--separation-ref` commençant par `P-L2-1` ; sinon `separation_unresolved` (rien n'est écrit, aucun appel réseau) ; même contrôle pour `plan` et `replay-check` | 4 |
 | Spec | sha256 = fichier voisin = `--expect-spec-sha256` ; statut `FROZEN` ; clés connues | 4 |
 | Code | `--expect-code-digest` = digest du paquet `research_l2` | 4 |
 | Autorisation | `--authorization-ref` non vide, recopié au manifeste | 4 |
-| Durée | ≤ 24 h ; horloge monotone **et** horloge murale (une mise en veille compte) | arrêt `max_duration` |
+| Durée | ≤ min(24 h ; fin dure − départ) ; horloge monotone **et** horloge murale (une mise en veille compte) | arrêt `max_duration` (ou `hard_end`) |
 | Octets écrits | arrêt quand le total atteint 5 Gio − 64 Mio de marge ; tout compte : segments, manifeste, journal, instantanés | arrêt `max_bytes` |
 | Espace libre | ≥ 10 Gio avant le départ (sinon refus) ; contrôlé toutes les 30 s | 5 au départ ; arrêt `min_free_space` |
 | Reconnexions | au plus 48 dans le run | arrêt `max_reconnects` (code 6) |
@@ -213,40 +224,47 @@ valeurs nulles sont comptées (`checksum_zero_or_absent`).
 
 ## 6. Commande exacte (non exécutée)
 
-À lancer à la main, une fois, au plus tôt le 2026-11-02 00:00 UTC, depuis le commit relu de cette branche :
+À lancer à la main, une fois, dans la fenêtre réservée (au plus tôt le 2026-11-02 00:00 UTC, avant le 2026-11-03 00:00 UTC ; un départ
+tardif raccourcit le run), depuis le commit relu de cette branche :
 
 ```bash
 cd /home/haythem/workspace/perso/tradingV3/.worktrees/l2-capture-pilot/python-orchestrator
 PY=/home/haythem/workspace/perso/tradingV3-private/research/20261013T100000Z-forward-okx-runtime/bin/python
+G5SPEC=/home/haythem/workspace/perso/tradingV3/.worktrees/g5-gate2-prefreeze/python-orchestrator/scripts/research_lp/specs/g5_gate2_spec.json
+AUTH="owner 2026-10-22: public-data L2 capture pilot, BTC and ETH X-Perps, max 24 h, <= 5 GiB, >= 10 GiB free"
+SEP="P-L2-1 (D14, owner 2026-10-22): reserved window 2026-11-02T00:00Z -> 2026-11-03T00:00Z, excluded until 2026-11-03T12:00Z"
 
-# 1. vérification sans réseau ni écriture (même code de sortie que capture)
+# 1. vérification sans réseau ni écriture (mêmes gardes et même code de sortie que capture)
 $PY -m scripts.research_l2.cli plan \
   --out /home/haythem/workspace/perso/tradingV3-private/research/l2-capture-pilot/r1 \
-  --authorization-ref "owner 2026-10-22: public-data L2 capture pilot, BTC and ETH X-Perps, max 24 h, <= 5 GiB, >= 10 GiB free"
+  --authorization-ref "$AUTH" --separation-spec "$G5SPEC" --separation-ref "$SEP"
 
-# 2. le pilote (premier plan ; Ctrl-C ou touch <out>/STOP pour l'arrêter proprement)
+# 2. le pilote (premier plan ; Ctrl-C ou touch <out>/STOP pour l'arrêter proprement ; arrêt automatique à la fin dure)
 $PY -m scripts.research_l2.cli capture \
   --out /home/haythem/workspace/perso/tradingV3-private/research/l2-capture-pilot/r1 \
-  --spec scripts/research_l2/specs/l2_pilot_spec_v1.json \
-  --expect-spec-sha256 16b1a6941f539c0a5a918d1a811ebbf6c291aedfe784f536a29ad675d52515a3 \
-  --expect-code-digest 6a0e06952b1646f5d1e901a9384c53e234dea20ff6946ed8acb9fc6c639c9068 \
-  --authorization-ref "owner 2026-10-22: public-data L2 capture pilot, BTC and ETH X-Perps, max 24 h, <= 5 GiB, >= 10 GiB free"
+  --spec scripts/research_l2/specs/l2_pilot_spec_v2.json \
+  --expect-spec-sha256 8ac57f2c601e04d113bf054a07aa1518ecaf3d12ce592db2c7442b050bca9c2c \
+  --expect-code-digest a7bdb560beace7261b8a1ce7a92dd155567365ecd2757aa910794a1d4e241b4e \
+  --authorization-ref "$AUTH" --separation-spec "$G5SPEC" --separation-ref "$SEP"
 ```
 
 `$PY` est l'interpréteur Python 3.12 du programme LP (`websockets`, `numpy`) ; seul le binaire est utilisé, aucun fichier du
-dossier `forward-okx-runtime` n'est lu. Le digest de code vaut pour le commit de ce document ; toute correction du paquet
-change le digest et la commande doit le recopier.
+dossier `forward-okx-runtime` n'est lu. `$G5SPEC` est lu pour quatre champs seulement (`spec_id`, `spec_version`, `requires`,
+`pilot_separation`) ; toute version ultérieure du spec Gate 2 qui garde le même bloc convient (le bloc est vérifié par sha256, la
+version est un plancher). Le digest de code vaut pour le commit de ce document ; toute correction du paquet change le digest et la
+commande doit le recopier.
 
 **Avant de lancer (vérifié à la main, hors code) :**
 
 | # | Prérequis | Source |
 |---|---|---|
-| 1 | date ≥ 2026-11-02 00:00 UTC (aussi gardé par le code) | autorisation, `QUARANTINE_FLOOR` |
+| 1 | date dans la fenêtre réservée [2026-11-02 00:00 UTC ; 2026-11-03 00:00 UTC) (aussi gardé par le code) | autorisation, P-L2-1 |
 | 2 | verdict `fwd-okx-r1` rendu (« rien ci-dessous avant le verdict fwd-okx-r1 ») ; le pilote ne le lit pas | `LP-PROGRAMME-GATES.md` §8 |
-| 3 | ligne `okx-xperp-l2-pilot-r1` présente au registre LP (écrite le 2026-10-22) | §7 |
-| 4 | décision P-L2-1 prise, ou la règle de scellé acceptée par défaut | §7 |
-| 5 | ≥ 16 Gio libres conseillés (10 Gio gardés + 5 Gio écrits ; sinon arrêt anticipé `min_free_space`) | autorisation |
-| 6 | commit relu ; digest de code et sha256 du spec recopiés | §4 |
+| 3 | lignes `okx-xperp-l2-pilot-r1` et `okx-xperp-capture-excluded-2026-11-02T00..2026-11-03T12` présentes au registre LP (écrites le 2026-10-22) | §7 |
+| 4 | décision P-L2-1 enregistrée (D14 ; registre §6) et bloc présent dans `$G5SPEC` (vérifié par le code) | §7 |
+| 5 | aucune capture de comptage P3 en cours (P3 commence au plus tôt le 2026-11-03T12:00Z ; `research_lp count` refuse avant) | `LP-PROGRAMME-GATES.md` §7.4 |
+| 6 | ≥ 16 Gio libres conseillés (10 Gio gardés + 5 Gio écrits ; sinon arrêt anticipé `min_free_space`) | autorisation |
+| 7 | commit relu ; digest de code et sha256 du spec recopiés | §4 |
 
 ## 7. Registre et protection (écrits avant toute collecte)
 
@@ -257,23 +275,25 @@ fichier, 2026-10-22) :
 |---|---|---|
 | `okx-xperp-l2-pilot-r1` | `prospective` | développement et exploration de la faisabilité de TP/SL adaptés au carnet ; **jamais une confirmation** |
 
-**Pourquoi un scellé.** Le jour du pilote (≥ 2026-11-02) tombe dans la fenêtre prospective du **Gate 2 de G5** : T0 = premier
-00:00 UTC ≥ max(plancher, gel du spec, fin de P3), avec une lecture des 480 minutes avant T0 pour le classifieur
-(`g5_gate2_spec.json`, `window`). L'univers du Gate 2 garde BTC et ETH (D8). Son exécution simulée lit `books5` des mêmes
-instruments. Le carnet `books` du pilote contient l'information de `books5` aux mêmes instants. Lire le pilote reviendrait
-à lire une partie de la période du Gate 2. Les fenêtres de G2 (capture ≥ 2 semaines, T0 ≈ 2026-11-05) et du Gate 2 de G4
-(90 jours) peuvent aussi le couvrir.
+**Pourquoi une séparation.** Le jour du pilote tombait dans les fenêtres prospectives du programme ou dans leurs lectures préalables :
+Gate 2 de G5 (T0 « atteignable » au 2026-11-03 dans le brouillon, classifieur sur les 480 minutes avant chaque décision, descriptifs lus
+dès le 2026-11-02), G2 (comptages P3 de sélection), Gate 2 de G4 (historique de 7 jours) et P3 lui-même (même hôte, même IP, même départ).
+L'univers de ces protocoles garde BTC et ETH, et le carnet `books` contient l'information de `books5` aux mêmes instants. Tableau complet :
+`LP-PROGRAMME-GATES.md` §7.4.
 
-**Règle.**
+**Décision P-L2-1 (D14, 2026-10-22).** Fenêtre réservée [2026-11-02T00:00Z ; 2026-11-03T00:00Z), marge 12 h, intervalle exclu
+[2026-11-02T00:00Z ; 2026-11-03T12:00Z) : aucune observation de cet intervalle n'entre dans un calcul décisif, ses empreintes, ses lectures
+préalables, rodages, calibrations, règles de qualité ou sélections. Codé dans `research_lp` (chargeur et lecteur du Gate 2 de G5, T0 ≥
+2026-11-04, `g5_index_fetch`, `simulate` / `events` / `count`) et vérifié par le pilote (bloc du spec Gate 2 de G5, sha256).
 
-1. Pendant le pilote, et tant que le propriétaire n'a pas décidé autrement, seuls sont permis les résumés de **qualité et de
-   volume** : `verify` et `quality` (en-têtes seuls, aucun prix).
-2. Le **contenu** du pilote (prix, carnets, trades) reste **scellé** jusqu'au verdict du Gate 2 de G5, et jusqu'au verdict de
-   tout autre protocole LP dont la fenêtre, lecture préalable comprise, couvre l'intervalle du pilote (G2, Gate 2 de G4).
-   `replay-check` reconstruit les carnets : il exige `--unsealed-ref` et n'est lancé qu'après la levée du scellé.
-3. **Décision à prendre par le propriétaire (P-L2-1)** : exclure l'intervalle du pilote de la fenêtre du Gate 2 de G5 (et,
-   le cas échéant, de G2 et du Gate 2 de G4) **dans leur spec, avant leur gel**. Si elle est prise, le contenu du pilote se
-   lit dès le contrôle qualité passé. Sinon, le scellé tient jusqu'aux verdicts (au plus tôt début 2027).
+**Règle de lecture.**
+
+1. Tant que la séparation n'est pas enregistrée (D14, registre §6, bloc dans le spec Gate 2 de G5), seuls sont permis les résumés de
+   **qualité et de volume** : `verify` et `quality` (en-têtes seuls, aucun prix).
+2. Ensuite, le **contenu** (prix, carnets, trades) peut être ouvert pour le **développement** seulement : `replay-check` exige
+   `--separation-spec` (le bloc vérifié) et `--unsealed-ref` commençant par `P-L2-1`. Jamais une confirmation, jamais la source d'un seuil,
+   d'une fenêtre, d'un univers ou du plafond du collecteur d'un test décisif.
+3. Tout protocole gelé après l'ouverture du contenu la déclare parmi ses expositions antérieures.
 4. Au jour de la lecture du contenu, la ligne passe à `consumed_equivalent` (règle du registre).
 
 **Séparer l'exploration des confirmations.**
@@ -350,11 +370,11 @@ En développement seulement, après la levée du scellé :
 
 | Vérification | Résultat |
 |---|---|
-| `tests/test_research_lp_l2_pilot.py` (fixtures synthétiques, garde réseau) | 48 tests, tous verts |
-| Suite `tests/test_research_lp_*.py` (dont les 132 tests existants) | 180 tests, tous verts |
+| `tests/test_research_lp_l2_pilot.py` (fixtures synthétiques, garde réseau) | 48 tests, tous verts ; **65** depuis P-L2-1 (spec v2) |
+| Suite `tests/test_research_lp_*.py` (dont les 132 tests existants) | 180 tests, tous verts ; **197** depuis P-L2-1 |
 | Syntaxe Python 3.11 du paquet et du test (`ast.parse`, `feature_version=(3, 11)`) | 6 fichiers, sans erreur |
 | `mkdocs build --strict -d /tmp/mk-l2` | sans avertissement |
-| Digest du paquet `research_l2` | `6a0e06952b1646f5d1e901a9384c53e234dea20ff6946ed8acb9fc6c639c9068` |
+| Digest du paquet `research_l2` | `6a0e06952b1646f5d1e901a9384c53e234dea20ff6946ed8acb9fc6c639c9068` (spec v1) ; **`a7bdb560beace7261b8a1ce7a92dd155567365ecd2757aa910794a1d4e241b4e`** depuis P-L2-1 (spec v2) |
 
 Les tests couvrent : cinq niveaux gardés par le chemin `books5` existant ; 400 niveaux et trames brutes gardés ;
 reconstruction instantané + incréments ; trou, hors d'ordre, malformé, reconnexion, désabonnement, somme de contrôle
@@ -363,7 +383,11 @@ fausse ⇒ INVALIDE jusqu'au prochain instantané ; doublons ; battement et remi
 et espace simulés) ; refus avant le 2026-11-02 ; refus des chemins protégés, liens compris ; dossier non vide et verrou ;
 plafonds seulement durcis ; hachage du spec ; intégrité du manifeste et des segments ; résumé qualité sans prix et
 critères ; boucle WebSocket sur connecteur factice ; erreur d'écriture locale ⇒ arrêt `fatal_error` sans reconnexion ;
-collecteur LP inchangé.
+collecteur LP inchangé. Depuis P-L2-1 (spec v2) : v1 gardé et refusé pour un run ; refus à partir de la fin dure ; refus tant que la
+séparation n'est pas enregistrée (dix cas : spec absent, illisible, autre identifiant, version 0.1.7, capacité absente, bloc absent ou
+différent, référence absente ou autre) ; départ tardif tronqué à la fin dure (18 h, 30 s), départ à l'heure : 24 h ; `replay-check` refusé
+sans la séparation ; vérification manuelle du spec réel `g5_gate2_spec.json` `0.1.8-draft` de la branche `claude/g5-gate2-prefreeze` :
+bloc reconnu (`verify_separation`).
 
 ## 12. Ce qui n'est pas fait
 
@@ -371,4 +395,5 @@ collecteur LP inchangé.
 - L'accès des X-Perps au canal `books` n'est pas prouvé avant le lancement (accusé de souscription).
 - Les volumes réels (messages par seconde, octets par heure) ne sont pas estimés : ils seront mesurés par le pilote. Le
   plafond de 5 Gio tient quel que soit le débit.
-- La décision P-L2-1 (exclusion du jour du pilote des fenêtres de G5, G2, G4) reste au propriétaire.
+- La décision P-L2-1 est prise et enregistrée (D14) ; son application dans G5, G2, G4 et P3 vit sur la branche
+  `claude/g5-gate2-prefreeze` (non fusionnée) : le pilote doit lire un spec Gate 2 de G5 qui porte le bloc (`--separation-spec`).
