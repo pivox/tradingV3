@@ -1,0 +1,434 @@
+{
+  "spec_id": "LP-G5-GATE1-2026",
+  "spec_schema": "g5-spec/2",
+  "spec_version": "0.3.0-draft",
+  "status": "DRAFT_NOT_FROZEN",
+  "protocol": "docs/handbook/research/LP-G5-DRAFT-PREREGISTRATION.md",
+  "note": "Spec machine du G5 Gate 1 (historique confirmatoire). Seul fichier lu par l'evaluateur. Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee. Le sha256 de la version FROZEN fait partie du gel (protocole section 13). Amendement A1 du 2026-10-21 (avant tout gel et toute lecture, protocole section Amendement A1) : selection adverse de la jambe d'entree de T01 mesuree par le conditionnement au remplissage (cout T01 9,5 / 14,25 pb, ancien total 13 / 19,5 pb en sensibilite rapportee), tableau A/B/C, analyse des non-remplis, variante preneur, stabilite chronologique, classification diagnostique (rapportes, jamais decisifs), frontieres comptees.",
+  "source": "history",
+  "dataset_id": "okx-xperp-1m-history-2026-03-30..2026-10-13",
+  "end_exclusive_utc": "2026-10-14T00:00:00Z",
+  "quarantine_floor_utc": "2026-11-02T00:00:00Z",
+  "window": {"start": "2026-04-28", "end_exclusive": "2026-10-14"},
+
+  "requires": [
+    "spec_schema_g5_v2_strict_keys",
+    "status_frozen_required_for_market_data",
+    "end_exclusive_constant_check",
+    "universe_from_spec_checked_against_snapshot",
+    "eligibility_list_time_plus_days",
+    "price_source_last_only",
+    "candle_confirm_and_vol_zero_exclusion",
+    "unit_instant_equal_weight",
+    "generator_funding_settlements_interval_filter",
+    "funding_coverage_window",
+    "classifier_premium_wavg_at_arm",
+    "classifier_validation_confusion_3x3",
+    "fill_proxy_through_candles",
+    "generator_local_time_exclude_dates",
+    "controls_minute_of_hour_all_admissible",
+    "exclusion_by_footprint_with_margin",
+    "sessions_local_time_dst",
+    "macro_filter_new_york_time",
+    "costs_by_execution_role",
+    "funding_unknown_outside_coverage_counted",
+    "no_information_after_decision",
+    "verdict_c1_c7_precedence",
+    "holm_local_and_programme_fields",
+    "sealed_statistics_for_inconclusive_and_not_informative",
+    "economic_reading_days_per_year",
+    "bootstrap_day_blocks",
+    "descriptive_reports_g5_v2",
+    "a1_entry_adverse_selection_measured_by_fill_proxy",
+    "a1_footprint_boundaries_counted",
+    "a1_descriptive_abc_signal_execution_net",
+    "a1_descriptive_filled_vs_unfilled_signal",
+    "a1_descriptive_taker_variant_without_fill_conditioning",
+    "a1_descriptive_chronological_stability",
+    "a1_diagnostic_classification_reported_never_a_verdict"
+  ],
+
+  "freeze_fill": {
+    "instruments_snapshot_path": null,
+    "instruments_snapshot_sha256": null,
+    "calendars_verified_utc": null,
+    "code_digest_sha256": null,
+    "decision_ref_p_g5_1": null,
+    "rule": "toutes ces valeurs sont non nulles dans la version FROZEN ; l'evaluateur refuse un spec FROZEN qui en contient une nulle"
+  },
+
+  "universe": {
+    "rule": "liste D1 (29 X-Perps, LP-OWNER-DECISIONS-2026-10-21) intersectee avec la regle de metadonnees du snapshot post-2026-10-31 : instType FUTURES, ruleType xperp, sous-jacent crypto <BASE>-USD, list_time + eligibility.days < end_exclusive_utc ; aucun volume ; aucune valeur de marche",
+    "selection_bias_declared": "la liste D1 vient d'un volume >= 1 M USD du 2026-10-14 (quarantaine, GATES M11) ; derogation ecrite du proprietaire exigee (P-G5-4)",
+    "analysed": [
+      {"inst_id": "BTC-USD_UM_XPERP-310404", "index_id": "BTC-USD", "list_time_utc": "2026-03-30T04:30:00Z", "eligible_from_utc": "2026-04-29T04:30:00Z", "ct_val": 0.0001, "tick_sz": 0.1},
+      {"inst_id": "ETH-USD_UM_XPERP-310404", "index_id": "ETH-USD", "list_time_utc": "2026-04-01T04:00:00Z", "eligible_from_utc": "2026-05-01T04:00:00Z", "ct_val": 0.001, "tick_sz": 0.01},
+      {"inst_id": "ADA-USD_UM_XPERP-310404", "index_id": "ADA-USD", "list_time_utc": "2026-04-01T04:05:00Z", "eligible_from_utc": "2026-05-01T04:05:00Z", "ct_val": 10, "tick_sz": 0.0001},
+      {"inst_id": "DOGE-USD_UM_XPERP-310404", "index_id": "DOGE-USD", "list_time_utc": "2026-04-01T04:10:00Z", "eligible_from_utc": "2026-05-01T04:10:00Z", "ct_val": 10, "tick_sz": 0.00001},
+      {"inst_id": "PEPE-USD_UM_XPERP-310404", "index_id": "PEPE-USD", "list_time_utc": "2026-04-01T04:15:00Z", "eligible_from_utc": "2026-05-01T04:15:00Z", "ct_val": 1000000, "tick_sz": 0.000000001},
+      {"inst_id": "PUMP-USD_UM_XPERP-310404", "index_id": "PUMP-USD", "list_time_utc": "2026-04-01T04:20:00Z", "eligible_from_utc": "2026-05-01T04:20:00Z", "ct_val": 1000, "tick_sz": 0.000001},
+      {"inst_id": "SOL-USD_UM_XPERP-310404", "index_id": "SOL-USD", "list_time_utc": "2026-04-01T04:25:00Z", "eligible_from_utc": "2026-05-01T04:25:00Z", "ct_val": 0.01, "tick_sz": 0.01},
+      {"inst_id": "SUI-USD_UM_XPERP-310404", "index_id": "SUI-USD", "list_time_utc": "2026-04-01T04:30:00Z", "eligible_from_utc": "2026-05-01T04:30:00Z", "ct_val": 1, "tick_sz": 0.0001},
+      {"inst_id": "XRP-USD_UM_XPERP-310404", "index_id": "XRP-USD", "list_time_utc": "2026-04-01T04:35:00Z", "eligible_from_utc": "2026-05-01T04:35:00Z", "ct_val": 1, "tick_sz": 0.0001},
+      {"inst_id": "TAO-USD_UM_XPERP-310523", "index_id": "TAO-USD", "list_time_utc": "2026-05-20T08:00:00Z", "eligible_from_utc": "2026-06-19T08:00:00Z", "ct_val": 0.01, "tick_sz": 0.1},
+      {"inst_id": "HYPE-USD_UM_XPERP-310523", "index_id": "HYPE-USD", "list_time_utc": "2026-05-20T08:30:00Z", "eligible_from_utc": "2026-06-19T08:30:00Z", "ct_val": 0.1, "tick_sz": 0.001},
+      {"inst_id": "LINK-USD_UM_XPERP-310523", "index_id": "LINK-USD", "list_time_utc": "2026-05-20T08:45:00Z", "eligible_from_utc": "2026-06-19T08:45:00Z", "ct_val": 1, "tick_sz": 0.001},
+      {"inst_id": "AVAX-USD_UM_XPERP-310530", "index_id": "AVAX-USD", "list_time_utc": "2026-05-27T08:15:00Z", "eligible_from_utc": "2026-06-26T08:15:00Z", "ct_val": 10, "tick_sz": 0.001},
+      {"inst_id": "ZEC-USD_UM_XPERP-310530", "index_id": "ZEC-USD", "list_time_utc": "2026-05-27T09:00:00Z", "eligible_from_utc": "2026-06-26T09:00:00Z", "ct_val": 0.01, "tick_sz": 0.01},
+      {"inst_id": "NEAR-USD_UM_XPERP-310613", "index_id": "NEAR-USD", "list_time_utc": "2026-06-11T08:30:00Z", "eligible_from_utc": "2026-07-11T08:30:00Z", "ct_val": 1, "tick_sz": 0.001},
+      {"inst_id": "ENA-USD_UM_XPERP-310613", "index_id": "ENA-USD", "list_time_utc": "2026-06-11T08:45:00Z", "eligible_from_utc": "2026-07-11T08:45:00Z", "ct_val": 100, "tick_sz": 0.00001},
+      {"inst_id": "ONDO-USD_UM_XPERP-310620", "index_id": "ONDO-USD", "list_time_utc": "2026-06-17T08:15:00Z", "eligible_from_utc": "2026-07-17T08:15:00Z", "ct_val": 10, "tick_sz": 0.0001},
+      {"inst_id": "LIT-USD_UM_XPERP-310704", "index_id": "LIT-USD", "list_time_utc": "2026-06-28T09:00:00Z", "eligible_from_utc": "2026-07-28T09:00:00Z", "ct_val": 1, "tick_sz": 0.0001},
+      {"inst_id": "INJ-USD_UM_XPERP-310711", "index_id": "INJ-USD", "list_time_utc": "2026-07-08T09:00:00Z", "eligible_from_utc": "2026-08-07T09:00:00Z", "ct_val": 0.1, "tick_sz": 0.001},
+      {"inst_id": "RENDER-USD_UM_XPERP-310711", "index_id": "RENDER-USD", "list_time_utc": "2026-07-08T09:30:00Z", "eligible_from_utc": "2026-08-07T09:30:00Z", "ct_val": 1, "tick_sz": 0.001},
+      {"inst_id": "DOT-USD_UM_XPERP-310808", "index_id": "DOT-USD", "list_time_utc": "2026-08-07T10:15:00Z", "eligible_from_utc": "2026-09-06T10:15:00Z", "ct_val": 1, "tick_sz": 0.0001},
+      {"inst_id": "ARB-USD_UM_XPERP-310815", "index_id": "ARB-USD", "list_time_utc": "2026-08-11T09:15:00Z", "eligible_from_utc": "2026-09-10T09:15:00Z", "ct_val": 10, "tick_sz": 0.00001},
+      {"inst_id": "OP-USD_UM_XPERP-310815", "index_id": "OP-USD", "list_time_utc": "2026-08-11T09:30:00Z", "eligible_from_utc": "2026-09-10T09:30:00Z", "ct_val": 1, "tick_sz": 0.00001},
+      {"inst_id": "GRASS-USD_UM_XPERP-310829", "index_id": "GRASS-USD", "list_time_utc": "2026-08-25T08:00:00Z", "eligible_from_utc": "2026-09-24T08:00:00Z", "ct_val": 1, "tick_sz": 0.0001},
+      {"inst_id": "FET-USD_UM_XPERP-310912", "index_id": "FET-USD", "list_time_utc": "2026-09-07T08:00:00Z", "eligible_from_utc": "2026-10-07T08:00:00Z", "ct_val": 10, "tick_sz": 0.0001}
+    ],
+    "excluded_never_eligible": [
+      {"inst_id": "PONS-USD_UM_XPERP-310919", "list_time_utc": "2026-09-16T08:00:00Z", "reason": "no_eligible_minute_before_end_exclusive", "fetched": false},
+      {"inst_id": "STRK-USD_UM_XPERP-310919", "list_time_utc": "2026-09-17T08:15:00Z", "reason": "no_eligible_minute_before_end_exclusive", "fetched": false},
+      {"inst_id": "CT-USD_UM_XPERP-311003", "list_time_utc": "2026-09-30T12:00:00Z", "reason": "no_eligible_minute_before_end_exclusive", "fetched": false},
+      {"inst_id": "QUANT-USD_UM_XPERP-311003", "list_time_utc": "2026-10-01T09:00:00Z", "reason": "no_eligible_minute_before_end_exclusive", "fetched": false}
+    ],
+    "mismatch_with_snapshot": "refuse_run"
+  },
+
+  "eligibility": {"days_after_list_time": 30, "reference": "footprint_start", "applies_to": ["events", "controls"], "count_field": "excluded_ineligible"},
+
+  "price": {
+    "source": "last",
+    "series": "candles_1m.close",
+    "boundary_convention": "c(t) = close of the candle opening at t - 60 s",
+    "mixing_sources": "refused",
+    "mark_and_index_use": "classifier_premium_proxy_only",
+    "confirm_zero_rows": "drop_and_count",
+    "missing_key_price": "exclude_instrument_instant_and_count",
+    "forward_fill": "none",
+    "max_missing_share_in_event_footprints_per_instrument": 0.20,
+    "above_max_missing_share": "exclude_instrument_from_type_and_count"
+  },
+
+  "frozen_candle": {"rule": "exclude_instrument_instant_if_vol_eq_0_on_any_key_candle", "key_candles": "events[].key_candles_end_min", "count_field": "excluded_vol_zero", "report": "share_by_instrument"},
+
+  "unit": {
+    "kind": "instant",
+    "instant": "minute-aligned UTC timestamp",
+    "instrument_weight": "equal_within_instant",
+    "instant_weight": "equal",
+    "min_instruments_per_instant": 1,
+    "n_definition": "number of unique event instants with >= min_instruments_per_instant retained instruments",
+    "report": ["instruments_per_instant_distribution", "stratum_min_instruments_3"]
+  },
+
+  "statistics": {
+    "measure": "net_bp",
+    "difference": "D = mean over event instants - mean over control instants",
+    "alpha_one_sided": 0.10,
+    "threshold_bp": 10.0,
+    "bootstrap": {"kind": "day_block", "block_days": 1, "resamples": 10000, "seed": 20261102, "events_and_controls_jointly": true,
+                  "lb_quantile": 0.10, "ub_quantile": 0.90, "p_value": "share of resamples with D* <= 0"},
+    "descriptive_sensitivity": {"block_days": 7}
+  },
+
+  "power_floor": {"min_instants": 100, "min_days": 30, "below_floor": "G5_GATE1_NOT_INFORMATIVE", "extension_on_result": false},
+
+  "costs": {
+    "maker_fee_bp": 2.0,
+    "taker_fee_bp": 5.0,
+    "adverse_selection_bp_per_maker_leg": 3.5,
+    "slippage_bp_per_round_trip": 2.0,
+    "taker_entry_half_spread_bp": 3.0,
+    "stress_multiplier_all_cost_terms": 1.5,
+    "g2_table_substitution": "none: G5 is frozen before the G2 reading (P-G5-9), the design values are final",
+    "funding": {
+      "source": "funding_hist.realized_rate",
+      "formula": "funding_bp = -side * sum(realized rates of the instrument's settlements T with entry < T <= exit) * 1e4",
+      "outside_coverage": "assumed_zero_not_observed_and_counted",
+      "count_field": "funding_unknown",
+      "cap_stress": "descriptive_only"
+    },
+    "margin_opportunity_cost": "negligible_reported"
+  },
+
+  "controls_common": {
+    "rule": "same classifier, sign rule, fill proxy, exclusions, costs and funding formula as the events of the type",
+    "candidates": "every hour of the type's control days at controls.minute_of_hour",
+    "selection": "all_admissible",
+    "random_draws": 0,
+    "admissible_if": "control footprint end <= exclusion start - margin_min or control footprint start >= exclusion end + margin_min, for every exclusion footprint",
+    "margin_min": 60,
+    "exclusions": [
+      "settlements of the instrument read in funding_hist (all intervals), footprint [s-5 ; s+15]",
+      "default settlement grid of the type (controls.default_settlement_grid_utc_hours), every day, footprint [s-5 ; s+15]",
+      "T05 event instants (generator of T05_us_open), footprint [h ; h+60], for every instrument",
+      "sessions (frozen list, local time, DST-aware)",
+      "macro releases (macro_filter, New York time)"
+    ],
+    "funding_at_controls": "computed; expected 0; any non-zero count reported as anomaly"
+  },
+
+  "sessions": [
+    {"name": "us_cash_open", "tz": "America/New_York", "start": "09:30", "end": "09:30", "days": "nyse_trading_days"},
+    {"name": "us_cash_close", "tz": "America/New_York", "start": "16:00", "end": "16:00", "days": "nyse_trading_days"},
+    {"name": "london_xetra_open", "tz": "Europe/London", "start": "08:00", "end": "08:00", "days": "mon_fri"},
+    {"name": "hong_kong_open", "tz": "Asia/Hong_Kong", "start": "09:30", "end": "09:30", "days": "mon_fri"},
+    {"name": "tokyo_open", "tz": "Asia/Tokyo", "start": "09:00", "end": "09:00", "days": "mon_fri"},
+    {"name": "cme_cf_brr_window", "tz": "Europe/London", "start": "15:00", "end": "16:00", "days": "all", "verify_at_freeze": true},
+    {"name": "okx_dated_settlement_average", "tz": "UTC", "start": "07:30", "end": "08:00", "days": "fri"}
+  ],
+  "sessions_note": "jours de semaine locaux ; feries locaux (UK, HK, JP) ignores : exclusion appliquee tous les lundis-vendredis (conservateur) ; demi-seances NYSE UNKNOWN, a relever au gel (P-G5-5)",
+
+  "calendars": {
+    "tz": "America/New_York",
+    "nyse_holidays": ["2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07"],
+    "cpi": ["2026-04-10", "2026-05-12", "2026-06-10", "2026-07-14", "2026-08-12", "2026-09-11"],
+    "employment_situation": ["2026-04-03", "2026-05-08", "2026-06-05", "2026-07-02", "2026-08-07", "2026-09-04", "2026-10-02"],
+    "fomc_statement": ["2026-04-29", "2026-06-17", "2026-07-29", "2026-09-16"],
+    "sources": ["nyse.com/markets/hours-calendars", "bls.gov/schedule/2026/home.htm", "federalreserve.gov FOMC calendar"],
+    "read_by": "a3-redteam 2026-10-21 ; to re-verify at freeze (P-G5-5)"
+  },
+
+  "macro_filter": {
+    "type": "T11_macro_filter",
+    "evaluate": false,
+    "tz": "America/New_York",
+    "releases": [
+      {"name": "cpi", "time": "08:30", "duration_min": 60, "dates_ref": "calendars.cpi"},
+      {"name": "employment_situation", "time": "08:30", "duration_min": 60, "dates_ref": "calendars.employment_situation"},
+      {"name": "fomc_statement", "time": "14:00", "duration_min": 90, "dates_ref": "calendars.fomc_statement"}
+    ],
+    "use": "control exclusion (controls_common.exclusions) ; CPI and employment_situation dates also excluded from T05 events",
+    "ten_am_et_releases": "declared noise inside the T05 window, not excluded ; descriptive stratum list frozen at P-G5-5"
+  },
+
+  "events": [
+    {
+      "type": "T01_funding_8h",
+      "decisive": true,
+      "primary": true,
+      "execution_role": "maker_maker",
+      "expected_cost_bp": 9.5,
+      "expected_cost_bp_stress": 14.25,
+      "adverse_selection_entry_leg": "measured_by_fill_proxy",
+      "cost_sensitivity_pre_a1": {"adverse_selection_entry_leg": "assumed_design_value", "expected_cost_bp": 13.0, "expected_cost_bp_stress": 19.5, "use": "reported sensitivity only: C2 / C3 values at the pre-A1 total ; never a criterion"},
+      "days_per_year": 365,
+      "window_rule": "funding_coverage",
+      "funding_coverage": {
+        "start": "first settlement of funding_hist whose predecessor is also served (manifest coverage_start_us, end_reason required)",
+        "end": "end_exclusive_utc",
+        "unknown": "G5_GATE1_INCONCLUSIVE for this type"
+      },
+      "generator": {
+        "kind": "funding_settlements",
+        "stream": "funding_hist",
+        "require_realized_rate": true,
+        "interval_filter": {"previous_gap_h": 8, "next_gap_h": 8, "tolerance_min": 1, "unknown_neighbour": "exclude_and_count"},
+        "fallback_hours": "none"
+      },
+      "footprint_min": [-5, 15],
+      "arm_min": -5,
+      "rest_until_min": 1,
+      "classifier": {
+        "kind": "premium_wavg",
+        "evaluated_at": "t_arm",
+        "applies_to": ["events", "controls"],
+        "premium_proxy": "pi(g) = (m(g) - idx(g)) / idx(g) at minute boundary g, m and idx = closes of mark_1m and index_1m candles ending at g",
+        "lookback_min": 480,
+        "weights": "k = 1..480, oldest = 1, boundary t_arm = 480 ; renormalised over present minutes",
+        "min_coverage_share": 0.90,
+        "long_if_ge": 0.0009,
+        "short_if_le": -0.0009,
+        "else": "exclude_and_count",
+        "threshold_origin": "|R| >= 4 bp <=> average premium >= +0.09 % or <= -0.09 % (OKX formula, I = 0.01 %, clamp 0.05 %, N = 8)"
+      },
+      "fill_proxy": {
+        "kind": "through_candles",
+        "applies_to": ["events", "controls"],
+        "candles_open_from_min": -5,
+        "candles_open_to_min": 0,
+        "limit_price": "c(t_arm)",
+        "long_filled_if": "min(low) < c(t_arm) - tick_sz",
+        "short_filled_if": "max(high) > c(t_arm) + tick_sz",
+        "unfilled": "exclude_from_primary_and_count",
+        "report": "fill_rate_events_and_controls"
+      },
+      "entry": {"kind": "passive_limit", "price": "c(h-5)"},
+      "exit": {"kind": "passive_assumed", "price": "c(h+15)"},
+      "return_window_min": [-5, 15],
+      "key_candles_end_min": [-5, 15],
+      "validation": {
+        "criterion": "C6",
+        "population": "raw T01 instrument-settlements (eligible, interval filter passed, realized rate present, classifier computable)",
+        "classifier_class": "+1 if P_hat(t_arm) >= 0.0009, -1 if <= -0.0009, 0 otherwise",
+        "rate_class": "+1 if realized_rate >= 0.0004, -1 if <= -0.0004, 0 otherwise",
+        "report": "3x3 matrix (classifier class x rate class), always printed",
+        "sensitivity": "share of rate class != 0 with classifier class == rate class",
+        "false_positive_rate": "share of rate class == 0 with classifier class != 0",
+        "sensitivity_min": 0.80,
+        "false_positive_rate_max": 0.20,
+        "min_denominator": 30,
+        "fail_or_not_computable": "G5_GATE1_INCONCLUSIVE"
+      },
+      "controls": {
+        "minute_of_hour": 0,
+        "days": "days on which the instrument has >= 1 raw T01 event (before classifier and fill proxy)",
+        "within": "funding_coverage",
+        "default_settlement_grid_utc_hours": [0, 8, 16]
+      },
+      "c7": {"event_hour_utc": 16, "controls": "same_utc_days", "require_point_gt_bp": 0.0},
+      "criteria": ["C1", "C2", "C3", "C4", "C5", "C6", "C7"],
+      "inconclusive_if": ["funding_coverage_unknown", "proxy_missing_instrument_day_share_gt_0_50", "C6_failed_or_not_computable"],
+      "audit_expected": {"raw_instants_upper_bound_if_funding_fetched_2026_11_02": 211, "not_informative_expected_if_f_inst_below": 0.474}
+    },
+    {
+      "type": "T05_us_open",
+      "decisive": true,
+      "primary": true,
+      "execution_role": "taker_maker",
+      "expected_cost_bp": 15.5,
+      "expected_cost_bp_stress": 23.25,
+      "days_per_year": 252,
+      "window_rule": "spec_window",
+      "generator": {
+        "kind": "local_time",
+        "tz": "America/New_York",
+        "time": "09:30",
+        "days": "nyse_trading_days",
+        "exclude_dates_ref": ["calendars.cpi", "calendars.employment_situation"]
+      },
+      "footprint_min": [0, 60],
+      "sign": {"kind": "return_sign", "from_min": 0, "to_min": 5, "price": "last", "zero": "exclude_and_count"},
+      "arm_min": 5,
+      "entry": {"kind": "taker", "price": "c(h+5)", "half_spread_bp": "costs.taker_entry_half_spread_bp"},
+      "exit": {"kind": "passive_assumed", "price": "c(h+60)"},
+      "return_window_min": [5, 60],
+      "key_candles_end_min": [0, 5, 60],
+      "controls": {
+        "minute_of_hour": 30,
+        "days": "days on which the instrument has a raw T05 event",
+        "within": "spec_window",
+        "default_settlement_grid_utc_hours": [0, 4, 8, 12, 16, 20]
+      },
+      "criteria": ["C1", "C2", "C3", "C4", "C5"],
+      "audit_expected": {"nyse_days_with_eligible_instrument": 116, "raw_instants": 105, "raw_instants_with_ge_3_instruments": 103, "first_instant_utc": "2026-04-29T13:30:00Z", "halves_by_lower_median_day": [53, 52]}
+    }
+  ],
+
+  "verdict": {
+    "precedence": ["G5_GATE1_INCONCLUSIVE", "G5_GATE1_NOT_INFORMATIVE", "criteria_then_holm"],
+    "inconclusive_global": ["spec_sha256_mismatch", "code_digest_mismatch", "status_not_frozen", "freeze_fill_null", "fetch_job_error_share_gt_0_10", "stream_end_reason_missing"],
+    "criteria": {
+      "C1": "D point >= threshold_bp and LB90(D) > 0",
+      "C2": "mean event net_bp (point, costs included) > 0",
+      "C3": "mean event net_bp at stress_multiplier_all_cost_terms (point) > 0",
+      "C4": "D point > 0 in each half ; halves = sorted distinct event days of the type cut at the lower median day (first half = days <= median) ; controls of the same days",
+      "C5": "LB90(D) > 0 after removing the ceil(0.05 n) event instants with the highest per-instant net ; controls unchanged ; same bootstrap seed and resamples",
+      "C6": "T01 only: validation of the classifier (events[].validation)",
+      "C7": "T01 only: D point > 0 on the event instants at 16:00 UTC against the controls of the same UTC days"
+    },
+    "pass": "G5_GATE1_PASS(type) iff every criterion of the type holds and holm_local_confirmed(type)",
+    "fail": "G5_GATE1_FAIL(type) otherwise, once no inconclusive condition holds and the floor is met",
+    "fail_annotation": {"ub90_ge_threshold": "non poursuivi ; absence d'effet non demontree", "ub90_lt_threshold": "effet >= +10 pb exclu sous la forme testee"},
+    "closure_scope": "the tested form only (type, classifier, window, execution role, threshold) ; never the mechanism"
+  },
+
+  "multiplicity": {
+    "local_holm": {"alpha": 0.10, "family": ["T01_funding_8h", "T05_us_open"], "p_for_inconclusive_or_not_informative": 1.0, "field": "holm_local_confirmed", "gate2_effect": "required for G5_GATE1_PASS"},
+    "programme": {"m_max": 7, "immediate_if_p_le": 0.0142857, "otherwise": "Holm at family closure (GATES 2.3)", "field": "pass_programme_immediate", "gate2_effect": "none"},
+    "forbidden_field_names": ["pass_programme"]
+  },
+
+  "sealing": {
+    "applies_to_verdicts": ["G5_GATE1_INCONCLUSIVE", "G5_GATE1_NOT_INFORMATIVE"],
+    "printed": ["verdict", "reasons", "n_instants", "n_days", "exclusion_counts", "fill_rate", "validation_matrix"],
+    "sealed": ["D", "lb90", "ub90", "p_one_sided", "event_mean", "control_mean", "criteria_values", "halves", "c5", "c7", "by_month", "by_instrument", "by_hour", "economic", "type_descriptives"],
+    "file": "sealed/<type>.json",
+    "print_sha256": true,
+    "open_after": "G5 Gate 2 verdict of the same type"
+  },
+
+  "gate2_inscription": {
+    "G5_GATE1_PASS": "inscribed",
+    "G5_GATE1_NOT_INFORMATIVE": "inscribed_automatically_without_futility",
+    "G5_GATE1_INCONCLUSIVE": "inscribed_automatically_without_futility",
+    "G5_GATE1_FAIL": "not_inscribed",
+    "discretion": "none"
+  },
+
+  "economic": {
+    "s_eco_usd_per_year": 97.0,
+    "capital_usd": 500.0,
+    "leverage": 1,
+    "max_live": 4,
+    "order_notional_usd": 100.0,
+    "admission_order_within_instant": "inst_id_ascending",
+    "fills_per_day": "admitted filled orders / number of days of the type's calendar (T01: calendar days of funding_coverage ; T05: NYSE trading days of the window with >= 1 eligible instrument, macro days included in the denominator)",
+    "formula": "plafond_usd_an = fills_per_day * order_notional_usd * mean_event_net_bp / 1e4 * days_per_year",
+    "measure": "absolute event net_bp (round trip), never D",
+    "pursued_if": "point >= s_eco and (ub90 >= 2 * s_eco or lb90 > 0)",
+    "readings": ["PASS, poursuivi", "PASS, non poursuivi (sous S_eco)", "FAIL"],
+    "pos_mode": "both hypotheses reported",
+    "audit_break_even_net_bp": {"T05_us_open_4_fills_per_event_day": 10.63, "T01_funding_8h_12_fills_per_day": 2.21, "T01_funding_8h_3_fills_per_day": 8.86}
+  },
+
+  "descriptive": {
+    "rule": "aucun descriptif ne recoit de p-value ni de verdict ; jamais promu ; un filtre G5 qui entre dans un protocole gele apres cette lecture y compte p = 1 (post-screen, GATES 2.1)",
+    "reports": [
+      "T01_classified_by_realized_rate", "T01_dead_zone_thresholds_0_0006_minus_0_0005", "T01_without_fill_proxy", "T01_dose_abs_rate",
+      "T01_v_shape_minus15_0_plus15", "T01_by_photo_hour_00_08_16", "T01_friday_0800", "T01_us_business_day_vs_not", "T01_stratum_T02_4h_2h_1h",
+      "T01_mark_reference_inside_coverage", "T01_premium_balance_events_vs_controls", "T01_funding_cap_stress",
+      "T05_horizons_15_30", "T05_move_ge_1_tick", "T05_macro_days_separately", "T05_ten_am_et_release_days", "T05_brr_adjacency",
+      "by_month", "by_instrument", "by_sign", "regime_rv24_above_median", "instruments_per_instant_ge_3", "excluded_share_by_instrument",
+      "block_days_7", "minute_zero_T07", "hourly_seasonality_last_price", "weekday_seasonality", "funding_intervals_histogram", "portfolio_reading",
+      "abc_signal_execution_net", "T01_filled_vs_unfilled_signal", "T01_taker_variant_without_fill_conditioning", "T01_cost_sensitivity_pre_a1",
+      "chronological_stability_month_and_window_halves", "diagnostic_classification_a1"
+    ],
+    "a1": {
+      "status": "amendment A1 (2026-10-21), written before any freeze and any reading ; reported, never decisive, never a verdict",
+      "definitions": {
+        "A_signal": "gross signed return of the reference price over return_window_min at every classified instrument-instant (classifier or sign passed, fill proxy off) ; no funding, no cost",
+        "B_execution": "the same gross return at the instrument-instants retained by the primary measure (filled by the fill proxy ; a taker entry is filled by construction)",
+        "C_net": "the primary net_bp = B + funding - the costs of the type (events[].expected_cost_bp) ; with the portfolio reading",
+        "statistics": "per row (events, controls, events - controls): n instants, n instrument-instants, fill rate, mean, median, LB90 and UB90 of the day-block bootstrap of the statistics block ; no p-value",
+        "filled_vs_unfilled": "A at the filled against A at the unfilled classified instrument-instants, events and controls (instant means), gap = filled - unfilled ; fill rates of the events and of the controls",
+        "taker_variant": "taker entry at c(t_arm) plus costs.taker_entry_half_spread_bp, no fill conditioning, costs of the taker_maker role, same funding, same exit",
+        "chronological_stability": "D and n per calendar month (UTC) and per half of the type's window (calendar days, first half = the first floor(L / 2) days), for C (net_bp) and A"
+      },
+      "classification_precedence": ["d_insufficiently_documented", "a_no_edge", "c_badly_executed", "b_too_weak_for_costs", "none_of_the_four"],
+      "classification_rules": {
+        "d_insufficiently_documented": "verdict NOT_INFORMATIVE or INCONCLUSIVE, or n below power_floor, or no LB90 / UB90 for A_event - A_control, or LB90(A_event - A_control) <= 0 and UB90(A_event - A_control) >= threshold_bp",
+        "a_no_edge": "LB90(A_event - A_control) <= 0",
+        "c_badly_executed": "LB90(A_event - A_control) > 0, the type has a fill proxy, UB90(A_filled - A_unfilled at the events) < 0, mean B_event < mean A_event, mean C_event <= 0 and mean taker-variant net at the events > 0",
+        "b_too_weak_for_costs": "LB90(A_event - A_control) > 0 and mean C_event <= 0",
+        "none_of_the_four": "LB90(A_event - A_control) > 0 and mean C_event > 0"
+      }
+    }
+  },
+
+  "fetch_plan": {
+    "host": "https://eea.okx.com",
+    "instruments": "universe.analysed",
+    "end_exclusive": "g5_fetch.END_EXCLUSIVE (module constant, never a parameter)",
+    "pre_freeze": {
+      "streams": ["funding_hist"],
+      "mode": "sealed",
+      "printed": ["jobs_total", "jobs_complete", "jobs_error", "coverage_start_utc"],
+      "sealed": "per-instrument manifest (rows, oldest/newest, pages), segment sha256",
+      "requests_estimate": 50,
+      "register_status": "unread"
+    },
+    "post_freeze": {
+      "candles_1m": {"start": "eligible_from_utc - 1 day", "page": 300, "requests_estimate": 13023},
+      "mark_1m": {"start": "max(coverage_start - 1 day, eligible_from_utc - 1 day)", "page": 100, "requests_estimate": 22606},
+      "index_1m": {"start": "max(coverage_start - 1 day, eligible_from_utc - 1 day)", "inst_id": "index_id", "page": 100, "requests_estimate": 22606}
+    },
+    "requests_total_estimate": 58285,
+    "estimate_assumption": "coverage_start = 2026-08-04 (funding fetched on 2026-11-02)",
+    "rate_scale_default": 0.8,
+    "rate_scale_proposed": 0.4,
+    "max_requests": "set by the owner's decision P-G5-1 ; the fetcher refuses a plan above it"
+  }
+}
