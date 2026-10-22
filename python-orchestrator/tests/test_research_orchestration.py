@@ -237,7 +237,7 @@ def test_real_deadline_interrupts_production_stages_and_retains_failure(producti
     events = []
     def delay(label):
         events.append(label)
-        if stage == label: time.sleep(.2)
+        if stage == label: time.sleep(2.0)  # far beyond the .05 deadline: only an interruption ends the stage early
     if stage == 'protocol':
         original = o.FundingReader
         def funding(*args, **kwargs):
@@ -260,7 +260,7 @@ def test_real_deadline_interrupts_production_stages_and_retains_failure(producti
     started = time.monotonic()
     with pytest.raises(o.DeadlineExpired):
         o.run(c, stages=stages, popen=setup[4], stop=lambda child:None)
-    assert time.monotonic()-started < .15
+    assert time.monotonic()-started < 1.0  # interrupted: an uninterrupted stage would take >= 2 s; the margin absorbs CI scheduling
     terminal = json.loads((c.evidence_root/'terminal.json').read_text())
     assert terminal['state'] == 'failed' and terminal['error_type'] == 'DeadlineExpired'
     assert 'wrongly_swallowed' not in events
