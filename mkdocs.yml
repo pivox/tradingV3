@@ -53,6 +53,7 @@ nav:
       - Analyse migration Trading Core: technical/trading-core-migration-analysis.md
       - Plan PR canoniques Trading Core: technical/trading-core-canonical-pr-plan.md
       - "ADR-309 Mode swing de recherche": technical/adr-309-swing-research-mode.md
+      - "Architecture exécuteur fourniture de liquidité (LP)": technical/lp-executor-architecture.md
   - Graphes:
       - Piles d'execution: graphs/execution-stacks.md
   - Runbooks:
@@ -107,6 +108,18 @@ nav:
       - "Levier théorique > 2× hors BTC (leverage-gt2) 2026-10-15": reports/research-leverage-gt2-2026-10-15.md
       - "H2 Gate 1 (étude d'effet), verdict FAIL 2026-10-15": reports/research-h2-gate1-2026-10-15.md
       - "Research landscape 2026-10": reports/research-strategy-landscape-2026-10.md
+      - "Autres voies vers un PnL positif (desk) 2026-10-16": reports/research-positive-pnl-structural-2026-10-16.md
+      - "Théorie du scalping et gaps du programme 2026-10-20": reports/research-scalping-theory-gap-2026-10-20.md
+      - "Diagnostic scalping 2026-10-21": reports/research-scalping-diagnostic-2026-10-21.md
+      - "Programme LP — plan vers un PnL positif 2026-10-20": research/LP-PROGRAMME-PLAN-2026-10-20.md
+      - "Programme LP — règles transversales (gates)": research/LP-PROGRAMME-GATES.md
+      - "Programme LP — G2 mark-outs passifs (brouillon)": research/LP-G2-DRAFT-PREREGISTRATION.md
+      - "Programme LP — G4 retour post-cascade (brouillon)": research/LP-G4-DRAFT-PREREGISTRATION.md
+      - "Programme LP — desk données 2026-10-20": research/LP-DATA-DESK-2026-10-20.md
+      - "Programme LP — décisions du propriétaire 2026-10-21": research/LP-OWNER-DECISIONS-2026-10-21.md
+      - "Programme LP — G5 scalping sur périodes précises (brouillon)": research/LP-G5-DRAFT-PREREGISTRATION.md
+      - "Programme LP — piste S, amendement CS-FUND K1(c) (brouillon)": research/LP-S-CSFUND-K1C-AMENDMENT-DRAFT.md
+      - "Alternatives à Hyperliquid : DEX de perpétuels 2026-10-21": research/DEX-ALTERNATIVES-2026-10-21.md
       - "Sorties dynamiques — pré-enregistrement": research/DYNAMIC-EXITS-DRAFT-PREREGISTRATION.md
       - "Sorties dynamiques — exploration 1 (2026-10-21)": reports/research-dynamic-exits-exploration-2026-10-21.md
       - "Next strategy — new market hypotheses (draft)": research/research-new-market-hypotheses.md
@@ -148,6 +161,11 @@ nav:
       - "État des campagnes de recherche (2026-10-15)": research/RESEARCH-CAMPAIGN-STATUS.md
       - "Diagnostic infrastructure H2 (disque, swap) 2026-10-15": research/RESEARCH-INFRA-DIAGNOSTIC.md
       - "H1 — état et prochaine décision (2026-10-15)": research/H1-NEXT-DECISION.md
+      - "H3 — candidate sources":
+          - "Synthèse CS-FUND, CS-UNLOCK, CS-XMOM (2026-10-15)": research/H3-CANDIDATE-SOURCES-2026-10-15.md
+          - "CS-FUND — portage de funding couvert (DRAFT, non gelé)": research/H3-CS-FUND-DRAFT-PREREGISTRATION.md
+          - "CS-UNLOCK — déblocages de tokens (DRAFT, non gelé)": research/H3-CS-UNLOCK-DRAFT-PREREGISTRATION.md
+          - "CS-XMOM — momentum transversal (DRAFT, non gelé)": research/H3-CS-XMOM-DRAFT-PREREGISTRATION.md
   - Inventaires:
       - Couverture projet: inventories/project-inventory.md
 

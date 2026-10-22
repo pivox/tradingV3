@@ -66,8 +66,8 @@ final class PaperFixtureContractTest extends TestCase
 
     /** @var list<string> */
     private const ALLOWED_PUBLIC_WEB_SOCKET_URIS = [
-        'wss://ws.okx.com:8443/ws/v5/public',
-        'wss://ws.okx.com:8443/ws/v5/business',
+        'wss://ws.okx.com/ws/v5/public',
+        'wss://ws.okx.com/ws/v5/business',
     ];
 
     /** @var list<string> */
@@ -397,10 +397,12 @@ final class PaperFixtureContractTest extends TestCase
     /** @return iterable<string, array{string}> */
     public static function forbiddenWebSocketEndpointProvider(): iterable
     {
-        yield 'private endpoint' => ['wss://ws.okx.com:8443/ws/v5/private'];
-        yield 'wrong host' => ['wss://example.test:8443/ws/v5/public'];
-        yield 'public query' => ['wss://ws.okx.com:8443/ws/v5/public?channel=books'];
-        yield 'business suffix' => ['wss://ws.okx.com:8443/ws/v5/business/'];
+        yield 'private endpoint' => ['wss://ws.okx.com/ws/v5/private'];
+        yield 'wrong host' => ['wss://example.test/ws/v5/public'];
+        yield 'public query' => ['wss://ws.okx.com/ws/v5/public?channel=books'];
+        yield 'business suffix' => ['wss://ws.okx.com/ws/v5/business/'];
+        yield 'legacy public port 8443' => ['wss://ws.okx.com:8443/ws/v5/public'];
+        yield 'legacy business port 8443' => ['wss://ws.okx.com:8443/ws/v5/business'];
     }
 
     public function testFixtureDiscoveryIncludesEverySupportedFileRecursively(): void
@@ -437,8 +439,8 @@ final class PaperFixtureContractTest extends TestCase
             'url' => 'https://example.test/public-market-data',
             'urn' => 'urn:example:public-market-data',
             'email' => 'mailto:paper@example.test',
-            'public_socket' => 'wss://ws.okx.com:8443/ws/v5/public',
-            'business_socket' => 'wss://ws.okx.com:8443/ws/v5/business',
+            'public_socket' => 'wss://ws.okx.com/ws/v5/public',
+            'business_socket' => 'wss://ws.okx.com/ws/v5/business',
         ]);
     }
 
