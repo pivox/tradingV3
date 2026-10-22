@@ -33,8 +33,9 @@ MINUTE_US = 60 * US
 HOUR_US = 60 * MINUTE_US
 DAY_US = tape.DAY_S * US
 REAL_SPEC = Path(__file__).resolve().parents[1] / "scripts" / "research_lp" / "specs" / "g5_gate1_spec.json"
-# LP-G5 Annexe A (informative). A1 (2026-10-21): the draft 0.2.0 was d4189493…af80a; 0.3.0-draft carries the amendment A1.
-REAL_SPEC_SHA256_DRAFT = "2ab0073cf53003d65ff46b3f62700faac46ec2fd00cdef7a529baeca362b15a6"
+# LP-G5 Annexe A (informative). A1 (2026-10-21): the draft 0.2.0 was d4189493…af80a; 0.3.0-draft (2ab0073c…62b15a6) carries the amendment A1;
+# 0.4.0-draft (2026-10-22) the freeze controls of the owner decision (a) of that day (Annexe B requests 11, 13, 14, 16, 18).
+REAL_SPEC_SHA256_DRAFT = "d2a22f7195ae423b6f5463904d5a3ccf9560f5a635a2ff212c3c0a1812b97f5e"
 BASE = json.loads(REAL_SPEC.read_text())
 BTC, ETH, SOL = "BTC-USD_UM_XPERP-310404", "ETH-USD_UM_XPERP-310404", "SOL-USD_UM_XPERP-310404"
 LISTED = {BTC: "2026-03-30T04:30:00Z", ETH: "2026-04-01T04:00:00Z", SOL: "2026-04-01T04:25:00Z"}
@@ -183,9 +184,12 @@ def k_of(series: g5_eval.Series, text: str) -> int:
 def test_the_real_spec_is_accepted_and_every_field_is_read():
     spec, sha = g5_eval.load_spec(REAL_SPEC)
     assert sha == REAL_SPEC_SHA256_DRAFT and spec.status == "DRAFT_NOT_FROZEN" and spec.source == "history" and spec.gate == "G5_GATE1_"
-    # A1: 27 capabilities + the 7 of the amendment (a1_*, Gate 1 only).
-    assert spec.requires == tuple(BASE["requires"]) and set(spec.requires) == set(g5_eval.HISTORY_REQUIRES) and len(spec.requires) == 34
-    assert set(g5_eval.A1_CAPABILITIES) <= set(spec.requires) and len(g5_eval.A1_CAPABILITIES) == 7
+    # A1: 27 capabilities + the 7 of the amendment (a1_*, Gate 1 only); owner decision (a) of 2026-10-22: + the 4 freeze controls of Annexe B
+    # (gate2_frozen_together, Gate 1 only; the calendar content test, the freeze_pending: marker, the S_eco floor, both gates).
+    assert spec.requires == tuple(BASE["requires"]) and set(spec.requires) == set(g5_eval.HISTORY_REQUIRES) and len(spec.requires) == 38
+    assert set(g5_eval.A1_CAPABILITIES) <= set(spec.requires) and len(g5_eval.A1_CAPABILITIES) == 7 and spec.version == "0.4.0-draft"
+    assert {"gate2_frozen_together", "calendars_content_test_at_freeze", "freeze_pending_marker_refuses_frozen", "economic_s_eco_at_least_d4"} <= set(spec.requires)
+    assert spec.notes["frozen_with"] == {"spec": g5_eval.GATE2_SPEC_PATH, "spec_id": "LP-G5-GATE2-2026"} and spec.notes["freeze_pending_markers"] == []
     # CTO M4: the sha256 of the sealed funding receipt is a freeze_fill value; the draft predates the key (absent = null, listed).
     assert spec.freeze_fill["null"] == ["instruments_snapshot_path", "instruments_snapshot_sha256", "calendars_verified_utc", "code_digest_sha256", "decision_ref_p_g5_1",
                                         "funding_seal_receipt_sha256"]
@@ -222,7 +226,7 @@ def test_the_real_spec_is_accepted_and_every_field_is_read():
     assert spec.family == ("T01_funding_8h", "T05_us_open") and spec.gate2_inscription == {"PASS": "inscribed", "FAIL": "not_inscribed",
                                                                                           "NOT_INFORMATIVE": "inscribed_automatically_without_futility",
                                                                                           "INCONCLUSIVE": "inscribed_automatically_without_futility"}
-    assert spec.economic["s_eco"] == 97.0 and spec.economic["max_live"] == 4 and spec.descriptive["reports"] == tuple(g5_eval.DESCRIPTIVE_REPORTS)
+    assert spec.economic["s_eco"] == 97.25 and spec.economic["max_live"] == 4 and spec.descriptive["reports"] == tuple(g5_eval.DESCRIPTIVE_REPORTS)
     # Calcul d'audit from the spec's own lists (LP-G5 §4.3, §4.4, §5.2, §7.6, Annexe C): the parse refuses any other number.
     assert spec.audit["T05_us_open"] == {"nyse_days_with_eligible_instrument": 116, "raw_instants": 105, "raw_instants_with_ge_3_instruments": 103,
                                          "first_instant_utc": "2026-04-29T13:30:00Z", "halves_by_lower_median_day": [53, 52]}
@@ -395,10 +399,13 @@ def test_no_information_after_the_decision_is_refused_at_parse_time():
 
 
 def verified_sessions(d: dict) -> None:
-    """At the freeze the sessions marked verify_at_freeze are verified (P-G5-5) and written false."""
+    """At the freeze the sessions marked verify_at_freeze are verified (P-G5-5) and written false; the lists pass the content test (Annexe B
+    request 13, 2026-10-22: the CPI of October 2026, 2026-10-14 in Annexe C, outside the window, is listed)."""
     for session in d["sessions"]:
         if "verify_at_freeze" in session:
             session["verify_at_freeze"] = False
+    if "2026-10-14" not in d["calendars"]["cpi"]:
+        d["calendars"]["cpi"].append("2026-10-14")
 
 
 def test_a_frozen_spec_needs_its_freeze_fill_and_the_c5_trim_share_is_read_from_its_text():
@@ -419,6 +426,16 @@ def test_a_frozen_spec_needs_its_freeze_fill_and_the_c5_trim_share_is_read_from_
     _refused(lambda d: (frozen(d), d["freeze_fill"].update({"code_digest_sha256": "not-a-sha"})), "sha256")
     _refused(lambda d: (frozen(d), d["freeze_fill"].update({"calendars_verified_utc": "yesterday"})), "ISO")
     _refused(lambda d: (frozen(d), d["sessions"][5].update({"verify_at_freeze": True})), "verify_at_freeze")  # the BRR window left unverified
+    # Owner decision (a) of 2026-10-22 (Annexe B 13, 14, 16): the content test, the freeze_pending: marker, the S_eco floor.
+    _refused(lambda d: (frozen(d), d["calendars"]["cpi"].remove("2026-10-14")), "content test.*cpi: no date in 2026-10")
+    _refused(lambda d: (frozen(d), d["calendars"]["fomc_statement"].remove("2026-07-29")), "content test.*fomc_statement: no date in the 56-day span")
+    _refused(lambda d: (frozen(d), d["calendars"]["nyse_half_days"].append("2026-07-04")), "content test.*not a NYSE trading day")
+    _refused(lambda d: (frozen(d), d["sessions"][1].pop("on_nyse_half_days"), d["calendars"]["nyse_half_days"].append("2026-11-27")), "content test.*no session carries")
+    _refused(lambda d: (frozen(d), d["universe"].update({"rule": d["universe"]["rule"] + " ; freeze_pending: to write"})), "freeze_pending: in a FROZEN spec")
+    _refused(lambda d: d["economic"].update({"s_eco_usd_per_year": 97.0}), "97.25")
+    _refused(lambda d: d.update({"frozen_with": {**d["frozen_with"], "spec": "elsewhere.json"}}), "frozen_with.spec")
+    _refused(lambda d: d.update({"frozen_with": {**d["frozen_with"], "rule": "read when convenient"}}), "frozen_with.rule")
+    _refused(lambda d: d.pop("frozen_with"), "missing")
     document = copy.deepcopy(BASE)
     document["verdict"]["criteria"]["C5"] = document["verdict"]["criteria"]["C5"].replace("0.05", "0.10")
     assert g5_eval.parse_spec(document).verdict["c5_trim_share"] == 0.10
@@ -929,7 +946,7 @@ def test_the_economic_reading_admits_at_most_max_live_fills_per_instant_and_read
         tspec = spec.type(name)
         assert e["fills"] <= 3 * r["n_instants"] and e["max_live"] == 4 and e["days_per_year"] == tspec.days_per_year
         assert e["usd_per_year_point"] == pytest.approx(e["fills_per_day"] * 100.0 * e["net_bp_mean"] / 1e4 * tspec.days_per_year)
-        pursued = e["usd_per_year_point"] >= 97.0 and (e["usd_per_year_ub90"] >= 2 * 97.0 or e["usd_per_year_lb90"] > 0)
+        pursued = e["usd_per_year_point"] >= 97.25 and (e["usd_per_year_ub90"] >= 2 * 97.25 or e["usd_per_year_lb90"] > 0)
         assert e["pursued"] == pursued and r["reading"] == ("PASS, poursuivi" if pursued else spec.economic["readings"][1])
         assert e["pos_mode"]["overlapping_positions_same_instrument"] == 0 and e["pos_mode"]["net_mode"] == e["pos_mode"]["long_short_mode"]
         minutes = tspec.return_window[1] - tspec.return_window[0]
@@ -959,6 +976,11 @@ def test_every_descriptive_report_of_the_spec_is_produced_without_any_p_value(pl
     v = t01["T01_v_shape_minus15_0_plus15"]["events"]  # the drift is planted over (h − 5, h + 15]: a quarter before h, three quarters after
     assert t01["T01_classified_by_realized_rate"]["point"] > 20 and 5 < v["signed_return_bp_h_minus_15_to_h"] < 15 and v["signed_return_bp_h_to_h_plus_15"] > 20
     assert set(t01["T01_by_photo_hour_00_08_16"]) == {"00:00", "08:00", "16:00"} and t01["block_days_7"]["lb90"] is not None and t01["portfolio_reading"]["net_mode"]["fills"] > 0
+    # Annexe B request 18 (2026-10-22): T01 filtered on the previous settlement only (the next-settlement criterion, known after the decision at
+    # the Gate 1, off): the last settlement before END_EXCLUSIVE, whose successor is never served, joins it on every instrument.
+    prev = t01["T01_previous_settlement_filter_only"]
+    assert prev["rule"] == g5_eval.PREVIOUS_ONLY_RULE and prev["raw_instrument_instants_added_vs_primary"] >= 3 and prev["n"] >= doc["types"]["T01_funding_8h"]["n_instants"]
+    assert prev["point"] is not None and "p_one_sided" not in prev
     assert t05["T05_macro_days_separately"]["n"] == 11 and t05["regime_rv24_above_median"]["stress"]["n"] + t05["regime_rv24_above_median"]["calm"]["n"] > 0
     assert "p_one_sided" not in json.dumps(g5_eval._clean(t01)) and "p_one_sided" not in json.dumps(g5_eval._clean(doc["common_descriptive"]))
     assert doc["common_descriptive"]["minute_zero_T07"]["by_minute_of_hour"]["00"]["n"] > 0
@@ -1068,12 +1090,21 @@ def test_the_command_line_end_to_end_on_a_synthetic_tape(tmp_path: Path, capsys)
     spec = g5_eval.parse_spec(document)
     series = {i: market(spec, spec.instrument(i), seed=21 + j, t01_drift_bp=40.0, d_cov_us=D_COV) for j, i in enumerate((BTC, ETH))}
 
+    def gate2_of(path: Path) -> Path:
+        """Annexe B request 11 (gate2_frozen_together): the FROZEN Gate 2 frozen with the Gate 1 file `path` (its sha256 in freeze_fill)."""
+        from tests.test_research_lp_g5_gate2 import frozen_gate2_for
+
+        gate2 = path.with_name(path.stem + ".gate2.json")
+        gate2.write_text(json.dumps(frozen_gate2_for(json.loads(path.read_text()), g5_fetch.sha256_bytes(path.read_bytes())), indent=1))
+        return gate2
+
     def spec_file(name: str, receipt_sha: str) -> tuple[Path, str]:
-        """The frozen spec naming the sealed receipt of one tape (freeze_fill.funding_seal_receipt_sha256, CTO M4)."""
+        """The frozen spec naming the sealed receipt of one tape (freeze_fill.funding_seal_receipt_sha256, CTO M4), and its Gate 2."""
         doc = copy.deepcopy(document)
         doc["freeze_fill"]["funding_seal_receipt_sha256"] = receipt_sha
         path = tmp_path / name
         path.write_text(json.dumps(doc, indent=1, ensure_ascii=False))
+        gate2_of(path)
         return path, g5_fetch.sha256_bytes(path.read_bytes())
 
     root = tmp_path / "history"
@@ -1081,11 +1112,29 @@ def test_the_command_line_end_to_end_on_a_synthetic_tape(tmp_path: Path, capsys)
     document["freeze_fill"]["funding_seal_receipt_sha256"] = receipt_sha
     spec_path, sha = spec_file("spec.json", receipt_sha)
     out_json, out_md = tmp_path / "run" / "g5.json", tmp_path / "run" / "g5.md"
-    args = ["g5-eval", "--tape", str(root), "--spec", str(spec_path), "--expect-spec-sha256", sha, "--out-json", str(out_json), "--out-md", str(out_md)]
+    gate2_path = spec_path.with_name("spec.gate2.json")
+    args = ["g5-eval", "--tape", str(root), "--spec", str(spec_path), "--expect-spec-sha256", sha, "--gate2-spec", str(gate2_path), "--out-json", str(out_json),
+            "--out-md", str(out_md)]
+    # Annexe B request 11 (gate2_frozen_together): before any market value, the Gate 2 frozen with this Gate 1 is read; a DRAFT one, another
+    # Gate 1 sha256, a freeze_pending: marker or the repository's draft (the default frozen_with.spec) refuse the run, nothing read.
+    good_gate2 = gate2_path.read_text()
+    for change, match in ((lambda d: d.update({"status": "DRAFT_NOT_FROZEN"}), "not FROZEN"), (lambda d: d["freeze_fill"].update({"gate1_spec_sha256": "9" * 64}), "is not the sha256"),
+                          (lambda d: d["quality"].update({"status": "freeze_pending: to write"}), "freeze_pending:")):
+        bad = json.loads(good_gate2)
+        change(bad)
+        gate2_path.write_text(json.dumps(bad))
+        with pytest.raises(SystemExit, match=f"gate2_frozen_together.*{match}"):
+            cli.main(args)
+    gate2_path.write_text(good_gate2)
+    without = [a for a in args if a not in ("--gate2-spec", str(gate2_path))]
+    with pytest.raises(SystemExit, match="gate2_frozen_together.*g5_gate2_spec.json.*not FROZEN"):
+        cli.main(without)
     assert cli.main(args) == 0
     printed = json.loads(capsys.readouterr().out)
+    assert printed["gate2_spec_sha256"] == tape.sha256_of(gate2_path)
     result = json.loads(out_json.read_text(), parse_constant=lambda c: pytest.fail(f"non-finite number {c} in the JSON report"))
     assert printed["spec_sha256"] == sha == result["spec"]["sha256"] and result["code_digest"] == cli.code_digest() and result["evaluator"] == g5_eval.EVALUATOR_VERSION
+    assert result["gate2_spec"] == {"path": str(gate2_path), "sha256": tape.sha256_of(gate2_path), "spec_id": "LP-G5-GATE2-2026", "status": "FROZEN", "gate1_spec_sha256": sha}
     t01, t05 = result["types"]["T01_funding_8h"], result["types"]["T05_us_open"]
     assert t01["verdict_label"] == "G5_GATE1_PASS" and t05["verdict_label"] == "G5_GATE1_FAIL" and result["d_cov_global"] == iso(D_COV)
     assert result["funding_seal"]["receipt_sha256"] == tape.sha256_of(root / g5_fetch.SEALED_RECEIPT_NAME) == receipt_sha and result["fetch_quality"]["error_share"] == 0.0
@@ -1110,7 +1159,8 @@ def test_the_command_line_end_to_end_on_a_synthetic_tape(tmp_path: Path, capsys)
     root2 = tmp_path / "history-c6"
     spec_path2, sha2 = spec_file("spec-c6.json", write_history(root2, spec, series_c6, funding_from, decision))
     out2 = tmp_path / "run2" / "g5.json"
-    assert cli.main(["g5-eval", "--tape", str(root2), "--spec", str(spec_path2), "--expect-spec-sha256", sha2, "--out-json", str(out2), "--out-md", str(tmp_path / "run2" / "g5.md")]) == 0
+    assert cli.main(["g5-eval", "--tape", str(root2), "--spec", str(spec_path2), "--expect-spec-sha256", sha2, "--gate2-spec", str(gate2_of(spec_path2)), "--out-json", str(out2),
+                     "--out-md", str(tmp_path / "run2" / "g5.md")]) == 0
     printed = json.loads(capsys.readouterr().out)
     r2 = json.loads(out2.read_text())["types"]["T01_funding_8h"]
     sealed_path = tmp_path / "run2" / "sealed" / "T01_funding_8h.json"
@@ -1139,12 +1189,13 @@ def test_the_command_line_end_to_end_on_a_synthetic_tape(tmp_path: Path, capsys)
     p = tmp_path / "tick.json"
     p.write_text(json.dumps(tampered))
     with pytest.raises(SystemExit, match="tickSz"):
-        cli.main(["g5-eval", "--tape", str(root), "--spec", str(p), "--expect-spec-sha256", g5_fetch.sha256_bytes(p.read_bytes()), "--out-json", str(tmp_path / "x.json")])
+        cli.main(["g5-eval", "--tape", str(root), "--spec", str(p), "--expect-spec-sha256", g5_fetch.sha256_bytes(p.read_bytes()), "--gate2-spec", str(gate2_of(p)),
+                  "--out-json", str(tmp_path / "x.json")])
     with pytest.raises(SystemExit, match="snapshot"):
         cli.main(args[:-4] + ["--instruments-file", str(bad_snapshot), "--out-json", str(tmp_path / "x.json")])
     # CTO M4: the sealed receipt is the one frozen in freeze_fill (another tape's receipt, or a wrong --expect-funding-seal-sha256: refuse_run).
     with pytest.raises(SystemExit, match="freeze_fill.funding_seal_receipt_sha256"):
-        cli.main(["g5-eval", "--tape", str(root2), "--spec", str(spec_path), "--expect-spec-sha256", sha, "--out-json", str(tmp_path / "x.json")])
+        cli.main(["g5-eval", "--tape", str(root2), "--spec", str(spec_path), "--expect-spec-sha256", sha, "--gate2-spec", str(gate2_path), "--out-json", str(tmp_path / "x.json")])
     with pytest.raises(SystemExit, match="expect-funding-seal-sha256"):
         cli.main(args + ["--expect-funding-seal-sha256", "f" * 64])
     # CTO m3: the sealed store is one archive whose sha256, manifest and files are those of the receipt; an open tree is refused.
@@ -1167,7 +1218,7 @@ def test_the_command_line_end_to_end_on_a_synthetic_tape(tmp_path: Path, capsys)
     root3 = tmp_path / "history-missing"
     spec_path3, sha3 = spec_file("spec-missing.json", write_history(root3, spec, series, funding_from, decision, drop_state=f"{ETH}:mark_1m"))
     out3 = tmp_path / "run3" / "g5.json"
-    assert cli.main(["g5-eval", "--tape", str(root3), "--spec", str(spec_path3), "--expect-spec-sha256", sha3, "--out-json", str(out3)]) == 0
+    assert cli.main(["g5-eval", "--tape", str(root3), "--spec", str(spec_path3), "--expect-spec-sha256", sha3, "--gate2-spec", str(gate2_of(spec_path3)), "--out-json", str(out3)]) == 0
     r3 = json.loads(out3.read_text())
     assert all(r["verdict"] == "INCONCLUSIVE" and "sealed" in r for r in r3["types"].values()) and any("stream_end_reason_missing" in x for x in r3["summary"]["global_device_defects"])
     with pytest.raises(SystemExit):  # the command line exposes no threshold, sign, window or seed

@@ -1,10 +1,10 @@
 {
   "spec_id": "LP-G5-GATE1-2026",
   "spec_schema": "g5-spec/2",
-  "spec_version": "0.3.0-draft",
+  "spec_version": "0.4.0-draft",
   "status": "DRAFT_NOT_FROZEN",
   "protocol": "docs/handbook/research/LP-G5-DRAFT-PREREGISTRATION.md",
-  "note": "Spec machine du G5 Gate 1 (historique confirmatoire). Seul fichier lu par l'evaluateur. Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee. Le sha256 de la version FROZEN fait partie du gel (protocole section 13). Amendement A1 du 2026-10-21 (avant tout gel et toute lecture, protocole section Amendement A1) : selection adverse de la jambe d'entree de T01 mesuree par le conditionnement au remplissage (cout T01 9,5 / 14,25 pb, ancien total 13 / 19,5 pb en sensibilite rapportee), tableau A/B/C, analyse des non-remplis, variante preneur, stabilite chronologique, classification diagnostique (rapportes, jamais decisifs), frontieres comptees.",
+  "note": "Spec machine du G5 Gate 1 (historique confirmatoire). Seul fichier lu par l'evaluateur. Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee. Le sha256 de la version FROZEN fait partie du gel (protocole section 13). Amendement A1 du 2026-10-21 (avant tout gel et toute lecture, protocole section Amendement A1) : selection adverse de la jambe d'entree de T01 mesuree par le conditionnement au remplissage (cout T01 9,5 / 14,25 pb, ancien total 13 / 19,5 pb en sensibilite rapportee), tableau A/B/C, analyse des non-remplis, variante preneur, stabilite chronologique, classification diagnostique (rapportes, jamais decisifs), frontieres comptees. Revision 0.4.0-draft (2026-10-22, decision du proprietaire (a) \"Finir les controles G5 realisables des maintenant\", avant tout gel et toute lecture) : capacite gate2_frozen_together et bloc frozen_with (le run du Gate 1 lit le spec Gate 2 avant toute donnee de marche et refuse de tourner s'il n'est pas FROZEN, garde une valeur owner_decision_pending, un marqueur ou un null, ou si son freeze_fill.gate1_spec_sha256 differe du sha256 de ce fichier ; sha256 du Gate 2 imprime ; Annexe B demande 11) ; test de contenu des calendriers en FROZEN (content_rule, nyse_half_days, content_exceptions, session us_cash_close a 13:00 les demi-seances ; demande 13) ; refus de FROZEN sur le marqueur freeze_pending suivi d un deux-points (demande 14) ; S_eco = 97,25 (D4, GATES 1.2 amende ; seuils de rentabilite recalcules ; demande 16) ; descriptif T01_previous_settlement_filter_only (demande 18).",
   "source": "history",
   "dataset_id": "okx-xperp-1m-history-2026-03-30..2026-10-13",
   "end_exclusive_utc": "2026-10-14T00:00:00Z",
@@ -45,7 +45,11 @@
     "a1_descriptive_filled_vs_unfilled_signal",
     "a1_descriptive_taker_variant_without_fill_conditioning",
     "a1_descriptive_chronological_stability",
-    "a1_diagnostic_classification_reported_never_a_verdict"
+    "a1_diagnostic_classification_reported_never_a_verdict",
+    "gate2_frozen_together",
+    "calendars_content_test_at_freeze",
+    "freeze_pending_marker_refuses_frozen",
+    "economic_s_eco_at_least_d4"
   ],
 
   "freeze_fill": {
@@ -172,7 +176,7 @@
 
   "sessions": [
     {"name": "us_cash_open", "tz": "America/New_York", "start": "09:30", "end": "09:30", "days": "nyse_trading_days"},
-    {"name": "us_cash_close", "tz": "America/New_York", "start": "16:00", "end": "16:00", "days": "nyse_trading_days"},
+    {"name": "us_cash_close", "tz": "America/New_York", "start": "16:00", "end": "16:00", "days": "nyse_trading_days", "on_nyse_half_days": "13:00"},
     {"name": "london_xetra_open", "tz": "Europe/London", "start": "08:00", "end": "08:00", "days": "mon_fri"},
     {"name": "hong_kong_open", "tz": "Asia/Hong_Kong", "start": "09:30", "end": "09:30", "days": "mon_fri"},
     {"name": "tokyo_open", "tz": "Asia/Tokyo", "start": "09:00", "end": "09:00", "days": "mon_fri"},
@@ -187,6 +191,9 @@
     "cpi": ["2026-04-10", "2026-05-12", "2026-06-10", "2026-07-14", "2026-08-12", "2026-09-11"],
     "employment_situation": ["2026-04-03", "2026-05-08", "2026-06-05", "2026-07-02", "2026-08-07", "2026-09-04", "2026-10-02"],
     "fomc_statement": ["2026-04-29", "2026-06-17", "2026-07-29", "2026-09-16"],
+    "nyse_half_days": [],
+    "content_rule": "FROZEN only, over R = [T0 ; last scored day + data-gap extension] (Gate 1: the spec window) ; at least one cpi date and one employment_situation date in every calendar month that meets R, unless content_exceptions names that list and that month ; every span of 56 consecutive days inside R holds a fomc_statement date ; the nyse_holidays inside R equal the rule-based NYSE generator (New Year's Day, Martin Luther King Jr. Day = 3rd Monday of January, Washington's Birthday = 3rd Monday of February, Good Friday from Easter, Memorial Day = last Monday of May, Juneteenth, Independence Day, Labor Day = 1st Monday of September, Thanksgiving = 4th Thursday of November, Christmas Day ; a Saturday holiday observed the Friday before except New Year's Day, a Sunday holiday the Monday after) up to the dates content_exceptions adds (extra_closure) or removes (not_observed) ; nyse_half_days listed (each a NYSE trading day ; the sessions with on_nyse_half_days take that time on them, a 13:00 ET close moves the us_cash_close exclusion) ; every exception dated (written_utc) and sourced",
+    "content_exceptions": [],
     "sources": ["nyse.com/markets/hours-calendars", "bls.gov/schedule/2026/home.htm", "federalreserve.gov FOMC calendar"],
     "read_by": "a3-redteam 2026-10-21 ; to re-verify at freeze (P-G5-5)"
   },
@@ -359,7 +366,7 @@
   },
 
   "economic": {
-    "s_eco_usd_per_year": 97.0,
+    "s_eco_usd_per_year": 97.25,
     "capital_usd": 500.0,
     "leverage": 1,
     "max_live": 4,
@@ -371,7 +378,7 @@
     "pursued_if": "point >= s_eco and (ub90 >= 2 * s_eco or lb90 > 0)",
     "readings": ["PASS, poursuivi", "PASS, non poursuivi (sous S_eco)", "FAIL"],
     "pos_mode": "both hypotheses reported",
-    "audit_break_even_net_bp": {"T05_us_open_4_fills_per_event_day": 10.63, "T01_funding_8h_12_fills_per_day": 2.21, "T01_funding_8h_3_fills_per_day": 8.86}
+    "audit_break_even_net_bp": {"T05_us_open_4_fills_per_event_day": 10.66, "T01_funding_8h_12_fills_per_day": 2.22, "T01_funding_8h_3_fills_per_day": 8.88}
   },
 
   "descriptive": {
@@ -379,7 +386,7 @@
     "reports": [
       "T01_classified_by_realized_rate", "T01_dead_zone_thresholds_0_0006_minus_0_0005", "T01_without_fill_proxy", "T01_dose_abs_rate",
       "T01_v_shape_minus15_0_plus15", "T01_by_photo_hour_00_08_16", "T01_friday_0800", "T01_us_business_day_vs_not", "T01_stratum_T02_4h_2h_1h",
-      "T01_mark_reference_inside_coverage", "T01_premium_balance_events_vs_controls", "T01_funding_cap_stress",
+      "T01_mark_reference_inside_coverage", "T01_premium_balance_events_vs_controls", "T01_funding_cap_stress", "T01_previous_settlement_filter_only",
       "T05_horizons_15_30", "T05_move_ge_1_tick", "T05_macro_days_separately", "T05_ten_am_et_release_days", "T05_brr_adjacency",
       "by_month", "by_instrument", "by_sign", "regime_rv24_above_median", "instruments_per_instant_ge_3", "excluded_share_by_instrument",
       "block_days_7", "minute_zero_T07", "hourly_seasonality_last_price", "weekday_seasonality", "funding_intervals_histogram", "portfolio_reading",
@@ -406,6 +413,12 @@
         "none_of_the_four": "LB90(A_event - A_control) > 0 and mean C_event > 0"
       }
     }
+  },
+
+  "frozen_with": {
+    "spec": "python-orchestrator/scripts/research_lp/specs/g5_gate2_spec.json",
+    "spec_id": "LP-G5-GATE2-2026",
+    "rule": "both specs are frozen in the same freeze line (protocol section 13 point 5) ; before any market read the Gate 1 evaluator reads frozen_with.spec (or --gate2-spec) and refuses to run (refuse_run) unless it is FROZEN, holds no owner_decision_pending, no freeze_pending marker and no null, passes the strict Gate 2 reader against this Gate 1 spec and its freeze_fill.gate1_spec_sha256 equals the sha256 of the Gate 1 spec read ; the sha256 of the Gate 2 spec is printed in the Gate 1 output (capability gate2_frozen_together)"
   },
 
   "fetch_plan": {

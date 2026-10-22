@@ -91,7 +91,8 @@ avant son gel :
     S_éco = max( 97,25 ; 5 × SOFR publié du jour du gel × 500 ; coût fixe annuel déclaré )      [USD par an]
 
 97,25 = 5 × 3,89 % × 500 : valeur littérale de D4. Son « ≈ 97 » et le 97,0 des deux specs G5 du 2026-10-21 sont des arrondis
-**inférieurs** à D4, contraires à « jamais plus bas » : les specs portent au moins 97,25 à leur gel. Convention de D4 : le taux
+**inférieurs** à D4, contraires à « jamais plus bas » : les specs portent au moins 97,25 à leur gel (**écrit 97,25 dans les deux specs G5 le
+2026-10-22**, décision du propriétaire « Finir les contrôles G5 réalisables dès maintenant » ; le lecteur refuse moins). Convention de D4 : le taux
 publié multiplie le capital, sans conversion de base de jours ; la lecture actual/360 ramenée à 365 jours (× 365/360 : 98,60
 USD/an au même SOFR, celle du track S) est une **option du propriétaire pour relever** S_éco, à prendre avant tout gel. **Coût
 fixe déclaré** : non chiffré (heures du propriétaire UNKNOWN) ; **déclaré nul** dans la formule, pour G5 Gate 1 (P-G5-8 :

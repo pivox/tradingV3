@@ -1,16 +1,16 @@
 {
   "spec_id": "LP-G5-GATE2-2026",
   "spec_schema": "g5-spec/2",
-  "spec_version": "0.1.5-draft",
+  "spec_version": "0.1.6-draft",
   "status": "DRAFT_NOT_FROZEN",
   "protocol": "docs/handbook/research/LP-G5-DRAFT-PREREGISTRATION.md",
   "protocol_sections": "section 10 (Gate 2), section 5.5 (simulated scalp), section 8 (inscription), Annex B (this file)",
-  "note": "Spec machine du G5 Gate 2 (prospectif, confirmation). Gele EN MEME TEMPS que le spec Gate 1 (piege 7) : memes types, classifieur, seuils, signes, fenetres, controles, unite et criteres ; seules changent la source (capture), l'execution (simulee sur carnet reel, lp_sim) et les calendriers (2026-11 -> 2027-04). Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee ; toute valeur null ou owner_decision_pending interdit le statut FROZEN. Le sha256 de la version FROZEN fait partie du gel (protocole section 13). Revision 0.1.2-draft (2026-10-21, passe de correction apres tradingV3-private/research/20261020T2321Z-g5-periods/review-b/quant.md) : textes libres seulement, chaque texte lie au lecteur strict est inchange. Les reponses du proprietaire D7 (P-G5-10 (i) : option a ; (ii) : refus lu dans Nn, remplace par D10 du 2026-10-21 : les deux sources, choix sur la qualite, recopie dans classifier_index_source) et D8 (piste S close, P-S3 sans objet, BTC et ETH restent) sont ecrites dans les textes et au journal du registre ; elles sont recopiees dans les blocs de decision au gel (status et choice restent owner_decision_pending jusque-la : echec ferme). Revision 0.1.5-draft (2026-10-21, passe avant gel) : D7 (i) et D8 sont ecrites dans leurs blocs avant le gel (events[T05_us_open].window_end = a_end_2027_03_31, universe.p_s3_track_s = moot_track_s_closed, valeur ajoutee au lecteur ; owner_decided ; decision_ref_p_g5_10_i, decision_ref_p_g5_10_ii et decision_ref_p_s3 de freeze_fill = textes dates du proprietaire) : plus aucune valeur owner_decision_pending ; T05 au Gate 2 est G5_GATE2_NOT_INFORMATIVE par construction, ecrit par le lecteur (audit power_by_construction, raison power_floor_unreachable_by_construction) ; le fetcher de l option b existe (g5_index_fetch), le lecteur admet D10 en FROZEN. Une valeur qui contient le marqueur freeze_pending suivi d un deux-points marque un choix de redaction que le corps du protocole ne fixe pas encore (a1, sections 10 et 11) ; elle interdit FROZEN (regle a coder, a2). Avant le gel, le canal funding-rate n est verifie que sur la documentation et sur un echantillon de schema (noms de champs, valeurs de settState, fundingTime contre ts ; aucun taux affiche ni persiste hors de la tape ; GATES 9.5) ; le texte FROZEN de costs.funding.source est g5_gate2.FUNDING_SOURCE. Revision 0.1.3-draft (2026-10-21, amendement A1 du Gate 1, avant tout gel et toute lecture) : events[T01_funding_8h].adverse_selection_entry_leg = measured_by_fill_proxy, identique au Gate 1 (piege 7, verifie par check_gate1_identity) ; il ne regle que la construction descriptive du Gate 1 sur les derniers prints (9,5 pb au lieu de 13) ; la mesure primaire simulee mesure tous ses termes et n est pas touchee.",
+  "note": "Spec machine du G5 Gate 2 (prospectif, confirmation). Gele EN MEME TEMPS que le spec Gate 1 (piege 7) : memes types, classifieur, seuils, signes, fenetres, controles, unite et criteres ; seules changent la source (capture), l'execution (simulee sur carnet reel, lp_sim) et les calendriers (2026-11 -> 2027-04). Chaque cle doit etre implementee (requires) ; toute cle inconnue est refusee ; toute valeur null ou owner_decision_pending interdit le statut FROZEN. Le sha256 de la version FROZEN fait partie du gel (protocole section 13). Revision 0.1.2-draft (2026-10-21, passe de correction apres tradingV3-private/research/20261020T2321Z-g5-periods/review-b/quant.md) : textes libres seulement, chaque texte lie au lecteur strict est inchange. Les reponses du proprietaire D7 (P-G5-10 (i) : option a ; (ii) : refus lu dans Nn, remplace par D10 du 2026-10-21 : les deux sources, choix sur la qualite, recopie dans classifier_index_source) et D8 (piste S close, P-S3 sans objet, BTC et ETH restent) sont ecrites dans les textes et au journal du registre ; elles sont recopiees dans les blocs de decision au gel (status et choice restent owner_decision_pending jusque-la : echec ferme). Revision 0.1.5-draft (2026-10-21, passe avant gel) : D7 (i) et D8 sont ecrites dans leurs blocs avant le gel (events[T05_us_open].window_end = a_end_2027_03_31, universe.p_s3_track_s = moot_track_s_closed, valeur ajoutee au lecteur ; owner_decided ; decision_ref_p_g5_10_i, decision_ref_p_g5_10_ii et decision_ref_p_s3 de freeze_fill = textes dates du proprietaire) : plus aucune valeur owner_decision_pending ; T05 au Gate 2 est G5_GATE2_NOT_INFORMATIVE par construction, ecrit par le lecteur (audit power_by_construction, raison power_floor_unreachable_by_construction) ; le fetcher de l option b existe (g5_index_fetch), le lecteur admet D10 en FROZEN. Une valeur qui contient le marqueur freeze_pending suivi d un deux-points marque un choix de redaction que le corps du protocole ne fixe pas encore (a1, sections 10 et 11) ; elle interdit FROZEN (regle codee le 2026-10-22, g5_eval.refuse_freeze_pending). Avant le gel, le canal funding-rate n est verifie que sur la documentation et sur un echantillon de schema (noms de champs, valeurs de settState, fundingTime contre ts ; aucun taux affiche ni persiste hors de la tape ; GATES 9.5) ; le texte FROZEN de costs.funding.source est g5_gate2.FUNDING_SOURCE. Revision 0.1.3-draft (2026-10-21, amendement A1 du Gate 1, avant tout gel et toute lecture) : events[T01_funding_8h].adverse_selection_entry_leg = measured_by_fill_proxy, identique au Gate 1 (piege 7, verifie par check_gate1_identity) ; il ne regle que la construction descriptive du Gate 1 sur les derniers prints (9,5 pb au lieu de 13) ; la mesure primaire simulee mesure tous ses termes et n est pas touchee. Revision 0.1.6-draft (2026-10-22, decisions du proprietaire de ce jour, avant tout gel et toute lecture) : (a) \"Finir les controles G5 realisables des maintenant\" : test de contenu des calendriers (content_rule, nyse_half_days, content_exceptions), refus de FROZEN sur le marqueur, S_eco = 97,25 aux deux portes (D4), le Gate 1 lit ce fichier avant toute donnee (gate2_frozen_together) ; (b) \"Choisir la traversee comme remplissage principal du Gate 2, et garder le simple contact comme comparaison descriptive\" : execution_sim.entry_fill_rule = through, touch et queue descriptives (fill_rules_touch_and_queue), jamais decisives : le resultat touch ne peut jamais sauver un FAIL, un NOT_INFORMATIVE ou un INCONCLUSIVE. Les huit marqueurs restent dans ce brouillon : le FROZEN est refuse tant qu ils ne sont pas ecrits au corps du protocole ou retires (a1).",
 
   "frozen_with": {
     "spec": "python-orchestrator/scripts/research_lp/specs/g5_gate1_spec.json",
     "spec_id": "LP-G5-GATE1-2026",
-    "rule": "both specs are frozen in the same freeze line (protocol section 13 point 5) ; Gate 1 side (capability gate2_frozen_together of g5_gate1_spec.json and its (B) line, to write, a2): before any market read the Gate 1 evaluator reads this file and refuses to run unless it is FROZEN, holds no owner_decision_pending, no freeze_pending marker and no null, and its freeze_fill.gate1_spec_sha256 equals the sha256 of the Gate 1 spec read ; the sha256 of this file is printed in the Gate 1 output and written in the register the day of the Gate 1 run ; Gate 2 side (g5_gate2): a FROZEN Gate 2 is refused unless its Gate 1 is FROZEN with that sha256 (review-b quant B1, CTO M2) ; the former clause on a Gate 2 frozen after a Gate 1 reading is withdrawn (no spec carries a freeze timestamp: not checkable)"
+    "rule": "both specs are frozen in the same freeze line (protocol section 13 point 5) ; Gate 1 side (capability gate2_frozen_together of g5_gate1_spec.json, protocol (B) xxiv, implemented 2026-10-22 under the owner decision (a) of that day: g5_gate2.check_frozen_together, g5_eval.command_eval, option --gate2-spec): before any market read the Gate 1 evaluator reads this file and refuses to run unless it is FROZEN, holds no owner_decision_pending, no freeze_pending marker and no null, and its freeze_fill.gate1_spec_sha256 equals the sha256 of the Gate 1 spec read ; the sha256 of this file is printed in the Gate 1 output and written in the register the day of the Gate 1 run ; Gate 2 side (g5_gate2): a FROZEN Gate 2 is refused unless its Gate 1 is FROZEN with that sha256 (review-b quant B1, CTO M2) ; the former clause on a Gate 2 frozen after a Gate 1 reading is withdrawn (no spec carries a freeze timestamp: not checkable)"
   },
 
   "source": "capture",
@@ -70,7 +70,10 @@
     "holm_local_and_programme_fields",
     "economic_reading_days_per_year",
     "bootstrap_day_blocks",
-    "descriptive_reports_g5_v2"
+    "descriptive_reports_g5_v2",
+    "calendars_content_test_at_freeze",
+    "freeze_pending_marker_refuses_frozen",
+    "economic_s_eco_at_least_d4"
   ],
 
   "owner_decisions": {
@@ -187,8 +190,9 @@
 
   "execution_sim": {
     "engine": "lp_sim primitives (g5_eval.measure_lp_sim, (B) xxi ; g5_eval/3 at 2026-10-21)",
-    "entry_fill_rule": "touch",
-    "descriptive_fill_rules": ["through", "queue"],
+    "entry_fill_rule": "through",
+    "entry_fill_rule_decision": "owner decision (b), 2026-10-22: \"Choisir la traversee comme remplissage principal du Gate 2, et garder le simple contact comme comparaison descriptive\" ; primary fill rule through (a resting order fills on a print strictly through its price or on an opposite touch crossing it: the pessimistic bound, as the Gate 1 proxy) ; touch (head of the queue, the optimistic bound) and queue reported in fill_rules_touch_and_queue, never decisive: the touch result can never rescue a FAIL, a NOT_INFORMATIVE or an INCONCLUSIVE (protocol 10.2, 11.1)",
+    "descriptive_fill_rules": ["touch", "queue"],
     "latency_ms": 250,
     "stale_s": 10,
     "stale_rule": "book older than stale_s at the decision: intention not placed, counted (as G2 section 5)",
@@ -264,7 +268,7 @@
 
   "sessions": [
     {"name": "us_cash_open", "tz": "America/New_York", "start": "09:30", "end": "09:30", "days": "nyse_trading_days"},
-    {"name": "us_cash_close", "tz": "America/New_York", "start": "16:00", "end": "16:00", "days": "nyse_trading_days"},
+    {"name": "us_cash_close", "tz": "America/New_York", "start": "16:00", "end": "16:00", "days": "nyse_trading_days", "on_nyse_half_days": "13:00"},
     {"name": "london_xetra_open", "tz": "Europe/London", "start": "08:00", "end": "08:00", "days": "mon_fri"},
     {"name": "hong_kong_open", "tz": "Asia/Hong_Kong", "start": "09:30", "end": "09:30", "days": "mon_fri"},
     {"name": "tokyo_open", "tz": "Asia/Tokyo", "start": "09:00", "end": "09:00", "days": "mon_fri"},
@@ -276,11 +280,14 @@
   "calendars": {
     "tz": "America/New_York",
     "covers": "2026-11-02 .. 2027-04-30 (window end 2027-03-31 under D7 ; the refused options b and c of P-G5-10 (i) ; the data-gap extension)",
-    "covers_rule": "the evaluator refuses a spec whose scoring window (every events[].window_end and the data gap extension included) is not inside covers, and a FROZEN spec whose lists are not complete over covers: a NYSE holiday or a CPI / Employment Situation / FOMC date missing from a list would be scored as an ordinary day ; the window coverage is implemented (g5_gate2, calendars_cover_the_window) ; the content test is to code before the freeze (review-b quant M4, a2 ; the same test on the Gate 1 spec over its own window): a FROZEN spec has at least one CPI date and one Employment Situation date per calendar month of [T0 ; last scored day + data-gap extension], except dated and sourced exceptions written here (postponement, government shutdown), at least one FOMC statement date per 8-week span, NYSE holidays equal to a rule-based generator (New Year, Martin Luther King Jr. Day, Washington's Birthday, Good Friday from Easter, Memorial Day, Juneteenth, Independence Day, Labor Day, Thanksgiving = 4th Thursday of November, Christmas, observed-day rules ; every exception written) and the NYSE half days listed (a 13:00 ET close moves the us_cash_close exclusion)",
+    "covers_rule": "the evaluator refuses a spec whose scoring window (every events[].window_end and the data gap extension included) is not inside covers, and a FROZEN spec whose lists are not complete over covers: a NYSE holiday or a CPI / Employment Situation / FOMC date missing from a list would be scored as an ordinary day ; the window coverage is implemented (g5_gate2, calendars_cover_the_window) ; the content test is implemented since 2026-10-22 (owner decision (a) of that day ; review-b quant M4 ; capability calendars_content_test_at_freeze, g5_eval.calendar_content, the rule of content_rule, the same test on the Gate 1 spec over its own window): a FROZEN spec has at least one CPI date and one Employment Situation date per calendar month of [T0 ; last scored day + data-gap extension], except dated and sourced exceptions written here (postponement, government shutdown), at least one FOMC statement date per 8-week span, NYSE holidays equal to a rule-based generator (New Year, Martin Luther King Jr. Day, Washington's Birthday, Good Friday from Easter, Memorial Day, Juneteenth, Independence Day, Labor Day, Thanksgiving = 4th Thursday of November, Christmas, observed-day rules ; every exception written) and the NYSE half days listed (a 13:00 ET close moves the us_cash_close exclusion)",
     "nyse_holidays": ["2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26"],
     "cpi": ["2026-11-10", "2026-12-10"],
     "employment_situation": [],
     "fomc_statement": ["2026-12-09", "2027-01-27", "2027-03-17"],
+    "nyse_half_days": [],
+    "content_rule": "FROZEN only, over R = [T0 ; last scored day + data-gap extension] (Gate 1: the spec window) ; at least one cpi date and one employment_situation date in every calendar month that meets R, unless content_exceptions names that list and that month ; every span of 56 consecutive days inside R holds a fomc_statement date ; the nyse_holidays inside R equal the rule-based NYSE generator (New Year's Day, Martin Luther King Jr. Day = 3rd Monday of January, Washington's Birthday = 3rd Monday of February, Good Friday from Easter, Memorial Day = last Monday of May, Juneteenth, Independence Day, Labor Day = 1st Monday of September, Thanksgiving = 4th Thursday of November, Christmas Day ; a Saturday holiday observed the Friday before except New Year's Day, a Sunday holiday the Monday after) up to the dates content_exceptions adds (extra_closure) or removes (not_observed) ; nyse_half_days listed (each a NYSE trading day ; the sessions with on_nyse_half_days take that time on them, a 13:00 ET close moves the us_cash_close exclusion) ; every exception dated (written_utc) and sourced",
+    "content_exceptions": [],
     "incomplete_at_draft": {
       "cpi": "2027-01 .. 2027-04 to record (bls.gov schedule 2027)",
       "employment_situation": "2026-11 .. 2027-04 to record (bls.gov schedules 2026 and 2027) ; never a first-Friday rule (piege 6)",
@@ -506,7 +513,7 @@
   },
 
   "economic": {
-    "s_eco_usd_per_year": 97.0,
+    "s_eco_usd_per_year": 97.25,
     "capital_usd": 500.0,
     "leverage": 1,
     "max_live": 4,
@@ -543,7 +550,7 @@
   "descriptive": {
     "rule": "aucun descriptif ne recoit de p-value ni de verdict ; jamais promu ; un filtre G5 qui entre dans un protocole gele apres cette lecture y compte p = 1 (post-screen, GATES 2.1)",
     "reports": [
-      "T02_funding_4h_settlements_premium_settstate_book", "T06_us_close_reversion", "T18_cme_cf_brr_window", "fill_rules_through_and_queue",
+      "T02_funding_4h_settlements_premium_settstate_book", "T06_us_close_reversion", "T18_cme_cf_brr_window", "fill_rules_touch_and_queue",
       "premium_okx_channel_vs_premium_mark_index", "net_bp_gate1_construction_on_last_prints", "adverse_selection_measured_vs_design_3_5",
       "taker_half_spread_measured_vs_design_3", "T01_by_photo_hour_00_08_16", "T01_dose_abs_rate", "T05_horizons_15_30",
       "T05_ten_am_et_release_days", "dst_regime_winter_vs_summer", "by_month", "by_instrument", "by_sign", "instruments_per_instant_ge_3",

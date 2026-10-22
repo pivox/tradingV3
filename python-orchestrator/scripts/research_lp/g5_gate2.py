@@ -30,6 +30,14 @@ What this module enforces (fail-closed, `SpecError`):
   hours of the three DST regimes (`controls_common.audit_expected_utc`, computed by the evaluator's own control rule); the UTC
   notes of the macro releases and of T05, and the DST dates (zoneinfo, New York checked against `events.us_dst_active`).
 
+**Owner decisions of 2026-10-22.** (a) « Finir les contrôles G5 réalisables dès maintenant » (Annexe B requests 11, 13, 14, 16): a
+`FROZEN` spec is refused while a key or a value contains the marker `freeze_pending:` (`g5_eval.refuse_freeze_pending`) or while its calendars
+fail the content test over [T0 ; last scored day + data-gap extension] (`g5_eval.calendar_content`, `CALENDAR_CONTENT_RULE`); S_eco >= 97.25
+at both gates (`g5_eval.check_s_eco`); `check_frozen_together` is the Gate 1 side of `frozen_with` (`gate2_frozen_together`: the Gate 1 run
+reads this file before any market value). (b) « Choisir la traversée comme remplissage principal du Gate 2, et garder le simple contact comme
+comparaison descriptive »: `execution_sim.entry_fill_rule` = `through` (`PRIMARY_FILL_RULE`), `touch` among the descriptive rules
+(`fill_rules_touch_and_queue`), a comparison that never decides and never rescues a FAIL, a NOT_INFORMATIVE or an INCONCLUSIVE.
+
 Runtime helpers: T0 and the per-type window ends (with the data-gap extension), the unusable instrument-days (`quality`), the
 inscription read from the Gate 1 result (its sha256, kind, mode and FROZEN spec; the effect of a refused Gate 1 run written, CTO m5),
 the capture manifest check, the index tape against its register sha256 (option b, CTO M3), the universe against the freeze snapshot;
@@ -180,9 +188,14 @@ ECONOMIC = {**g5.ECONOMIC_FIXED,
 QUALITY_RE = re.compile(r"^books5 coverage \(minutes with >= 1 snapshot\) < (?P<cov>\d+(?:\.\d+)?) % or a stale period > (?P<stale>\d+(?:\.\d+)?) min crossing the "
                         r"instrument-day \(G2 4\.4, same capture\) ; removed before any computation and counted$")
 LAYOUTS_READ = ("trades", "books5", "mark", "funding")
+# Owner decision (b) of 2026-10-22: the through rule is the primary fill of the Gate 2 (the pessimistic bound, as the Gate 1 proxy), the touch rule
+# (head of the queue, the optimistic bound) a descriptive comparison only.
+PRIMARY_FILL_RULE = "through"
+DESCRIPTIVE_FILL_RULE_REQUIRED = "touch"
+FILL_RULE_DECISION_DATE = "2026-10-22"
 CONTROL_WITHIN = ("spec_window", "spec_window, up to the T05 window_end")
 DESCRIPTIVE_REPORTS = (
-    "T02_funding_4h_settlements_premium_settstate_book", "T06_us_close_reversion", "T18_cme_cf_brr_window", "fill_rules_through_and_queue",
+    "T02_funding_4h_settlements_premium_settstate_book", "T06_us_close_reversion", "T18_cme_cf_brr_window", "fill_rules_touch_and_queue",
     "premium_okx_channel_vs_premium_mark_index", "net_bp_gate1_construction_on_last_prints", "adverse_selection_measured_vs_design_3_5",
     "taker_half_spread_measured_vs_design_3", "T01_by_photo_hour_00_08_16", "T01_dose_abs_rate", "T05_horizons_15_30", "T05_ten_am_et_release_days",
     "dst_regime_winter_vs_summer", "by_month", "by_instrument", "by_sign", "instruments_per_instant_ge_3", "excluded_share_by_instrument", "block_days_7",
@@ -343,7 +356,7 @@ def _parse_calendars(block, window_start: Date) -> tuple[dict, dict]:
     if m is None:
         raise SpecError("calendars.covers must start with 'YYYY-MM-DD .. YYYY-MM-DD'")
     covers = (_parse_date(m.group("a"), "calendars.covers"), _parse_date(m.group("b"), "calendars.covers"))
-    for name in ("nyse_holidays", "cpi", "employment_situation", "fomc_statement"):
+    for name in ("nyse_holidays", "cpi", "employment_situation", "fomc_statement", "nyse_half_days"):
         outside = sorted(d for d in calendars[name] if not covers[0] <= d <= covers[1])
         if outside:
             raise SpecError(f"calendars.{name}: {outside} outside calendars.covers {covers[0]} .. {covers[1]}")
@@ -511,8 +524,8 @@ def _parse_costs(block, gate1_costs: dict | None, status: str = "DRAFT_NOT_FROZE
 
 
 def _parse_execution_sim(block, notional: float) -> dict:
-    keys = ("engine", "entry_fill_rule", "descriptive_fill_rules", "latency_ms", "stale_s", "stale_rule", "post_only", "funding_fill_grace_min", "funding_fill_grace_rule",
-            "order_notional_usd", "size", "book_layout", "rpi_bias", "band_rejected", "status_counts")
+    keys = ("engine", "entry_fill_rule", "entry_fill_rule_decision", "descriptive_fill_rules", "latency_ms", "stale_s", "stale_rule", "post_only", "funding_fill_grace_min",
+            "funding_fill_grace_rule", "order_notional_usd", "size", "book_layout", "rpi_bias", "band_rejected", "status_counts")
     _check_keys(block, "execution_sim", keys)
     if not _text(block, "engine", "execution_sim").startswith("lp_sim primitives"):
         raise SpecError("execution_sim.engine: the implemented engine is the lp_sim primitives (g5_eval.measure_lp_sim)")
@@ -520,6 +533,12 @@ def _parse_execution_sim(block, notional: float) -> dict:
     descriptive = _str_list(block, "descriptive_fill_rules", "execution_sim", lp_sim.RULES)
     if rule in descriptive:
         raise SpecError("execution_sim.descriptive_fill_rules: the primary rule is not a descriptive one")
+    # Owner decision (b) of 2026-10-22: through primary, touch kept as a descriptive comparison (never decisive).
+    if rule != PRIMARY_FILL_RULE or DESCRIPTIVE_FILL_RULE_REQUIRED not in descriptive:
+        raise SpecError(f"execution_sim: entry_fill_rule {PRIMARY_FILL_RULE!r} with {DESCRIPTIVE_FILL_RULE_REQUIRED!r} among descriptive_fill_rules is the owner's "
+                        f"decision of {FILL_RULE_DECISION_DATE} (got {rule!r}, {list(descriptive)})")
+    if FILL_RULE_DECISION_DATE not in _text(block, "entry_fill_rule_decision", "execution_sim"):
+        raise SpecError(f"execution_sim.entry_fill_rule_decision: the owner's dated text of {FILL_RULE_DECISION_DATE}")
     for key, text in SIM_TEXTS.items():
         _exact(block, key, "execution_sim", text)
     _text(block, "funding_fill_grace_rule", "execution_sim")
@@ -724,6 +743,7 @@ def _parse_economic(block) -> dict:
     out = {"s_eco": _num(block, "s_eco_usd_per_year", "economic", 0.0), "capital": _num(block, "capital_usd", "economic", 0.0, lo_open=True),
            "leverage": _num(block, "leverage", "economic", 0.0, lo_open=True), "max_live": _int(block, "max_live", "economic", 1),
            "notional": _num(block, "order_notional_usd", "economic", 0.0, lo_open=True), "readings": readings, "break_even": {}}
+    g5.check_s_eco(out["s_eco"])  # Annexe B request 16
     if out["max_live"] * out["notional"] / out["leverage"] > out["capital"] + 1e-9:
         raise SpecError("economic: max_live × order_notional_usd / leverage exceeds capital_usd")
     return out
@@ -1229,6 +1249,7 @@ def parse_capture_spec(document: dict, gate1=None) -> g5.Spec:
             raise SpecError(f"owner_decision_pending in a FROZEN spec at {pending} ({OWNER_RULE})")
         if nulls:
             raise SpecError(f"null values in a FROZEN spec at {nulls} (note: toute valeur null ou owner_decision_pending interdit le statut FROZEN)")
+    markers = g5.refuse_freeze_pending(document, status)  # Annexe B request 14
     for key in ("protocol", "protocol_sections", "note", "dataset_id", "capture_dataset_id"):
         _text(document, key, "spec")
     _choice(document, "source", "spec", ("capture",))
@@ -1323,6 +1344,9 @@ def parse_capture_spec(document: dict, gate1=None) -> g5.Spec:
             raise SpecError(f"calendars.covers ends {covers[1]}, before {where} {last} + the data-gap extension of {window['max_gap_days']} days ({COVERS_RULE})")
     if grid_end - timedelta(days=1) > covers[1]:
         raise SpecError(f"calendars.covers ends {covers[1]}, before the last scored day with the data-gap extension ({grid_end - timedelta(days=1)})")
+    # Annexe B request 13 (review-b quant M4): the content test over R = [T0 ; last scored day + data-gap extension].
+    content = g5.calendar_content(calendars, sessions, t0, grid_end - timedelta(days=1))
+    g5.refuse_calendar_content(content, status)
     if "type_instants" in controls_common["components"]:
         target = controls_common["components"]["type_instants"]
         if target[0] not in names or next(t for t in types if t.name == target[0]).generator["kind"] != "local_time":
@@ -1363,6 +1387,7 @@ def parse_capture_spec(document: dict, gate1=None) -> g5.Spec:
                    sealing, {**inscription, "rule": dict(INSCRIPTION)}, economic, descriptive, None, gate2, {}, {})
     audit = _check_type_audits(types, calendars, power)
     audit["power_by_construction"] = power_by_construction(spec, bool(cal_extra["incomplete"]))
+    audit["calendar_content"] = content
     if "audit_expected_utc" in document["controls_common"]:
         audit["control_hours"] = check_control_hours(spec, document["controls_common"]["audit_expected_utc"])
     spec.audit.update(audit)
@@ -1394,10 +1419,50 @@ def parse_capture_spec(document: dict, gate1=None) -> g5.Spec:
                        "controls_common.audit_expected_utc.rule": (document["controls_common"].get("audit_expected_utc") or {}).get("rule"),
                        "sealing.gate1_sealed_files.files": document["sealing"]["gate1_sealed_files"]["files"],
                        "owner_decisions.ids": decisions, "universe.always_included": document["universe"]["always_included"],
+                       "freeze_pending_markers": markers, "calendars.content_problems": content["problems"],
+                       "execution_sim.entry_fill_rule_decision": document["execution_sim"]["entry_fill_rule_decision"],
                        "power_by_construction": {name: {k: v for k, v in item.items() if k in ("raw_instants_upper_bound", "min_instants", "not_informative_by_construction",
                                                                                               "window_end_choice", "calendars_complete")}
                                                  for name, item in audit["power_by_construction"].items()}})
     return spec
+
+
+def check_frozen_together(gate1: g5.Spec, gate1_sha: str, path: Path) -> dict:
+    """Annexe B request 11 (`gate2_frozen_together`, review-b quant B1), the Gate 1 side of `frozen_with`: the Gate 2 spec at `path` is
+    FROZEN, holds no `owner_decision_pending`, no `freeze_pending:` marker and no null, names the Gate 1 spec read by its sha256
+    (`freeze_fill.gate1_spec_sha256`) and passes this strict reader against that Gate 1. Returns the path, sha256, id, status and the
+    problems (empty: admitted); `g5_eval.command_eval` refuses the Gate 1 run (refuse_run) before any market value when one holds."""
+    out = {"path": str(path), "sha256": None, "spec_id": None, "status": None, "gate1_spec_sha256": None, "problems": []}
+    if not Path(path).is_file():
+        out["problems"].append(f"{path}: absent (the Gate 1 is frozen together with its Gate 2, protocol section 13 point 5)")
+        return out
+    data = Path(path).read_bytes()
+    out["sha256"] = g5_fetch.sha256_bytes(data)
+    try:
+        document = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        out["problems"].append(f"not JSON ({error})")
+        return out
+    if not isinstance(document, dict):
+        out["problems"].append("not a JSON object")
+        return out
+    freeze_fill = document.get("freeze_fill") if isinstance(document.get("freeze_fill"), dict) else {}
+    out.update({"spec_id": document.get("spec_id"), "status": document.get("status"), "gate1_spec_sha256": freeze_fill.get("gate1_spec_sha256")})
+    if document.get("source") != "capture" or document.get("spec_id") != gate1.raw["frozen_with"]["spec_id"]:
+        out["problems"].append(f"spec_id {document.get('spec_id')!r} / source {document.get('source')!r} is not the Gate 2 of frozen_with ({gate1.raw['frozen_with']['spec_id']!r})")
+    if document.get("status") != "FROZEN":
+        out["problems"].append(f"status {document.get('status')!r}: the Gate 2 spec is not FROZEN")
+    for label, paths in (("owner_decision_pending", scan(document, PENDING)), ("null", scan(document, None)), (g5.FREEZE_PENDING_MARKER, g5.marker_paths(document))):
+        if paths:
+            out["problems"].append(f"{label} at {paths[:10]}")
+    if freeze_fill.get("gate1_spec_sha256") != gate1_sha:
+        out["problems"].append(f"freeze_fill.gate1_spec_sha256 {freeze_fill.get('gate1_spec_sha256')} is not the sha256 {gate1_sha} of the Gate 1 spec read")
+    if not out["problems"]:
+        try:
+            parse_capture_spec(document, gate1)
+        except SpecError as error:
+            out["problems"].append(f"the strict Gate 2 reader refuses it: {error}")
+    return out
 
 
 POWER_BY_CONSTRUCTION_RULE = ("upper bound of n for a local_time type: one instant per NYSE day of [T0 ; end of the type window with the largest data-gap extension "

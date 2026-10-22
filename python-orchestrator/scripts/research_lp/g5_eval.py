@@ -79,6 +79,20 @@ Implemented (§2.3 (B)):
   removed (share > 20 % ⇒ INCONCLUSIVE); the types inscribed by the Gate 1 result (FAIL: not evaluated, p = 1); no sealing;
   the deferred strata of §9.8 as descriptive reports.
 
+Owner decisions of 2026-10-22, before any freeze and any reading (LP-G5 §2.3 (B) xxiv, xxv; Annexe B requests 11, 13, 14, 16, 18):
+- (a) « Finir les contrôles G5 réalisables dès maintenant »: (xxiv) `gate2_frozen_together` — a Gate 1 run reads the Gate 2 spec of
+  `frozen_with` (or `--gate2-spec`) before any market value and refuses (refuse_run) unless it is FROZEN, holds no
+  `owner_decision_pending`, no `freeze_pending:` marker and no null, passes the strict Gate 2 reader against this Gate 1 and names its
+  sha256 in `freeze_fill.gate1_spec_sha256` (`g5_gate2.check_frozen_together`); its sha256 is printed and written in the result;
+  (xxv) `calendars_content_test_at_freeze` — a FROZEN spec's calendars pass `CALENDAR_CONTENT_RULE` over [T0 ; last scored day +
+  data-gap extension] (`calendar_content`: CPI and Employment Situation every calendar month, FOMC every 56 days, NYSE holidays equal to
+  `nyse_holidays_by_rule`, half days listed and `on_nyse_half_days` moving the us_cash_close exclusion, exceptions dated and sourced);
+  `freeze_pending_marker_refuses_frozen` (`refuse_freeze_pending`); `economic_s_eco_at_least_d4` (`check_s_eco`: S_eco >= 97.25,
+  GATES §1.2 amended, D4); the descriptive `T01_previous_settlement_filter_only` (request 18: the next-settlement criterion off);
+- (b) « Choisir la traversée comme remplissage principal du Gate 2, et garder le simple contact comme comparaison descriptive »: the
+  Gate 2 primary fill rule is `through` for every passive leg (`g5_gate2.PRIMARY_FILL_RULE`), `touch` a descriptive comparison
+  (`fill_rules_touch_and_queue`) that never decides and never rescues a FAIL, a NOT_INFORMATIVE or an INCONCLUSIVE.
+
 Amendment A1 (LP-G5 « Amendement A1 (2026-10-21) », written before any freeze and any reading; capabilities `a1_*`, Gate 1 only):
 - the adverse selection of the T01 entry leg is **measured by the conditioning on the fill** (`events[].adverse_selection_entry_leg:
   measured_by_fill_proxy`): 0 in the assumed cost of the filled (primary) measure, the passive exit leg keeps its design value; T01
@@ -110,6 +124,7 @@ import tarfile
 import time
 from dataclasses import dataclass, field
 from datetime import date as _date
+from datetime import date as CalDate  # `_date` is also the name of the date parser below
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -164,13 +179,24 @@ CAPABILITIES: dict[str, str] = {
     "economic_reading_days_per_year": "(B) xx: plafond_USD_an with the type's days per year, S_eco, pursued / not pursued",
     "bootstrap_day_blocks": "(B) xx: day-block bootstrap, events and controls jointly, seed and resamples of the spec",
     "descriptive_reports_g5_v2": "(B) xx: the descriptive reports of section 9, warning at the head of the Markdown",
+    # Owner decision of 2026-10-22 (a), « Finir les contrôles G5 réalisables dès maintenant »: the freeze controls of LP-G5 Annexe B, requests
+    # 11, 13, 14, 16 (18 is a descriptive report of descriptive_reports_g5_v2), (B) xxiv and xxv of the protocol.
+    "gate2_frozen_together": "(B) xxiv, Annexe B request 11: before any market read a Gate 1 run reads the Gate 2 spec of frozen_with and refuses (refuse_run) "
+                             "unless it is FROZEN, holds no owner_decision_pending, no freeze_pending: marker and no null, passes the strict Gate 2 reader "
+                             "against this Gate 1 and its freeze_fill.gate1_spec_sha256 is the sha256 of the Gate 1 spec read; its sha256 is printed",
+    "calendars_content_test_at_freeze": "(B) xxv, P-G5-5, Annexe B request 13: a FROZEN spec's calendars pass CALENDAR_CONTENT_RULE over [T0 ; last scored day + "
+                                        "data-gap extension] (cpi and employment_situation every month, fomc_statement every 56 days, nyse_holidays equal to the "
+                                        "rule-based generator, nyse_half_days listed, exceptions dated and sourced)",
+    "freeze_pending_marker_refuses_frozen": "(B) xxv, Annexe B request 14: a FROZEN spec holds no key and no value containing the marker freeze_pending:",
+    "economic_s_eco_at_least_d4": "(B) xxv, Annexe B request 16: economic.s_eco_usd_per_year >= 97.25 (GATES 1.2 amended 2026-10-21, D4), at both gates",
     # (B) xxi — the Gate 2 (`source: capture`, `specs/g5_gate2_spec.json`), implemented in `g5_gate2` and in the capture paths below.
     "owner_decisions_resolved_required_for_freeze": "(B) xxi: owner_decision_pending anywhere (or a null) refuses FROZEN; at DRAFT it makes every type INCONCLUSIVE",
     "capture_source_quarantine_floor_check": "(B) xxi: capture rows before xperp_capture.QUARANTINE_FLOOR dropped and counted; the tape's not_before checked",
     "price_last_print_per_minute": "(B) xxi: c(t) = last print with ts in (t - 60 s ; t]; minute bars (low, high, prints) built from the prints",
     "key_minute_without_print_exclusion": "(B) xxi: a key minute without any print excludes the instrument-instant (the capture analogue of vol = 0)",
     "classifier_mark_and_index_from_capture_or_index_history": "(B) xxi: P_hat on the captured mark and the index of the owner's P-G5-10 (ii) choice",
-    "gate2_sim_maker_post_only_touch": "(B) xxi: T01 post-only at the own touch decided at h + arm_min, resting until h + rest_until_min (lp_sim fill rule)",
+    "gate2_sim_maker_post_only_touch": "(B) xxi: T01 post-only at the own touch decided at h + arm_min, resting until h + rest_until_min; primary lp_sim fill rule "
+                                       "through (owner decision 2026-10-22), touch a descriptive comparison only",
     "gate2_sim_taker_entry_opposite_touch_slippage": "(B) xxi: T05 taker entry at the opposite touch after the latency, plus the slippage per taker leg",
     "gate2_sim_passive_exit_taker_remainder": "(B) xxi: passive exit at the opposite touch from the exit offset until exit_until_min, remainder taker",
     "gate2_funding_fill_grace_crossing": "(B) xxi: a fill within funding_fill_grace_min after a settlement crosses it and pays",
@@ -194,7 +220,7 @@ CAPABILITIES: dict[str, str] = {
 }
 A1_CAPABILITIES = tuple(k for k in CAPABILITIES if k.startswith("a1_"))
 GATE1_ONLY = ("candle_confirm_and_vol_zero_exclusion", "funding_coverage_window", "fill_proxy_through_candles", "funding_unknown_outside_coverage_counted",
-              "sealed_statistics_for_inconclusive_and_not_informative") + A1_CAPABILITIES
+              "sealed_statistics_for_inconclusive_and_not_informative", "gate2_frozen_together") + A1_CAPABILITIES
 GATE2_ONLY = ("owner_decisions_resolved_required_for_freeze", "capture_source_quarantine_floor_check", "price_last_print_per_minute", "key_minute_without_print_exclusion",
               "classifier_mark_and_index_from_capture_or_index_history", "gate2_sim_maker_post_only_touch", "gate2_sim_taker_entry_opposite_touch_slippage",
               "gate2_sim_passive_exit_taker_remainder", "gate2_funding_fill_grace_crossing", "gate2_classifier_validation_funding_channel", "gate2_stress_add_on_for_measured_terms",
@@ -257,7 +283,7 @@ BREAK_EVEN_RE = re.compile(r"^(?P<type>[A-Za-z0-9]+_[A-Za-z0-9_]+?)_(?P<k>\d+)_f
 DESCRIPTIVE_REPORTS = (
     "T01_classified_by_realized_rate", "T01_dead_zone_thresholds_0_0006_minus_0_0005", "T01_without_fill_proxy", "T01_dose_abs_rate",
     "T01_v_shape_minus15_0_plus15", "T01_by_photo_hour_00_08_16", "T01_friday_0800", "T01_us_business_day_vs_not", "T01_stratum_T02_4h_2h_1h",
-    "T01_mark_reference_inside_coverage", "T01_premium_balance_events_vs_controls", "T01_funding_cap_stress",
+    "T01_mark_reference_inside_coverage", "T01_premium_balance_events_vs_controls", "T01_funding_cap_stress", "T01_previous_settlement_filter_only",
     "T05_horizons_15_30", "T05_move_ge_1_tick", "T05_macro_days_separately", "T05_ten_am_et_release_days", "T05_brr_adjacency",
     "by_month", "by_instrument", "by_sign", "regime_rv24_above_median", "instruments_per_instant_ge_3", "excluded_share_by_instrument",
     "block_days_7", "minute_zero_T07", "hourly_seasonality_last_price", "weekday_seasonality", "funding_intervals_histogram", "portfolio_reading",
@@ -715,8 +741,11 @@ def session_intervals(spec: Spec, lo_us: int, hi_us: int) -> list[tuple[int, int
         for day in _local_days(lo_us, hi_us):
             if not day_matches(session["days"], day, spec.calendars):
                 continue
-            a = local_to_utc_us(day, session["start_min"], session["tz_info"])
-            b = local_to_utc_us(day, session["end_min"], session["tz_info"])
+            start_min, end_min = session["start_min"], session["end_min"]
+            if session.get("half_day_min") is not None and day in spec.calendars.get("nyse_half_days", ()):
+                start_min = end_min = session["half_day_min"]  # Annexe B request 13: the 13:00 ET close of a NYSE half day
+            a = local_to_utc_us(day, start_min, session["tz_info"])
+            b = local_to_utc_us(day, end_min, session["tz_info"])
             if b >= lo_us - DAY_US and a < hi_us + DAY_US:
                 out.append((a, b, session["name"]))
     return out
@@ -776,6 +805,193 @@ FREEZE_FILL_KEYS = ("instruments_snapshot_path", "instruments_snapshot_sha256", 
 # CTO M4 (P-G5-3, §4.7, §13 point 5): the sha256 of the sealed funding receipt, written in the register and in the freeze line, is also a
 # freeze_fill value. Optional key while the spec is a draft written before it existed (absent = null); a FROZEN spec carries it.
 FREEZE_FILL_SEAL_KEY = "funding_seal_receipt_sha256"
+
+# ----------------------------------------------------------------------------- freeze controls (owner decision 2026-10-22 (a); Annexe B 11, 13, 14, 16)
+
+# Annexe B request 14 (review-b quant M5): a value that carries this marker is a drafting choice the protocol body does not fix yet.
+FREEZE_PENDING_MARKER = "freeze_pending:"
+# Annexe B request 16 (review-b quant m5): GATES §1.2 amended 2026-10-21 (D4), S_eco = max(97.25 ; 5 x SOFR of the freeze day x 500 ; declared
+# fixed cost) USD a year; 97.25 = 5 x 3.89 % x 500, the literal value of D4 (97.0 was a rounding below it).
+S_ECO_FLOOR_USD_PER_YEAR = 97.25
+# Annexe B request 11 (review-b quant B1): the Gate 1 names the Gate 2 spec frozen with it and reads it before any market value.
+GATE2_SPEC_PATH = "python-orchestrator/scripts/research_lp/specs/g5_gate2_spec.json"
+GATE1_FROZEN_WITH_RULE = ("both specs are frozen in the same freeze line (protocol section 13 point 5) ; before any market read the Gate 1 evaluator reads "
+                          "frozen_with.spec (or --gate2-spec) and refuses to run (refuse_run) unless it is FROZEN, holds no owner_decision_pending, no "
+                          "freeze_pending marker and no null, passes the strict Gate 2 reader against this Gate 1 spec and its freeze_fill.gate1_spec_sha256 "
+                          "equals the sha256 of the Gate 1 spec read ; the sha256 of the Gate 2 spec is printed in the Gate 1 output (capability "
+                          "gate2_frozen_together)")
+# Annexe B request 13 (review-b quant M4): the content test of the calendars, the same rule at both gates.
+CALENDAR_LISTS = ("nyse_holidays", "cpi", "employment_situation", "fomc_statement")
+CALENDAR_CONTENT_RULE = (
+    "FROZEN only, over R = [T0 ; last scored day + data-gap extension] (Gate 1: the spec window) ; at least one cpi date and one employment_situation "
+    "date in every calendar month that meets R, unless content_exceptions names that list and that month ; every span of 56 consecutive days inside R "
+    "holds a fomc_statement date ; the nyse_holidays inside R equal the rule-based NYSE generator (New Year's Day, Martin Luther King Jr. Day = 3rd "
+    "Monday of January, Washington's Birthday = 3rd Monday of February, Good Friday from Easter, Memorial Day = last Monday of May, Juneteenth, "
+    "Independence Day, Labor Day = 1st Monday of September, Thanksgiving = 4th Thursday of November, Christmas Day ; a Saturday holiday observed "
+    "the Friday before except New Year's Day, a Sunday holiday the Monday after) up to the dates content_exceptions adds (extra_closure) or removes "
+    "(not_observed) ; nyse_half_days listed (each a NYSE trading day ; the sessions with on_nyse_half_days take that time on them, a 13:00 ET close "
+    "moves the us_cash_close exclusion) ; every exception dated (written_utc) and sourced")
+CONTENT_EXCEPTION_KEYS = ("list", "period", "change", "written_utc", "source", "reason")
+CONTENT_EXCEPTION_CHANGES = {"cpi": ("no_release_in_month",), "employment_situation": ("no_release_in_month",), "nyse_holidays": ("extra_closure", "not_observed")}
+FOMC_SPAN_DAYS = 56  # « au moins une date FOMC par 8 semaines » (Annexe B, ligne calendars)
+
+
+def marker_paths(document, marker: str = FREEZE_PENDING_MARKER, path: str = "spec") -> list[str]:
+    """Every path of `document` whose key or string value contains `marker` (Annexe B request 14)."""
+    out, stack = [], [(document, path)]
+    while stack:
+        item, where = stack.pop()
+        if isinstance(item, dict):
+            for key, value in item.items():
+                if marker in str(key):
+                    out.append(f"{where}.{key} (key)")
+                stack.append((value, f"{where}.{key}"))
+        elif isinstance(item, list):
+            stack.extend((v, f"{where}[{i}]") for i, v in enumerate(item))
+        elif isinstance(item, str) and marker in item:
+            out.append(where)
+    return sorted(out)
+
+
+def refuse_freeze_pending(document, status: str) -> list[str]:
+    """Annexe B request 14: the marker paths; a FROZEN spec that still holds one is refused."""
+    paths = marker_paths(document)
+    if status == "FROZEN" and paths:
+        raise SpecError(f"{FREEZE_PENDING_MARKER} in a FROZEN spec at {paths}: a drafting choice the protocol body does not fix yet is written in "
+                        "the protocol (sections 10, 11.1) or withdrawn from the spec before the freeze (Annexe B, review-b quant M5)")
+    return paths
+
+
+def check_s_eco(value: float) -> float:
+    """Annexe B request 16: the economic gate of both specs is at least the literal value of D4 (GATES §1.2 amended 2026-10-21)."""
+    if value < S_ECO_FLOOR_USD_PER_YEAR:
+        raise SpecError(f"economic.s_eco_usd_per_year {value:g} < {S_ECO_FLOOR_USD_PER_YEAR:g}: GATES 1.2 (amended 2026-10-21, D4) sets S_eco = max(97.25 ; "
+                        "5 x SOFR of the freeze day x 500 ; declared fixed cost), never lower")
+    return value
+
+
+def easter_sunday(year: int) -> _date:
+    """Gregorian Easter Sunday (anonymous Gregorian algorithm)."""
+    a, (b, c) = year % 19, divmod(year, 100)
+    d, e = divmod(b, 4)
+    g = (b - (b + 8) // 25 + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    ell = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * ell) // 451
+    month, day = divmod(h + ell - 7 * m + 114, 31)
+    return CalDate(year, month, day + 1)
+
+
+def nyse_holidays_by_rule(year: int) -> frozenset:
+    """The NYSE full-day holidays of `year` from the rules of CALENDAR_CONTENT_RULE (no exception: those are written in the spec)."""
+    def nth(month: int, weekday: int, n: int) -> _date:
+        first = CalDate(year, month, 1)
+        return first + timedelta(days=(weekday - first.weekday()) % 7 + 7 * (n - 1))
+
+    def last(month: int, weekday: int) -> _date:
+        end = CalDate(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1)
+        return end - timedelta(days=(end.weekday() - weekday) % 7)
+
+    def observed(day: _date, saturday_to_friday: bool = True) -> _date | None:
+        if day.weekday() == 5:
+            return day - timedelta(days=1) if saturday_to_friday else None
+        return day + timedelta(days=1) if day.weekday() == 6 else day
+
+    days = {observed(CalDate(year, 1, 1), saturday_to_friday=False), nth(1, 0, 3), nth(2, 0, 3), easter_sunday(year) - timedelta(days=2), last(5, 0),
+            observed(CalDate(year, 7, 4)), nth(9, 0, 1), nth(11, 3, 4), observed(CalDate(year, 12, 25))}
+    if year >= 2022:
+        days.add(observed(CalDate(year, 6, 19)))
+    return frozenset(d for d in days if d is not None)
+
+
+def _parse_content_exceptions(items) -> tuple:
+    if not isinstance(items, list):
+        raise SpecError("calendars.content_exceptions: expected a list (empty when no exception is written)")
+    out, seen = [], set()
+    for i, item in enumerate(items):
+        where = f"calendars.content_exceptions[{i}]"
+        _check_keys(item, where, CONTENT_EXCEPTION_KEYS)
+        name = _choice(item, "list", where, tuple(CONTENT_EXCEPTION_CHANGES))
+        change = _choice(item, "change", where, CONTENT_EXCEPTION_CHANGES[name])
+        period = _text(item, "period", where)
+        if name == "nyse_holidays":
+            value = _date(period, f"{where}.period")
+        elif re.match(r"^\d{4}-\d{2}$", period):
+            value = (int(period[:4]), int(period[5:]))
+        else:
+            raise SpecError(f"{where}.period: a cpi / employment_situation exception names a month 'YYYY-MM'")
+        _iso_us(item["written_utc"], f"{where}.written_utc")
+        _text(item, "source", where)
+        _text(item, "reason", where)
+        if (name, value) in seen:
+            raise SpecError(f"{where}: {name} {period} listed twice")
+        seen.add((name, value))
+        out.append({"list": name, "period": value, "change": change, "written_utc": item["written_utc"]})
+    return tuple(out)
+
+
+def _months(first: _date, last: _date) -> list[tuple[int, int]]:
+    out, (y, m) = [], (first.year, first.month)
+    while (y, m) <= (last.year, last.month):
+        out.append((y, m))
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return out
+
+
+def calendar_content(calendars: dict, sessions: tuple, first: _date, last: _date) -> dict:
+    """Annexe B request 13 (review-b quant M4), CALENDAR_CONTENT_RULE over R = [first ; last]: the problems of the frozen lists (an empty
+    list passes). Computed at every status (copied in the audit); a FROZEN spec with a problem is refused by its reader."""
+    problems = []
+    exceptions = calendars["content_exceptions"]
+    months = _months(first, last)
+    for name in ("cpi", "employment_situation"):
+        excepted = {e["period"] for e in exceptions if e["list"] == name}
+        have = {(d.year, d.month) for d in calendars[name]}
+        for ym in months:
+            if ym in excepted and ym in have:
+                problems.append(f"calendars.content_exceptions: {name} {ym[0]:04d}-{ym[1]:02d} is excepted but the list holds a date of that month")
+            elif ym not in excepted and ym not in have:
+                problems.append(f"calendars.{name}: no date in {ym[0]:04d}-{ym[1]:02d} (R = {first} .. {last}) and no dated, sourced exception")
+        for ym in sorted(excepted - set(months)):
+            problems.append(f"calendars.content_exceptions: {name} {ym[0]:04d}-{ym[1]:02d} lies outside R = {first} .. {last}")
+    fomc = sorted(calendars["fomc_statement"])
+    d = first
+    while d + timedelta(days=FOMC_SPAN_DAYS - 1) <= last:
+        end = d + timedelta(days=FOMC_SPAN_DAYS - 1)
+        if not any(d <= x <= end for x in fomc):
+            problems.append(f"calendars.fomc_statement: no date in the {FOMC_SPAN_DAYS}-day span {d} .. {end}")
+            break
+        d += timedelta(days=1)
+    generated = set().union(*(nyse_holidays_by_rule(y) for y in range(first.year, last.year + 1)))
+    generated = {x for x in generated if first <= x <= last}
+    added = {e["period"] for e in exceptions if e["list"] == "nyse_holidays" and e["change"] == "extra_closure"}
+    removed = {e["period"] for e in exceptions if e["list"] == "nyse_holidays" and e["change"] == "not_observed"}
+    for x in sorted(added & generated):
+        problems.append(f"calendars.content_exceptions: nyse_holidays {x} extra_closure is a rule-based holiday")
+    for x in sorted(removed - generated):
+        problems.append(f"calendars.content_exceptions: nyse_holidays {x} not_observed is not a rule-based holiday")
+    for x in sorted((added | removed) - {y for y in added | removed if first <= y <= last}):
+        problems.append(f"calendars.content_exceptions: nyse_holidays {x} lies outside R = {first} .. {last}")
+    expected = (generated - removed) | {x for x in added if first <= x <= last}
+    listed = {x for x in calendars["nyse_holidays"] if first <= x <= last}
+    for x in sorted(expected - listed):
+        problems.append(f"calendars.nyse_holidays: {x} missing (rule-based generator, CALENDAR_CONTENT_RULE)")
+    for x in sorted(listed - expected):
+        problems.append(f"calendars.nyse_holidays: {x} is not a rule-based NYSE holiday and no extra_closure exception names it")
+    half = sorted(calendars["nyse_half_days"])
+    for x in half:
+        if x.weekday() >= 5 or x in calendars["nyse_holidays"]:
+            problems.append(f"calendars.nyse_half_days: {x} is not a NYSE trading day")
+    if half and not any(s.get("half_day_min") is not None for s in sessions):
+        problems.append("calendars.nyse_half_days: listed, but no session carries on_nyse_half_days (the us_cash_close exclusion would not move)")
+    return {"rule": "CALENDAR_CONTENT_RULE", "range": [first.isoformat(), last.isoformat()], "months": len(months), "holidays_by_rule": sorted(x.isoformat() for x in generated),
+            "half_days": [x.isoformat() for x in half], "exceptions": len(exceptions), "problems": problems}
+
+
+def refuse_calendar_content(content: dict, status: str) -> None:
+    if status == "FROZEN" and content["problems"]:
+        raise SpecError(f"calendars: the content test refuses a FROZEN spec (CALENDAR_CONTENT_RULE, Annexe B request 13, review-b quant M4): {content['problems']}")
 
 
 def _parse_freeze_fill(block, status: str) -> dict:
@@ -998,7 +1214,7 @@ def _parse_sessions(items, status: str = "DRAFT_NOT_FROZEN") -> tuple:
     out, names = [], set()
     for i, item in enumerate(items):
         where = f"sessions[{i}]"
-        _check_keys(item, where, ("name", "tz", "start", "end", "days"), ("verify_at_freeze",))
+        _check_keys(item, where, ("name", "tz", "start", "end", "days"), ("verify_at_freeze", "on_nyse_half_days"))
         name = _text(item, "name", where)
         if name in names:
             raise SpecError(f"{where}: duplicate session {name}")
@@ -1006,19 +1222,28 @@ def _parse_sessions(items, status: str = "DRAFT_NOT_FROZEN") -> tuple:
         start, end = _hhmm(item["start"], f"{where}.start"), _hhmm(item["end"], f"{where}.end")
         if end < start:
             raise SpecError(f"{where}: end before start (a session spans one local day)")
-        out.append({"name": name, "tz": item["tz"], "tz_info": _tz(item["tz"], f"{where}.tz"), "start_min": start, "end_min": end,
-                    "days": _choice(item, "days", where, SESSION_DAYS), "verify_at_freeze": _bool(item, "verify_at_freeze", where) if "verify_at_freeze" in item else False})
+        days = _choice(item, "days", where, SESSION_DAYS)
+        half = None
+        if "on_nyse_half_days" in item:  # Annexe B request 13: a 13:00 ET close moves the us_cash_close exclusion on the NYSE half days
+            if days != "nyse_trading_days" or start != end:
+                raise SpecError(f"{where}.on_nyse_half_days: only an instant session of the NYSE trading days moves on the half days (calendars.nyse_half_days)")
+            half = _hhmm(item["on_nyse_half_days"], f"{where}.on_nyse_half_days")
+        out.append({"name": name, "tz": item["tz"], "tz_info": _tz(item["tz"], f"{where}.tz"), "start_min": start, "end_min": end, "days": days,
+                    "half_day_min": half, "verify_at_freeze": _bool(item, "verify_at_freeze", where) if "verify_at_freeze" in item else False})
         if status == "FROZEN" and out[-1]["verify_at_freeze"]:
             raise SpecError(f"{where}: verify_at_freeze is true in a FROZEN spec (verify the session at the freeze, P-G5-5, then write false)")
     return tuple(out)
 
 
 def _parse_calendars(block, extra: tuple = ()) -> dict:
-    lists = ("nyse_holidays", "cpi", "employment_situation", "fomc_statement")
-    _check_keys(block, "calendars", ("tz",) + lists + ("sources", "read_by") + tuple(extra))
+    lists = CALENDAR_LISTS
+    _check_keys(block, "calendars", ("tz",) + lists + ("nyse_half_days", "content_rule", "content_exceptions", "sources", "read_by") + tuple(extra))
     if _text(block, "tz", "calendars") != NEW_YORK:
         raise SpecError(f"calendars.tz: the frozen dates are New York dates ({NEW_YORK}); {block['tz']!r} is not implemented")
     out = {name: frozenset(_dates(block[name], f"calendars.{name}")) for name in lists}
+    out["nyse_half_days"] = frozenset(_dates(block["nyse_half_days"], "calendars.nyse_half_days"))
+    _exact(block, "content_rule", "calendars", CALENDAR_CONTENT_RULE)  # Annexe B request 13
+    out["content_exceptions"] = _parse_content_exceptions(block["content_exceptions"])
     out["sources"] = _str_list(block, "sources", "calendars")
     out["read_by"] = _text(block, "read_by", "calendars")
     return out
@@ -1028,7 +1253,7 @@ def _calendar_ref(text: str, where: str, calendars: dict) -> str:
     if not isinstance(text, str) or not text.startswith("calendars."):
         raise SpecError(f"{where}: {text!r} is not a calendars.<list> reference")
     name = text[len("calendars."):]
-    if name not in calendars or name in ("sources", "read_by"):
+    if name not in CALENDAR_LISTS or name not in calendars:
         raise SpecError(f"{where}: {text!r} names no date list of calendars")
     return name
 
@@ -1421,6 +1646,7 @@ def _parse_economic(block) -> dict:
     out = {"s_eco": _num(block, "s_eco_usd_per_year", "economic", 0.0), "capital": _num(block, "capital_usd", "economic", 0.0, lo_open=True),
            "leverage": _num(block, "leverage", "economic", 0.0, lo_open=True), "max_live": _int(block, "max_live", "economic", 1),
            "notional": _num(block, "order_notional_usd", "economic", 0.0, lo_open=True), "readings": readings}
+    check_s_eco(out["s_eco"])  # Annexe B request 16
     if out["max_live"] * out["notional"] / out["leverage"] > out["capital"] + 1e-9:
         raise SpecError("economic: max_live × order_notional_usd / leverage exceeds capital_usd (the portfolio reading is not feasible)")
     be = block["audit_break_even_net_bp"]
@@ -1619,8 +1845,19 @@ def _check_audits(types: tuple, spec_like, fetch_plan: dict | None, economic: di
 
 _TOP_REQUIRED = ("spec_id", "spec_schema", "spec_version", "status", "protocol", "note", "source", "dataset_id", "end_exclusive_utc", "quarantine_floor_utc", "window",
                  "requires", "freeze_fill", "universe", "eligibility", "price", "frozen_candle", "unit", "statistics", "power_floor", "costs", "controls_common", "sessions",
-                 "sessions_note", "calendars", "macro_filter", "events", "verdict", "multiplicity", "sealing", "gate2_inscription", "economic", "descriptive")
+                 "sessions_note", "calendars", "macro_filter", "events", "verdict", "multiplicity", "sealing", "gate2_inscription", "economic", "descriptive",
+                 "frozen_with")
 _TOP_OPTIONAL = ("fetch_plan",)
+
+
+def _parse_gate1_frozen_with(block) -> dict:
+    """Annexe B request 11 (`gate2_frozen_together`): the Gate 2 spec frozen with this Gate 1, read by `command_eval` before any market value."""
+    _check_keys(block, "frozen_with", ("spec", "spec_id", "rule"))
+    _exact(block, "spec", "frozen_with", GATE2_SPEC_PATH)
+    if "GATE2" not in _text(block, "spec_id", "frozen_with"):
+        raise SpecError(f"frozen_with.spec_id {block['spec_id']!r} does not name a Gate 2 spec")
+    _exact(block, "rule", "frozen_with", GATE1_FROZEN_WITH_RULE)
+    return {"spec": block["spec"], "spec_id": block["spec_id"]}
 
 
 @dataclass(frozen=True)
@@ -1664,6 +1901,7 @@ def parse_spec(document, gate1=None) -> Spec:
     status = _choice(document, "status", "spec", STATUSES)
     if status == "FROZEN" and "draft" in version.lower():
         raise SpecError(f"spec_version {version!r}: a FROZEN spec carries a final version")
+    markers = refuse_freeze_pending(document, status)  # Annexe B request 14
     source = _choice(document, "source", "spec", ("history", "capture"))  # capture: dispatched above
     gate = "G5_GATE1_"
     if "GATE1" not in spec_id:
@@ -1701,6 +1939,9 @@ def parse_spec(document, gate1=None) -> Spec:
     sessions = _parse_sessions(document["sessions"], status)
     _text(document, "sessions_note", "spec")
     calendars = _parse_calendars(document["calendars"])
+    content = calendar_content(calendars, sessions, start, end_exclusive - timedelta(days=1))  # Annexe B request 13: R = the spec window
+    refuse_calendar_content(content, status)
+    frozen_with = _parse_gate1_frozen_with(document["frozen_with"])  # Annexe B request 11
     macro = _parse_macro(document["macro_filter"], calendars)
     items = _list(document, "events", "spec")
     types = tuple(_parse_type(item, i, source, gate, calendars) for i, item in enumerate(items))
@@ -1728,6 +1969,7 @@ def parse_spec(document, gate1=None) -> Spec:
     gate2 = None
     partial = _Partial(start, end_exclusive, universe, calendars, sessions, macro)
     audit = _check_audits(types, partial, fetch_plan, economic, power)
+    audit["calendar_content"] = content
     notes = {"note": document["note"], "universe.rule": document["universe"]["rule"], "universe.selection_bias_declared": document["universe"]["selection_bias_declared"],
              "controls_common.rule": document["controls_common"]["rule"], "sessions_note": document["sessions_note"], "calendars.sources": list(calendars["sources"]),
              "calendars.read_by": calendars["read_by"], "macro_filter.type": document["macro_filter"]["type"], "macro_filter.use": document["macro_filter"]["use"],
@@ -1735,7 +1977,8 @@ def parse_spec(document, gate1=None) -> Spec:
              "verdict.closure_scope": verdict["closure_scope"], "multiplicity.programme.otherwise": multiplicity["otherwise"], "sealing.open_after": sealing["open_after"],
              "freeze_fill.rule": freeze_fill["rule"], "freeze_fill.absent_keys": freeze_fill["absent"], "gate2_inscription.discretion": document["gate2_inscription"]["discretion"],
              "sessions_to_verify_at_freeze": [s["name"] for s in sessions if s["verify_at_freeze"]],
-             "classifier.threshold_origin": {t.name: t.classifier["threshold_origin"] for t in types if t.classifier is not None}}
+             "classifier.threshold_origin": {t.name: t.classifier["threshold_origin"] for t in types if t.classifier is not None},
+             "frozen_with": frozen_with, "freeze_pending_markers": markers, "calendars.content_problems": content["problems"]}
     if fetch_plan is not None:
         notes.update({"fetch_plan.max_requests": document["fetch_plan"]["max_requests"], "fetch_plan.pre_freeze.sealed": document["fetch_plan"]["pre_freeze"]["sealed"],
                       "fetch_plan.estimate_assumption": document["fetch_plan"]["estimate_assumption"], "fetch_plan.rate_scale_proposed": fetch_plan["rate_scale_proposed"]})
@@ -2171,13 +2414,14 @@ def next_settlement_at_decision(series: Series, instants: np.ndarray, arm_min: i
     return out
 
 
-def settlement_instants(series: Series, tspec: TypeSpec, spec: Spec) -> tuple[np.ndarray, dict, np.ndarray]:
+def settlement_instants(series: Series, tspec: TypeSpec, spec: Spec, previous_only: bool = False) -> tuple[np.ndarray, dict, np.ndarray]:
     """(B) ii — settlements of the instrument inside the window kept when the gaps to the previous and to the next settlement
     match the filter (8 h ± 1 min), with a known realized rate. Returns the kept instants, the counts and the settlements with
     another (known) interval and a known rate (the descriptive T02 stratum: 4 h, 2 h, 1 h). History: h+ is the next settlement
     served (§5.1); the instants that only the h+ criterion removes are counted (`removed_by_next_neighbour_only`: the h+ gap is
     known after the decision, CTO M1 — the protocol decides at the freeze). Capture: h+ is the decision-time `nextFundingTime`
-    (`next_settlement_at_decision`, `NEXT_AT_DECISION_RULE`), never the settlement realised after t_arm."""
+    (`next_settlement_at_decision`, `NEXT_AT_DECISION_RULE`), never the settlement realised after t_arm. `previous_only` (Annexe B request
+    18, descriptive `T01_previous_settlement_filter_only`): the next-neighbour criterion off — kept on the previous gap and the rate only."""
     gen = tspec.generator
     every = np.unique(series.settlements_us)
     inside = every[(every >= spec.start_us) & (every < spec.end_us)]
@@ -2194,7 +2438,7 @@ def settlement_instants(series: Series, tspec: TypeSpec, spec: Spec) -> tuple[np
     known = (prev_gap >= 0) & (next_gap >= 0)
     prev_ok = (prev_gap >= 0) & (np.abs(prev_gap - gen["previous_gap_us"]) <= gen["tolerance_us"])
     next_ok = (next_gap >= 0) & (np.abs(next_gap - gen["next_gap_us"]) <= gen["tolerance_us"])
-    ok = prev_ok & next_ok
+    ok = prev_ok if previous_only else prev_ok & next_ok
     rate = series.rate_at(inside)
     has_rate = np.isfinite(rate)
     counts["unknown_neighbour"] = int((~known).sum())
@@ -3092,7 +3336,7 @@ def common_reports(series_by_inst: dict, spec: Spec, names: tuple, windows: dict
 GATE2_TYPE_REPORTS = {
     "T02_funding_4h_settlements_premium_settstate_book": lambda t: t.generator["kind"] == "funding_settlements",
     "T18_cme_cf_brr_window": lambda t: True,
-    "fill_rules_through_and_queue": lambda t: True,
+    "fill_rules_touch_and_queue": lambda t: True,
     "premium_okx_channel_vs_premium_mark_index": lambda t: t.classifier is not None,
     "net_bp_gate1_construction_on_last_prints": lambda t: True,
     "adverse_selection_measured_vs_design_3_5": lambda t: t.role == "maker_maker",
@@ -3102,7 +3346,7 @@ GATE2_TYPE_REPORTS = {
 DESCRIPTIVE_RULE_NOTES = {
     "T02_funding_4h_settlements_premium_settstate_book": "the T01 rule (classifier, simulation) at the settlements of another interval (4 h, 2 h, 1 h); settState counts, "
                                                          "mean |premium| of the funding-rate channel and book spread at the decision",
-    "T06_us_close_reversion": "16:00 New York of the NYSE days: s = sign(c(h) - c(h-5)), reversion = -s ln(c(h+15) / c(h)) x 1e4 (last price, no cost, no test)",
+    "T06_us_close_reversion": "16:00 New York of the NYSE days (13:00 on calendars.nyse_half_days): s = sign(c(h) - c(h-5)), reversion = -s ln(c(h+15) / c(h)) x 1e4 (last price, no cost, no test)",
     "adverse_selection_measured_vs_design_3_5": "filled maker entries: m_h = s (mid(first fill + h) - p) / p x 1e4 at h = 0 (mid just before), 60 s, 300 s; measured adverse "
                                                 "selection = -mean(m_60)",
     "taker_half_spread_measured_vs_design_3": "taker entries: s (p - mid) / mid x 1e4 at the activation snapshot",
@@ -3110,6 +3354,28 @@ DESCRIPTIVE_RULE_NOTES = {
     "premium_okx_channel_vs_premium_mark_index": "P_hat(t_arm) (premium_mark_index) against the funding-rate channel's last premium before t_arm, at the raw events and the controls: "
                                                  "3 x 3 class matrix at the classifier thresholds, Cohen's kappa, Pearson correlation (descriptive only, CTO M2)",
 }
+
+
+PREVIOUS_ONLY_SUFFIX = "_previous_settlement_filter_only"
+PREVIOUS_ONLY_RULE = ("Annexe B request 18 (review-b quant m12, CTO review-b M1): the type's settlements kept on the gap to the previous settlement and the "
+                      "realized rate only, the next-settlement criterion off (at the Gate 1 the next settlement is known after the decision) ; same "
+                      "eligibility, D_cov, classifier, fill proxy, costs and control rule (controls on the days of these events) ; descriptive, no p-value, "
+                      "never decisive, never promoted")
+
+
+def report_previous_settlement_only(run: dict, spec: Spec) -> dict:
+    """Annexe B request 18: T01 filtered on the previous settlement only (`PREVIOUS_ONLY_RULE`), against the primary filter on both neighbours."""
+    tspec = run["tspec"]
+    if tspec.generator["kind"] != "funding_settlements":
+        return {"status": "UNAVAILABLE", "reason": "not a funding_settlements type"}
+    events, controls, added = {}, {}, 0
+    for inst, s in run["series"].items():
+        instants, _, _ = settlement_instants(s, tspec, spec, previous_only=True)
+        ev_i, _ = restrict(s, instants, tspec, spec, run["window"])
+        events[inst] = ev_i
+        controls[inst], _ = control_instants(s, tspec, spec, ev_i, exclusion_intervals(s, tspec, spec, run["common"]), run["window"])
+        added += int(np.setdiff1d(ev_i, run["events"].get(inst, np.zeros(0, dtype=np.int64))).size)
+    return {"rule": PREVIOUS_ONLY_RULE, "raw_instrument_instants_added_vs_primary": added, **_variant_d(run, spec, None, None, events, controls)}
 
 
 def _us_summer_time(ts_us) -> np.ndarray:
@@ -3178,7 +3444,8 @@ def report_us_close_reversion(series_by_inst: dict, spec: Spec, windows: dict | 
     instants = []
     for day in _local_days(lo, hi):
         if day_matches(session["days"], day, spec.calendars):
-            m = local_to_utc_us(day, session["start_min"], session["tz_info"])
+            close_min = session["half_day_min"] if session.get("half_day_min") is not None and day in spec.calendars.get("nyse_half_days", ()) else session["start_min"]
+            m = local_to_utc_us(day, close_min, session["tz_info"])  # the 13:00 ET close of a NYSE half day (Annexe B request 13)
             if lo <= m - 5 * MINUTE_US and m + 15 * MINUTE_US < hi:
                 instants.append(m)
     instants = np.array(sorted(set(instants)), dtype=np.int64)
@@ -3514,6 +3781,8 @@ def type_reports(run: dict, spec: Spec, names: tuple, calendar_days: int, verdic
                         gaps[key] = gaps.get(key, 0) + 1
             out[name] = {"settlements_other_interval": int(sum(np.asarray(v).size for v in run["other_interval"].values())), "previous_gap_histogram": gaps,
                          "observations": int(sum(p["counts"]["kept"] for p in parts)), "net_bp_mean": _fmean(_pooled(parts, "net_bp")), "funding_bp_mean": _fmean(_pooled(parts, "funding_bp"))}
+        elif name.endswith(PREVIOUS_ONLY_SUFFIX):
+            out[name] = report_previous_settlement_only(run, spec)
         elif name.endswith("_mark_reference_inside_coverage"):
             out[name] = {"price": "mark_1m.close", **_variant_d(run, spec, {"price": "mark"})}
         elif name.endswith("_premium_balance_events_vs_controls"):
@@ -3572,8 +3841,10 @@ def type_reports(run: dict, spec: Spec, names: tuple, calendar_days: int, verdic
                          "previous_gap_histogram": gaps, "sett_state_counts": states, "observations": int(sum(p["counts"]["kept"] for p in parts)),
                          "net_bp_mean": _fmean(_pooled(parts, "net_bp")), "funding_bp_mean": _fmean(_pooled(parts, "funding_bp")),
                          "abs_premium_okx_mean": _fmean(np.concatenate(premiums)) if premiums else None, "book_spread_bp_at_decision_mean": _fmean(np.concatenate(spreads)) if spreads else None}
-        elif name == "fill_rules_through_and_queue":
-            out[name] = {"rule": "the same simulation under each descriptive fill rule of execution_sim (the primary rule is execution_sim.entry_fill_rule)",
+        elif name == "fill_rules_touch_and_queue":
+            out[name] = {"rule": "the same simulation under each descriptive fill rule of execution_sim (the primary rule is execution_sim.entry_fill_rule = through, "
+                                 "owner decision 2026-10-22) ; descriptive comparison only: never decisive, it can never rescue a FAIL, a NOT_INFORMATIVE "
+                                 "or an INCONCLUSIVE",
                          **{rule: _variant_d(run, spec, {"sim_rule": rule}) for rule in spec.gate2["sim"]["descriptive_rules"]}}
         elif name == "premium_okx_channel_vs_premium_mark_index":
             out[name] = {"rule": DESCRIPTIVE_RULE_NOTES[name], **_premium_agreement(run, tspec)}
@@ -4166,6 +4437,8 @@ def add_parser(sub) -> None:
     parser.add_argument("--out-json", required=True)
     parser.add_argument("--out-md", default="")
     parser.add_argument("--sealed-dir", default="", help="where sealed/<type>.json go (default: <dir of --out-json>/sealed)")
+    parser.add_argument("--gate2-spec", default="", help="Gate 1 only: the FROZEN Gate 2 spec frozen with this one (default: frozen_with.spec in the repository), "
+                                                        "read before any market value (gate2_frozen_together, refuse_run; its sha256 is printed)")
     gate2 = parser.add_argument_group("Gate 2 (source capture)")
     gate2.add_argument("--gate1-result", default="", help="the Gate 1 result JSON of g5-eval (gate2_inscription.input; never a file under sealed/)")
     gate2.add_argument("--expect-gate1-result-sha256", default="", help="its sha256 written in the register the day of the Gate 1 run")
@@ -4239,14 +4512,22 @@ def command_eval(args: argparse.Namespace) -> int:
     except SpecError as error:
         raise SystemExit(f"spec error: {error}") from None
     if spec.source == "capture":
+        if getattr(args, "gate2_spec", ""):
+            raise SystemExit("--gate2-spec belongs to a history (Gate 1) spec")
         return _command_eval_capture(args, spec, spec_sha, started)
     for option in ("gate1_result", "expect_gate1_result_sha256", "p3_counts_file", "index_tape", "expect_index_tape_sha256", "gate1_spec"):
         if getattr(args, option, ""):
             raise SystemExit(f"--{option.replace('_', '-')} belongs to a capture (Gate 2) spec")
     guard = guard_window(spec)
     code_digest = cli.code_digest()
+    from . import g5_gate2  # lazy: g5_gate2 imports this module
+
+    # Annexe B request 11 (gate2_frozen_together): the Gate 2 spec frozen with this one, read (never a market value) before anything else.
+    gate2_path = Path(args.gate2_spec) if getattr(args, "gate2_spec", "") else REPO_ROOT / spec.raw["frozen_with"]["spec"]
+    together = g5_gate2.check_frozen_together(spec, spec_sha, gate2_path)
     base = {"kind": "lp-g5-eval", "evaluator": EVALUATOR_VERSION, "generated_at": tape.iso_now(), "spec": spec_summary(spec, spec_sha, str(args.spec)), "tape": str(args.tape),
-            "guard": guard, "code": cli.code_identity(), "code_digest": code_digest}
+            "guard": guard, "code": cli.code_identity(), "code_digest": code_digest,
+            "gate2_spec": {k: together[k] for k in ("path", "sha256", "spec_id", "status", "gate1_spec_sha256")}}
     # Global device conditions decided before any market value is opened (B xviii): nothing is read when one holds.
     device = []
     if args.expect_spec_sha256.lower() != spec_sha:
@@ -4265,8 +4546,12 @@ def command_eval(args: argparse.Namespace) -> int:
                                                         "mode": "tape"}}
         check_forbidden(document, spec)
         _write(Path(args.out_json), json.dumps(_clean(document), indent=1, sort_keys=True, ensure_ascii=False) + "\n")
-        print(json.dumps({"spec_sha256": spec_sha, "verdicts": document["summary"]["verdicts"], "market_data_read": False, "device": device}, ensure_ascii=False))
+        print(json.dumps({"spec_sha256": spec_sha, "gate2_spec_sha256": together["sha256"], "verdicts": document["summary"]["verdicts"], "market_data_read": False,
+                          "device": device}, ensure_ascii=False))
         return 2
+    if together["problems"]:
+        raise SystemExit(f"gate2_frozen_together (refuse_run, nothing read): the Gate 2 spec {gate2_path} (sha256 {together['sha256']}): "
+                         + "; ".join(together["problems"]))
     snapshot_path = Path(args.instruments_file or spec.freeze_fill["instruments_snapshot_path"])
     if not snapshot_path.exists() or tape.sha256_of(snapshot_path) != spec.freeze_fill["instruments_snapshot_sha256"]:
         raise SystemExit(f"instruments snapshot {snapshot_path}: missing or its sha256 differs from freeze_fill.instruments_snapshot_sha256 (mismatch_with_snapshot: refuse_run)")
@@ -4338,8 +4623,9 @@ def command_eval(args: argparse.Namespace) -> int:
     document = {**base, **study, "instruments": [i.inst_id for i in spec.universe], "instruments_snapshot": {"path": str(snapshot_path), "sha256": tape.sha256_of(snapshot_path)},
                 "funding_seal": seal, "coverage": {i: s.coverage for i, s in series.items()}, "elapsed_seconds": round(time.time() - started, 1)}
     _finish(document, args, sealed_payloads)
-    print(json.dumps({"spec_sha256": spec_sha, "code_digest": code_digest, "verdicts": study["summary"]["verdicts"], "sealed_sha256": study["summary"]["sealed_sha256"],
-                      "gate2_inscription": study["summary"]["gate2_inscription"], "elapsed_seconds": document["elapsed_seconds"]}, ensure_ascii=False))
+    print(json.dumps({"spec_sha256": spec_sha, "gate2_spec_sha256": together["sha256"], "code_digest": code_digest, "verdicts": study["summary"]["verdicts"],
+                      "sealed_sha256": study["summary"]["sealed_sha256"], "gate2_inscription": study["summary"]["gate2_inscription"],
+                      "elapsed_seconds": document["elapsed_seconds"]}, ensure_ascii=False))
     return 0
 
 
