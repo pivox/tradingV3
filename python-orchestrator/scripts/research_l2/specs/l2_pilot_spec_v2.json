@@ -1,0 +1,175 @@
+{
+  "schema": "l2-pilot-spec/2",
+  "spec_id": "okx-xperp-l2-capture-pilot",
+  "version": "2.0.0",
+  "status": "FROZEN",
+  "frozen_at_utc": "2026-10-22",
+  "supersedes": {
+    "spec": "l2_pilot_spec_v1.json",
+    "sha256": "16b1a6941f539c0a5a918d1a811ebbf6c291aedfe784f536a29ad675d52515a3",
+    "why": "v1 kept unchanged (frozen); v2 adds the reserved window with its hard end and the P-L2-1 separation check ; the code refuses v1 for a run (no hard end, no separation check)"
+  },
+  "purpose": "Public-data capture pilot of OKX Europe X-Perps order-book depth (L2) and public trades, to study LATER the feasibility of take-profit / stop-loss rules adapted to the order book. Development / exploration only, never a confirmation. Nothing is scheduled; one run, started by hand.",
+  "authorization": {
+    "date": "2026-10-22",
+    "text": "a public-data capture pilot, start no earlier than 2026-11-02 and respecting the LP programme prerequisites; two X-Perps contracts, BTC and ETH, selected by authorized metadata; max 24 h; at most 5 GiB written and at least 10 GiB kept free; clean stop as soon as a limit is hit; no automatic extension or restart.",
+    "today": "prepare the tool and its exact command only; schedule nothing (no cron, no systemd unit, no scheduled task). No orders, no flags, no merge.",
+    "reserved_window": "owner mission of 2026-10-22 (decision P-L2-1, D14): reserve a short development exploration window for the pilot, preferred slot 2026-11-02T00:00Z -> 2026-11-03T00:00Z (a later manual start shortens it, never shifts the end) ; keep BTC/ETH X-Perps, 24 h max, 5 GiB max written, >= 10 GiB free, no restart or extension ; refuse before the start, after the end, and while the separation is not recorded"
+  },
+  "window": {
+    "start_not_before_utc": "2026-11-02T00:00:00Z",
+    "hard_end_utc": "2026-11-03T00:00:00Z",
+    "duration_rule": "duration = min(limits.max_duration_s, hard_end_utc - start) ; a later manual start shortens the run, never shifts its end ; refused before start_not_before_utc and at or after hard_end_utc ; one run, no restart, no extension (stop reason hard_end when the hard end binds)",
+    "decision": "P-L2-1 (D14, 2026-10-22): the reserved development exploration window of the L2 capture pilot"
+  },
+  "separation": {
+    "decision_id": "P-L2-1",
+    "decision_ref": "docs/handbook/research/LP-OWNER-DECISIONS-2026-10-21.md D14 (branch claude/g5-gate2-prefreeze) ; tradingV3-private/research/20261020T1430Z-lp-programme/REGISTRY.md",
+    "g5_gate2_spec_id": "LP-G5-GATE2-2026",
+    "g5_gate2_min_version": "0.1.8",
+    "g5_gate2_requires": "pilot_separation_floor",
+    "g5_gate2_block_key": "pilot_separation",
+    "g5_gate2_block_sha256": "4b96e2bd3987e123b597b6534a9c464580d560db399401849cf992af004d489e",
+    "g5_gate2_block": {
+      "decision": "P-L2-1 (LP-OWNER-DECISIONS-2026-10-21.md D14 ; owner mission of 2026-10-22): reserve a short development exploration window for the L2 capture pilot, preferred slot 2026-11-02T00:00Z -> 2026-11-03T00:00Z (a later manual start shortens it, never shifts the end), separated from every decisive use of the LP programme by the observations used, not by storage folders",
+      "reserved_interval_utc": [
+        "2026-11-02T00:00:00Z",
+        "2026-11-03T00:00:00Z"
+      ],
+      "margin_s": 43200,
+      "separation_floor_utc": "2026-11-03T12:00:00Z",
+      "excluded_interval_utc": [
+        "2026-11-02T00:00:00Z",
+        "2026-11-03T12:00:00Z"
+      ],
+      "rule": "no observation timestamped in excluded_interval_utc (prints, books, bbo, mark, index, funding messages, liquidations, open interest, message counts) enters a decisive computation of the LP programme, nor its footprints, look-backs, warm-ups, rodage day, calibration, quality rules or instrument selection ; data captured in that interval, by the pilot or by any LP collector, are development data only",
+      "g5_gate2_t0_min_utc": "2026-11-04T00:00:00Z",
+      "max_lookback_min": 540,
+      "applies_to": {
+        "g5_gate1": "absent: historical window 2026-04-28 .. 2026-10-14 (exclusive), fetched and read under g5_fetch.END_EXCLUSIVE",
+        "g5_gate2": "T0 >= g5_gate2_t0_min_utc = first 00:00 UTC >= separation_floor_utc + max_lookback_min (480-minute classifier look-back before t_arm, 60-minute margin of g5_index_fetch ; every footprint starts at or after T0) ; capture rows before separation_floor_utc dropped and counted before any computation (g5_eval.load_capture_series), a residual row refused ; g5_index_fetch refuses a start before separation_floor_utc",
+        "g2": "T0 = first 00:00 UTC >= max(2026-11-02 ; separation_floor_utc ; end of P3 ; freeze + 24 h) ; rodage day T0 ; research_lp simulate and events refuse the day files of 2026-11-02 and 2026-11-03 (day granularity, stricter than the floor) unless --separation-waiver-reason TEXT (development only, recorded in the guard record)",
+        "g4_gate2": "the look-back history (2 016 five-minute bins, at least 288) and the 24-hour sigma and notional hold no bin before separation_floor_utc: research_lp events refuses the day files of 2026-11-02 and 2026-11-03 ; bins before the first readable day are absent, never imputed",
+        "p3": "research_lp count refuses a --not-before before separation_floor_utc: P3 never runs during the pilot, its counts, coverage table and selection file hold no minute of excluded_interval_utc",
+        "pilot": "l2-pilot-spec/2: start >= reserved_interval_utc[0], hard end reserved_interval_utc[1] whatever the start, duration = min(24 h, hard end - start) ; capture and replay-check refused unless this block is found, sha256 of its canonical JSON equal, in the G5 Gate 2 spec given"
+      },
+      "reading": "pilot content (prices, books, trades) opened only once this separation is recorded (P-L2-1 in LP-OWNER-DECISIONS-2026-10-21.md and in REGISTRY.md, this block in the G5 Gate 2 spec) ; before that, quality and volume summaries only ; a protocol frozen after the pilot content is opened declares that exposure among its prior exposures (development data, never a threshold, a window or a universe choice) ; the pilot's volume measures never decide the P3 / G2 collector ceiling (G2 3.4: P3 facts only)"
+    },
+    "rule": "capture, plan and replay-check refuse unless --separation-spec names a G5 Gate 2 spec (spec_id g5_gate2_spec_id, spec_version >= g5_gate2_min_version, requires holding g5_gate2_requires) whose pilot_separation block hashes (sha256 of its canonical JSON: sorted keys, no spaces, UTF-8) to g5_gate2_block_sha256 (= g5_gate2_block, copied here) and whose reserved interval is this window, and unless --separation-ref starts with decision_id ; nothing is read from that spec but these fields"
+  },
+  "venue": {
+    "ws_public": "wss://wseea.okx.com/ws/v5/public",
+    "rest": "https://eea.okx.com",
+    "instruments_path": "/api/v5/public/instruments?instType=FUTURES",
+    "login": false
+  },
+  "selection": {
+    "inst_type": "FUTURES",
+    "rule_type": "xperp",
+    "state": "live",
+    "underlyings": [
+      "BTC-USD",
+      "ETH-USD"
+    ],
+    "inst_id_regex": "^[A-Z0-9]+-USD_UM_XPERP-\\d{6}$",
+    "exactly_one_per_underlying": true,
+    "units_kept": [
+      "instId",
+      "instType",
+      "instFamily",
+      "uly",
+      "ruleType",
+      "state",
+      "ctType",
+      "ctVal",
+      "ctValCcy",
+      "ctMult",
+      "settleCcy",
+      "tickSz",
+      "lotSz",
+      "minSz",
+      "listTime",
+      "expTime"
+    ]
+  },
+  "channels": {
+    "depth_primary": "books",
+    "depth_fallback": "books5",
+    "trades": "trades",
+    "subscribed": [
+      "books",
+      "books5",
+      "trades"
+    ],
+    "fallback_rule": "books5 is always subscribed next to books (declared fallback and cross-check). If books is refused for an instrument (error event), the run continues with books5 + trades for it, the refusal is written in the manifest (depth_status = books5_only) and the dataset is labelled 5-level only for that instrument. Never an automatic switch to another channel, host or login.",
+    "excluded": {
+      "books-l2-tbt": "VIP4+ and login (docs: error 64003; trick page: login, VIP5)",
+      "books50-l2-tbt": "VIP4+ and login",
+      "bbo-tbt": "1 level only; not needed for L2 (speed not required by the authorization)",
+      "books-rpi": "consolidated with RPI depth; not part of the authorization",
+      "trades-all": "URL path /ws/v5/business (a second connection, no cross-connection ordering with books); trades on /ws/v5/public keeps the documented sequential publication of book and aggregated trades"
+    },
+    "doc_copies_sha256": {
+      "my-docs-v5-en.txt": "893cccb2b7154a85e7ace6d8ef13aaf5d48a4ed330741fa0f202161c621fc14c",
+      "docs-v5-en.txt": "a7e949639846d080506d554985985419521b8a94b58cbf1f7423de4e144342dd",
+      "docs-v5-log_en.txt": "3d2f48e02f3920d1b55815d65b019db57b7cb305195fa79190d2fbec8287a225"
+    },
+    "doc_citations": [
+      "docs-v5 WS / Order book channel (EEA local copy my-docs-v5-en.txt l.15095-15349; global docs-v5-en.txt l.30510-30766): books 400 levels snapshot + incremental every 100 ms; books5 5-level snapshot every 100 ms; URL path /ws/v5/public; l2-tbt channels VIP4+",
+      "docs-v5 Sequence ID (EEA l.15352-15371; global l.30767-30786): prevSeqId/seqId continuity, heartbeat with empty asks/bids after ~60 s, sequence reset",
+      "changelog 2026-06-23 Deprecation of checksum field in order book channels (docs-v5-log_en.txt l.2212-2228): checksum fixed to 0 for books, use seqId/prevSeqId; books5 has no checksum",
+      "docs-v5 Checksum algorithm, still written only in the Spread Trading order book section (sprd-books-l2-tbt; global l.38728-38742): merge rule and CRC32 (32-bit signed) of the first 25 bids and asks; used only if a non-zero checksum is delivered",
+      "docs-v5 WS / Trades channel (EEA l.14750-14930; global l.30165-30345): URL path /ws/v5/public, one message per taker order, filled price and source, count, seqId; 'Order book and the aggregated trades data are still published sequentially'",
+      "docs-v5 WS / All trades channel (EEA l.14931-15094; global l.30346-30509): URL path /ws/v5/business",
+      "trick_en Market data (fetched 2026-10-22): books publishes changes every 100 ms; books-l2-tbt / books50-l2-tbt need login and VIP5 / VIP4",
+      "changelog Upcoming Changes, WebSocket port 8443 discontinuation (l.1171-1207): from 2026-10-31 no :8443; the pilot host has no port"
+    ]
+  },
+  "limits": {
+    "not_before_utc": "2026-11-02T00:00:00Z",
+    "max_duration_s": 86400,
+    "max_bytes_written": 5368709120,
+    "stop_margin_bytes": 67108864,
+    "min_free_bytes": 10737418240,
+    "free_space_check_every_s": 30,
+    "segment_max_s": 3600,
+    "segment_max_bytes": 268435456,
+    "flush_every_s": 5,
+    "max_reconnects": 48,
+    "resync_min_interval_s": 5,
+    "resync_max_per_hour": 120,
+    "ping_every_s": 20,
+    "recv_timeout_s": 30
+  },
+  "storage": {
+    "format": "gzip JSONL, one record per line, segments seg-NNNNNN.jsonl.gz",
+    "record_frame": "{rx, recv_ns, mono_ns, conn, k: frame, h: header (ids, seq, counts; no price), raw: frame text exactly as received}",
+    "record_meta": "{rx, recv_ns, mono_ns, conn, k: meta, event, ...}",
+    "availability_order": "rx (reception order of the process = write order)"
+  },
+  "quality_criteria": {
+    "book_valid_fraction_min": 0.95,
+    "minute_coverage_min": 0.99,
+    "gaps_per_instrument_max": 24,
+    "resync_snapshot_within_s_p95_max": 10,
+    "checksum_failures_max": 0,
+    "out_of_order_max": 0,
+    "reconnects_max": 24,
+    "verdict_rule": "PASS if every criterion holds on both instruments with books; PASS_WITH_RESERVATIONS if the run stopped on a limit or a signal before 24 h, or only books5 was available, while the criteria hold on what was captured; FAIL otherwise (or if a segment hash does not verify)"
+  },
+  "protected_path_tokens": [
+    "forward-okx",
+    "fwd-okx",
+    "g5",
+    "scalp-q3",
+    "scalping-diagnostic",
+    "sealed",
+    "okx-xperp-capture"
+  ],
+  "protection": {
+    "dataset_id": "okx-xperp-l2-pilot-r1",
+    "status": "development",
+    "use": "development / exploration of book-adapted TP/SL feasibility only",
+    "content_sealed": "Before the separation is recorded (P-L2-1 in LP-OWNER-DECISIONS-2026-10-21.md D14 and in REGISTRY.md, the pilot_separation block in the G5 Gate 2 spec, checked by sha256), only quality and volume summaries (header fields, no price) are allowed. Once recorded, the content (prices, books, trades) may be opened for development only (replay-check needs --separation-spec and --unsealed-ref): never a confirmation, never a threshold, window, universe or collector ceiling of a decisive test ; a protocol frozen after the opening declares that exposure among its prior exposures."
+  }
+}
