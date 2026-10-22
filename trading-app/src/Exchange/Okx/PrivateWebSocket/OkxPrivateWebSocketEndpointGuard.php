@@ -7,8 +7,8 @@ namespace App\Exchange\Okx\PrivateWebSocket;
 final class OkxPrivateWebSocketEndpointGuard
 {
     private const ALLOWED_URIS = [
-        'wss://wseeapap.okx.com:8443/ws/v5/private' => 'okx_demo_private_v1',
-        'wss://wseeapap.okx.com:8443/ws/v5/business' => 'okx_demo_business_v1',
+        'wss://wseeapap.okx.com/ws/v5/private' => 'okx_demo_private_v1',
+        'wss://wseeapap.okx.com/ws/v5/business' => 'okx_demo_business_v1',
     ];
 
     public function assertAllowed(string $uri): string

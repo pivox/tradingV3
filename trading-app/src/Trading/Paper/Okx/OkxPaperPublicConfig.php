@@ -7,8 +7,8 @@ namespace App\Trading\Paper\Okx;
 final readonly class OkxPaperPublicConfig
 {
     public const REST_BASE_URI = 'https://www.okx.com';
-    public const WEB_SOCKET_URI = 'wss://ws.okx.com:8443/ws/v5/public';
-    public const BUSINESS_WEB_SOCKET_URI = 'wss://ws.okx.com:8443/ws/v5/business';
+    public const WEB_SOCKET_URI = 'wss://ws.okx.com/ws/v5/public';
+    public const BUSINESS_WEB_SOCKET_URI = 'wss://ws.okx.com/ws/v5/business';
 
     public function __construct(
         public bool $acquisitionEnabled,

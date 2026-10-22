@@ -566,7 +566,7 @@ final class OkxPaperPublicRestClientTest extends TestCase
             new OkxPaperPublicConfig(
                 acquisitionEnabled: false,
                 restBaseUri: 'https://www.okx.com',
-                webSocketUri: 'wss://ws.okx.com:8443/ws/v5/public',
+                webSocketUri: 'wss://ws.okx.com/ws/v5/public',
                 dataRoot: '/srv/app/var/paper-market-data',
             ),
             new OkxPaperPublicRateLimiter(

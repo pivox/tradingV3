@@ -55,8 +55,8 @@ final readonly class OkxConfig
         }
 
         return $this->isDemo()
-            ? 'wss://wseeapap.okx.com:8443/ws/v5/public'
-            : 'wss://ws.okx.com:8443/ws/v5/public';
+            ? 'wss://wseeapap.okx.com/ws/v5/public'
+            : 'wss://ws.okx.com/ws/v5/public';
     }
 
     public function wsPrivateUri(): string
@@ -67,8 +67,8 @@ final readonly class OkxConfig
         }
 
         return $this->isDemo()
-            ? 'wss://wseeapap.okx.com:8443/ws/v5/private'
-            : 'wss://ws.okx.com:8443/ws/v5/private';
+            ? 'wss://wseeapap.okx.com/ws/v5/private'
+            : 'wss://ws.okx.com/ws/v5/private';
     }
 
     public function wsBusinessUri(): string
@@ -79,8 +79,8 @@ final readonly class OkxConfig
         }
 
         return $this->isDemo()
-            ? 'wss://wseeapap.okx.com:8443/ws/v5/business'
-            : 'wss://ws.okx.com:8443/ws/v5/business';
+            ? 'wss://wseeapap.okx.com/ws/v5/business'
+            : 'wss://ws.okx.com/ws/v5/business';
     }
 
     public function assertLiveAllowed(): void

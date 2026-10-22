@@ -148,7 +148,7 @@ contrats n'est pas implémenté.
 En environnement demo, `OkxConfig` utilise par défaut :
 
 - REST : `https://eea.okx.com`
-- WebSocket public documenté : `wss://wseeapap.okx.com:8443/ws/v5/public`
+- WebSocket public documenté : `wss://wseeapap.okx.com/ws/v5/public`
 
 Les lectures privées demo exigent des credentials dédiés hors Git :
 
