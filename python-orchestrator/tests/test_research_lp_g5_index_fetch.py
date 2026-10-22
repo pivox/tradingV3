@@ -32,6 +32,10 @@ MINUTE_US = 60 * US
 HOUR_US = 60 * MINUTE_US
 DAY_US = tape.DAY_S * US
 FLOOR_US = tape.parse_iso_utc("2026-11-02T00:00:00Z")
+# P-L2-1 (D14, 2026-10-22): a FROZEN Gate 2 has T0 >= 2026-11-04; the short windows of these tests run 2026-11-04 -> 2026-11-07 (adapted;
+# 2026-11-02 -> 2026-11-05 before), the index read starts at T0 - 540 min = 2026-11-03T15:00Z, after the separation floor 2026-11-03T12:00Z.
+T0_US = tape.parse_iso_utc("2026-11-04T00:00:00Z")
+SEPARATION_FLOOR_US = tape.parse_iso_utc("2026-11-03T12:00:00Z")
 D10 = g5_gate2.INDEX_CHOICE_D10
 DECISION = "D10, owner, 2026-10-21: On essaye des deux un par un puis on decide (test)"
 
@@ -53,7 +57,7 @@ def _no_network(monkeypatch):
 # ----------------------------------------------------------------------------- helpers
 
 
-def gate2_document(end: str = "2026-11-05", t0: str = "2026-11-02T00:00:00Z", index: str = D10, max_gap_days: int | None = 0) -> dict:
+def gate2_document(end: str = "2026-11-07", t0: str = "2026-11-04T00:00:00Z", index: str = D10, max_gap_days: int | None = 0) -> dict:
     """A FROZEN Gate 2 document on a short window (T0 → `end`), D10 (or option b), P-S3 moot (D8), BTC and ETH; `max_gap_days` 0 keeps the
     grid end at `end` (None: the draft's 14 days, which the reader caps at 2027-04-01 under D7)."""
     document = short(frozen(copy.deepcopy(BASE)), end)
@@ -152,15 +156,16 @@ def test_the_window_comes_from_the_frozen_spec_only():
     assert g5_index_fetch.CHOICES_NEEDING_B == (g5_gate2.INDEX_OPTION_B, g5_gate2.INDEX_CHOICE_D10) == g5_gate2.INDEX_FROZEN_ALLOWED
     spec = parsed(gate2_document())
     w = g5_index_fetch.window_of(spec)
-    # T01: arm −5 = footprint start −5, so the first scored t_arm is T0; T0 − 540 min is before the floor: the read starts at the floor.
-    assert (w.t0_us, w.first_t_arm_us, w.lookback_min, w.margin_min) == (FLOOR_US, FLOOR_US, 480, 60)
-    assert (w.read_from_us, w.end_us) == (FLOOR_US, tape.parse_iso_utc("2026-11-05T00:00:00Z")) and w.lookback_floor_us == FLOOR_US - 540 * MINUTE_US
-    late = g5_index_fetch.window_of(parsed(gate2_document(t0="2026-11-03T00:00:00Z")))
-    assert late.read_from_us == tape.parse_iso_utc("2026-11-02T15:00:00Z")  # 2026-11-03 − 480 min − 60 min
+    # T01: arm −5 = footprint start −5, so the first scored t_arm is T0; the read starts at T0 − 540 min, after the separation floor.
+    assert (w.t0_us, w.first_t_arm_us, w.lookback_min, w.margin_min) == (T0_US, T0_US, 480, 60)
+    assert (w.read_from_us, w.end_us) == (T0_US - 540 * MINUTE_US, tape.parse_iso_utc("2026-11-07T00:00:00Z")) and w.lookback_floor_us == T0_US - 540 * MINUTE_US
+    assert w.read_from_us >= SEPARATION_FLOOR_US and w.separation == (FLOOR_US, SEPARATION_FLOOR_US)
+    late = g5_index_fetch.window_of(parsed(gate2_document(t0="2026-11-05T00:00:00Z")))
+    assert late.read_from_us == tape.parse_iso_utc("2026-11-04T15:00:00Z")  # 2026-11-05 − 480 min − 60 min
     # The data-gap extension of the draft (14 days) is part of the grid the evaluator reads: the index read covers it (under D7 the reader
     # never extends beyond 2027-04-01).
     extended = g5_index_fetch.window_of(parsed(gate2_document(max_gap_days=None)))
-    assert extended.end_us == tape.parse_iso_utc("2026-11-19T00:00:00Z")
+    assert extended.end_us == tape.parse_iso_utc("2026-11-21T00:00:00Z")
     assert g5_index_fetch.index_ids_of(spec) == ["BTC-USD", "ETH-USD"]
     with pytest.raises(g5_index_fetch.RefusedRun, match="t0_provisional"):
         g5_index_fetch.window_of(g5_eval.load_spec(GATE2_SPEC)[0])  # the repository's draft: T0 not frozen
@@ -183,6 +188,21 @@ def test_the_window_check_refuses_the_quarantine_and_t0_violations(read_from: st
     assert error.value.reason == reason
 
 
+def test_the_window_check_refuses_a_start_inside_the_pilot_separation():
+    """P-L2-1 (D14): a read starting inside [2026-11-02T00:00Z ; 2026-11-03T12:00Z) is refused, whatever T0 allows."""
+    window = g5_index_fetch.IndexWindow(T0_US, T0_US, 480, 60, SEPARATION_FLOOR_US - MINUTE_US, tape.parse_iso_utc("2026-11-07T00:00:00Z"),
+                                        (FLOOR_US, SEPARATION_FLOOR_US))
+    with pytest.raises(g5_index_fetch.RefusedRun) as error:
+        window.check()
+    assert error.value.reason in ("start_inside_pilot_separation", "start_before_t0_lookback")
+    inside = g5_index_fetch.IndexWindow(SEPARATION_FLOOR_US, SEPARATION_FLOOR_US, 480, 60, SEPARATION_FLOOR_US - 540 * MINUTE_US,
+                                        tape.parse_iso_utc("2026-11-07T00:00:00Z"), (FLOOR_US, SEPARATION_FLOOR_US))
+    with pytest.raises(g5_index_fetch.RefusedRun, match="pilot_separation") as error:
+        inside.check()
+    assert error.value.reason == "start_inside_pilot_separation"
+    g5_index_fetch.IndexWindow(T0_US, T0_US, 480, 60, T0_US - 540 * MINUTE_US, T0_US + DAY_US, (FLOOR_US, SEPARATION_FLOOR_US)).check()
+
+
 def test_the_window_guard_drops_both_sides_and_counts_them():
     w = g5_index_fetch.window_of(parsed(gate2_document()))
     guard = g5_index_fetch.WindowGuard(w)
@@ -201,14 +221,14 @@ def test_pagination_stores_only_rows_inside_the_window_and_writes_a_hashed_recei
     path, sha, _ = write_spec(tmp_path, document)
     spec = parsed(document)
     w = g5_index_fetch.window_of(spec)
-    server = FakeIndexServer(tape.parse_iso_utc("2026-10-30T00:00:00Z"), tape.parse_iso_utc("2026-11-07T00:00:00Z"), straddle_end_us=w.end_us)
+    server = FakeIndexServer(tape.parse_iso_utc("2026-11-01T00:00:00Z"), tape.parse_iso_utc("2026-11-09T00:00:00Z"), straddle_end_us=w.end_us)
     clock = FakeTime()
     out = tmp_path / "index"
     cfg = config(spec, sha, path, out, max_requests=200)
     fetcher = g5_index_fetch.IndexFetcher(cfg, server, sleep=clock.sleep, clock=clock.clock, now_us=lambda: w.end_us + HOUR_US)
     plan = fetcher.plan
     minutes = (w.end_us - w.read_from_us) // MINUTE_US
-    assert minutes == 3 * 1440 and plan["requests_total"] == 2 * math.ceil(minutes / 100) and plan["jobs"][0]["first_url"].endswith(f"after={w.end_us // 1000}&limit=100")
+    assert minutes == 3 * 1440 + 540 and plan["requests_total"] == 2 * math.ceil(minutes / 100) and plan["jobs"][0]["first_url"].endswith(f"after={w.end_us // 1000}&limit=100")
     summary = fetcher.run()
     assert fetcher.ok and summary["complete"] == 2 and summary["end_reasons"] == {"BTC-USD": "reached_start", "ETH-USD": "reached_start"}
     assert summary["rejected_at_or_after_end"] == 2 * 50 and summary["rejected_before_start"] > 0 and summary["rows"] == 2 * minutes
@@ -222,9 +242,9 @@ def test_pagination_stores_only_rows_inside_the_window_and_writes_a_hashed_recei
     receipt = json.loads((out / g5_index_fetch.RECEIPT_NAME).read_text())
     digest = g5_fetch.directory_digest(out / "index_1m")[0]
     assert receipt["index_tape_sha256"] == digest == summary["index_tape_sha256"] and receipt["spec"]["sha256"] == sha and receipt["decision_ref"] == DECISION
-    assert receipt["window"]["read_from"] == "2026-11-02T00:00:00Z" and receipt["index_ids_sha256"] == g5_fetch.inst_ids_digest(["BTC-USD", "ETH-USD"])
+    assert receipt["window"]["read_from"] == "2026-11-03T15:00:00Z" and receipt["index_ids_sha256"] == g5_fetch.inst_ids_digest(["BTC-USD", "ETH-USD"])
     manifest = tape.read_manifest(out)
-    assert manifest["kind"] == g5_index_fetch.MANIFEST_KIND and manifest["not_before"] == "2026-11-02T00:00:00Z" and manifest["mode"] == "values"
+    assert manifest["kind"] == g5_index_fetch.MANIFEST_KIND and manifest["not_before"] == "2026-11-03T15:00:00Z" and manifest["mode"] == "values"
     assert g5_gate2.check_index_tape(out, digest)["digest"] == digest  # what g5-eval --expect-index-tape-sha256 checks
     with pytest.raises(SystemExit, match="differs"):
         g5_gate2.check_index_tape(out, "0" * 64)
@@ -327,9 +347,9 @@ def test_the_dry_run_plans_without_a_client_and_the_cli_is_wired(tmp_path: Path,
     plan_out = tmp_path / "plan.json"
     assert g5_index_fetch.command_index_fetch(args_for(path, sha, gate1, tmp_path / "index", "--dry-run", "--plan-out", str(plan_out)), client_factory=no_client) == 0
     printed = json.loads(capsys.readouterr().out)
-    assert printed == json.loads(plan_out.read_text()) and printed["kind"] == g5_index_fetch.PLAN_KIND and printed["requests_total"] == 2 * 44
+    assert printed == json.loads(plan_out.read_text()) and printed["kind"] == g5_index_fetch.PLAN_KIND and printed["requests_total"] == 2 * 49
     assert printed["index_ids"] == ["BTC-USD", "ETH-USD"] and printed["spec"]["sha256"] == sha and printed["spec"]["index_choice"] == D10
-    assert printed["window"]["end_exclusive"] == "2026-11-05T00:00:00Z" and not (tmp_path / "index").exists()
+    assert printed["window"]["end_exclusive"] == "2026-11-07T00:00:00Z" and not (tmp_path / "index").exists()
     assert "g5-index-fetch" in cli.build_parser().format_help()
 
 
@@ -346,23 +366,23 @@ def test_the_command_runs_after_the_window_and_its_tape_feeds_option_b_and_the_d
     args = args_for(path, sha, gate1, out, "--index-ids", "ETH-USD,BTC-USD", "--max-requests", "100", "--decision-ref", DECISION)
     code = g5_index_fetch.command_index_fetch(args, client_factory=lambda: server, now_us=lambda: w.end_us + HOUR_US, sleep=clock.sleep, clock=clock.clock)
     summary = json.loads(capsys.readouterr().out)
-    assert code == 0 and summary["complete"] == 2 and summary["requests"] == 88 and summary["rejected_at_or_after_end"] == 0
+    assert code == 0 and summary["complete"] == 2 and summary["requests"] == 98 and summary["rejected_at_or_after_end"] == 0
     # The layout read by option (b): the close of the confirmed candle ending at g, at every minute boundary of (read_from ; end].
-    rows, _ = tape.load_days(out, "index_1m", "BTC-USD", ["2026-11-02", "2026-11-03", "2026-11-04"], allow_pending=False)
+    rows, _ = tape.load_days(out, "index_1m", "BTC-USD", ["2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06"], allow_pending=False)
     grid = np.arange(w.read_from_us, w.end_us + MINUTE_US, MINUTE_US, dtype=np.int64)
     idx = g5_gate2.index_minutes_from_candles(grid, rows)
     assert np.isnan(idx[0]) and np.all(idx[1:] == 100.1)
     # A capture with the index-tickers layout 0.1 bp away (D10 (a)); the candles of (b) come from the fetched tape (--index-tape).
     root = tmp_path / "capture"
-    write_capture(root, index_root=tmp_path / "unused-index")
-    add_index_ticks(root, 0.1e-4)
+    write_capture(root, index_root=tmp_path / "unused-index", days=6)
+    add_index_ticks(root, 0.1e-4, days=6)
     series = {BTC: g5_eval.load_capture_series(root, spec.instrument(BTC), spec, {"instId": BTC}, out)}
     sources = series[BTC].cache["index_sources"]
     in_window = (series[BTC].grid_us > w.read_from_us) & (series[BTC].grid_us <= w.end_us)
     assert np.all(np.asarray(sources[g5_gate2.INDEX_OPTION_B])[in_window] == 100.1)
     selection = g5_gate2.apply_index_selection(series, spec)
     assert selection["primary"] == g5_gate2.INDEX_OPTION_A and selection["measures"]["median_abs_diff_bp"] == pytest.approx(0.1, abs=1e-6)
-    assert selection["measures"]["pairs_b"] == selection["measures"]["pairs"] - 1  # g = T0 has no candle ending at it (opened before the floor)
+    assert selection["measures"]["pairs_b"] == selection["measures"]["pairs"]  # T0 - 540 min is read: the candle ending at g = T0 exists (P-L2-1: T0 >= 2026-11-04)
     assert g5_gate2.verify_index_selection(selection, spec) == []
     # Disagreeing sources (the fetched candles 2 bp away): (b), the fetched tape, becomes the primary.
     far = tmp_path / "index-far"

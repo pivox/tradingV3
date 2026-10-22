@@ -132,7 +132,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import numpy as np
 
 from . import events as ev
-from . import g5_fetch, lp_sim, tape
+from . import calendar_versions as cv
+from . import g5_fetch, lp_sim
+from . import separation as sep
+from . import tape
 from . import xperp_capture as xc
 
 EVALUATOR_VERSION = "g5_eval/3"
@@ -206,6 +209,12 @@ CAPABILITIES: dict[str, str] = {
     "gate2_inscription_from_gate1_result": "(B) xxi: the Gate 1 result decides which types are evaluated (FAIL: not evaluated, p = 1)",
     "gate2_quality_unusable_instrument_day": "(B) xxi: books5 coverage < 90 % or a stale period > 10 min: instrument-day removed; share > 20 % => INCONCLUSIVE",
     "calendars_cover_the_window": "(B) xxi, P-G5-5: the scoring window (every type end, the data-gap extension) inside calendars.covers; FROZEN needs complete lists",
+    # P-L2-1 (D14, 2026-10-22): the L2 capture pilot's development window kept out of every decisive use (research_lp.separation).
+    "pilot_separation_floor": "P-L2-1: pilot_separation equal to research_lp.separation.BLOCK at FROZEN ; T0 and window.start >= g5_gate2_t0_min_utc ; capture rows "
+                              "inside [reserved start ; separation floor) dropped and counted before any computation, a residual row refused",
+    # Protocol 2.4 row 15, 10.5 (2026-10-22): calendar dates changed after the freeze (research_lp.calendar_versions).
+    "calendars_versioned_as_of_union": "10.5: official calendar snapshots after the freeze, as-of classification at each decision instant, an instant kept only if "
+                                       "admissible under every version (union rule), a final snapshot required at FROZEN, every change logged",
     # Amendment A1 (LP-G5, 2026-10-21, before any freeze and any reading) — the Gate 1.
     "a1_entry_adverse_selection_measured_by_fill_proxy": "A1: adverse_selection_entry_leg measured_by_fill_proxy: 0 in the assumed cost of the filled measure, exit leg at "
                                                           "its design value (T01 9.5 / 14.25 bp), pre-A1 total reported as a sensitivity; checked against expected_cost_bp",
@@ -224,7 +233,8 @@ GATE1_ONLY = ("candle_confirm_and_vol_zero_exclusion", "funding_coverage_window"
 GATE2_ONLY = ("owner_decisions_resolved_required_for_freeze", "capture_source_quarantine_floor_check", "price_last_print_per_minute", "key_minute_without_print_exclusion",
               "classifier_mark_and_index_from_capture_or_index_history", "gate2_sim_maker_post_only_touch", "gate2_sim_taker_entry_opposite_touch_slippage",
               "gate2_sim_passive_exit_taker_remainder", "gate2_funding_fill_grace_crossing", "gate2_classifier_validation_funding_channel", "gate2_stress_add_on_for_measured_terms",
-              "gate2_window_end_per_type", "gate2_inscription_from_gate1_result", "gate2_quality_unusable_instrument_day", "calendars_cover_the_window")
+              "gate2_window_end_per_type", "gate2_inscription_from_gate1_result", "gate2_quality_unusable_instrument_day", "calendars_cover_the_window",
+              "pilot_separation_floor", "calendars_versioned_as_of_union")
 HISTORY_REQUIRES = tuple(k for k in CAPABILITIES if k not in GATE2_ONLY)
 CAPTURE_REQUIRES = tuple(k for k in CAPABILITIES if k not in GATE1_ONLY)
 
@@ -742,12 +752,16 @@ def session_intervals(spec: Spec, lo_us: int, hi_us: int) -> list[tuple[int, int
             if not day_matches(session["days"], day, spec.calendars):
                 continue
             start_min, end_min = session["start_min"], session["end_min"]
+            spans = [(start_min, end_min)]
             if session.get("half_day_min") is not None and day in spec.calendars.get("nyse_half_days", ()):
-                start_min = end_min = session["half_day_min"]  # Annexe B request 13: the 13:00 ET close of a NYSE half day
-            a = local_to_utc_us(day, start_min, session["tz_info"])
-            b = local_to_utc_us(day, end_min, session["tz_info"])
-            if b >= lo_us - DAY_US and a < hi_us + DAY_US:
-                out.append((a, b, session["name"]))
+                spans = [(session["half_day_min"], session["half_day_min"])]  # Annexe B request 13: the 13:00 ET close of a NYSE half day
+                if day in spec.calendars.get("nyse_half_days_disputed", ()):  # 10.5: a half day of some versions only: both closes excluded
+                    spans.append((start_min, end_min))
+            for s_min, e_min in spans:
+                a = local_to_utc_us(day, s_min, session["tz_info"])
+                b = local_to_utc_us(day, e_min, session["tz_info"])
+                if b >= lo_us - DAY_US and a < hi_us + DAY_US:
+                    out.append((a, b, session["name"]))
     return out
 
 
@@ -2323,14 +2337,25 @@ def load_capture_series(tape_dir: Path, meta: Instrument, spec: Spec, row: dict 
     from . import g5_gate2  # lazy: g5_gate2 imports this module
 
     grid = spec_grid(spec)
-    dates = _dates_between(max(spec.pad_start_us, QUARANTINE_END_US), spec.end_us)  # never a day file dated before the quarantine floor (CTO m2)
-    cov: dict = {"minutes": int(grid.size), "index_id": meta.index_id, "rows_before_quarantine_floor_dropped": {}}
+    separation = (spec.gate2 or {}).get("pilot_separation")  # P-L2-1 (D14): [reserved start ; separation floor) never reaches a computation
+    low_us = max(spec.pad_start_us, QUARANTINE_END_US)
+    if separation is not None and separation["reserved_start_us"] <= low_us < separation["floor_us"]:
+        low_us = separation["floor_us"]  # no day file wholly inside the excluded interval is opened
+    dates = _dates_between(low_us - low_us % DAY_US, spec.end_us)  # never a day file dated before the quarantine floor (CTO m2)
+    cov: dict = {"minutes": int(grid.size), "index_id": meta.index_id, "rows_before_quarantine_floor_dropped": {}, "rows_in_pilot_separation_dropped": {}}
 
     def load(base: Path, layout: str, key: str) -> np.ndarray:
         rows, _ = tape.load_days(base, layout, key, dates, allow_pending=False)
         keep = rows["ts_us"] >= QUARANTINE_END_US  # capture_source_quarantine_floor_check
         cov["rows_before_quarantine_floor_dropped"][layout] = int((~keep).sum())
-        return rows[keep]
+        rows = rows[keep]
+        if separation is not None:  # pilot_separation_floor
+            inside = (rows["ts_us"] >= separation["reserved_start_us"]) & (rows["ts_us"] < separation["floor_us"])
+            cov["rows_in_pilot_separation_dropped"][layout] = int(inside.sum())
+            rows = rows[~inside]
+            if ((rows["ts_us"] >= separation["reserved_start_us"]) & (rows["ts_us"] < separation["floor_us"])).any():  # pragma: no cover - defence in depth
+                raise sep.SeparationViolation(f"{layout} {key}: a row inside the excluded interval survived the filter")
+        return rows
 
     def last_per_minute(ts_us: np.ndarray, values: np.ndarray) -> np.ndarray:
         out = np.full(grid.size, np.nan)
@@ -4448,6 +4473,8 @@ def add_parser(sub) -> None:
                                                                       "(g5_fetch.directory_digest of its index_1m/; required, refuse_run otherwise; CTO M3)")
     gate2.add_argument("--gate1-spec", default="", help="the FROZEN Gate 1 spec frozen with this one (default: frozen_with.spec in the repository); "
                                                        "its sha256 must equal freeze_fill.gate1_spec_sha256 (CTO M2)")
+    gate2.add_argument("--calendar-snapshots", default="", help="protocol 10.5: the directory of the official calendar snapshots taken after the freeze "
+                                                               "(g5-calendar-snapshot/1); a FROZEN run needs a final one retrieved after the scored window")
     parser.set_defaults(func=command_eval)
 
 
@@ -4682,6 +4709,13 @@ def _command_eval_capture(args: argparse.Namespace, spec: Spec, spec_sha: str, s
         _write(Path(args.out_json), json.dumps(_clean(document), indent=1, sort_keys=True, ensure_ascii=False) + "\n")
         print(json.dumps({"spec_sha256": spec_sha, "verdicts": document["summary"]["verdicts"], "market_data_read": False, "device": device}, ensure_ascii=False))
         return 2
+    calendar_doc = None
+    if cv.CAPABILITY in spec.requires:  # protocol 10.5: the calendar versions, applied before any market value is read (refuse_run otherwise)
+        try:
+            spec, calendar_doc = cv.apply_to_spec(spec, Path(args.calendar_snapshots) if getattr(args, "calendar_snapshots", "") else None,
+                                                  cv.scored_end_us(spec), require_final=spec.frozen)
+        except cv.SnapshotError as error:
+            raise SystemExit(f"calendar snapshots (refuse_run, nothing read): {error}") from None
     snapshot_path = Path(args.instruments_file or spec.freeze_fill["instruments_snapshot_path"])
     if not snapshot_path.exists() or tape.sha256_of(snapshot_path) != spec.freeze_fill["instruments_snapshot_sha256"]:
         raise SystemExit(f"instruments snapshot {snapshot_path}: missing or its sha256 differs from freeze_fill.instruments_snapshot_sha256 (mismatch_with_snapshot: refuse_run)")
@@ -4716,7 +4750,8 @@ def _command_eval_capture(args: argparse.Namespace, spec: Spec, spec_sha: str, s
         g5_gate2.use_index_source(series, selection["primary"])
     document = {**base, **study, "instruments": [i.inst_id for i in spec.universe], "instruments_snapshot": {"path": str(snapshot_path), "sha256": tape.sha256_of(snapshot_path)},
                 "gate1_result": {k: gate1[k] for k in ("path", "sha256", "market_data_read", "note")}, "index_tape": index_check,
-                "index_selection": selection, "index_sensitivity": sensitivity,
+                "index_selection": selection, "index_sensitivity": sensitivity, "calendar_versions": calendar_doc,
+                "pilot_separation": {k: v for k, v in (spec.gate2.get("pilot_separation") or {}).items() if k != "t0_min_date"},
                 "coverage": {i: s.coverage for i, s in series.items()}, "elapsed_seconds": round(time.time() - started, 1)}
     _finish(document, args, {})
     print(json.dumps({"spec_sha256": spec_sha, "code_digest": code_digest, "verdicts": study["summary"]["verdicts"], "gate1_inscription": study["summary"]["gate1_inscription"],

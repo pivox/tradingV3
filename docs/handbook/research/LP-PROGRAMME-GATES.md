@@ -401,6 +401,48 @@ véhicule de confirmation.
 certification Paper a été conçue pour d'autres contrats et produit 0 trade par cellule sur 1.1.0 (CLAUDE.md) ; la démo exige des
 drapeaux et un chemin produit qui n'existent pas, et n'ajouterait qu'un risque sans ajouter d'information sur le signe.
 
+7.4 **Fenêtre réservée du pilote de capture L2 et séparation des confirmations (P-L2-1, décision D14 du 2026-10-22,
+`LP-OWNER-DECISIONS-2026-10-21.md`).** Le propriétaire réserve au pilote L2 (branche `claude/research-l2-capture-pilot`, X-Perps BTC et
+ETH, carnets 400 niveaux et trades, 24 h au plus) une courte fenêtre d'exploration de **développement**, créneau préféré
+2026-11-02T00:00Z → 2026-11-03T00:00Z (un départ manuel plus tardif la raccourcit, ne décale jamais la fin). Recouvrement réel, établi sur
+les protocoles et les specs seulement (aucune donnée lue) :
+
+| Élément | Données | Début réel de l'évaluation, règle de T0 | Instruments | Périodes antérieures et empreintes | Lecture, scellés | Recouvrement avec le pilote **avant** P-L2-1 | Application de P-L2-1 |
+|---|---|---|---|---|---|---|---|
+| **P3** (comptage, plan §2.2) | `research_lp count` 24–72 h, aucune valeur persistée ; départ prévu 2026-11-02 00:00 UTC (plancher) | pas de T0 ; sa fin entre dans les T0 de G2 et du Gate 2 de G5 | tous les `FUTURES` comptés, BTC et ETH compris | aucune ; mesure couverture, cadence, reconnexions et budget de souscriptions par IP, charge du collecteur ; comptages `selection` (univers ≤ 40) | table publiée ; comptages hachés, statut `selection` | **certain** : même départ, même hôte EEE, même IP ; le pilote charge la machine et le budget de connexion pendant le comptage (couverture, reconnexions et comptages de sélection biaisés) ; comptages horodatés dans la fenêtre du pilote | P3 compte au plus tôt au plancher F = 2026-11-03T12:00Z (`research_lp count` et `capture --counting-only` refusent un `--not-before` antérieur ; dérogation de développement seulement, tracée) ; jamais pendant le pilote ; durée inchangée ⇒ fin ≥ 2026-11-04T12:00Z |
+| **G2** | capture continue D1 ≥ 2026-11-02 | T0 = premier 00:00 UTC ≥ max(2026-11-02 ; fin de P3 ; gel + 24 h) ; rodage = jour T0 ; scoring T0+1 → T0+14 ; prolongation ≤ 7 j, fin dure T0+21 ; futilité au 7ᵉ jour scoré | univers ≤ 40 (métadonnées + comptages P3), BTC et ETH toujours (C0), swaps globaux si acceptés | rodage = jour T0 (liquidité du jour UTC précédent pour T0+1) ; décision sur le dernier `books5` antérieur ; funding traversé | une exécution à la fin ; futilité booléenne seule | **possible** pour le décisif (T0 ≥ 2026-11-05 en pratique, donc après la fenêtre, mais aucune règle ne l'imposait) ; **certain** pour sa sélection (comptages P3 pendant la fenêtre) | T0 = premier 00:00 UTC ≥ max(2026-11-02 ; F ; fin de P3 ; gel + 24 h) ⇒ ≥ 2026-11-06 en pratique ; `simulate` et `events` refusent les fichiers jour 2026-11-02 et 2026-11-03 (`--separation-waiver-reason` : développement seulement, tracé) ; 14 jours scorés et 1 000 fills inchangés |
+| **G4 Gate 1** | archives Hyperliquid / dYdX ≤ 2026-09-30 | une exécution | — | — | — | **absent** | rien |
+| **G4 Gate 2** | capture continue ; jours capturés avant le gel = historique du percentile | T0 = gel du Gate 2 (≥ `G4_GATE1_PASS`, ≥ 2026-11-02, ≥ P3) ; fin T0 + 90 j ; futilité T0 + 45 j ou 50ᵉ instant | univers large (`liquidation-orders` de tout `FUTURES`) | historique de 2 016 fenêtres de 5 min (7 j), au moins 288 (1 j) ; σ₁₅ et notionnel sur 24 h ; contrôle apparié sur l'historique | une exécution (futilité exceptée) | **possible** : certain si T0 < 2026-11-10T12:00Z (l'historique de 7 j atteint la fenêtre) ; absent au T0 du plan (≈ 2026-12-01 → 12-10) | `events` refuse les jours 2026-11-02 et 2026-11-03 : l'historique commence au plus tôt le 2026-11-04, fenêtres antérieures absentes, jamais imputées ; 90 j et planchers inchangés |
+| **G5 Gate 1** | 1 m historique 2026-04-28 → 2026-10-14 (exclu) ; funding scellé le jour du verdict `fwd-okx-r1`, bougies, mark et indice après le gel | une exécution ; `END_EXCLUSIVE` codé | 25 X-Perps (D1 ∩ métadonnées, D6) | éligibilité `listTime` + 30 j ; P̂ 480 min ; D_cov (≈ 3 mois de funding) | statistiques scellées pour `NOT_INFORMATIVE` / `INCONCLUSIVE` jusqu'au verdict du Gate 2 | **absent** | rien (spec Gate 1 `0.4.1-draft` inchangé) |
+| **G5 Gate 2** | capture continue ≥ 2026-11-02 ; indice (b) relu une fois après la fenêtre | T0 = premier 00:00 UTC ≥ max(2026-11-02, gel, fin de P3) ; scoring jusqu'au 2027-03-31 (D7) | univers G2 §3 (≤ 40), BTC et ETH (D8) | P̂ : 480 min avant t_arm ; indice lu depuis T0 − 540 min ; exclusions des contrôles par empreintes de règlement à ± 60 min (T0 − 65 min) ; éligibilité `listTime` + 30 j (métadonnée) ; descriptifs : rv24 (24 h) et médiane sur 30 j, σ₁₅ sur 24 h (lecture portefeuille) ; grille chargée dès `window.start` − 1 j | une exécution après la fenêtre ; aucun scellé propre | **certain** pour les descriptifs (la grille et rv24 lisaient le 2026-11-02) ; **possible** pour le décisif (T0 = 2026-11-03, borne « atteignable » du brouillon, mettait le classifieur de la première photo dans la fenêtre) | T0 ≥ 2026-11-04 ; premières observations T01 2026-11-03T16:00Z, T05 2026-11-03T23:59Z ; lignes de E écartées par le chargeur avant tout calcul ; `g5_index_fetch` refuse un départ dans E ; le lecteur refuse un `FROZEN` qui s'en écarte (G5 §10.6) |
+| **G1** (aucun protocole) | — | — | — | condition rv24 > médiane de 30 j de capture : 30 jours de rodage | — | **possible** si un protocole futur comptait ses 30 jours depuis le 2026-11-02 | règle générale : tout protocole futur du programme applique E (rodage compté depuis F) |
+| **Sélections** (liste D1, liste des 25, univers ≤ 40) | D1 : 29 X-Perps (volume du 2026-10-14, D6) ; G5 Gate 1 : 25 par métadonnées après le 2026-10-31 ; G2 et G5 Gate 2 : métadonnées + comptages P3, BTC et ETH toujours | — | — | — | — | **possible** par deux voies : comptages P3 perturbés par le pilote ; plafond du collecteur (G2 §3.4) décidé sur les volumes du pilote. Le pilote ne choisit aucun instrument (BTC et ETH par métadonnées, toujours inclus ailleurs) | voies fermées : P3 jamais pendant le pilote et compté ≥ F ; plafond décidé sur les faits de P3 seuls ; filtres figés avant toute lecture de P3 (G2 §0.8) ; contenu du pilote jamais une source de seuil, de fenêtre, d'univers ni de plafond |
+
+**Séparation retenue (règle unique, codée).** Fenêtre réservée R = [2026-11-02T00:00Z ; 2026-11-03T00:00Z) ; marge 12 h ; plancher
+F = 2026-11-03T12:00Z ; intervalle exclu E = [2026-11-02T00:00Z ; F). Aucune observation horodatée dans E n'entre dans un calcul décisif du
+programme, ni dans ses empreintes, lectures préalables, rodages, calibrations, règles de qualité ou sélections ; les données de E (pilote
+ou collecteurs LP) sont des données de **développement** (statut au registre). Le texte machine est `research_lp.separation.BLOCK`
+(sha256 canonique `4b96e2bd3987e123b597b6534a9c464580d560db399401849cf992af004d489e`), recopié dans le spec Gate 2 de G5
+(`pilot_separation`, `0.1.8-draft`) et vérifié par le pilote avant toute capture et toute relecture de son contenu.
+
+**Pourquoi une règle plutôt que la chance.** Les règles de T0 existantes ne garantissaient pas la séparation : avec P3 lancé au plancher
+le 2026-11-02 et d'une durée de 24 h, le brouillon G5 tenait 2026-11-03 pour « atteignable », ce qui plaçait le classifieur de la
+première photo dans la fenêtre ; ses descriptifs lisaient le 2026-11-02 quel que soit T0 ; P3 aurait compté pendant le pilote ; le Gate 2
+de G4 lisait son historique de 7 j sans plancher. P-L2-1 rend la séparation **contraignante** : T0 du Gate 2 de G5 ≥ 2026-11-04
+(premier 00:00 UTC ≥ F + 540 min), P3 au plus tôt à F, G2 et G4 privés des jours 2026-11-02 et 2026-11-03.
+
+**Coût et puissance.** Une marge de 12 h ne coûte aucun jour par rapport à une marge nulle (P3 doit suivre le pilote, durer au moins 24 h
+et précéder le gel : T0 du Gate 2 de G5 ≥ 2026-11-05, de G2 ≥ 2026-11-06 dans les deux cas) ; 24 h en coûterait un. Effet chiffré
+(calcul d'audit, listes du spec `0.1.8-draft`) : T05 au Gate 2 de G5 90 instants au plus (T0 2026-11-04), 89 au T0 réaliste, contre 91 —
+`NOT_INFORMATIVE` par construction inchangé sous D7 ; T01 443 / 440 instants bruts contre 446, f_inst ≥ 0,226 / 0,227 pour 100 instants,
+δ₈₀ + 0,7 % au plus ; G2 : 14 jours scorés inchangés, verdict décalé d'un jour au plus ; G4 Gate 2 : 90 jours inchangés ; fins décidées
+(2027-03-31) et planchers statistiques inchangés.
+
+**Conditions de lecture du pilote.** Tant que la séparation n'est pas démontrée et enregistrée (D14 et `REGISTRY.md`, bloc dans le spec
+Gate 2 de G5, vérifié par sha256), seuls les résumés de qualité et de volume (en-têtes, aucun prix) sont permis. Ensuite, le contenu est
+ouvert pour le développement seulement (`replay-check --separation-spec … --unsealed-ref "P-L2-1 …"`), jamais pour une confirmation ; tout
+protocole gelé après cette ouverture la déclare parmi ses expositions antérieures.
+
 ---
 
 ## 8. Séquence (règle 14 ; décisions 1, 7, 8, 11 du rapport théorie)
@@ -463,6 +505,10 @@ derniers prints (`net_bp_gate1_construction_on_last_prints`, descriptive) est im
 2027-03-31 » et « T01 ≈ 449 × f_inst » sont des bornes hautes (T0 = 2026-11-02 inatteignable) ; plage réaliste en §3.3 amendé ;
 sous D7, T05 au Gate 2 est `NOT_INFORMATIVE` par construction. (3) Une Phase 4 ne s'ouvre que sur un `PASS_PROGRAMME`
 prospectif (§2.3 amendé).
+
+**Amendement 2026-10-22 (P-L2-1, D14 ; §7.4).** Dans le schéma ci-dessus, « P3 … ≥ 2026-11-02 » se lit « P3 ≥ 2026-11-03T12:00Z,
+jamais pendant le pilote de capture L2 » (`research_lp count` refuse un `--not-before` antérieur) ; tout T0 de G2, du Gate 2 de G4 et du
+Gate 2 de G5 suit la règle de §7.4 (aucune observation de [2026-11-02T00:00Z ; 2026-11-03T12:00Z), lectures préalables comprises).
 
 ---
 

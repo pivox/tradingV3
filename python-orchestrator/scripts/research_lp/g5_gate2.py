@@ -38,6 +38,14 @@ reads this file before any market value). (b) « Choisir la traversée comme rem
 comparaison descriptive »: `execution_sim.entry_fill_rule` = `through` (`PRIMARY_FILL_RULE`), `touch` among the descriptive rules
 (`fill_rules_touch_and_queue`), a comparison that never decides and never rescues a FAIL, a NOT_INFORMATIVE or an INCONCLUSIVE.
 
+**P-L2-1 (D14, 2026-10-22) and protocol 10.5.** `pilot_separation` (capability `pilot_separation_floor`): the L2 capture pilot's
+development window [2026-11-02T00:00Z ; 2026-11-03T00:00Z) + 12 h margin is kept out of every observation the Gate 2 uses; the block
+equals `separation.BLOCK` at FROZEN, `window.start` and `freeze_fill.t0_utc` are on or after 2026-11-04 (first 00:00 UTC at or after the
+floor + 540 min), the first observation of every type (`first_observation_by_type_utc`) is after the floor, and `g5_eval.load_capture_series`
+drops the excluded rows. `calendars.versioning` (capability `calendars_versioned_as_of_union`) equals `calendar_versions.VERSIONING_BLOCK`:
+dates changed after the freeze are read from dated, hashed official snapshots, classified as of each decision instant, and an instant is
+kept only if every version admits it; a FROZEN run needs a final snapshot (`g5-eval --calendar-snapshots`).
+
 Runtime helpers: T0 and the per-type window ends (with the data-gap extension), the unusable instrument-days (`quality`), the
 inscription read from the Gate 1 result (its sha256, kind, mode and FROZEN spec; the effect of a refused Gate 1 run written, CTO m5),
 the capture manifest check, the index tape against its register sha256 (option b, CTO M3), the universe against the freeze snapshot;
@@ -58,7 +66,9 @@ from pathlib import Path
 
 import numpy as np
 
+from . import calendar_versions as cv
 from . import events as ev
+from . import separation as sep
 from . import g5_eval as g5
 from . import g5_fetch, lp_sim, tape
 from . import xperp_capture as xc
@@ -98,8 +108,10 @@ NOT_EVALUATED = "NOT_EVALUATED"
 QUARANTINE_RULE = ("nothing timestamped in [end_exclusive_utc ; quarantine_floor_utc) is ever read ; the Gate 2 reads capture rows with ts >= quarantine_floor_utc only "
                    "(xperp_capture.QUARANTINE_FLOOR and g5_fetch.END_EXCLUSIVE, module constants, checked for equality)")
 WINDOW_TEXTS = {
-    "start_rule": "T0 = first 00:00 UTC >= max(quarantine_floor_utc, freeze of this spec, end of P3) ; written in freeze_fill.t0_utc ; days captured before T0 are never scored",
-    "lookback_before_t0": "allowed for the classifier only (the 480 min of mark and index before t_arm), never before quarantine_floor_utc, never scored",
+    "start_rule": ("T0 = first 00:00 UTC >= max(quarantine_floor_utc, pilot_separation.g5_gate2_t0_min_utc, freeze of this spec, end of P3) ; written in "
+                   "freeze_fill.t0_utc ; days captured before T0 are never scored"),
+    "lookback_before_t0": ("allowed for the classifier only (the 480 min of mark and index before t_arm), never before quarantine_floor_utc nor before "
+                           "pilot_separation.separation_floor_utc, never scored"),
     "instant_in_window_if": "the whole footprint of the instant lies in [T0 ; end_exclusive of its type)",
 }
 DATA_GAP_RULE = "one day added per unusable day (quality.unusable_instrument_day), never on a result"
@@ -348,8 +360,12 @@ def _check_dst(block, t0: Date) -> dict:
 
 
 def _parse_calendars(block, window_start: Date) -> tuple[dict, dict]:
-    extra = ("covers", "covers_rule", "incomplete_at_draft", "incomplete_rule", "dst")
+    extra = ("covers", "covers_rule", "incomplete_at_draft", "incomplete_rule", "dst", "versioning")
     calendars = g5._parse_calendars(block, extra)
+    try:  # calendar dates changed after the freeze (protocol 2.4 row 15, 10.5): the implemented rule, every text equal
+        cv.check_versioning_block(block["versioning"])
+    except cv.SnapshotError as error:
+        raise SpecError(str(error)) from None
     if not _text(block, "covers_rule", "calendars").startswith(COVERS_RULE):
         raise SpecError(f"calendars.covers_rule: {COVERS_RULE!r} is the implemented rule (calendars_cover_the_window)")
     m = COVERS_RE.match(_text(block, "covers", "calendars"))
@@ -1209,7 +1225,43 @@ def check_control_hours(spec: g5.Spec, block: dict) -> dict:
 TOP_REQUIRED = ("spec_id", "spec_schema", "spec_version", "status", "protocol", "protocol_sections", "note", "frozen_with", "source", "dataset_id", "capture_dataset_id",
                 "end_exclusive_utc", "quarantine_floor_utc", "quarantine_rule", "window", "requires", "owner_decisions", "freeze_fill", "universe", "eligibility", "price",
                 "frozen_candle", "unit", "statistics", "power_floor", "costs", "execution_sim", "classifier_index_source", "controls_common", "sessions", "sessions_note",
-                "calendars", "macro_filter", "events", "verdict", "multiplicity", "sealing", "gate2_inscription", "economic", "quality", "capture", "descriptive")
+                "calendars", "macro_filter", "events", "verdict", "multiplicity", "sealing", "gate2_inscription", "economic", "quality", "capture", "descriptive",
+                "pilot_separation")
+
+
+def _parse_pilot_separation(block, status: str) -> dict:
+    """P-L2-1 (D14, 2026-10-22; capability `pilot_separation_floor`): the block read strictly. Its keys are those of
+    `separation.BLOCK`; its instants are consistent (floor = end of the reserved interval + margin, excluded interval = [start of the
+    reserved interval ; floor), T0 minimum = first 00:00 UTC at or after floor + max look-back, nothing before the quarantine floor).
+    A FROZEN spec carries `separation.BLOCK` itself (every text equal); a draft may carry a synthetic block (tests), reported."""
+    _check_keys(block, "pilot_separation", tuple(sep.BLOCK))
+    _check_keys(block["applies_to"], "pilot_separation.applies_to", tuple(sep.BLOCK["applies_to"]))
+    for key in ("decision", "rule", "reading"):
+        _text(block, key, "pilot_separation")
+    reserved = block["reserved_interval_utc"]
+    excluded = block["excluded_interval_utc"]
+    if not (isinstance(reserved, list) and len(reserved) == 2 and isinstance(excluded, list) and len(excluded) == 2):
+        raise SpecError("pilot_separation: reserved_interval_utc and excluded_interval_utc are [start, end] pairs of UTC instants")
+    r0, r1 = _iso_us(reserved[0], "pilot_separation.reserved_interval_utc"), _iso_us(reserved[1], "pilot_separation.reserved_interval_utc")
+    margin_s = _int(block, "margin_s", "pilot_separation", 0, 7 * 86400)
+    floor = _iso_us(block["separation_floor_utc"], "pilot_separation.separation_floor_utc")
+    lookback = _int(block, "max_lookback_min", "pilot_separation", 0, 7 * 1440)
+    t0_min = _iso_us(block["g5_gate2_t0_min_utc"], "pilot_separation.g5_gate2_t0_min_utc")
+    if r0 < g5.QUARANTINE_END_US or r1 <= r0:
+        raise SpecError("pilot_separation.reserved_interval_utc: a non-empty interval at or after the quarantine floor")
+    if floor != r1 + margin_s * tape.SECOND_US:
+        raise SpecError("pilot_separation.separation_floor_utc: end of the reserved interval + margin_s")
+    if [_iso_us(excluded[0], "pilot_separation.excluded_interval_utc"), _iso_us(excluded[1], "pilot_separation.excluded_interval_utc")] != [r0, floor]:
+        raise SpecError("pilot_separation.excluded_interval_utc: [start of the reserved interval ; separation_floor_utc]")
+    need = floor + lookback * g5.MINUTE_US
+    if t0_min % g5.DAY_US or t0_min < need or t0_min - g5.DAY_US >= need:
+        raise SpecError("pilot_separation.g5_gate2_t0_min_utc: the first 00:00 UTC at or after separation_floor_utc + max_lookback_min")
+    is_rule = block == sep.BLOCK
+    if status == "FROZEN" and not is_rule:
+        raise SpecError(f"pilot_separation: a FROZEN spec carries research_lp.separation.BLOCK (P-L2-1, sha256 {sep.block_sha256()}), every text equal")
+    return {"reserved_start_us": r0, "reserved_end_us": r1, "floor_us": floor, "t0_min_us": t0_min,
+            "t0_min_date": datetime.fromtimestamp(t0_min / tape.SECOND_US, tz=g5.UTC).date(), "max_lookback_min": lookback, "is_rule": is_rule,
+            "sha256": sep.block_sha256(block), "rule_sha256": sep.block_sha256()}
 
 
 def _load_gate1(document: dict, gate1) -> tuple[g5.Spec, str | None]:
@@ -1269,6 +1321,17 @@ def parse_capture_spec(document: dict, gate1=None) -> g5.Spec:
     if missing:
         raise SpecError(f"the spec relies on {missing} without declaring it in requires (the version lock of (B) xviii)")
     freeze_fill = _parse_freeze_fill(document["freeze_fill"], status, window["start"])
+    separation = _parse_pilot_separation(document["pilot_separation"], status)  # P-L2-1 (D14)
+    deviations = []
+    if window["start"] < separation["t0_min_date"]:
+        deviations.append(f"window.start {window['start']} before pilot_separation.g5_gate2_t0_min_utc {separation['t0_min_date']}")
+    if freeze_fill["t0_utc"] is not None and _iso_us(freeze_fill["t0_utc"], "freeze_fill.t0_utc") < separation["t0_min_us"]:
+        deviations.append(f"freeze_fill.t0_utc {freeze_fill['t0_utc']} before pilot_separation.g5_gate2_t0_min_utc {separation['t0_min_date']}")
+    if not separation["is_rule"]:
+        deviations.append("pilot_separation differs from research_lp.separation.BLOCK (draft only)")
+    if status == "FROZEN" and deviations:
+        raise SpecError(f"pilot_separation (P-L2-1): {deviations}")
+    separation["draft_deviations"] = deviations
     if status == "FROZEN":  # trap 7, protocol §13 point 5 (CTO M2): both specs are frozen in the same freeze line
         if not gate1_spec.frozen:
             raise SpecError(f"frozen_with: a FROZEN Gate 2 spec is read against a FROZEN Gate 1 spec; {gate1_spec.spec_id} is {gate1_spec.status} "
@@ -1380,7 +1443,18 @@ def parse_capture_spec(document: dict, gate1=None) -> g5.Spec:
              "pending": pending_paths, "pending_values": pending, "calendars": cal_extra,
              "frozen_with": {"spec": GATE1_SPEC_PATH, "spec_id": gate1_spec.spec_id, "status": gate1_spec.status, "sha256": gate1_sha},
              "identity_checked": identity, "universe": uni_extra, "funding_fallback": costs["funding_fallback"],
-             "funding_fallback_status": "not implemented: " + FUNDING_FALLBACK_NOT_IMPLEMENTED, "gate1_sealing_open_after": sealing["gate1_open_after"]}
+             "funding_fallback_status": "not implemented: " + FUNDING_FALLBACK_NOT_IMPLEMENTED, "gate1_sealing_open_after": sealing["gate1_open_after"], "pilot_separation": separation}
+    # P-L2-1: the first observation any scored instant of a type can use (footprint start at T0, classifier look-back, one minute bar) is at
+    # or after the separation floor; a FROZEN spec that breaks it is refused (the loader drops the excluded rows in any case).
+    first_obs = {}
+    for t in types:
+        first = _day_us(t0) - t.footprint[0] * g5.MINUTE_US + (t.lookback_min - 1) * g5.MINUTE_US
+        first_obs[t.name] = g5._iso(first)
+        if first < separation["floor_us"] and _day_us(grid_end) > separation["reserved_start_us"]:  # the read range [first ; grid end) meets the excluded interval
+            separation["draft_deviations"].append(f"{t.name}: first observation {g5._iso(first)} inside the excluded interval")
+    separation["first_observation_by_type_utc"] = first_obs
+    if status == "FROZEN" and separation["draft_deviations"]:
+        raise SpecError(f"pilot_separation (P-L2-1): {separation['draft_deviations']}")
     start = t0
     spec = g5.Spec(document, spec_id, version, status, "capture", document["dataset_id"], document["protocol"], GATE, start, grid_end, tuple(items), freeze_fill, universe, (),
                    eligibility_days, count_field, price, frozen_candle, unit, statistics, power, costs, controls_common, sessions, calendars, macro, types, verdict, multiplicity,

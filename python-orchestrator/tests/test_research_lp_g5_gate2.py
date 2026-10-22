@@ -32,7 +32,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from scripts.research_lp import calendar_versions as cv
 from scripts.research_lp import cli, g5_eval, g5_fetch, g5_gate2, tape
+from scripts.research_lp import separation as sep
 from scripts.research_lp import xperp_capture as xc
 
 US = tape.SECOND_US
@@ -46,6 +48,12 @@ BASE = json.loads(GATE2_SPEC.read_text())
 BTC, ETH = "BTC-USD_UM_XPERP-310404", "ETH-USD_UM_XPERP-310404"
 PENDING = "owner_decision_pending"
 BASE_CALENDARS = g5_eval.parse_spec(copy.deepcopy(BASE)).calendars
+# P-L2-1 (D14, 2026-10-22): the real block keeps [2026-11-02T00:00Z ; 2026-11-03T12:00Z) out of every decisive read and puts T0 at
+# 2026-11-04 or later. The synthetic DRAFT windows of these tests start on 2026-11-02: they carry a synthetic block whose excluded
+# interval lies outside them (accepted at DRAFT only, reported; a FROZEN spec carries separation.BLOCK itself).
+SYNTHETIC_SEPARATION = {**copy.deepcopy(sep.BLOCK), "reserved_interval_utc": ["2027-06-01T00:00:00Z", "2027-06-02T00:00:00Z"],
+                        "separation_floor_utc": "2027-06-02T12:00:00Z", "excluded_interval_utc": ["2027-06-01T00:00:00Z", "2027-06-02T12:00:00Z"],
+                        "g5_gate2_t0_min_utc": "2027-06-03T00:00:00Z"}
 
 
 @pytest.fixture(autouse=True)
@@ -154,7 +162,7 @@ def frozen(document: dict, tmp_path: Path | None = None, t05_end: str = "2027-03
     complete_gate2_calendars(document)  # Annexe B request 13 (2026-10-22): the content test of a FROZEN spec
     document["costs"]["funding"]["fallback"] = "none: an unknown settled rate excludes the observation (test)"
     document["costs"]["funding"]["source"] = g5_gate2.FUNDING_SOURCE
-    document["freeze_fill"].update({"t0_utc": "2026-11-02T00:00:00Z", "gate1_spec_sha256": FROZEN_GATE1_SHA, "instruments_snapshot_path": "snapshot.json",
+    document["freeze_fill"].update({"t0_utc": "2026-11-04T00:00:00Z", "gate1_spec_sha256": FROZEN_GATE1_SHA, "instruments_snapshot_path": "snapshot.json",
                                     "instruments_snapshot_sha256": "a" * 64, "p3_counts_selection_sha256": "b" * 64, "calendars_verified_utc": "2026-11-02T10:00:00Z",
                                     "code_digest_sha256": "c" * 64, "decision_ref_d1_capture": "test D1", "decision_ref_p_g5_10_i": "test (i) a",
                                     "decision_ref_p_g5_10_ii": "test (ii) b", "decision_ref_p_s3": "test beta", "t05_end_inclusive_utc": t05_end})
@@ -163,7 +171,11 @@ def frozen(document: dict, tmp_path: Path | None = None, t05_end: str = "2027-03
 
 def short(document: dict, end_exclusive: str = "2026-11-05") -> dict:
     """A synthetic window (T0 = 2026-11-02 → `end_exclusive`): the window end, the T01 end and the T05 options follow; the calcul d'audit
-    of the real window is dropped (its numbers belong to the full window)."""
+    of the real window is dropped (its numbers belong to the full window). A DRAFT document starts on 2026-11-02 under the synthetic
+    separation block (P-L2-1, adapted 2026-10-22); a FROZEN one keeps T0 = 2026-11-04 and the real block."""
+    if document.get("status") != "FROZEN":
+        document["window"]["start"] = "2026-11-02"
+        document["pilot_separation"] = copy.deepcopy(SYNTHETIC_SEPARATION)
     last = date.fromordinal(date.fromisoformat(end_exclusive).toordinal() - 1)
     document["window"]["end_exclusive"] = end_exclusive
     document["events"][0]["window_end"] = {"end_inclusive": last.isoformat(), "end_exclusive": end_exclusive}
@@ -175,6 +187,17 @@ def short(document: dict, end_exclusive: str = "2026-11-05") -> dict:
         event.pop("audit_expected", None)
     document["controls_common"].pop("audit_expected_utc", None)
     return document
+
+
+def final_calendar_snapshot(directory: Path, retrieved: str = "2026-11-20T00:00:00Z", fomc=("2026-12-09", "2027-01-27", "2027-03-17", "2027-04-28")) -> Path:
+    """Protocol 10.5: one official snapshot after the scored window (FOMC page re-read, dates unchanged by default)."""
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "v1.json").write_text(json.dumps({
+        "schema": cv.SNAPSHOT_SCHEMA, "version": 1, "retrieved_utc": retrieved, "note": "test",
+        "lists": {"fomc_statement": {"covers": "2026-12-01 .. 2027-04-30", "dates": list(fomc)}},
+        "sources": [{"list": "fomc_statement", "url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm", "published": cv.NOT_STATED,
+                     "retrieved_utc": retrieved, "raw_sha256": "e" * 64}]}))
+    return directory
 
 
 def gate1_for(document: dict):
@@ -199,19 +222,28 @@ def refused(mutate, match: str, base: dict | None = None):
 def test_the_real_gate2_draft_is_accepted_and_every_block_is_read():
     spec, sha = g5_eval.load_spec(GATE2_SPEC)
     assert sha == tape.sha256_of(GATE2_SPEC) and spec.status == "DRAFT_NOT_FROZEN" and spec.source == "capture" and spec.gate == "G5_GATE2_"
-    assert set(spec.requires) == set(g5_eval.CAPTURE_REQUIRES) and len(spec.requires) == 40 and "calendars_cover_the_window" in spec.requires
+    assert set(spec.requires) == set(g5_eval.CAPTURE_REQUIRES) and len(spec.requires) == 42 and "calendars_cover_the_window" in spec.requires
+    # P-L2-1 (D14) and protocol 10.5 (2026-10-22): the pilot separation and the calendar versions are Gate 2 capabilities.
+    assert {"pilot_separation_floor", "calendars_versioned_as_of_union"} <= set(spec.requires) <= set(g5_eval.CAPTURE_REQUIRES)
+    ps = spec.gate2["pilot_separation"]
+    assert ps["is_rule"] and ps["sha256"] == sep.block_sha256() and ps["draft_deviations"] == [] and spec.raw["pilot_separation"] == sep.BLOCK
+    assert (g5_eval._iso(ps["floor_us"]), g5_eval._iso(ps["t0_min_us"]), ps["max_lookback_min"]) == ("2026-11-03T12:00:00Z", "2026-11-04T00:00:00Z", 540)
+    # The first observation a scored instant can use (footprint start at T0, 480-minute look-back, one minute bar): after the floor.
+    assert ps["first_observation_by_type_utc"] == {"T01_funding_8h": "2026-11-03T16:00:00Z", "T05_us_open": "2026-11-03T23:59:00Z"}
+    assert spec.raw["calendars"]["versioning"] == cv.VERSIONING_BLOCK
     # Owner decision (a) of 2026-10-22: the freeze controls of Annexe B (13, 14, 16) are capabilities of both gates; 11 is the Gate 1's.
     assert {"calendars_content_test_at_freeze", "freeze_pending_marker_refuses_frozen", "economic_s_eco_at_least_d4"} <= set(spec.requires)
-    assert "gate2_frozen_together" not in spec.requires and spec.version == "0.1.7-draft" and spec.economic["s_eco"] == 97.25
+    assert "gate2_frozen_together" not in spec.requires and spec.version == "0.1.8-draft" and spec.economic["s_eco"] == 97.25
     # 0.1.7-draft (2026-10-22): the eight freeze_pending: choices (Annexe B, (1) to (7)) are written in the protocol body (10.1 to 10.4), no
     # marker is left (a FROZEN spec with one is still refused: test_freeze_pending_markers_and_the_economic_floor_at_both_gates).
     assert spec.notes["freeze_pending_markers"] == [] and spec.costs["funding_fallback"].startswith("none")
     # The content test on the draft's lists (reported, enforced at FROZEN only): the lists recorded from the official pages on 2026-10-22 pass;
     # incomplete_at_draft keeps two blocking entries (the rule for a date changed after the freeze, the 10:00 ET releases).
     content = spec.audit["calendar_content"]
-    assert content["range"] == ["2026-11-02", "2027-03-31"] and content["holidays_by_rule"] == ["2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26"]
+    assert content["range"] == ["2026-11-04", "2027-03-31"] and content["holidays_by_rule"] == ["2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26"]
     assert content["problems"] == [] and spec.notes["calendars.content_problems"] == [] and content["half_days"] == ["2026-11-27", "2026-12-24"]
-    assert sorted(spec.gate2["calendars"]["incomplete"]) == ["fomc_statement", "ten_am_et_releases"]
+    # 0.1.8-draft: the rule for a date changed after the freeze is written (protocol 10.5, calendars.versioning): fomc_statement is no longer blocking.
+    assert sorted(spec.gate2["calendars"]["incomplete"]) == ["ten_am_et_releases"]
     assert not set(spec.requires) & set(g5_eval.GATE1_ONLY) and set(g5_eval.HISTORY_REQUIRES) & set(spec.requires) == set(g5_eval.HISTORY_REQUIRES) - set(g5_eval.GATE1_ONLY)
     # Owner decisions: every block decided since 2026-10-21 — D10 (index source, both sources, primary by selection_rule), D7 (i) (T05 window
     # end 2027-03-31, option a, no extension) and D8 (P-S3 moot: track S closed, BTC and ETH stay); no owner_decision_pending value is left.
@@ -226,7 +258,7 @@ def test_the_real_gate2_draft_is_accepted_and_every_block_is_read():
     assert '"Nn"' in spec.freeze_fill["decision_ref_p_g5_10_i"] and "On essaye des deux un par un" in spec.freeze_fill["decision_ref_p_g5_10_ii"]
     assert '"Clore s"' in spec.freeze_fill["decision_ref_p_s3"] and all("2026-10-21" in spec.freeze_fill[k] for k in refs)
     assert spec.freeze_fill["t05_end_inclusive_utc"] is None  # written at the freeze (2027-03-31 under D7)
-    assert (spec.start.isoformat(), spec.end_exclusive.isoformat(), spec.gate2["t0_date"].isoformat()) == ("2026-11-02", "2027-04-01", "2026-11-02")
+    assert (spec.start.isoformat(), spec.end_exclusive.isoformat(), spec.gate2["t0_date"].isoformat()) == ("2026-11-04", "2027-04-01", "2026-11-04")
     t01, t05 = spec.types
     assert t01.gate2["window_end"]["end_exclusive"] == date(2027, 4, 1) and not t05.gate2["window_end"]["provisional"]
     assert t05.gate2["window_end"]["choice"] == "a_end_2027_03_31" and t05.gate2["window_end"]["end_exclusive"] == date(2027, 4, 1) and not spec.gate2["beyond_allowed"]
@@ -234,7 +266,8 @@ def test_the_real_gate2_draft_is_accepted_and_every_block_is_read():
     # Situation lists recorded 2026-10-22: 5 + 5 dates on NYSE days of the window) the bound is 102 NYSE days - 10 = 92 < 100 (adapted
     # 2026-10-22; 100 with the two CPI dates of 0.1.6-draft); calendars_complete stays False while incomplete_at_draft is not empty.
     pbc = spec.audit["power_by_construction"]["T05_us_open"]
-    assert (pbc["raw_instants_upper_bound"], pbc["min_instants"], pbc["not_informative_by_construction"], pbc["calendars_complete"]) == (92, 100, True, False)
+    # 0.1.8-draft (P-L2-1): T0 provisional 2026-11-04, 100 NYSE days - 10 = 90.
+    assert (pbc["raw_instants_upper_bound"], pbc["min_instants"], pbc["not_informative_by_construction"], pbc["calendars_complete"]) == (90, 100, True, False)
     assert spec.notes["power_by_construction"]["T05_us_open"]["window_end_choice"] == "a_end_2027_03_31" and set(spec.audit["power_by_construction"]) == {"T05_us_open"}
     assert t01.gate2["exit_until_min"] == 60 and t05.gate2["exit_until_min"] == 75 and t01.gate2["fill_sim"] == {"kind": "lp_sim_post_only_touch", "decided_at_min": -5,
                                                                                                                    "resting_until_min": 1}
@@ -258,10 +291,11 @@ def test_the_real_gate2_draft_is_accepted_and_every_block_is_read():
     assert spec.audit["T05_us_open"] == {"nyse_days_if_t0_2026_11_02.to_2027_03_31": 102, "nyse_days_if_t0_2026_11_02.to_2027_04_12": 110,
                                          "nyse_days_if_t0_2026_11_05.to_2027_03_31": 99, "nyse_days_if_t0_2026_11_05.to_2027_04_12": 107}
     hours = spec.audit["control_hours"]
-    assert hours["us_winter_uk_winter_t0_to_2027_03_13"]["T01"] == {"ordinary": "2026-11-02", "CPI / Employment Situation": "2026-11-06", "FOMC": "2026-12-09"}
+    assert hours["us_winter_uk_winter_t0_to_2027_03_13"]["T01"] == {"ordinary": "2026-11-04", "CPI / Employment Situation": "2026-11-06", "FOMC": "2026-12-09"}
     assert hours["us_summer_uk_winter_2027_03_14_to_2027_03_27"]["T05"] == {"ordinary": "2027-03-15", "FOMC": "2027-03-17"}
-    assert g5_gate2.control_hours_on(spec, t01, date(2026, 11, 2)) == ["03:00", "04:00", "05:00", "06:00", "10:00", "11:00", "12:00", "13:00", "18:00", "19:00"]
-    assert g5_gate2.control_hours_on(spec, t05, date(2026, 11, 2)) == ["05:30", "09:30", "17:30"]
+    assert g5_gate2.control_hours_on(spec, t01, date(2026, 11, 4)) == ["03:00", "04:00", "05:00", "06:00", "10:00", "11:00", "12:00", "13:00", "18:00", "19:00"]
+    assert g5_gate2.control_hours_on(spec, t05, date(2026, 11, 4)) == ["05:30", "09:30", "17:30"]
+    assert g5_gate2.control_hours_on(spec, t01, date(2026, 11, 2)) == []  # before T0 (2026-11-04 since P-L2-1): no control
     assert g5_gate2.control_hours_on(spec, t01, date(2027, 3, 29)) == ["03:00", "04:00", "05:00", "10:00", "11:00", "12:00", "18:00", "22:00"]  # as Gate 1 (§7.1)
     # Identity with the Gate 1 spec named by frozen_with (trap 7).
     assert {"T01_funding_8h:classifier", "T01_funding_8h:validation", "T05_us_open:generator in New York time", "sessions", "macro_filter.releases", "statistics",
@@ -312,9 +346,10 @@ def test_a_frozen_gate2_spec_is_refused_while_an_owner_decision_or_a_null_remain
     assert spec_b.end_exclusive == date(2027, 4, 27)  # the data-gap extension of 14 days is allowed beyond 2027-03-31 under (b)
     c = frozen(copy.deepcopy(BASE))
     c["events"][1]["window_end"]["choice"] = "c_end_by_calendar_rule"
-    end_c = g5_gate2.t05_end_by_calendar_rule(parse(frozen(copy.deepcopy(BASE))).calendars, date(2026, 11, 2), 100)  # the complete lists of a FROZEN spec
+    # T0 of the FROZEN fixture: 2026-11-04 since P-L2-1 (adapted 2026-10-22; 2026-11-02 before).
+    end_c = g5_gate2.t05_end_by_calendar_rule(parse(frozen(copy.deepcopy(BASE))).calendars, date(2026, 11, 4), 100)  # the complete lists of a FROZEN spec
     c["freeze_fill"]["t05_end_inclusive_utc"] = end_c.isoformat()
-    assert parse(c).types[1].gate2["window_end"]["end_inclusive"] == end_c and end_c == g5_gate2.nyse_days(parse(c).calendars, date(2026, 11, 2), end_c, exclude_macro=True)[99]
+    assert parse(c).types[1].gate2["window_end"]["end_inclusive"] == end_c and end_c == g5_gate2.nyse_days(parse(c).calendars, date(2026, 11, 4), end_c, exclude_macro=True)[99]
     # Index option (a) and an undecided P-S3 alpha are refused at any status (not implemented / not decided).
     refused(lambda d: resolve(d, index="a_capture_index_tickers"), "not the owner's decision")  # adapted 2026-10-21: (a) alone is not D10
     refused(lambda d: resolve(d, p_s3="alpha"), "Gate 2 scope")
@@ -342,25 +377,34 @@ def test_t05_gate2_is_not_informative_by_construction_under_d7():
     hidden; the floor rule itself (power_floor.below_floor) then gives G5_GATE2_NOT_INFORMATIVE whatever the data."""
     base = frozen(copy.deepcopy(BASE))
     # Adapted 2026-10-22: a FROZEN spec carries complete lists (the content test, Annexe B request 13; illustrative dates, about two BLS dates a
-    # month, the real ones are recorded at the freeze, P-G5-5). T0 = 2026-11-02 (an upper bound, not reachable): 102 NYSE days - 10 = 92.
-    # (The draft's two CPI dates gave 100 = the floor: such incomplete lists can no longer be FROZEN.)
+    # month, the real ones are recorded at the freeze, P-G5-5). T0 = 2026-11-04 (P-L2-1, adapted 2026-10-22; 2026-11-02 gave 102 - 10 = 92):
+    # 100 NYSE days - 10 = 90. (The draft's two CPI dates gave 100 = the floor: such incomplete lists can no longer be FROZEN.)
     pbc = parse(base).audit["power_by_construction"]["T05_us_open"]
-    assert (pbc["raw_instants_upper_bound"], pbc["not_informative_by_construction"], pbc["calendars_complete"]) == (92, True, True)
+    assert (pbc["raw_instants_upper_bound"], pbc["not_informative_by_construction"], pbc["calendars_complete"]) == (90, True, True)
     incomplete = copy.deepcopy(base)
     incomplete["calendars"].update({"cpi": ["2026-11-10", "2026-12-10"], "employment_situation": []})
     refused(lambda d: None, "content test", base=incomplete)
-    # Any reachable T0 (>= 2026-11-03: T0 >= freeze >= end of P3, P3 starting 2026-11-02): 101 NYSE days - 10 = 91 < 100.
+    # P-L2-1 (D14): a T0 before 2026-11-04 is refused at FROZEN; the realistic T0 once P3 runs after the pilot (P3 from the separation floor
+    # 2026-11-03T12:00Z, 24 h at least, freeze after it): 2026-11-05, 99 NYSE days - 10 = 89 < 100.
+    early = copy.deepcopy(base)
+    early["freeze_fill"]["t0_utc"] = "2026-11-03T00:00:00Z"
+    refused(lambda d: None, r"on or after window.start .*pilot_separation.g5_gate2_t0_min_utc", base=early)
+    early["window"]["start"] = "2026-11-02"  # the window moved back as well: refused by the separation itself
+    refused(lambda d: None, r"pilot_separation \(P-L2-1\).*window.start 2026-11-02.*freeze_fill.t0_utc 2026-11-03", base=early)
+    refused(lambda d: d["pilot_separation"].update({"margin_s": 0, "separation_floor_utc": "2026-11-03T00:00:00Z",
+                                                    "excluded_interval_utc": ["2026-11-02T00:00:00Z", "2026-11-03T00:00:00Z"]}),
+            r"a FROZEN spec carries research_lp.separation.BLOCK", base=base)
     full = copy.deepcopy(base)
-    full["freeze_fill"]["t0_utc"] = "2026-11-03T00:00:00Z"
+    full["freeze_fill"]["t0_utc"] = "2026-11-05T00:00:00Z"
     pbc = parse(full).audit["power_by_construction"]["T05_us_open"]
-    assert pbc["t0"] == "2026-11-03"
-    assert pbc["raw_instants_upper_bound"] == 101 - 10 == 91 and pbc["not_informative_by_construction"] and pbc["window_end_choice"] == "a_end_2027_03_31"
+    assert pbc["t0"] == "2026-11-05"
+    assert pbc["raw_instants_upper_bound"] == 99 - 10 == 89 and pbc["not_informative_by_construction"] and pbc["window_end_choice"] == "a_end_2027_03_31"
     assert pbc["end_exclusive_with_max_extension"] == "2027-04-01"  # no extension beyond 2027-03-31 under D7
     # Under the refused option (b) the extension may go beyond 2027-03-31: the bound grows (stated for comparison only, D7 refused it).
     b = copy.deepcopy(full)
     b["events"][1]["window_end"]["choice"] = "b_end_2027_04_12"
     b["freeze_fill"]["t05_end_inclusive_utc"] = "2027-04-12"
-    assert parse(b).audit["power_by_construction"]["T05_us_open"]["raw_instants_upper_bound"] > 91
+    assert parse(b).audit["power_by_construction"]["T05_us_open"]["raw_instants_upper_bound"] > 89
 
 
 def test_the_strict_gate2_reader_refuses_unknown_keys_changed_rules_and_wrong_audits():
@@ -980,7 +1024,11 @@ def test_the_gate2_command_line_refuses_before_reading_and_runs_end_to_end(tmp_p
     index_sha = g5_fetch.directory_digest(root / "index_1m")[0]  # P-G5-10 (ii) option b: the register's sha256 of the index tape (CTO M3)
     args = ["g5-eval", "--tape", str(root), "--spec", str(spec_path), "--expect-spec-sha256", sha, "--gate1-result", str(gate1_result),
             "--expect-gate1-result-sha256", tape.sha256_of(gate1_result), "--p3-counts-file", str(p3), "--gate1-spec", str(gate1_spec),
-            "--expect-index-tape-sha256", index_sha, "--out-json", str(out), "--out-md", str(tmp_path / "run2" / "g5.md")]
+            "--expect-index-tape-sha256", index_sha, "--out-json", str(out), "--out-md", str(tmp_path / "run2" / "g5.md"),
+            "--calendar-snapshots", str(final_calendar_snapshot(tmp_path / "calendars"))]
+    # Protocol 10.5 (2026-10-22): a FROZEN run without a final calendar snapshot is refused before any market value.
+    with pytest.raises(SystemExit, match="no final calendar snapshot"):
+        cli.main(args[:-2])
     # Trap 7 (CTO M2): read against the repository's DRAFT Gate 1, the FROZEN Gate 2 is refused before anything is read.
     with pytest.raises(SystemExit, match="FROZEN Gate 1"):
         cli.main([a for i, a in enumerate(args) if a != "--gate1-spec" and (i == 0 or args[i - 1] != "--gate1-spec")])
@@ -998,7 +1046,13 @@ def test_the_gate2_command_line_refuses_before_reading_and_runs_end_to_end(tmp_p
     result = json.loads(out.read_text(), parse_constant=lambda c: pytest.fail(f"non-finite number {c}"))
     assert printed["verdicts"] == {"T01_funding_8h": "G5_GATE2_NOT_EVALUATED", "T05_us_open": "G5_GATE2_NOT_INFORMATIVE"} and result["gate1_result"]["sha256"] == tape.sha256_of(gate1_result)
     assert result["gate1_result"]["market_data_read"] is True and result["gate1_result"]["note"] is None and result["index_tape"]["digest"] == index_sha
-    assert result["spec"]["notes"]["costs.funding.source_status"] == "implemented" and result["coverage"][BTC]["funding_attribution"]["settled_unattributed"] == 0
+    # P-L2-1 (adapted 2026-10-22): the rows of [2026-11-02T00:00Z ; 2026-11-03T12:00Z) are dropped before any computation; the settled-rate
+    # messages of [12:00 ; 16:00) on 2026-11-03 refer to the 08:00 settlement, before the floor, and stay unattributed (never used).
+    cov = result["coverage"][BTC]
+    assert result["spec"]["notes"]["costs.funding.source_status"] == "implemented" and cov["funding_attribution"]["settled_unattributed"] == 4
+    # the 2026-11-02 day file is never opened (padded start floored at the separation floor), the first half of 2026-11-03 is dropped.
+    assert cov["rows_in_pilot_separation_dropped"]["trades"] == (12 * 3600) // 10 and cov["dates_read"][0] == "2026-11-03"
+    assert result["pilot_separation"]["is_rule"] and result["calendar_versions"]["final_snapshot"] and result["calendar_versions"]["changes"] == []
     assert result["types"]["T05_us_open"]["statistic"]["measure"] == "sim_net_bp" and not (out.parent / "sealed").exists() and '"pass_programme"' not in out.read_text()
     assert "inscription (résultat du Gate 1)" in (tmp_path / "run2" / "g5.md").read_text() and result["coverage"][BTC]["rows_before_quarantine_floor_dropped"]["trades"] == 0
     # Decided before any market value is read (exit 2): a wrong register sha256 of the Gate 1 result, a DRAFT spec, a missing channel.
@@ -1218,7 +1272,8 @@ def test_d10_the_command_line_records_the_choice_before_t01_and_reports_the_sens
     out = tmp_path / "run2" / "g5.json"
     args = ["g5-eval", "--tape", str(root), "--spec", str(spec_path), "--expect-spec-sha256", tape.sha256_of(spec_path), "--gate1-result", str(gate1_result),
             "--expect-gate1-result-sha256", tape.sha256_of(gate1_result), "--p3-counts-file", str(p3), "--gate1-spec", str(gate1_spec),
-            "--expect-index-tape-sha256", g5_fetch.directory_digest(root / "index_1m")[0], "--out-json", str(out)]
+            "--expect-index-tape-sha256", g5_fetch.directory_digest(root / "index_1m")[0], "--out-json", str(out),
+            "--calendar-snapshots", str(final_calendar_snapshot(tmp_path / "calendars"))]
     assert cli.main(args) == 0
     capsys.readouterr()
     recorded = json.loads((tmp_path / "run2" / "g5.index-selection.json").read_text())
@@ -1246,7 +1301,7 @@ def test_the_nyse_holiday_generator_and_the_calendar_content_test():
     assert date(2022, 6, 20) in rule(2022) and not any(d.month == 6 and d.day in (18, 19, 20) for d in rule(2021))  # Juneteenth from 2022 only
     frozen_doc = frozen(copy.deepcopy(BASE))
     spec = parse(frozen_doc)
-    assert spec.audit["calendar_content"]["problems"] == [] and spec.audit["calendar_content"]["range"] == ["2026-11-02", "2027-03-31"]
+    assert spec.audit["calendar_content"]["problems"] == [] and spec.audit["calendar_content"]["range"] == ["2026-11-04", "2027-03-31"]
     cal, sessions = spec.calendars, spec.sessions
 
     def problems(first="2026-11-02", last="2027-03-31", **changes):

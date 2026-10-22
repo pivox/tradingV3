@@ -29,6 +29,7 @@ module has its own guard, `WindowGuard`, bounded by the frozen Gate 2 spec.
   `classifier.lookback_min` (480) and `margin` = `LOOKBACK_MARGIN_MIN` (60 min, declared); `end` = the spec's grid end (`spec.end_us`:
   the latest type window end with the data-gap extension the chosen option allows — 2027-04-01 under D7). `IndexWindow.check` refuses a
   start inside the quarantine [2026-10-14 ; 2026-11-02) or before it, a start before T0's own lookback (`first t_arm − lookback − margin`),
+  a start inside the excluded interval of the spec's `pilot_separation` block (P-L2-1, [2026-11-02T00:00Z ; 2026-11-03T12:00Z)),
   an end not after the start; `WindowGuard.admits` drops (and counts) every row whose candle opening time `ts_us` is outside
   [read_from ; end), before it reaches the store.
 - **After the window only**: a real run is refused while the current UTC time is not strictly after `end` (`window_not_ended`).
@@ -106,6 +107,7 @@ class IndexWindow:
     margin_min: int
     read_from_us: int  # inclusive
     end_us: int  # exclusive
+    separation: tuple | None = None  # P-L2-1: (reserved start, separation floor) of the spec's pilot_separation block, µs
 
     @property
     def lookback_floor_us(self) -> int:
@@ -122,6 +124,9 @@ class IndexWindow:
         if self.read_from_us < self.lookback_floor_us:
             raise RefusedRun("start_before_t0_lookback", f"start {_iso(self.read_from_us)} before the first t_arm {_iso(self.first_t_arm_us)} "
                                                          f"- {self.lookback_min} min - {self.margin_min} min (T0 {_iso(self.t0_us)})")
+        if self.separation is not None and self.separation[0] <= self.read_from_us < self.separation[1]:
+            raise RefusedRun("start_inside_pilot_separation", f"start {_iso(self.read_from_us)} inside the excluded interval [{_iso(self.separation[0])} ; "
+                                                               f"{_iso(self.separation[1])}) of pilot_separation (P-L2-1)")
         if self.read_from_us % MINUTE_US:
             raise RefusedRun("start_not_on_a_minute", f"start {_iso(self.read_from_us)}")
         if self.end_us <= self.read_from_us:
@@ -148,7 +153,9 @@ def window_of(spec, margin_min: int = LOOKBACK_MARGIN_MIN) -> IndexWindow:
     lookback = max(int(t.classifier["lookback_min"]) for t in with_classifier)
     read_from = max(QUARANTINE_END_US, first_t_arm_us - (lookback + int(margin_min)) * MINUTE_US)
     read_from -= read_from % MINUTE_US
-    return IndexWindow(t0_us, first_t_arm_us, lookback, int(margin_min), int(read_from), int(spec.end_us)).check()
+    block = spec.gate2.get("pilot_separation")
+    separation = (int(block["reserved_start_us"]), int(block["floor_us"])) if block else None
+    return IndexWindow(t0_us, first_t_arm_us, lookback, int(margin_min), int(read_from), int(spec.end_us), separation).check()
 
 
 class WindowGuard:

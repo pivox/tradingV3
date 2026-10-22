@@ -15,6 +15,15 @@ corrections de **code** demandées par la relecture CTO (M1–M4, m1–m12) ne s
 2026-10-21 (lecture du code, digests, suite `tests/test_research_lp_*.py` : **40 passed**) et consigné en P-G2-4 (A) ; ce qui reste
 à coder avant le gel est en P-G2-4 (B).
 
+**Amendement 2026-10-22 (décision P-L2-1, D14 ; avant tout gel et toute lecture).** Statut inchangé. La fenêtre d'exploration de
+développement du pilote de capture L2 ([2026-11-02T00:00Z ; 2026-11-03T00:00Z), BTC et ETH) et une marge de 12 h forment l'intervalle
+exclu E = [2026-11-02T00:00Z ; 2026-11-03T12:00Z) (`LP-PROGRAMME-GATES.md` §7.4) : aucune observation de E n'entre dans G2 — ni au
+rodage, ni au scoring, ni à la calibration C0, ni aux comptages P3 de la sélection (§3.4). En pratique : T0 = premier 00:00 UTC ≥
+max(2026-11-02 ; **2026-11-03T12:00Z** ; fin de P3 ; gel + 24 h) (§7.5) ; P3 compte au plus tôt à partir du 2026-11-03T12:00Z, jamais
+pendant le pilote (§3.4) ; les commandes `research_lp simulate` et `events` refusent les fichiers jour 2026-11-02 et 2026-11-03 (seule une
+lecture de développement, avec `--separation-waiver-reason TEXT` recopié dans le résumé, les ouvre). Les 14 jours scorés, la prolongation
+et le plancher de 1 000 fills sont inchangés ; le T0 réaliste passe au 2026-11-06 (un jour au plus de décalage).
+
 **Base.** Fiche G2 (§3.3, rang 1) et règles transversales §3.5 du rapport
 `docs/handbook/reports/research-scalping-theory-gap-2026-10-20.md` (branche `claude/research-scalping-theory-gap`, non fusionnée
 à `main` au 2026-10-20 ; lue depuis le worktree `research-scalping-theory`). Part A du rapport
@@ -155,7 +164,9 @@ d'instrument-jours par instrument.
 3.4 **Plafond du collecteur.** Si P3 montre que le collecteur ne tient pas tous les X-Perps crypto vivants (`books5` à ~100 ms
 × N instruments), la sélection se fait **une fois**, à T0 − 1 jour (≥ 2026-11-01), par les **comptages P3** (nombre de messages
 `trades` par instrument sur la fenêtre de comptage — zéro valeur de prix, de taille ou de volume), fichier haché, étiqueté
-`selection` au registre (ce n'est pas un résultat) : les N X-Perps crypto les plus actifs passant les filtres 3.2, **N = 40 au
+`selection` au registre (ce n'est pas un résultat ; depuis P-L2-1, comptés sur la seule fenêtre de P3 postérieure au
+2026-11-03T12:00Z, P3 ne tournant jamais pendant le pilote L2, et le plafond décidé sur les faits de P3 seuls, jamais sur les volumes du
+pilote) : les N X-Perps crypto les plus actifs passant les filtres 3.2, **N = 40 au
 plus** (quant M6 : l'univers est élargi dès le gel, pas allongé ensuite). Aucun relevé de `volCcy24h` : un volume est une Market
 Data (§1.8) et `LP-PROGRAMME-GATES.md` §9.5 en interdit la lecture avant le gel (quant M11). Sans ce plafond, tous les
 instruments de 3.2 sont capturés. Les filtres 3.2 sont figés avant la lecture des comptages (§0.8).
@@ -363,7 +374,8 @@ prolongation sur résultat ; voir §7.5). Le **test confirmatoire primaire** de 
 > 10 % des règlements traversés sans repli REST ; changement de barème, de règle d'ordre ou de spécification d'un instrument
 du contrôle pendant la fenêtre. Un INCONCLUSIVE ne se corrige pas : nouvelle fenêtre, nouveau pré-enregistrement.
 
-7.5 **Fenêtre et futilité.** T0 = premier 00:00 UTC ≥ max(2026-11-02 ; fin de P3 ; gel + 24 h) ; **rodage** = jour T0
+7.5 **Fenêtre et futilité.** T0 = premier 00:00 UTC ≥ max(2026-11-02 ; fin de P3 ; gel + 24 h) ; depuis P-L2-1 (D14) aussi ≥ le
+plancher de séparation 2026-11-03T12:00Z, aucune observation de [2026-11-02T00:00Z ; 2026-11-03T12:00Z) n'étant lue ; **rodage** = jour T0
 (classification 3.3) ; **scoring** = 14 jours UTC complets, T0 + 1 → T0 + 14 ; **prolongation** uniquement **pour des trous de
 données** (jour inexploitable 4.4 ⇒ un jour ajouté, au plus 7), jamais sur le résultat ; fin dure T0 + 21. **Futilité** : au
 7ᵉ jour scoré, si le net 60 s poolé de la cellule primaire a **UB90 < −2 pb** et ≥ 500 fills, l'évaluation peut être close

@@ -45,6 +45,14 @@ npz `meta`, and a WARN line is printed, so a read under a lifted guard is distin
 the fact. They also refuse a counting tape (it holds no value). Nothing here places, cancels or
 signs anything.
 
+Pilot separation (P-L2-1, D14 of 2026-10-22; `research_lp.separation`): `simulate` and `events`
+(the readers of G2 and of the G4 Gate 2) refuse the day files of 2026-11-02 and 2026-11-03, the days
+that meet the excluded interval [2026-11-02T00:00Z ; 2026-11-03T12:00Z) of the L2 capture pilot,
+unless `--separation-waiver-reason TEXT` is given (development use only; the reason and the days
+are recorded in the guard record, a WARN line is printed). `count` (and `capture --counting-only`),
+the P3 counting capture, refuses a `--not-before` before the separation floor 2026-11-03T12:00Z
+under the same waiver: P3 never counts during the pilot.
+
 Contract specifications: `simulate` and `events --kind liquidation` need `ctVal` for every
 instrument (notional = contracts × ctVal × price). It comes from `instruments-futures.json` (the
 capture writes it) or `--instruments-file`, or from `--ct-val`; when neither has it the command
@@ -65,6 +73,7 @@ import numpy as np
 
 from . import events as ev
 from . import g5_eval, g5_fetch, g5_index_fetch, lp_sim, tape, xperp_capture as xc
+from . import separation as sep
 
 
 def code_identity() -> dict[str, str]:
@@ -118,6 +127,13 @@ def command_capture(args: argparse.Namespace, counting_only: bool) -> int:
     if tape.parse_iso_utc(args.not_before) < xc.quarantine_floor_us():
         print(f"{tape.iso_now()} level=ERROR event=refused reason=not_before_below_floor not_before={args.not_before} floor={xc.QUARANTINE_FLOOR}", file=sys.stderr, flush=True)
         return 2
+    waiver = (getattr(args, "separation_waiver_reason", None) or "").strip()
+    if counting and tape.parse_iso_utc(args.not_before) < sep.floor_us():  # P-L2-1: P3 never counts during the pilot
+        if not waiver:
+            print(f"{tape.iso_now()} level=ERROR event=refused reason=not_before_inside_pilot_separation not_before={args.not_before} "
+                  f"separation_floor={sep.SEPARATION_FLOOR_UTC}", file=sys.stderr, flush=True)
+            return 2
+        _warn(f"event=separation_waived command=count not_before={args.not_before} separation_floor={sep.SEPARATION_FLOOR_UTC} reason={json.dumps(waiver)}")
     inst_ids, rows = _capture_instruments(args)
     channels = tuple(c for c in args.channels.split(",") if c)
     cfg = xc.CaptureConfig(out_dir=Path(args.out), inst_ids=tuple(inst_ids), host=args.host, channels=channels, counting_only=counting,
@@ -146,8 +162,16 @@ def _guard_tape(args: argparse.Namespace, dates: list[str]) -> tuple[dict | None
         raise SystemExit(f"dates before {args.not_before} refused ({early[0]} …); pass --allow-before-reason TEXT only for synthetic or explicitly released data")
     if early:
         _warn(f"event=guard_lifted not_before={args.not_before} dates_before={early[0]}..{early[-1]} count={len(early)} reason={json.dumps(reason)}")
+    touching = sep.dates_touching(dates)  # P-L2-1: the days of the pilot's excluded interval never reach G2 or the G4 Gate 2
+    waiver = (getattr(args, "separation_waiver_reason", None) or "").strip()
+    if touching and not waiver:
+        raise SystemExit(f"pilot_separation (P-L2-1): days {touching} meet the excluded interval [{sep.RESERVED_START_UTC} ; {sep.SEPARATION_FLOOR_UTC}) "
+                         "of the L2 capture pilot; pass --separation-waiver-reason TEXT only for a development reading (never a decisive one)")
+    if touching:
+        _warn(f"event=separation_waived days={','.join(touching)} reason={json.dumps(waiver)}")
     record = {"not_before": args.not_before, "quarantine_floor": xc.QUARANTINE_FLOOR, "allow_before": bool(reason), "allow_before_reason": reason or None,
-              "dates_before_not_before": early}
+              "dates_before_not_before": early, "pilot_separation_floor": sep.SEPARATION_FLOOR_UTC, "separation_waiver_reason": waiver or None,
+              "dates_in_pilot_separation": touching}
     return manifest, record
 
 
@@ -375,6 +399,8 @@ def _add_capture_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--duration-s", type=float, default=0.0, help="stop after this many seconds (0 = until STOP file or signal)")
     parser.add_argument("--max-connection-failures", type=int, default=None)
     parser.add_argument("--liq-selected-only", action="store_true", help="persist liquidation-orders rows of the selected instruments only (the channel pushes every FUTURES instrument)")
+    parser.add_argument("--separation-waiver-reason", default=None, metavar="TEXT", help="counting mode only: count before the pilot separation floor "
+                                                                                        f"{sep.SEPARATION_FLOOR_UTC} anyway (development, never P3)")
     parser.add_argument("--quiet", action="store_true")
 
 
@@ -387,6 +413,8 @@ def _add_tape_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--not-before", default=xc.DEFAULT_NOT_BEFORE, help=f"days before it are refused; must be >= the quarantine floor {xc.QUARANTINE_FLOOR}")
     parser.add_argument("--allow-before-reason", default=None, metavar="TEXT", help="read days before --not-before anyway; the reason is recorded in every summary (synthetic or released data only)")
     parser.add_argument("--allow-partial", action="store_true", help="read pending segments of unfinalized days")
+    parser.add_argument("--separation-waiver-reason", default=None, metavar="TEXT", help="read the days of the pilot's excluded interval (2026-11-02, 2026-11-03) "
+                                                                                        "anyway: development only, recorded (P-L2-1)")
 
 
 def build_parser() -> argparse.ArgumentParser:

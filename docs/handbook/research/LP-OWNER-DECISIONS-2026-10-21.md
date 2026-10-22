@@ -150,3 +150,70 @@ respect des prérequis du programme. Il porte sur deux X-Perps, BTC et ETH, sél
 24 heures au plus, avec au plus 5 Gio écrits et au moins 10 Gio laissés libres. Il s'arrête proprement à la première limite
 atteinte, sans prolongation automatique. Aucun lancement n'est programmé. Le dispositif et ses règles de protection sont dans
 `L2-CAPTURE-PILOT.md`, sur la branche `claude/research-l2-capture-pilot`.
+
+## D14 — P-L2-1 : fenêtre d'exploration du pilote L2, séparée de toute confirmation (2026-10-22)
+
+**Matériau de la décision.** Mission du propriétaire du 2026-10-22, transmise en anglais et recopiée telle que reçue (extraits) :
+
+> Reserve a short development exploration window for the pilot, preferred slot 2026-11-02T00:00Z -> 2026-11-03T00:00Z (a later manual
+> start shortens it, never shifts the end). FIRST look for a separation that respects the existing T0 rules […]; if so, add an explicit
+> spec rule/check making it binding […] rather than relying on chance. If an exclusion is needed: define the exact interval and margins,
+> cover lookbacks and footprints, apply it in ALL concerned draft protocols/specs […], keep decided end dates and statistical floors.
+> The separation must bear on the observations used (code-enforced where the evaluator reads data […]), not only storage folders.
+
+> Pilot guarantees […]: keep BTC/ETH X-Perps, 24 h max, 5 GiB max written, >= 10 GiB free, no restart/extension.
+
+**Décision P-L2-1 (texte).**
+1. **Fenêtre réservée** du pilote de capture L2 (X-Perps BTC et ETH, carnets `books` 400 niveaux, `books5` et trades publics ; aucun
+   ordre) : R = [2026-11-02T00:00Z ; 2026-11-03T00:00Z). Départ au plus tôt le 2026-11-02T00:00Z ; **fin dure** le 2026-11-03T00:00Z quel
+   que soit le départ ; durée = min(24 h ; fin dure − départ) ; un départ plus tardif raccourcit le pilote, ne décale jamais sa fin ; au
+   plus 5 Gio écrits, au moins 10 Gio libres, aucun redémarrage, aucune prolongation. Usage : développement et exploration seulement.
+2. **Marge et intervalle exclu** : marge de 12 h ; plancher de séparation F = 2026-11-03T12:00Z ; intervalle exclu
+   E = [2026-11-02T00:00Z ; 2026-11-03T12:00Z).
+3. **Règle** : aucune observation horodatée dans E (prints, carnets, bbo, mark, indice, messages de funding, liquidations, open interest,
+   comptages de messages) n'entre dans un calcul décisif du programme LP, ni dans ses empreintes, lectures préalables, rodages,
+   calibrations, règles de qualité ou sélections d'instruments. Les données de E (pilote ou collecteurs LP) sont des données de
+   développement.
+4. **Application** (`LP-PROGRAMME-GATES.md` §7.4, tableau des recouvrements) : Gate 2 de G5 — T0 ≥ 2026-11-04 (premier 00:00 UTC ≥ F +
+   540 min), premières observations T01 2026-11-03T16:00Z et T05 2026-11-03T23:59Z, lignes de E écartées par le chargeur, départ de
+   `g5_index_fetch` refusé dans E, spec `FROZEN` refusé s'il s'en écarte (G5 §10.6) ; G2 — T0 ≥ F, `simulate` et `events` refusent les
+   jours 2026-11-02 et 2026-11-03 (G2, amendement du 2026-10-22, §7.5) ; Gate 2 de G4 — historique sans ces deux jours (G4, amendement du
+   2026-10-22, §4.2) ; P3 — comptage au plus tôt à F, jamais pendant le pilote (`research_lp count` refuse avant ; plan §3, `GATES` §8) ;
+   Gate 1 de G5 et Gate 1 de G4 — aucun recouvrement ; tout protocole futur (G1) applique E à ses rodages.
+5. **Pilote** : spec `l2-pilot-spec/2` ; la capture, son plan et la relecture de son contenu (`replay-check`) sont refusés avant le début
+   de R, à partir de sa fin dure, et tant que la séparation n'est pas enregistrée et résolue (le spec Gate 2 de G5 donné par
+   `--separation-spec` doit porter le bloc `pilot_separation` dont le pilote fige le sha256, en version ≥ `0.1.8`, et `--separation-ref`
+   doit nommer P-L2-1).
+6. **Conditions de lecture du contenu du pilote** : il n'est ouvert qu'une fois la séparation démontrée et enregistrée (cette décision, la
+   ligne du registre, le bloc dans le spec Gate 2 de G5, vérifié par sha256) ; jusque-là, résumés de qualité et de volume seulement
+   (en-têtes, aucun prix). Ensuite : développement seulement, jamais une confirmation, jamais la source d'un seuil, d'une fenêtre, d'un
+   univers ou du plafond du collecteur ; tout protocole gelé après l'ouverture la déclare parmi ses expositions antérieures.
+7. **Effet** (calcul d'audit sur les listes gelées) : T05 au Gate 2 de G5 90 instants au plus (T0 2026-11-04), 89 au T0 réaliste
+   (2026-11-05), contre 91 — `NOT_INFORMATIVE` par construction inchangé sous D7 ; T01 443 / 440 instants bruts contre 446 (f_inst ≥ 0,226 /
+   0,227 pour 100 instants ; δ₈₀ + 0,7 % au plus) ; G2 : 14 jours scorés, verdict décalé d'un jour au plus ; G4 Gate 2 : 90 jours ; fins
+   décidées (2027-03-31) et planchers inchangés. La marge de 12 h ne coûte aucun jour par rapport à une marge nulle (P3 doit suivre le
+   pilote, durer au moins 24 h et précéder le gel).
+
+**Références versionnées (2026-10-22).**
+
+| Objet | Branche | Version | sha256 |
+|---|---|---|---|
+| Bloc `research_lp.separation.BLOCK` (JSON canonique : clés triées, sans espaces, UTF-8) | `claude/g5-gate2-prefreeze` | — | `4b96e2bd3987e123b597b6534a9c464580d560db399401849cf992af004d489e` |
+| Spec Gate 2 de G5 `g5_gate2_spec.json` (porte le bloc et `calendars.versioning`) | `claude/g5-gate2-prefreeze` | `0.1.8-draft` | `fc631ef8d7c0624f6db0b20e2dd212f4895033a6b3b34414c6d0f46aae1b14bc` (informatif : brouillon) |
+| Spec Gate 1 de G5 `g5_gate1_spec.json` (inchangé) | `claude/g5-gate2-prefreeze` | `0.4.1-draft` | `1d86d3f538da49010f5e70edb2d55d1200c34ac56e4d30cdec5cc96d4cd35a12` |
+| Code `research_lp` (`cli.code_digest()`) | `claude/g5-gate2-prefreeze` | — | `d1066fe426e4beb647b1b206c345266ffa5eadf0e15946c36998b636f6d8e7f6` |
+| Spec du pilote `l2_pilot_spec_v2.json` (+ `.sha256`) | `claude/research-l2-capture-pilot` | `l2-pilot-spec/2`, `2.0.0`, `FROZEN` | `8ac57f2c601e04d113bf054a07aa1518ecaf3d12ce592db2c7442b050bca9c2c` |
+| Spec du pilote `l2_pilot_spec_v1.json` (gardé tel quel, refusé pour un run) | `claude/research-l2-capture-pilot` | `l2-pilot-spec/1`, `1.0.0`, `FROZEN` | `16b1a6941f539c0a5a918d1a811ebbf6c291aedfe784f536a29ad675d52515a3` |
+| Code `research_l2` (`pilot.code_digest()`) | `claude/research-l2-capture-pilot` | — | `a7bdb560beace7261b8a1ce7a92dd155567365ecd2757aa910794a1d4e241b4e` |
+
+Inscrite au registre `tradingV3-private/research/20261020T1430Z-lp-programme/REGISTRY.md` (ajout en fin de fichier, 2026-10-22). Rien
+n'est lancé ni planifié ; aucun ordre, aucun drapeau.
+
+## Note (sans nouvelle décision) — Dates de calendrier changées après le gel (mission du 2026-10-22, point D)
+
+Écrite en réponse à la même mission (point D) et à la ligne 15 de G5 §2.4 : règle déterministe en G5 §10.5 (instantanés officiels datés
+et hachés — bls.gov, federalreserve.gov, nyse.com ; ISM seulement avec un accès officiel —, classement de chaque instant avec la version
+disponible à sa décision, un instant retenu seulement s'il est admissible sous toutes les versions, instantané final exigé avant
+l'exécution, journal de chaque changement, dates non publiées jamais inventées ; aucune hypothèse, aucun seuil, aucun horizon, aucune fin
+de fenêtre ne change). Code : `research_lp/calendar_versions.py`, bloc `calendars.versioning` du spec Gate 2 `0.1.8-draft`. Les dates
+JOLTS 2027 et ISM restent bloquantes (G5 §2.4 ligne 5).

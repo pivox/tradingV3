@@ -212,6 +212,14 @@ Deux tensions de calendrier à trancher par le propriétaire : (i) **G1** (≈ 4
 « ≤ 2027-03-31 » sauf consentement et démarrage en décembre, ou allongement écrit ; (ii) **G5 Gate 2** pour les types
 quotidiens (≈ 100 jours) exige un T0 ≤ ≈ 2026-12-20.
 
+**Amendement 2026-10-22 (décision P-L2-1, D14 ; `LP-PROGRAMME-GATES.md` §7.4).** Le pilote de capture L2 (BTC et ETH, développement)
+occupe la fenêtre réservée 2026-11-02T00:00Z → 2026-11-03T00:00Z (fin dure ; s'il est lancé) ; avec la marge de 12 h, rien de
+[2026-11-02T00:00Z ; 2026-11-03T12:00Z) n'entre dans un test décisif. Lignes du tableau ci-dessus à lire ainsi (dates indicatives) :
+**P3** commence au plus tôt le **2026-11-03T12:00Z** (le code refuse avant ; jamais pendant le pilote), 24–72 h, fin ≥ 2026-11-04T12:00Z ;
+**G5 Gate 2** T0 ≥ 2026-11-04 par la règle, ≈ 2026-11-05 en pratique ; **G2** T0 ≈ 2026-11-06/07 (gel + 24 h après P3), scoring jusqu'à
+≈ 11-21, verdict ≈ 2026-11-23 ; **G4 Gate 2** inchangé (historique sans les jours 2026-11-02 et 2026-11-03). Aucune fin décidée ne bouge
+(2027-03-31) ; aucun plancher n'est abaissé ; T05 au Gate 2 de G5 reste `NOT_INFORMATIVE` par construction (90 au plus, 89 au T0 réaliste).
+
 ---
 
 ## 4. Ce qui a été construit

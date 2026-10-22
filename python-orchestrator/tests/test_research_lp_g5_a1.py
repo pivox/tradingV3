@@ -195,7 +195,7 @@ def test_a1_the_gate2_keeps_the_gate1_entry_leg_rule_for_its_gate1_construction(
     """Trap 7: the Gate 2's descriptive Gate 1 construction uses the same entry-leg rule; a Gate 2 draft that differs is refused."""
     spec = g5_eval.parse_spec(copy.deepcopy(GATE2_BASE))
     assert spec.type("T01_funding_8h").expected_cost_bp == 9.5 and spec.type("T01_funding_8h").entry_adverse_selection == "measured_by_fill_proxy"
-    assert spec.status == "DRAFT_NOT_FROZEN" and spec.version == "0.1.7-draft"  # adapted 2026-10-21: D10 (0.1.4), then D7 (i) and D8 (0.1.5) bumped the draft (0.1.3 = A1); 0.1.6: owner decisions of 2026-10-22; 0.1.7: calendars and choices (1)-(7) written in the body
+    assert spec.status == "DRAFT_NOT_FROZEN" and spec.version == "0.1.8-draft"  # adapted 2026-10-21: D10 (0.1.4), then D7 (i) and D8 (0.1.5) bumped the draft (0.1.3 = A1); 0.1.6: owner decisions of 2026-10-22; 0.1.7: calendars and choices (1)-(7) written in the body; 0.1.8: P-L2-1 separation and calendar versions (10.5)
     other = copy.deepcopy(GATE2_BASE)
     other["events"][0].pop("adverse_selection_entry_leg")
     with pytest.raises(g5_eval.SpecError, match="adverse_selection_entry_leg"):

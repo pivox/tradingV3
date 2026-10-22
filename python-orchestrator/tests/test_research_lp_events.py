@@ -218,7 +218,7 @@ def test_clock_windows_take_the_settlement_instants_of_the_instrument_from_its_f
 # ----------------------------------------------------------------------------- command line on a synthetic tape
 
 
-def _write_tape(root: Path, date_str: str = "2026-11-03", seconds: int = 7200, instruments: bool = True, start_s: int = 0) -> None:
+def _write_tape(root: Path, date_str: str = "2026-11-05", seconds: int = 7200, instruments: bool = True, start_s: int = 0) -> None:
     """A quiet one-tick book with regular prints, a funding row and liquidations, finalized."""
     store = tape.TapeStore(root, "values", source={"ws": "synthetic"}, not_before="2026-11-02T00:00:00Z")
     day_us = tape.day_of_date(date_str) * tape.DAY_S * US
@@ -246,20 +246,21 @@ def test_cli_simulate_events_and_verify_on_a_synthetic_tape(tmp_path: Path, caps
     _write_tape(root)
     assert cli.main(["verify", "--tape", str(root)]) == 0
     out, summary = tmp_path / "orders.npz", tmp_path / "summary.json"
-    assert cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-03", "--rule", "touch", "--grid-s", "60", "--ttl-s", "30", "--exit-max-s", "60",
+    assert cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-05", "--rule", "touch", "--grid-s", "60", "--ttl-s", "30", "--exit-max-s", "60",
                      "--order-notional", "50", "--out", str(out), "--summary", str(summary)]) == 0
     document = json.loads(summary.read_text())
     cell = document["symbols"][INST]
     assert cell["instrument"]["ct_val"] == 0.1 and cell["funding_source"] == "tape" and cell["settlements"] == 1
     assert cell["ct_val_source"] == "instruments_file" and cell["tick_source"] == "instruments_file" and document["ct_val_source"] == {INST: "instruments_file"}
-    assert document["guard"] == {"not_before": "2026-11-02T00:00:00Z", "quarantine_floor": "2026-11-02T00:00:00Z", "allow_before": False, "allow_before_reason": None, "dates_before_not_before": []}
+    assert document["guard"] == {"not_before": "2026-11-02T00:00:00Z", "quarantine_floor": "2026-11-02T00:00:00Z", "allow_before": False, "allow_before_reason": None, "dates_before_not_before": [],
+                                 "pilot_separation_floor": "2026-11-03T12:00:00Z", "separation_waiver_reason": None, "dates_in_pilot_separation": []}
     assert cell["unconstrained"]["fills"] > 0 and cell["unconstrained"]["round_trip"]["net_bp_mean"] == pytest.approx(20.0 - 4.0, abs=0.05)  # 2 ticks of spread (20 bp on 100, 19.96 on 100.2), maker/maker
     assert cell["portfolio"]["orders"] <= cell["unconstrained"]["orders"] and cell["scheduled_intents"] == 0
     with np.load(out) as data:
         assert data[f"orders_{INST}"].dtype.names == np.dtype(cli.lp_sim.ORDER_DTYPE).names and json.loads(bytes(data["meta"]).decode())["instruments"] == [INST]
         assert json.loads(bytes(data["meta"]).decode())["guard"]["allow_before"] is False
     events_out, events_summary = tmp_path / "events.npz", tmp_path / "events.json"
-    assert cli.main(["events", "--tape", str(root), "--dates", "2026-11-03", "--kind", "liquidation,excursion,clock", "--abs-notional", "1", "--min-history-bins", "2",
+    assert cli.main(["events", "--tape", str(root), "--dates", "2026-11-05", "--kind", "liquidation,excursion,clock", "--abs-notional", "1", "--min-history-bins", "2",
                      "--min-days", "1", "--out", str(events_out), "--summary", str(events_summary)]) == 0
     ev_summary = json.loads(events_summary.read_text())
     diag = ev_summary["diagnostics"]
@@ -272,7 +273,7 @@ def test_cli_simulate_events_and_verify_on_a_synthetic_tape(tmp_path: Path, caps
         clock = data[f"events_{INST}"][data[f"events_{INST}"]["kind"] >= ev.KINDS["clock_funding"]]
         assert [tape.iso_utc(int(t))[11:16] for t in clock["ts_us"]] == ["08:00", "14:30", "16:00"]
     # Events feed the simulator: detected events at the next minute (global TTL), the three clock windows at their arming instant (own TTL = 6 min, both sides).
-    assert cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-03", "--rule", "queue", "--events", str(events_out), "--out", str(tmp_path / "ev-orders.npz"),
+    assert cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-05", "--rule", "queue", "--events", str(events_out), "--out", str(tmp_path / "ev-orders.npz"),
                      "--summary", str(tmp_path / "ev-summary.json")]) == 0
     ev_document = json.loads((tmp_path / "ev-summary.json").read_text())
     assert ev_document["symbols"][INST]["intents"] > 6 and ev_document["symbols"][INST]["scheduled_intents"] == 6
@@ -288,27 +289,36 @@ def test_cli_simulate_events_and_verify_on_a_synthetic_tape(tmp_path: Path, caps
 
 def test_cli_refuses_quarantined_dates_and_counting_tapes(tmp_path: Path):
     root = tmp_path / "tape"
-    _write_tape(root, date_str="2026-11-03", seconds=10)
+    _write_tape(root, date_str="2026-11-05", seconds=10)
     with pytest.raises(SystemExit):
         cli.main(["simulate", "--tape", str(root), "--dates", "2026-10-20"])
     with pytest.raises(SystemExit):
-        cli.main(["events", "--tape", str(root), "--dates", "2026-11-01..2026-11-03", "--kind", "clock"])
+        cli.main(["events", "--tape", str(root), "--dates", "2026-11-01..2026-11-05", "--kind", "clock"])
     # M1: the old `--allow-before` flag no longer exists; the guard is lifted only with a recorded reason, and never below the floor.
     with pytest.raises(SystemExit):
-        cli.main(["events", "--tape", str(root), "--dates", "2026-11-01..2026-11-03", "--kind", "clock", "--allow-before"])
+        cli.main(["events", "--tape", str(root), "--dates", "2026-11-01..2026-11-05", "--kind", "clock", "--allow-before"])
     for command in ("simulate", "events"):
         with pytest.raises(SystemExit, match="not_before_below_floor"):
-            cli.main([command, "--tape", str(root), "--dates", "2026-11-03", "--not-before", "2026-10-15T00:00:00Z"])
+            cli.main([command, "--tape", str(root), "--dates", "2026-11-05", "--not-before", "2026-10-15T00:00:00Z"])
         with pytest.raises(SystemExit, match="not_before_below_floor"):
-            cli.main([command, "--tape", str(root), "--dates", "2026-11-03", "--not-before", "2026-10-15T00:00:00Z", "--allow-before-reason", "trying anyway"])
+            cli.main([command, "--tape", str(root), "--dates", "2026-11-05", "--not-before", "2026-10-15T00:00:00Z", "--allow-before-reason", "trying anyway"])
     summary = tmp_path / "clock.json"
-    assert cli.main(["events", "--tape", str(root), "--dates", "2026-11-01..2026-11-03", "--kind", "clock", "--allow-before-reason", "synthetic tape", "--summary", str(summary)]) == 0
+    # P-L2-1 (D14, 2026-10-22; tapes of these CLI tests moved from 2026-11-03 to 2026-11-05): the days that meet the pilot's excluded interval
+    # [2026-11-02T00:00Z ; 2026-11-03T12:00Z) are refused unless a development reason is recorded.
+    with pytest.raises(SystemExit, match=r"pilot_separation \(P-L2-1\): days \['2026-11-02', '2026-11-03'\]"):
+        cli.main(["events", "--tape", str(root), "--dates", "2026-11-01..2026-11-05", "--kind", "clock", "--allow-before-reason", "synthetic tape"])
+    assert cli.main(["events", "--tape", str(root), "--dates", "2026-11-01..2026-11-05", "--kind", "clock", "--allow-before-reason", "synthetic tape",
+                     "--separation-waiver-reason", "synthetic tape", "--summary", str(summary)]) == 0
     guard = json.loads(summary.read_text())["guard"]
-    assert guard == {"not_before": "2026-11-02T00:00:00Z", "quarantine_floor": "2026-11-02T00:00:00Z", "allow_before": True, "allow_before_reason": "synthetic tape", "dates_before_not_before": ["2026-11-01"]}
+    assert guard == {"not_before": "2026-11-02T00:00:00Z", "quarantine_floor": "2026-11-02T00:00:00Z", "allow_before": True, "allow_before_reason": "synthetic tape", "dates_before_not_before": ["2026-11-01"],
+                     "pilot_separation_floor": "2026-11-03T12:00:00Z", "separation_waiver_reason": "synthetic tape", "dates_in_pilot_separation": ["2026-11-02", "2026-11-03"]}
+    for command in ("simulate", "events"):  # a single day of the excluded interval is enough to refuse
+        with pytest.raises(SystemExit, match="pilot_separation"):
+            cli.main([command, "--tape", str(root), "--dates", "2026-11-03"])
     counting = tmp_path / "counting"
     tape.TapeStore(counting, "counting")
     with pytest.raises(SystemExit):
-        cli.main(["simulate", "--tape", str(counting), "--dates", "2026-11-03"])
+        cli.main(["simulate", "--tape", str(counting), "--dates", "2026-11-05"])
     assert cli.main(["verify", "--tape", str(tmp_path / "nowhere")]) == 1
 
 
@@ -317,23 +327,23 @@ def test_cli_refuses_to_assume_a_contract_value(tmp_path: Path, capsys):
     root = tmp_path / "tape"
     _write_tape(root, instruments=False)
     with pytest.raises(SystemExit, match="ct_val_missing"):
-        cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-03"])
+        cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-05"])
     (root / "instruments-futures.json").write_text(json.dumps({"instruments": [{"instId": INST, "tickSz": "0.1"}]}))  # a row without ctVal is no better
     with pytest.raises(SystemExit, match="ct_val_missing"):
-        cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-03"])
+        cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-05"])
     with pytest.raises(SystemExit, match="ct_val_missing"):
-        cli.main(["events", "--tape", str(root), "--dates", "2026-11-03", "--kind", "liquidation"])
-    assert cli.main(["events", "--tape", str(root), "--dates", "2026-11-03", "--kind", "excursion,clock"]) == 0  # these kinds need no ctVal
+        cli.main(["events", "--tape", str(root), "--dates", "2026-11-05", "--kind", "liquidation"])
+    assert cli.main(["events", "--tape", str(root), "--dates", "2026-11-05", "--kind", "excursion,clock"]) == 0  # these kinds need no ctVal
     summary = tmp_path / "summary.json"
-    assert cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-03", "--rule", "touch", "--ct-val", "0.1", "--summary", str(summary)]) == 0
+    assert cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-05", "--rule", "touch", "--ct-val", "0.1", "--summary", str(summary)]) == 0
     cell = json.loads(summary.read_text())["symbols"][INST]
     assert cell["instrument"]["ct_val"] == 0.1 and cell["ct_val_source"] == "cli" and cell["tick_source"] == "instruments_file" and cell["unconstrained"]["fills"] > 0
     (root / "instruments-futures.json").unlink()
-    assert cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-03", "--rule", "touch", "--ct-val", "0.1", "--summary", str(summary)]) == 0
+    assert cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-05", "--rule", "touch", "--ct-val", "0.1", "--summary", str(summary)]) == 0
     cell = json.loads(summary.read_text())["symbols"][INST]
     assert cell["tick_source"] == "inferred" and cell["instrument"]["tick"] == pytest.approx(0.1) and cell["ct_val_source"] == "cli"
     events_summary = tmp_path / "events.json"
-    assert cli.main(["events", "--tape", str(root), "--dates", "2026-11-03", "--kind", "liquidation", "--ct-val", "0.1", "--abs-notional", "1", "--min-history-bins", "2", "--summary", str(events_summary)]) == 0
+    assert cli.main(["events", "--tape", str(root), "--dates", "2026-11-05", "--kind", "liquidation", "--ct-val", "0.1", "--abs-notional", "1", "--min-history-bins", "2", "--summary", str(events_summary)]) == 0
     assert json.loads(events_summary.read_text())["ct_val_source"] == {INST: "cli"}
     capsys.readouterr()
 
@@ -343,12 +353,12 @@ def test_cli_clock_window_is_decided_at_the_arming_instant_on_a_tape_around_a_se
     root = tmp_path / "tape"
     _write_tape(root, start_s=7 * 3600 + 50 * 60, seconds=20 * 60)
     events_out = tmp_path / "events.npz"
-    assert cli.main(["events", "--tape", str(root), "--dates", "2026-11-03", "--kind", "clock", "--out", str(events_out)]) == 0
+    assert cli.main(["events", "--tape", str(root), "--dates", "2026-11-05", "--kind", "clock", "--out", str(events_out)]) == 0
     out = tmp_path / "orders.npz"
-    assert cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-03", "--rule", "touch", "--ttl-s", "60", "--exit-max-s", "60", "--events", str(events_out), "--out", str(out)]) == 0
+    assert cli.main(["simulate", "--tape", str(root), "--dates", "2026-11-05", "--rule", "touch", "--ttl-s", "60", "--exit-max-s", "60", "--events", str(events_out), "--out", str(out)]) == 0
     with np.load(out) as data:
         orders = data[f"orders_{INST}"]
-    h = tape.parse_iso_utc("2026-11-03T08:00:00Z")
+    h = tape.parse_iso_utc("2026-11-05T08:00:00Z")
     window = orders[orders["decision_ts"] == h - 5 * 60 * US]
     assert window.size == 2 and set(window["side"].tolist()) == {1, -1} and set(window["ttl_us"].tolist()) == {6 * 60 * US}
     assert not np.any(orders["decision_ts"] == h + 60 * US)  # nothing is decided at h+1 any more

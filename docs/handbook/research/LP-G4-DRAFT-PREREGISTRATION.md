@@ -29,6 +29,13 @@ n'entre dans un critère d'OKX, et un FAIL HL n'est pas une preuve d'absence sur
 
 ---
 
+**Amendement 2026-10-22 (décision P-L2-1, D14 ; avant tout gel et toute lecture).** Statut inchangé. Gate 1 : aucun recouvrement
+(archives ≤ 2026-09-30). Gate 2 : l'historique du percentile (2 016 fenêtres de 5 min, au moins 288), le σ₁₅ et le notionnel sur 24 h et
+le contrôle apparié ne contiennent aucune fenêtre de l'intervalle exclu E = [2026-11-02T00:00Z ; 2026-11-03T12:00Z) du pilote de capture
+L2 (`LP-PROGRAMME-GATES.md` §7.4) : `research_lp events` refuse les fichiers jour 2026-11-02 et 2026-11-03, l'historique commence au plus tôt
+le 2026-11-04, les fenêtres antérieures sont absentes, jamais imputées (§4.2) ; T0 ≥ fin de P3, P3 commençant au plus tôt au
+2026-11-03T12:00Z (§7.5). Durée de 90 jours, futilité et planchers inchangés ; sans effet au T0 du plan (≈ 2026-12-01 → 12-10).
+
 ## 0. Déclarations préalables
 
 0.1 **Aucune donnée lue.** Aucun fill, carnet, prix, funding ou liquidation d'Hyperliquid ou d'OKX, courant ou historique, n'a été
@@ -213,7 +220,8 @@ séparément (§7.3 C4), pas comme entraînement/validation (une seule lecture).
 manifeste) ; layout `liquidations` (`ts_us`, `recv_us`, `side`, `pos_side`, `size`, `bk_px`, `bk_loss`), `books5`, `trades`,
 `funding`, `mark`. Statut `prospective`. **Fenêtre de scoring** : du **gel du Gate 2** (jamais avant, même si la capture tourne
 depuis T0 de G2) au gel + 90 jours ; les jours capturés avant le gel servent **uniquement** à l'historique du percentile
-(`lookback`), pas au scoring. Lecture unique après la fin de la fenêtre (futilité §7.5 exceptée).
+(`lookback`), pas au scoring ; depuis P-L2-1 (D14), jamais les jours 2026-11-02 et 2026-11-03 (intervalle exclu du pilote L2,
+`research_lp events` les refuse) : l'historique commence au plus tôt le 2026-11-04. Lecture unique après la fin de la fenêtre (futilité §7.5 exceptée).
 
 4.3 **Qualité** : (HL) jour manquant dans l'archive ⇒ exclu et compté ; si > 10 % des jours de la fenêtre manquent, le Gate 1 est
 `INCONCLUSIVE` ; (OKX) règles de `LP-G2-DRAFT-PREREGISTRATION.md` §4.4 ; en plus, toute déconnexion du canal `liquidation-orders`
