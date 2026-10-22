@@ -1,4 +1,4 @@
-# État des campagnes de recherche TradingV3 (au 2026-10-15 ; §2 et §4 complétés le 2026-10-20)
+# État des campagnes de recherche TradingV3 (au 2026-10-15 ; §2, §3, §4 et §5 complétés le 2026-10-20)
 
 Cet inventaire est fait en lecture seule. Il reprend :
 
@@ -126,19 +126,26 @@ Restent non lus d'après les documents consultés (à notre connaissance, sans p
 | **Écart technique X-Perps** | Le code OKX ne gère que l'USDT-SWAP : `instType=SWAP` est codé en dur et l'USDT est supposé partout. Les X-Perps sont réglés en USD avec une marge en USDC. | À traiter seulement si une hypothèse franchit ses gates. Rien n'est construit pour H1. |
 | **Questions du rapport de paysage** | Breakouts rejetés : `NOT_TESTED`. Prédiction de régime D5 : `INCONCLUSIVE` (entraînement seulement). Q3 C2-SL : `STATISTICAL_BLOCKER` (`research-scalp-q3-r2-correction-2026-10-14.md`), à ne pas rouvrir. Le rapport de paysage emploie l'ancien libellé `TECHNICAL_BLOCKER`. Cycle de vie des instruments : testé par H1, clos. Mouvements relatifs au marché : testés par H2, clos. | Le propriétaire examine les propositions H3 (`H1-NEXT-DECISION.md` §3) avant d'autoriser une campagne, en passant les gates M1–M5 dans l'ordre. |
 | **Voies non directionnelles (desk 2026-10-20)** | Clos sans candidat ; rapport `../reports/research-positive-pnl-structural-2026-10-16.md`. Treize décisions du propriétaire listées en §6.2 du rapport, dont les vérifications d'interface (réglages de marge X-Perps, devise de règlement USD-M, datés et options visibles, barème) et le sort du brouillon CS-FUND à 12 mois. | Le propriétaire. Rien n'est lancé. |
+| **Théorie du scalping et gaps (desk 2026-10-20)** | Rapport `../reports/research-scalping-theory-gap-2026-10-20.md` : le scalping à la minute sur états est fermé par la théorie et par le programme ; ce qui reste est un programme de fourniture de liquidité événementielle à mesurer (préalables P1–P3, puis G2 mark-outs sur carnets larges, G4 cascades de liquidation, G5 horloge, G1 réversion en fournisseur sur consentement). Fait établi : le profil `scalper_micro` 1.1.7 ne peut poster aucun ordre en production (preuve microstructure absente du chemin vivant). Douze décisions du propriétaire (§6). | Le propriétaire. Rien n'est lancé. |
 | **Contrat scalping 1.2.0** | Non publié (r10, 0/96). | Aucun contrat n'est publiable en l'état. |
 
 **Aucune campagne n'autorise aujourd'hui de trading, réel ou en démo.** Les drapeaux d'exécution restent à 0.
 
 ## 5. Prochaine action unique (non lancée)
 
-**Le propriétaire exécute lui-même `tradingV3-private/tools/okx_xperp_readonly_check.py`.** Le détail et la
-justification sont dans [H1-NEXT-DECISION.md](H1-NEXT-DECISION.md) §4.
+**P1 — le diagnostic de la machine, sans aucune donnée de marché** (rapport `../reports/research-scalping-theory-gap-2026-10-20.md`
+§3.3, décision n° 1 de son §6) : compter les ordres postés depuis le déploiement de 1.1.7 (`order-journey*`), ventiler les raisons
+de rejet de la production (`proof_reason`, `rulesFailed` dans `mtf-runner.log`) et de la certification Paper #132 (12 cellules,
+0 trade), mesurer la durée du run et l'instant réel de décision, dresser la table « configuration déclarée / comportement
+réel ». Champs texte des journaux seulement, zéro prix, zéro ordre. Le fait que le profil `scalper_micro` 1.1.7 ne peut pas
+poster (preuve microstructure absente du chemin vivant) est déjà établi par le code et le dernier dry-run du 2026-10-13
+(en-tête du rapport) ; P1 le complète, il ne le conditionne pas.
 
-- Le script fait deux GET en lecture seule.
-- Il ne couvre que l'accès aux X-Perps. Le spot d'OKX Europe (prestataire MiCA, nécessaire à l'idée H3-A) demanderait
-  une vérification séparée.
-- Rien d'autre n'est lancé tant que le propriétaire n'a pas examiné les propositions H3.
+**Puis P2 — le propriétaire exécute lui-même `tradingV3-private/tools/okx_xperp_readonly_check.py`** (deux GET en lecture
+seule ; détail dans [H1-NEXT-DECISION.md](H1-NEXT-DECISION.md) §4) et tranche la licence OKX API Agreement §9.4 avant toute
+capture longue. Le script ne couvre que l'accès aux X-Perps ; le spot d'OKX Europe (prestataire MiCA) demanderait une
+vérification séparée. Rien d'autre n'est lancé avant le verdict fwd-okx-r1 (après le 2026-10-31) et les décisions du
+propriétaire sur les deux rapports du 2026-10-16 et du 2026-10-20.
 
 **Backlog (décisions du propriétaire, ce n'est pas la prochaine action) :**
 
