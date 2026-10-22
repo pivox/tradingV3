@@ -252,11 +252,14 @@ réutilisation pour une nouvelle hypothèse.
   funding nul. Ce cas ne s'est pas produit : le rejeu est allé au bout.
 - **Horodatage des sorties au marché.** Les sorties sur invalidation, stagnation ou stop franchi sont
   horodatées à la fin de la bougie d'exécution, alors que le prix est celui de son ouverture. La paire
-  est donc libérée une minute trop tard, et un funding tombant à cette minute peut être imputé. Le
-  biais est conservateur.
+  est donc libérée une minute trop tard. Un funding tombant à cette minute peut être imputé à tort :
+  c'est un paiement ou un crédit, selon le signe du taux et le sens de la position. Le retard de
+  libération peut aussi bien empêcher qu'autoriser une entrée suivante. **Le signe de ce biais n'est
+  pas connu. Son effet doit être quantifié avant toute réutilisation du simulateur.**
 - **Convention de funding.** Le funding est imputé sur l'intervalle (remplissage ; sortie]. Une sortie
-  à l'intérieur d'une bougie qui se termine sur une heure de funding paie ce funding. Le biais est
-  conservateur et touche environ une sortie sur 480.
+  à l'intérieur d'une bougie qui se termine sur une heure de funding se voit imputer ce funding. Ce
+  peut être un paiement ou un crédit. Le biais n'est donc pas toujours défavorable. Il touche environ
+  une sortie sur 480 et doit lui aussi être quantifié avant réutilisation.
 - **Grille de funding.** Le contrôle de complétude ne vérifie que la grille de 8 h. Il suffit pour ces
   10 majors en 2023-2024, où la grille était complète. Un symbole à intervalle de 4 h ou de 1 h
   demanderait de l'étendre.
